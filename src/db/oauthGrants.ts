@@ -14,7 +14,7 @@ type Row = Record<string, string | number | null>;
 
 const GRANT_COLUMNS = [
   "id", "identity_id", "tenant_id", "session_id", "client_id", "client_name", "client_kind", "redirect_host", "resource", "scopes",
-  "library_grant_id", "refresh_hash", "refreshed_at", "approved_by_session_id", "created_at", "expires_at", "revoked_at", "revoked_by", "revoke_reason",
+  "library_grant_id", "refresh_hash", "prev_refresh_hash", "refreshed_at", "approved_by_session_id", "created_at", "expires_at", "revoked_at", "revoked_by", "revoke_reason",
 ] as const;
 
 function pickGrant(row: Row): OAuthGrant {
@@ -24,8 +24,8 @@ function pickGrant(row: Row): OAuthGrant {
 }
 
 /**
- * Write the grant and its `oauth` session in one batch (MCP spec 5.3). Earlier live grants for the same
- * identity, client, and resource are revoked as `replaced`, mirroring what the library does to its own grants.
+ * Write the grant and its `oauth` session in one batch (MCP spec 5.3). Earlier grants for the same client
+ * and resource are replaced separately, by `replaceEarlierGrants`, once the library has accepted the new one.
  */
 export async function createGrant(db: D1Database, input: NewGrant, now: number): Promise<{ grant: OAuthGrant; session: Session }> {
   const expires_at = now + GRANT_TTL_MS;
@@ -38,15 +38,10 @@ export async function createGrant(db: D1Database, input: NewGrant, now: number):
   const grant: OAuthGrant = {
     id: ulid(now), identity_id: input.identity_id, tenant_id: input.tenant_id, session_id: session.id, client_id: input.client_id,
     client_name: input.client_name, client_kind: input.client_kind, redirect_host: input.redirect_host, resource: input.resource,
-    scopes: input.scopes.join(" "), library_grant_id: null, refresh_hash: null, refreshed_at: null,
+    scopes: input.scopes.join(" "), library_grant_id: null, refresh_hash: null, prev_refresh_hash: null, refreshed_at: null,
     approved_by_session_id: input.approved_by_session_id, created_at: now, expires_at, revoked_at: null, revoked_by: null, revoke_reason: null,
   };
-  const same = "identity_id = ? AND client_id = ? AND resource = ? AND revoked_at IS NULL";
   await db.batch([
-    db.prepare(`UPDATE session SET revoked_at = ? WHERE revoked_at IS NULL AND id IN (SELECT session_id FROM oauth_grant WHERE ${same})`)
-      .bind(now, input.identity_id, input.client_id, input.resource),
-    db.prepare(`UPDATE oauth_grant SET revoked_at = ?, revoked_by = ?, revoke_reason = 'replaced' WHERE ${same}`)
-      .bind(now, input.identity_id, input.identity_id, input.client_id, input.resource),
     db.prepare(
       `INSERT INTO session (id, identity_id, tenant_id, kind, label, token_hash, created_at, last_seen_at, expires_at, last_proof_at, revoked_at, parent_token_id)
        VALUES (?, ?, ?, 'oauth', ?, ?, ?, ?, ?, ?, NULL, NULL)`,
@@ -59,6 +54,19 @@ export async function createGrant(db: D1Database, input: NewGrant, now: number):
       grant.redirect_host, grant.resource, grant.scopes, grant.approved_by_session_id, now, expires_at),
   ]);
   return { grant, session };
+}
+
+/** Revoke the identity's other live grants for the same client and resource as `replaced`. Returns the grants it replaced. */
+export async function replaceEarlierGrants(db: D1Database, grant: OAuthGrant, now: number): Promise<OAuthGrant[]> {
+  const same = "identity_id = ? AND client_id = ? AND resource = ? AND revoked_at IS NULL AND id != ?";
+  const binds = [grant.identity_id, grant.client_id, grant.resource, grant.id];
+  const old = (await db.prepare(`SELECT * FROM oauth_grant WHERE ${same}`).bind(...binds).all<OAuthGrant>()).results;
+  if (old.length === 0) return [];
+  await db.batch([
+    db.prepare(`UPDATE session SET revoked_at = ? WHERE revoked_at IS NULL AND id IN (SELECT session_id FROM oauth_grant WHERE ${same})`).bind(now, ...binds),
+    db.prepare(`UPDATE oauth_grant SET revoked_at = ?, revoked_by = ?, revoke_reason = 'replaced' WHERE ${same}`).bind(now, grant.identity_id, ...binds),
+  ]);
+  return old;
 }
 
 export function getGrantById(db: D1Database, id: string): Promise<OAuthGrant | null> {
@@ -117,11 +125,14 @@ export async function liveGrant(db: D1Database, grant_id: string, now: number): 
   return { grant, session, identity, tenant, membership };
 }
 
-/** Compare-and-set the hash of the one refresh token that is currently valid for the grant. */
+/**
+ * Compare-and-set the hash of the one refresh token that is currently valid for the grant. The hash it
+ * replaces is kept as `prev_refresh_hash`: only that retired token coming back proves reuse.
+ */
 export async function rotateRefreshHash(db: D1Database, id: string, expected: string | null, next: string, now: number): Promise<boolean> {
   const stmt = expected === null
-    ? db.prepare("UPDATE oauth_grant SET refresh_hash = ?, refreshed_at = ? WHERE id = ? AND revoked_at IS NULL AND refresh_hash IS NULL").bind(next, now, id)
-    : db.prepare("UPDATE oauth_grant SET refresh_hash = ?, refreshed_at = ? WHERE id = ? AND revoked_at IS NULL AND refresh_hash = ?").bind(next, now, id, expected);
+    ? db.prepare("UPDATE oauth_grant SET prev_refresh_hash = refresh_hash, refresh_hash = ?, refreshed_at = ? WHERE id = ? AND revoked_at IS NULL AND refresh_hash IS NULL").bind(next, now, id)
+    : db.prepare("UPDATE oauth_grant SET prev_refresh_hash = refresh_hash, refresh_hash = ?, refreshed_at = ? WHERE id = ? AND revoked_at IS NULL AND refresh_hash = ?").bind(next, now, id, expected);
   return (await stmt.run()).meta.changes === 1;
 }
 

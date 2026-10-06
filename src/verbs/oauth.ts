@@ -5,7 +5,7 @@ import { timingSafeEqual } from "../ids";
 import { roleFor } from "../auth/context";
 import { getTenantBySlug } from "../db/tenants";
 import { getMembership } from "../db/memberships";
-import { createGrant, revokeGrantRows, setLibraryGrantId } from "../db/oauthGrants";
+import { createGrant, replaceEarlierGrants, revokeGrantRows, setLibraryGrantId } from "../db/oauthGrants";
 import { recordEvent } from "../db/events";
 import { CONSENT_FRESH_PROOF_MINUTES, authServer, libraryGrantIdOf } from "../oauth/config";
 import { deletePending, loadPending } from "../oauth/pending";
@@ -47,6 +47,8 @@ export const oauthGrantApprove = defineVerb({
     const code = new URL(redirectTo).searchParams.get("code");
     const libraryGrantId = code ? libraryGrantIdOf(code) : null;
     if (libraryGrantId) await setLibraryGrantId(ctx.db, grant.id, libraryGrantId);
+    // Only now that the library accepted the new grant does the earlier one for the same client and resource go.
+    await replaceEarlierGrants(ctx.db, grant, ctx.now);
     await recordEvent(ctx.db, {
       tenant_id: tenant.id, identity_id: ctx.identity.id, session_id: ctx.session.id, kind: "oauth.grant.approve", target_kind: "oauth_grant",
       target_id: grant.id, summary: `Connected "${pending.client_name}" (${pending.redirect_host}) to ${tenant.slug} with ${pending.scopes.join(" ")}`,

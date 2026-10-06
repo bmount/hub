@@ -12,6 +12,7 @@ export const RATE_RULES = {
   oauth_register_all: { limit: 200, windowMs: DAY_MS },
   oauth_authorize_ip: { limit: 60, windowMs: RATE_WINDOW_MS },
   oauth_token_client: { limit: 60, windowMs: MINUTE_MS },
+  oauth_token_ip: { limit: 120, windowMs: MINUTE_MS },
   mcp_anon_ip: { limit: 60, windowMs: MINUTE_MS },
   mcp_grant_minute: { limit: 120, windowMs: MINUTE_MS },
   mcp_grant_hour: { limit: 2000, windowMs: RATE_WINDOW_MS },
@@ -52,12 +53,49 @@ export async function takeRateDetail(kv: KVNamespace, bucket: RateBucket, subjec
   }
   if (used >= limit) {
     const overKey = `${key}:over`;
-    if ((await kv.get(overKey)) !== null) return { ok: false, first: false, retryAfterS };
+    let marked: string | null;
+    try {
+      marked = await kv.get(overKey);
+    } catch (e) {
+      // Still denied; only the once-per-window "first" signal is lost. The email buckets keep failing closed.
+      if (bucket === "addr" || bucket === "ip") throw e;
+      console.log("rate marker read failed", e instanceof Error ? e.name : "error");
+      return { ok: false, first: false, retryAfterS };
+    }
+    if (marked !== null) return { ok: false, first: false, retryAfterS };
     await putCounter(kv, bucket, overKey, "1", ttl);
     return { ok: false, first: true, retryAfterS };
   }
   await putCounter(kv, bucket, key, String(used + 1), ttl);
   return { ok: true, first: false, retryAfterS };
+}
+
+/**
+ * The same decision as `takeRateDetail`, from one atomic D1 statement instead of KV (MCP spec 10.6): the
+ * per-grant and per-IP MCP buckets need counts that cannot be lost to eventual consistency or same-key write
+ * limits. `first` is true for exactly the first denied call in a window (the count passes the limit by one).
+ * A D1 failure fails open: the same database is needed to serve the call anyway.
+ */
+export async function takeRateAtomic(db: D1Database, bucket: RateBucket, subject: string, now: number): Promise<RateResult> {
+  const { limit, windowMs } = RATE_RULES[bucket];
+  const window = Math.floor(now / windowMs);
+  const retryAfterS = Math.max(1, Math.ceil(((window + 1) * windowMs - now) / 1000));
+  const key = `${bucket}:${await sha256Hex(subject.trim().toLowerCase())}`;
+  try {
+    const row = await db.prepare(
+      `INSERT INTO rate_counter (key, window, count, expires_at) VALUES (?, ?, 1, ?)
+       ON CONFLICT(key, window) DO UPDATE SET count = count + 1 RETURNING count`,
+    ).bind(key, window, (window + 2) * windowMs).first<{ count: number }>();
+    const count = row?.count ?? 1;
+    if (count === 1) {
+      // A new window for this key: sweep counters whose window is long over.
+      await db.prepare("DELETE FROM rate_counter WHERE expires_at < ?").bind(now).run().catch(() => undefined);
+    }
+    return { ok: count <= limit, first: count === limit + 1, retryAfterS };
+  } catch (e) {
+    console.log("rate counter failed", e instanceof Error ? e.name : "error");
+    return { ok: true, first: false, retryAfterS };
+  }
 }
 
 export async function takeRate(kv: KVNamespace, bucket: RateBucket, subject: string, now: number): Promise<boolean> {

@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import {
-  GRANT_TTL_MS, getGrantById, getGrantBySessionId, listLiveGrantsForIdentity, liveGrant, revokeGrantRows, revokeGrantsFor, rotateRefreshHash,
+  GRANT_TTL_MS, getGrantById, getGrantBySessionId, listLiveGrantsForIdentity, liveGrant, replaceEarlierGrants, revokeGrantRows, revokeGrantsFor, rotateRefreshHash,
 } from "../src/db/oauthGrants";
 import { getSessionById } from "../src/db/sessions";
 import { seedGrant, seedHuman, seedTenant } from "./helpers";
@@ -31,6 +31,8 @@ describe("oauth grants", () => {
     const first = await seedGrant(acme, h);
     const other = await seedGrant(blue, h);
     const second = await seedGrant(acme, h);
+    expect((await getGrantById(db(), first.grant.id))!.revoked_at).toBeNull();
+    expect((await replaceEarlierGrants(db(), second.grant, Date.now())).map((g) => g.id)).toEqual([first.grant.id]);
     expect(await getGrantById(db(), first.grant.id)).toMatchObject({ revoke_reason: "replaced", revoked_by: h.identity.id });
     expect((await getSessionById(db(), first.session.id))!.revoked_at).not.toBeNull();
     expect((await getGrantById(db(), other.grant.id))!.revoked_at).toBeNull();
@@ -76,7 +78,7 @@ describe("oauth grants", () => {
     expect(await rotateRefreshHash(db(), grant.id, null, "a", 1)).toBe(true);
     expect(await rotateRefreshHash(db(), grant.id, null, "b", 2)).toBe(false);
     expect(await rotateRefreshHash(db(), grant.id, "a", "b", 2)).toBe(true);
-    expect(await getGrantById(db(), grant.id)).toMatchObject({ refresh_hash: "b", refreshed_at: 2 });
+    expect(await getGrantById(db(), grant.id)).toMatchObject({ refresh_hash: "b", prev_refresh_hash: "a", refreshed_at: 2 });
   });
 
   it("cascades by tenant, by identity, and by membership", async () => {

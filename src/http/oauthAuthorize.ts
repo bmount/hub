@@ -37,11 +37,15 @@ function neutralPage(headers: Record<string, string> = {}): Response {
   return errorPage(200, "You do not have access to this workspace", "This connection request cannot continue here. Start again from your assistant.", headers);
 }
 
+/** `state` is echoed to the client and kept with the pending request; a client has no use for more than this. */
+const STATE_MAX = 1024;
+
 export async function authorizePage(request: Request, env: Env, now: number = Date.now()): Promise<Response> {
   if (!isApex(request, env)) return notFoundPage();
   const rate = await takeRateDetail(env.RATE, "oauth_authorize_ip", request.headers.get("cf-connecting-ip") ?? "unknown", now);
   if (!rate.ok) return errorPage(429, "Too many requests", "Wait a little and try again.", { "retry-after": String(rate.retryAfterS) });
   const url = new URL(request.url);
+  if ((url.searchParams.get("state") ?? "").length > STATE_MAX) return errorPage(400, "This request is not valid", "The state value is too long.");
   const allowed = await redirectAllowed(env.HUB_DB, url.searchParams.get("redirect_uri") ?? "");
   if (!allowed) return errorPage(400, "This app cannot connect", "Its return address is not one of the assistants Pimwell accepts.");
   const api = authServer(env, url.searchParams.get("resource")).getOAuthApi(env);

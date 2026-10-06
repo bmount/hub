@@ -12,6 +12,11 @@ describe("rate counters", () => {
     const kv = stub({ get: async (k: unknown) => (String(k).endsWith(":over") ? null : "999") } as never);
     expect(await takeRateDetail(kv, "mcp_grant_minute", "g1", Date.now())).toMatchObject({ ok: false, first: true });
   });
+  it("still deny, without a 500, when the over-limit marker read throws", async () => {
+    const kv = stub({ get: async (k: unknown) => { if (String(k).endsWith(":over")) throw new Error("boom"); return "999"; } } as never);
+    expect(await takeRateDetail(kv, "oauth_token_client", "c1", Date.now())).toMatchObject({ ok: false, first: false });
+    expect(await takeRateDetail(kv, "mcp_grant_minute", "g1", Date.now())).toMatchObject({ ok: false, first: false });
+  });
   it("keep the email buckets failing closed", async () => {
     await expect(takeRateDetail(stub({}), "addr", "a@example.com", Date.now())).rejects.toThrow("429");
   });

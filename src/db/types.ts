@@ -49,6 +49,6 @@ export type Agent = { identity: Identity; membership: Membership; tenant: Tenant
 export type OAuthGrant = {
   id: string; identity_id: string; tenant_id: string; session_id: string; client_id: string; client_name: string;
   client_kind: "dcr" | "cimd"; redirect_host: string; resource: string; scopes: string; library_grant_id: string | null;
-  refresh_hash: string | null; refreshed_at: number | null; approved_by_session_id: string; created_at: number; expires_at: number;
+  refresh_hash: string | null; prev_refresh_hash: string | null; refreshed_at: number | null; approved_by_session_id: string; created_at: number; expires_at: number;
   revoked_at: number | null; revoked_by: string | null; revoke_reason: string | null;
 };

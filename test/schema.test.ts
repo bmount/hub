@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const EXPECTED = [
   "api_token", "auth_link", "consent", "event", "identity", "invite", "membership",
-  "meta", "namespace", "oauth_grant", "oauth_redirect_allow", "project", "proof", "session", "tenant",
+  "meta", "namespace", "oauth_grant", "oauth_redirect_allow", "project", "proof", "rate_counter", "session", "tenant",
 ];
 
 describe("schema", () => {
@@ -14,9 +14,9 @@ describe("schema", () => {
     expect(rows.results.map((r) => r.name)).toEqual(EXPECTED);
   });
 
-  it("records schema version 2", async () => {
+  it("records schema version 3", async () => {
     const row = await env.HUB_DB.prepare("SELECT value FROM meta WHERE key='schema_version'").first<{ value: string }>();
-    expect(row?.value).toBe("2");
+    expect(row?.value).toBe("3");
   });
 
   it("seeds the redirect allowlist with Claude and loopback only", async () => {

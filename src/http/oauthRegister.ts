@@ -7,6 +7,9 @@ import { isApex } from "./login";
 import { oauthJson } from "./oauthMeta";
 import { notFoundPage } from "./pages";
 
+const REGISTER_BODY_MAX = 8 * 1024;
+const tooLarge = () => oauthJson({ error: "invalid_client_metadata", error_description: "registration body is larger than 8 KB" }, 413);
+
 /**
  * RFC 7591 registration (MCP spec 6). The hub checks policy before the library sees the request:
  * rate limits, public clients only, and every redirect URI on the allowlist.
@@ -18,7 +21,9 @@ export async function registerEndpoint(request: Request, env: Env, ectx: Executi
     const r = await takeRateDetail(env.RATE, bucket, subject, now);
     if (!r.ok) return oauthJson({ error: "too_many_requests" }, 429, { "retry-after": String(r.retryAfterS) });
   }
+  if (Number(request.headers.get("content-length") ?? "0") > REGISTER_BODY_MAX) return tooLarge();
   const text = await request.text();
+  if (new TextEncoder().encode(text).length > REGISTER_BODY_MAX) return tooLarge();
   let meta: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(text);
