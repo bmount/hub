@@ -1,0 +1,25 @@
+{
+  "name": "pimwell-hub",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "migrate:local": "wrangler d1 migrations apply HUB_DB --local",
+    "migrate:remote": "wrangler d1 migrations apply HUB_DB --remote",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.0",
+    "@cloudflare/workers-types": "^5.20261001.1",
+    "@types/node": "^26.6.4",
+    "typescript": "^5.6.0",
+    "vitest": "~3.1.0",
+    "wrangler": "^4.0.0"
+  }
+}

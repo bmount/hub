@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pimwell-hub",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    { "pattern": "pimwell.com/*", "zone_name": "pimwell.com" },
+    { "pattern": "*.pimwell.com/*", "zone_name": "pimwell.com" }
+  ],
+  "vars": { "HUB_DOMAIN": "pimwell.com" },
+  "d1_databases": [
+    {
+      "binding": "HUB_DB",
+      "database_name": "pimwell-hub",
+      "database_id": "local-placeholder-until-d1-create",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    { "binding": "RATE", "id": "local-placeholder-until-kv-create" }
+  ]
+}
