@@ -27,3 +27,15 @@ export type EventRow = {
   id: string; tenant_id: string | null; identity_id: string | null; session_id: string | null;
   kind: string; target_kind: string; target_id: string; summary: string; created_at: number;
 };
+
+export type LinkPurpose = "login" | "reproof";
+export type AuthLink = {
+  id: string; identity_id: string; token_hash: string; purpose: LinkPurpose;
+  created_at: number; expires_at: number; used_at: number | null;
+};
+export type Consent = {
+  id: string; email: string; tenant_id: string | null; kind: string; granted_at: number;
+  revoked_at: number | null; source_message_id: string | null; evidence: string | null;
+};
+export type ProofKind = "email" | "google" | "passkey";
+export type Proof = { id: string; identity_id: string; kind: ProofKind; subject: string; created_at: number };

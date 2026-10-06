@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { esc, htmlResponse, page } from "../html";
 import { classifyHost } from "../tenant";
 import { acceptInvite, findInviteByToken, inviteIsOpen, setInviteAcceptedSession } from "../db/invites";
+import { recordProof } from "../db/proofs";
 import { getTenantById, listTenants } from "../db/tenants";
 import { createBrowserSession, listSessions } from "../db/sessions";
 import { clearSessionCookie, sessionCookie } from "../auth/cookie";
@@ -55,6 +56,7 @@ export async function acceptInvitePage(request: Request, env: Env): Promise<Resp
   }
   const accepted = await acceptInvite(env.HUB_DB, invite, now);
   if (!accepted) return htmlResponse(neutralInvitePage());
+  await recordProof(env.HUB_DB, { identity_id: accepted.identity.id, kind: "email", subject: accepted.identity.email }, now);
   let tenantRow: Awaited<ReturnType<typeof getTenantById>> = null;
   if (invite.tenant_id) tenantRow = await getTenantById(env.HUB_DB, invite.tenant_id);
   const location = tenantRow ? `https://${tenantRow.slug}.${env.HUB_DOMAIN}/` : `https://${env.HUB_DOMAIN}/`;
