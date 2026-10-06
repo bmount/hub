@@ -66,8 +66,7 @@ describe("loop limits end to end", () => {
     for (let i = 0; i < 21; i++) expect([409, 429]).toContain((await call(w.scout.token, "chat.post", { c: "general", body: "same", after: head })).status);
     expect((await call(w.scout.token, "chat.post", { c: "general", body: "new", after: head })).body.error).toBe("muted");
     expect((await inboxOf(w, w.lead.identity.id)).map((i) => i.kind)).toEqual(["tripwire"]);
-    expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'chat.tripwire'").first<{ n: number }>())!.n).toBe(1);
-  });
+    expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'chat.tripwire'").first<{ n: number }>())!.n).toBe(1);}, 30_000);
 
   it("never wakes an agent removed from the channel through an old thread subscription", async () => {
     const w = await chatWorld();

@@ -17,8 +17,8 @@ const noop = { parse: () => ({}), run: async () => ({}) };
 const input = { type: "object" as const, properties: {}, additionalProperties: false as const };
 
 describe("MCP exposure rules", () => {
-  it("exposes exactly whoami, project.list, and event.list in phase 1", () => {
-    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["event.list", "project.list", "whoami"]);
+  it("exposes exactly the phase 1 read tools", () => {
+    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["chat.inbox", "chat.read", "chat.thread", "event.list", "project.list", "ref.backlinks", "whoami"]);
     expect(toolName("project.list")).toBe("project_list");
   });
 
@@ -35,9 +35,9 @@ describe("MCP exposure rules", () => {
   });
 
   it("caps tools by scope and by the human's current role", () => {
-    expect(names(exposedVerbs("reader", ["read"]))).toEqual(["project.list", "whoami"]);
-    expect(names(exposedVerbs("member", ["read"]))).toEqual(["event.list", "project.list", "whoami"]);
-    expect(names(exposedVerbs("admin", ["read"]))).toEqual(["event.list", "project.list", "whoami"]);
+    expect(names(exposedVerbs("reader", ["read"]))).toEqual(["chat.inbox", "chat.read", "chat.thread", "project.list", "ref.backlinks", "whoami"]);
+    expect(names(exposedVerbs("member", ["read"]))).toEqual(["chat.inbox", "chat.read", "chat.thread", "event.list", "project.list", "ref.backlinks", "whoami"]);
+    expect(names(exposedVerbs("admin", ["read"]))).toEqual(["chat.inbox", "chat.read", "chat.thread", "event.list", "project.list", "ref.backlinks", "whoami"]);
     expect(names(exposedVerbs("member", []))).toEqual([]);
     expect(names(exposedVerbs(null, ["read"]))).toEqual(["whoami"]);
   });

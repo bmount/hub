@@ -31,8 +31,8 @@ describe("tool definitions", () => {
 
   it("follow the human's current role", async () => {
     const { ctx } = await ctxFor("reader");
-    expect(toolsFor(ctx).map((v) => toolDefinition(v).name)).toEqual(["project_list", "whoami"]);
-    expect(toolsFor({ ...ctx, role: "member" }).map((v) => toolDefinition(v).name)).toEqual(["event_list", "project_list", "whoami"]);
+    expect(toolsFor(ctx).map((v) => toolDefinition(v).name)).toEqual(["chat_inbox", "chat_read", "chat_thread", "project_list", "ref_backlinks", "whoami"]);
+    expect(toolsFor({ ...ctx, role: "member" }).map((v) => toolDefinition(v).name)).toEqual(["chat_inbox", "chat_read", "chat_thread", "event_list", "project_list", "ref_backlinks", "whoami"]);
   });
 });
 
