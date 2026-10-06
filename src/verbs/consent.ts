@@ -16,7 +16,7 @@ async function consentTarget(ctx: Ctx, email: string | null): Promise<{ email: s
   if (ctx.tenant && ctx.role === "admin") {
     const other = await getIdentityByEmail(ctx.db, target);
     const m = other ? await getMembership(ctx.db, other.id, ctx.tenant.id) : null;
-    if (m && m.state === "active") return { email: target, tenant_id: ctx.tenant.id };
+    if (other && other.state === "active" && m && m.state === "active") return { email: target, tenant_id: ctx.tenant.id };
   }
   throw notFound("no such address");
 }

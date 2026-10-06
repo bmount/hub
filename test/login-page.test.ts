@@ -76,6 +76,12 @@ describe("POST /login", () => {
     expect(sent.map((m) => m.to)).toEqual(["known@example.com"]);
   });
 
+  it("answers neutrally for an over-long /auth token", async () => {
+    const res = await SELF.fetch(`https://pimwell.test/auth/${"A".repeat(129)}`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("not valid");
+  });
+
   it("still answers neutrally past the rate limit", async () => {
     await seedHuman("known@example.com");
     await consent("known@example.com");

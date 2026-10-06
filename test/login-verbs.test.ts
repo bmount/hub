@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { handleApi } from "../src/http/api";
 import { registerAllVerbs } from "../src/verbs/index";
@@ -77,6 +77,17 @@ describe("login.verify", () => {
     const unknown = await apiPost("pimwell.test", "login.verify", { token: `pml_${"A".repeat(43)}` });
     expect(again.status).toBe(404);
     expect(await again.text()).toBe(await unknown.text());
+  });
+
+  it("rejects form bodies and leaves the link unused", async () => {
+    const h = await seedHuman("a@example.com");
+    const { token } = await createAuthLink(env.HUB_DB, h.identity.id, "login", Date.now());
+    const res = await SELF.fetch("https://pimwell.test/api/login.verify", {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token }).toString(),
+    });
+    expect(res.status).toBe(400);
+    expect((await findAuthLinkByToken(env.HUB_DB, token))!.used_at).toBeNull();
+    expect((await apiPost("pimwell.test", "login.verify", { token })).status).toBe(200);
   });
 
   it("a reproof link refreshes the calling browser session and refuses others", async () => {

@@ -6,7 +6,7 @@ import type { Ctx } from "../auth/context";
 
 // Off the response path when the Worker gives us waitUntil, so timing does not reveal known addresses.
 async function dispatch(ctx: Ctx, req: LinkRequest): Promise<void> {
-  const work = requestLink(ctx.env, req, ctx.now).catch(() => {});
+  const work = requestLink(ctx.env, req, ctx.now).catch((e) => console.log("login request failed", e instanceof Error ? e.name : "error"));
   if (ctx.waitUntil) ctx.waitUntil(work);
   else await work;
 }

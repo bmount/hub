@@ -38,6 +38,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
   try {
     const body = await readBody(request);
     isForm = body.isForm;
+    if (isForm && name === "login.verify") throw new HubError(400, "bad_request", "login.verify does not accept form bodies");
     const verb = getVerb(name);
     if (!verb) throw new HubError(404, "unknown_verb");
     ctx = await buildContext(request, env, Date.now(), waitUntil);
@@ -86,7 +87,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
       return finish(ctx, env, json({ ok: false, error: e.reason, detail: e.detail ?? null }, e.status));
     }
     if (e instanceof SyntaxError) return finish(ctx, env, json({ ok: false, error: "bad_request", detail: "invalid JSON" }, 400));
-    console.error("verb failed", name, e instanceof Error ? e.message : String(e));
+    console.error("verb failed", name, e instanceof Error ? e.name : "error");
     return finish(ctx, env, json({ ok: false, error: "internal", detail: null }, 500));
   }
 }

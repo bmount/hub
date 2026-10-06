@@ -17,7 +17,7 @@ export function sameOrigin(request: Request): boolean {
 }
 
 function authToken(request: Request): string | null {
-  const m = new URL(request.url).pathname.match(/^\/auth\/([A-Za-z0-9_-]+)$/);
+  const m = new URL(request.url).pathname.match(/^\/auth\/([A-Za-z0-9_-]{1,128})$/);
   return m ? m[1]! : null;
 }
 

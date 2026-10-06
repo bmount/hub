@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # Point login@ and signup@ at the pimwell-hub Worker via Email Routing. Idempotent.
-# Needs CLOUDFLARE_API_TOKEN with Email Routing Rules Write on the zone (spec 9).
+# Needs CLOUDFLARE_API_TOKEN with Email Routing Rules Write and Zone:Read on the zone (spec 9).
 set -euo pipefail
 : "${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN}"
 DOMAIN="${HUB_DOMAIN:-pimwell.com}"
 WORKER="${WORKER_NAME:-pimwell-hub}"
 API="https://api.cloudflare.com/client/v4"
-AUTH=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
+# Token goes through a curl config file, not argv, so it stays out of process listings.
+HDR=$(mktemp)
+trap 'rm -f "$HDR"' EXIT
+chmod 600 "$HDR"
+printf 'header = "Authorization: Bearer %s"\n' "$CLOUDFLARE_API_TOKEN" > "$HDR"
+AUTH=(-K "$HDR")
 
 zone=$(curl -fsS "${AUTH[@]}" "$API/zones?name=$DOMAIN" | jq -r '.result[0].id // empty')
 [ -n "$zone" ] || { echo "zone $DOMAIN is not visible to this token" >&2; exit 1; }

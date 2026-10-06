@@ -218,14 +218,17 @@ The Worker's `email` handler receives mail to `login@` and `signup@`.
 1. Reject (`setReject`) if the envelope sender is not the `email` of a human
    identity, or if the identity is archived. No reply is sent to unknown
    senders.
-2. Record consent for the sender address if none exists (this is the signup
-   step; `signup@` and `login@` behave identically, two names exist for
+2. After the rate check (item 3), record consent for the sender address if
+   none exists (this is the signup step; `signup@` and `login@` behave identically, two names exist for
    discoverability).
 3. Create an `auth_link` as in 6.3 and reply with `message.reply()`. Cloudflare
    permits `reply` only on DMARC-passing mail, only to the original sender,
    and only from the receiving domain, which is exactly what we want. If
-   `reply` throws (no DMARC pass), the consent row is still recorded but no
-   link is sent, and the event is logged.
+   `reply` throws (no DMARC pass), the consent just recorded is revoked, no
+   link is sent, and `login.reply_failed` is logged. Consent therefore sticks
+   only when the reply succeeded. Rate limiting (3 per sender per hour)
+   happens before consent is granted; a limited message grants nothing, and
+   `login.inbound_limited` is logged once per window.
 4. The Worker does not parse `Authentication-Results`; its presence on
    Worker-delivered mail is not reliable. Cloudflare's SPF/DKIM gate plus the
    `reply` DMARC gate are the trust boundary.
@@ -458,3 +461,5 @@ Rulings from the phase 1 reviews, folded into the sections above:
 5. 6.6, 6.7: fresh proof is enforced on sessions of kind `browser` whether the
    token arrives by cookie or bearer.
 6. 4.5: archived identities are treated as signed out everywhere.
+7. 6.4: inbound consent is kept only when the DMARC-gated reply succeeds, and
+   the rate limit is applied before consent is granted.

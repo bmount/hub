@@ -37,12 +37,27 @@ describe("consent verbs", () => {
     expect((await apiPost("blue.pimwell.test", "consent.list", { email: "m2@example.com" }, bearer(blueAdmin.token))).status).toBe(404);
     expect((await apiPost("acme.pimwell.test", "consent.list", { email: "m2@example.com" }, bearer(member.token))).status).toBe(404);
     expect((await apiPost("pimwell.test", "consent.list", { email: "m2@example.com" }, bearer(admin.token))).status).toBe(404);
-    expect((await apiPost("acme.pimwell.test", "consent.list", { email: "nobody@example.com" }, bearer(admin.token))).status).toBe(404);
+    const unknown = await apiPost("acme.pimwell.test", "consent.list", { email: "nobody@example.com" }, bearer(admin.token));
+    const nonMember = await apiPost("acme.pimwell.test", "consent.list", { email: "badmin@example.com" }, bearer(admin.token));
+    expect(unknown.status).toBe(404);
+    expect(nonMember.status).toBe(404);
+    expect(await nonMember.text()).toBe(await unknown.text());
+    const listed = (await (await apiPost("acme.pimwell.test", "consent.list", { email: "m2@example.com" }, bearer(admin.token))).json()) as any;
+    expect(listed.result).toMatchObject({ email: "m2@example.com", active: true });
+    expect(listed.result.consents).toHaveLength(1);
     const res = await apiPost("acme.pimwell.test", "consent.revoke", { email: "M2@example.com" }, bearer(admin.token));
     expect(res.status).toBe(200);
     expect(await hasActiveConsent(env.HUB_DB, "m2@example.com")).toBe(false);
     const ev = await env.HUB_DB.prepare("SELECT tenant_id FROM event WHERE kind = 'consent.revoke'").first<{ tenant_id: string }>();
     expect(ev!.tenant_id).toBe(acme.id);
+  });
+
+  it("denies a tenant admin an archived member's address", async () => {
+    const acme = await seedTenant("acme");
+    const admin = await seedHuman("admin@example.com", { memberships: [{ tenant_id: acme.id, role: "admin" }] });
+    const gone = await seedHuman("gone@example.com", { memberships: [{ tenant_id: acme.id, role: "member" }] });
+    await env.HUB_DB.prepare("UPDATE identity SET state = 'archived' WHERE id = ?").bind(gone.identity.id).run();
+    expect((await apiPost("acme.pimwell.test", "consent.list", { email: "gone@example.com" }, bearer(admin.token))).status).toBe(404);
   });
 
   it("lets a root manage any address", async () => {
