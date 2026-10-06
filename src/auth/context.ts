@@ -49,19 +49,26 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
 
   let session: Session | null = null;
   let authKind: Ctx["authKind"] = null;
+  let staleCookie = false;
   if (bearer && bearer.startsWith("pms_")) {
     session = await getSessionByToken(db, bearer, now);
     if (session) authKind = "bearer";
   } else if (cookieToken) {
     session = await getSessionByToken(db, cookieToken, now);
     if (session) authKind = "cookie";
+    else staleCookie = true;
   }
-  const staleCookie = cookieToken !== null && authKind !== "bearer" && session === null;
 
   let identity: Identity | null = null;
   if (session) {
     session = await touchSession(db, session, now);
     identity = await getIdentityById(db, session.identity_id);
+    if (!identity || identity.state !== "active") {
+      if (authKind === "cookie") staleCookie = true;
+      identity = null;
+      session = null;
+      authKind = null;
+    }
   }
 
   let role: Role | null = null;

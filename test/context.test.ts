@@ -76,3 +76,46 @@ describe("roleFor and rank", () => {
     expect(roleFor(null, null)).toBeNull();
   });
 });
+
+describe("signed-out and stale cookie rules", () => {
+  async function archive(id: string) {
+    await db().prepare("UPDATE identity SET state = 'archived' WHERE id = ?").bind(id).run();
+  }
+
+  it("archived root is signed out on the apex", async () => {
+    const root = await createIdentity(db(), { kind: "human", email: "r@example.com", display_name: "R", is_root: 1, operator_id: null }, now);
+    const { token } = await createBrowserSession(db(), root.id, now);
+    await archive(root.id);
+    const req = new Request("https://pimwell.test/", { headers: { cookie: `${COOKIE_NAME}=${token}` } });
+    const ctx = await buildContext(req, env, now + 1);
+    expect(ctx.identity).toBeNull();
+    expect(ctx.session).toBeNull();
+    expect(ctx.role).toBeNull();
+    expect(ctx.staleCookie).toBe(true);
+  });
+
+  it("archived member is signed out on a tenant host", async () => {
+    const s = await seed();
+    await archive(s.identity.id);
+    const req = new Request("https://acme.pimwell.test/", { headers: { cookie: `${COOKIE_NAME}=${s.token}` } });
+    const ctx = await buildContext(req, env, now + 1);
+    expect(ctx.identity).toBeNull();
+    expect(ctx.role).toBeNull();
+  });
+
+  it("bad bearer with valid cookie: bearer wins, cookie not consulted, not stale", async () => {
+    const s = await seed();
+    const req = new Request("https://pimwell.test/", { headers: { authorization: "Bearer pms_nope", cookie: `${COOKIE_NAME}=${s.token}` } });
+    const ctx = await buildContext(req, env, now + 1);
+    expect(ctx.staleCookie).toBe(false);
+    expect(ctx.identity).toBeNull();
+  });
+
+  it("valid bearer with stale cookie: not stale, identity from bearer", async () => {
+    const s = await seed();
+    const req = new Request("https://pimwell.test/", { headers: { authorization: `Bearer ${s.token}`, cookie: `${COOKIE_NAME}=pms_stale` } });
+    const ctx = await buildContext(req, env, now + 1);
+    expect(ctx.staleCookie).toBe(false);
+    expect(ctx.identity?.id).toBe(s.identity.id);
+  });
+});
