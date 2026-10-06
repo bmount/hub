@@ -7,11 +7,17 @@ import { mePage } from "./http/me";
 import { adminAgentsPage } from "./http/adminAgents";
 import { handleEmail } from "./mail/inbound";
 import { introspect } from "./http/internal";
+import { asMetadataPage, protectedResourcePage } from "./http/oauthMeta";
+import { registerEndpoint } from "./http/oauthRegister";
+import { handleMcp } from "./mcp/handler";
 import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sessionsPage } from "./http/pages";
 
 registerAllVerbs();
 
 const app = new Hono<{ Bindings: Env }>();
+
+/** Hono types its execution context separately from workers-types; at runtime it is the Worker's own. */
+const workerCtx = (c: unknown): ExecutionContext => c as ExecutionContext;
 
 app.get("/healthz", (c) => c.text("ok"));
 app.post("/api/*", (c) => handleApi(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
@@ -27,6 +33,11 @@ app.get("/me", (c) => mePage(c.req.raw, c.env));
 app.get("/admin/agents", (c) => adminAgentsPage(c.req.raw, c.env));
 app.get("/me/sessions", (c) => sessionsPage(c.req.raw, c.env));
 app.post("/internal/introspect", (c) => introspect(c.req.raw, c.env));
+app.get("/.well-known/oauth-authorization-server", (c) => asMetadataPage(c.req.raw, c.env));
+app.get("/.well-known/oauth-protected-resource", (c) => protectedResourcePage(c.req.raw, c.env));
+app.get("/.well-known/oauth-protected-resource/mcp", (c) => protectedResourcePage(c.req.raw, c.env));
+app.post("/oauth/register", (c) => registerEndpoint(c.req.raw, c.env, workerCtx(c.executionCtx)));
+app.all("/mcp", (c) => handleMcp(c.req.raw, c.env));
 app.notFound(() => notFoundPage());
 
 export default { fetch: app.fetch, email: handleEmail } satisfies ExportedHandler<Env>;
