@@ -67,5 +67,11 @@ and send it with a matching `Origin` header:
 | project.list | tenant | reader | |
 | invite.create, invite.revoke, invite.list | tenant | admin | 60 min (admin-role invites can only be created by a root) |
 | session.list, session.revoke, session.end | any | signed in | |
+| login.request | apex | public (neutral answer; `reproof: true` needs a browser session) | |
+| login.verify | apex | public (link token) | |
 
-Phase 1 has no re-proof flow. A browser session older than 60 minutes cannot run the fresh-proof verbs until phase 2 adds magic links. Operator escape hatch: find your session id on `/me/sessions`, then run `npx wrangler d1 execute pimwell-hub --remote --command "UPDATE session SET last_proof_at = <now in ms> WHERE id = '<session id>'"`.
+### Signing in and re-proving
+
+- `https://pimwell.com/login` emails a sign-in link, but only to an address that has written to the hub first (the consent rule). To give consent, or to sign in without the form, send any message to `login@pimwell.com` or `signup@pimwell.com` from your address; the reply carries a link. Links last 15 minutes, work once, and are consumed by the button on `/auth/<token>`, not by opening it.
+- Admin changes need a proof less than 60 minutes old. A form post past that age lands on `/login?reproof=1`, which emails a confirmation link to your own address; open it in the same browser. Without consent, write to `login@pimwell.com` and open the reply's link in the browser you are signed in with; that refreshes the proof too.
+- Limits: 3 links per address per hour, 20 requests per IP per hour. Over the limit the page answers the same way and sends nothing.

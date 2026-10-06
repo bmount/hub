@@ -78,7 +78,13 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     }
     return finish(ctx, env, json({ ok: true, result }, 200));
   } catch (e) {
-    if (e instanceof HubError) return finish(ctx, env, json({ ok: false, error: e.reason, detail: e.detail ?? null }, e.status));
+    if (e instanceof HubError) {
+      if (isForm && e.reason === "reproof_required") {
+        const next = ctx?.tenant ? `&next=${ctx.tenant.slug}` : "";
+        return finish(ctx, env, new Response(null, { status: 303, headers: { location: `https://${env.HUB_DOMAIN}/login?reproof=1${next}`, "cache-control": "no-store" } }));
+      }
+      return finish(ctx, env, json({ ok: false, error: e.reason, detail: e.detail ?? null }, e.status));
+    }
     if (e instanceof SyntaxError) return finish(ctx, env, json({ ok: false, error: "bad_request", detail: "invalid JSON" }, 400));
     console.error("verb failed", name, e instanceof Error ? e.message : String(e));
     return finish(ctx, env, json({ ok: false, error: "internal", detail: null }, 500));
