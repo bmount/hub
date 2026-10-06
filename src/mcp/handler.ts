@@ -33,6 +33,15 @@ function mcpHandler(): McpHttpHandler {
   return mcp;
 }
 
+/** True when the body parses as a JSON array. Anything else, including a body that is not JSON, is left to the SDK. */
+async function isBatch(request: Request): Promise<boolean> {
+  try {
+    return Array.isArray(JSON.parse(await request.clone().text()));
+  } catch {
+    return false;
+  }
+}
+
 export async function handleMcp(request: Request, env: Env, waitUntil?: (p: Promise<unknown>) => void, now: number = Date.now()): Promise<Response> {
   const host = classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN);
   if (host.kind !== "tenant") return notFoundPage();
@@ -40,6 +49,10 @@ export async function handleMcp(request: Request, env: Env, waitUntil?: (p: Prom
   if (origin !== null && !ALLOWED_ORIGINS.has(origin)) return oauthJson({ error: "forbidden_origin" }, 403);
   const auth = await mcpAuth(request, env, host.slug, now, waitUntil);
   if (auth.kind === "deny") return auth.response;
+  // A batch array would run many calls under one rate-limit charge; the 2025-06-18 spec dropped batching anyway.
+  if (request.method === "POST" && (await isBatch(request))) {
+    return oauthJson({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "JSON-RPC batch requests are not supported" } }, 400);
+  }
   const o = auth.ctx.oauth!;
   return mcpHandler().fetch(request, {
     authInfo: { token: auth.token, clientId: o.client_id, scopes: o.scopes, expiresAt: auth.expiresAt, resource: new URL(auth.resource), extra: { hub: auth.ctx } },

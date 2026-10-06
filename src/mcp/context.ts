@@ -3,7 +3,7 @@ import { credentialUsable, oauthContext, type Ctx } from "../auth/context";
 import { liveGrant } from "../db/oauthGrants";
 import { touchSession } from "../db/sessions";
 import { recordEvent } from "../db/events";
-import { takeRateDetail } from "../rate";
+import { takeRateAtomic } from "../rate";
 import { bearerChallenge, oauthJson } from "../http/oauthMeta";
 import { authServer, tenantResource } from "../oauth/config";
 
@@ -27,18 +27,28 @@ export async function mcpAuth(
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
   const header = request.headers.get("authorization") ?? "";
   const token = header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";
-  if (!token) {
-    const r = await takeRateDetail(env.RATE, "mcp_anon_ip", ip, now);
-    return r.ok ? { kind: "deny", response: bearerChallenge(env, slug, null) } : tooMany(r.retryAfterS);
+  // Every path that ends without a valid token charges the same per-IP bucket, so guessing tokens is rate-limited too.
+  const refuse = async (error: "invalid_token" | null): Promise<McpAuth> => {
+    const r = await takeRateAtomic(env.HUB_DB, "mcp_anon_ip", ip, now);
+    return r.ok ? { kind: "deny", response: bearerChallenge(env, slug, error) } : tooMany(r.retryAfterS);
+  };
+  if (!token) return refuse(null);
+  let validated;
+  try {
+    validated = await authServer(env, resource).validateToken<GrantProps>(resource, token, env);
+  } catch (e) {
+    // The check itself failed (storage or library error): that is not a verdict on the token.
+    console.log("mcp token validation failed", e instanceof Error ? e.name : "error");
+    return { kind: "deny", response: oauthJson({ error: "temporarily_unavailable" }, 503, { "retry-after": "5" }) };
   }
-  const invalid = { kind: "deny" as const, response: bearerChallenge(env, slug, "invalid_token") };
-  const validated = await authServer(env, resource).validateToken<GrantProps>(resource, token, env).catch(() => null);
-  if (!validated || validated.audience !== resource) return invalid;
+  if (!validated || validated.audience !== resource) return refuse("invalid_token");
   const live = await liveGrant(env.HUB_DB, validated.props.grant_id, now);
-  if (!live || live.grant.resource !== resource || live.tenant.slug !== slug || live.session.id !== validated.props.session_id) return invalid;
-  if (!(await credentialUsable(env.HUB_DB, live.identity, live.session, null, live.tenant, "mcp"))) return invalid;
+  if (!live || live.grant.resource !== resource || live.tenant.slug !== slug || live.session.id !== validated.props.session_id) return refuse("invalid_token");
+  // Defence in depth: the token must have been issued to this grant's client and for this grant's human.
+  if (validated.clientId !== live.grant.client_id || validated.userId !== live.identity.id) return refuse("invalid_token");
+  if (!(await credentialUsable(env.HUB_DB, live.identity, live.session, null, live.tenant, "mcp"))) return refuse("invalid_token");
   for (const bucket of ["mcp_grant_minute", "mcp_grant_hour"] as const) {
-    const r = await takeRateDetail(env.RATE, bucket, live.grant.id, now);
+    const r = await takeRateAtomic(env.HUB_DB, bucket, live.grant.id, now);
     if (r.ok) continue;
     if (r.first) {
       await recordEvent(env.HUB_DB, {
