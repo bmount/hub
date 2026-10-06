@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import type { Env } from "./env";
 import { handleApi } from "./http/api";
+import { registerAllVerbs } from "./verbs/index";
+
+registerAllVerbs();
 
 const app = new Hono<{ Bindings: Env }>();
 
