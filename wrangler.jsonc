@@ -9,6 +9,7 @@
     { "pattern": "*.pimwell.com/*", "zone_name": "pimwell.com" }
   ],
   "vars": { "HUB_DOMAIN": "pimwell.com" },
+  "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
   "d1_databases": [
     {
       "binding": "HUB_DB",

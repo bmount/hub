@@ -11,6 +11,7 @@ import { listMembershipsForIdentity } from "../db/memberships";
 import { listNamespaces } from "../db/namespaces";
 import { listProjects } from "../db/projects";
 import type { State } from "../db/types";
+import intro from "../../site/index.html";
 
 export function neutralInvitePage(): string {
   return page("Invite", `<h1>This invite link is not valid</h1><p>It may have expired, been used already, or been revoked. Ask the person who invited you for a new link.</p>`);
@@ -121,7 +122,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind === "apex") {
-    if (!ctx.identity) return htmlResponse(page("Pimwell", `<h1>Pimwell</h1><p>Sign in with an invite link.</p>`), 200, extra);
+    if (!ctx.identity) return htmlResponse(intro, 200, extra);
     const memberships = await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id);
     let body = `<h1>Pimwell</h1><p>${esc(ctx.identity.display_name)} · <a href="/me/sessions">sessions</a></p>`;
     body += listSection("Your tenants", memberships.map((m) => `<a href="https://${esc(m.tenant.slug)}.${esc(env.HUB_DOMAIN)}/">${esc(m.tenant.display_name)}</a> (${esc(m.membership.role)})`));
