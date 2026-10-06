@@ -23,20 +23,40 @@ export type RateResult = { ok: boolean; first: boolean; retryAfterS: number };
 // Fixed windows in KV. Subjects are hashed so keys hold no addresses.
 // KV is eventually consistent; a burst at the edge may slightly exceed the cap.
 // `first` is true only on the first denial in a window, so callers can log once.
+// KV rejects (429) when one key is written more than about once a second. A counter write that fails
+// fails open for the MCP and OAuth buckets: the decision already computed from the read stands.
+async function putCounter(kv: KVNamespace, bucket: RateBucket, key: string, value: string, ttl: number): Promise<void> {
+  try {
+    await kv.put(key, value, { expirationTtl: ttl });
+  } catch (e) {
+    // The email buckets (addr, ip) keep failing closed: requestLink relies on it so a KV outage sends no mail.
+    if (bucket === "addr" || bucket === "ip") throw e;
+    console.log("rate write failed", e instanceof Error ? e.name : "error");
+  }
+}
+
 export async function takeRateDetail(kv: KVNamespace, bucket: RateBucket, subject: string, now: number): Promise<RateResult> {
   const { limit, windowMs } = RATE_RULES[bucket];
   const window = Math.floor(now / windowMs);
   const retryAfterS = Math.max(1, Math.ceil(((window + 1) * windowMs - now) / 1000));
   const ttl = Math.max(60, Math.ceil((2 * windowMs) / 1000));
   const key = `rl:${bucket}:${window}:${await sha256Hex(subject.trim().toLowerCase())}`;
-  const used = Number((await kv.get(key)) ?? "0");
+  let used: number;
+  try {
+    used = Number((await kv.get(key)) ?? "0");
+  } catch (e) {
+    // A read failure must not turn a /mcp call into a 500: the per-grant MCP buckets treat it as allowed.
+    if (!bucket.startsWith("mcp_grant_")) throw e;
+    console.log("rate read failed", e instanceof Error ? e.name : "error");
+    return { ok: true, first: false, retryAfterS };
+  }
   if (used >= limit) {
     const overKey = `${key}:over`;
     if ((await kv.get(overKey)) !== null) return { ok: false, first: false, retryAfterS };
-    await kv.put(overKey, "1", { expirationTtl: ttl });
+    await putCounter(kv, bucket, overKey, "1", ttl);
     return { ok: false, first: true, retryAfterS };
   }
-  await kv.put(key, String(used + 1), { expirationTtl: ttl });
+  await putCounter(kv, bucket, key, String(used + 1), ttl);
   return { ok: true, first: false, retryAfterS };
 }
 
