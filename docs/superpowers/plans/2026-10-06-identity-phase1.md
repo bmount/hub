@@ -2040,7 +2040,8 @@ export function defineVerb<P, R>(def: VerbDef<P, R>): VerbDef<P, R> {
   return def;
 }
 
-export function registerVerbs(defs: Array<VerbDef<never, unknown>> | Array<VerbDef<any, any>>): void {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function registerVerbs(defs: Array<VerbDef<any, any>>): void {
   for (const d of defs) REGISTRY.set(d.name, d as VerbDef<unknown, unknown>);
 }
 
@@ -3393,15 +3394,9 @@ One-time, with an account that can create resources:
 DNS: a proxied wildcard `A` or `AAAA` record for `*` and the apex must exist in the zone so the
 two Workers routes receive traffic. Universal SSL covers `pimwell.com` and `*.pimwell.com`.
 
-After deploy, bootstrap once against `https://pimwell.com/api/bootstrap` with the secret, accept the
-invite, then create a tenant from the apex:
-
-    curl -s -X POST https://pimwell.com/api/tenant.create \
-      -H 'authorization: Bearer <session token from /me/sessions is not shown; use a cookie-based client or whoami>' \
-      ...
-
-Simplest: use the browser. Sign in via the invite, then POST the form-encoded verbs from any page or use
-`curl` with the `pmw_session` cookie and an `Origin: https://pimwell.com` header:
+After deploy, bootstrap once against `https://pimwell.com/api/bootstrap` with the secret and accept the
+invite in a browser. To call verbs from the terminal, copy the `pmw_session` cookie value from the browser
+and send it with a matching `Origin` header:
 
     curl -s -X POST https://pimwell.com/api/tenant.create \
       -H 'content-type: application/json' -H 'origin: https://pimwell.com' \
@@ -3429,8 +3424,6 @@ Simplest: use the browser. Sign in via the invite, then POST the form-encoded ve
 Phase 1 has no re-proof flow; a session older than 60 minutes cannot run the fresh-proof verbs
 until phase 2 adds magic links. Accept a new invite to get a fresh session in the meantime.
 ```
-
-Edit the README's deploy section so it has no half-written `curl` example: delete the three-line block that starts with `curl -s -X POST https://pimwell.com/api/tenant.create` and the `...` line, keeping only the cookie-based example that follows. (The block above is shown so the executor sees exactly what to remove.)
 
 - [ ] **Step 2: Create cloud resources and fill in ids**
 
