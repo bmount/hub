@@ -3,8 +3,10 @@ import { COOKIE_NAME } from "../src/auth/cookie";
 import { createTenant } from "../src/db/tenants";
 import { createIdentity } from "../src/db/identities";
 import { addMembership } from "../src/db/memberships";
-import { createBrowserSession } from "../src/db/sessions";
-import type { Role } from "../src/db/types";
+import { createAgent } from "../src/db/agents";
+import { createApiToken } from "../src/db/apiTokens";
+import { AGENT_SESSION_DEFAULT_TTL_S, createAgentSession, createBrowserSession } from "../src/db/sessions";
+import type { Identity, Role, Tenant } from "../src/db/types";
 
 export function apiPost(host: string, verb: string, body: unknown, headers: Record<string, string> = {}) {
   return SELF.fetch(`https://${host}/api/${verb}`, {
@@ -31,4 +33,11 @@ export function cookieHeaders(token: string, host: string): Record<string, strin
 
 export function bearer(token: string): Record<string, string> {
   return { authorization: `Bearer ${token}` };
+}
+
+export async function seedAgent(tenant: Tenant, operator: Identity, slug = "bot", role: "member" | "reader" = "member") {
+  const agent = await createAgent(env.HUB_DB, { tenant, slug, display_name: slug, operator_id: operator.id, role, hubDomain: env.HUB_DOMAIN }, Date.now());
+  const { token: apiToken, plaintext: longLived } = await createApiToken(env.HUB_DB, { identity_id: agent.identity.id, tenant_id: tenant.id, name: "ci", created_by: operator.id, expires_at: null }, Date.now());
+  const { session, token } = await createAgentSession(env.HUB_DB, { identity_id: agent.identity.id, tenant_id: tenant.id, label: "run-1", parent_token_id: apiToken.id, ttl_s: AGENT_SESSION_DEFAULT_TTL_S }, Date.now());
+  return { agent, apiToken, longLived, session, token };
 }

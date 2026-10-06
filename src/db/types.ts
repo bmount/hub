@@ -39,3 +39,9 @@ export type Consent = {
 };
 export type ProofKind = "email" | "google" | "passkey";
 export type Proof = { id: string; identity_id: string; kind: ProofKind; subject: string; created_at: number };
+
+export type ApiToken = {
+  id: string; identity_id: string; tenant_id: string; name: string; token_hash: string; scopes: string;
+  created_by: string; created_at: number; expires_at: number | null; last_used_at: number | null; revoked_at: number | null;
+};
+export type Agent = { identity: Identity; membership: Membership; tenant: Tenant; slug: string };
