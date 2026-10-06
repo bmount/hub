@@ -31,7 +31,7 @@ const TABLE: Record<string, Decl> = {
   "channel.create": T("tenant", "member", null, { humanOnly: true }), "channel.set_topic": T("tenant", "member", null, { humanOnly: true }),
   "channel.add_agent": T("tenant", "member", null, { humanOnly: true }), "channel.remove_agent": T("tenant", "member", null, { humanOnly: true }),
   "channel.set_agent_policy": T("tenant", "member", null, { humanOnly: true }),
-  "channel.archive": T("tenant", "admin", 60), "channel.unarchive": T("tenant", "admin", 60),
+  "channel.archive": T("tenant", "admin", 60, { humanOnly: true }), "channel.unarchive": T("tenant", "admin", 60, { humanOnly: true }),
   "chat.post": T("tenant", "member", null), "chat.edit": T("tenant", "member", null), "chat.retract": T("tenant", "member", null),
   "chat.read": T("tenant", "reader", null, { mcp: "read" }), "chat.thread": T("tenant", "reader", null, { mcp: "read" }),
   "chat.history": T("tenant", "reader", null), "chat.inbox": T("tenant", "reader", null, { mcp: "read" }),

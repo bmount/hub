@@ -23,7 +23,7 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 export function stripCode(body: string): string {
   const blank = (m: string) => m.replace(/[^\n]/g, " ");
   let fence: string | null = null;
-  const lines = body.split("\n").map((line) => {
+  const lines = body.replace(/\r\n?/g, "\n").split("\n").map((line) => {
     const m = FENCE.exec(line);
     if (fence === null) {
       if (!m) return line;

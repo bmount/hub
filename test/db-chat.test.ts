@@ -52,12 +52,12 @@ describe("chat repository", () => {
     const add = () => addAgentMember(env.HUB_DB, { conversation_id: ch.project_id, tenant_id: acme.id, identity_id: scout.agent.identity.id, added_by: lead.identity.id }, Date.now());
     expect(await add()).toBe(true);
     expect(await add()).toBe(false);
-    expect(await isAgentMember(env.HUB_DB, ch.project_id, scout.agent.identity.id)).toBe(true);
-    expect(await listAgentMembers(env.HUB_DB, ch.project_id)).toEqual([{ identity_id: scout.agent.identity.id, operator_id: lead.identity.id }]);
+    expect(await isAgentMember(env.HUB_DB, acme.id, ch.project_id, scout.agent.identity.id)).toBe(true);
+    expect(await listAgentMembers(env.HUB_DB, acme.id, ch.project_id)).toEqual([{ identity_id: scout.agent.identity.id, operator_id: lead.identity.id }]);
     expect([...(await agentConversationIds(env.HUB_DB, acme.id, scout.agent.identity.id))]).toEqual([ch.project_id]);
-    expect(await removeAgentMember(env.HUB_DB, ch.project_id, scout.agent.identity.id, Date.now())).toBe(true);
-    expect(await isAgentMember(env.HUB_DB, ch.project_id, scout.agent.identity.id)).toBe(false);
-    expect(await listAgentMembers(env.HUB_DB, ch.project_id)).toEqual([]);
+    expect(await removeAgentMember(env.HUB_DB, acme.id, ch.project_id, scout.agent.identity.id, Date.now())).toBe(true);
+    expect(await isAgentMember(env.HUB_DB, acme.id, ch.project_id, scout.agent.identity.id)).toBe(false);
+    expect(await listAgentMembers(env.HUB_DB, acme.id, ch.project_id)).toEqual([]);
     expect(await add()).toBe(true);
   });
 

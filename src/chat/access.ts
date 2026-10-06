@@ -16,7 +16,7 @@ export function viewerOf(ctx: Ctx): Viewer {
 export async function canRead(db: D1Database, v: Viewer, ch: ChannelRow): Promise<boolean> {
   if (ch.tenant_id !== v.tenant.id || rank(v.role) < rank("reader")) return false;
   if (v.identity.kind === "human") return true;
-  return isAgentMember(db, ch.project_id, v.identity.id);
+  return isAgentMember(db, ch.tenant_id, ch.project_id, v.identity.id);
 }
 
 /** The channel by name if the caller may read it; otherwise 404, the same as a channel that does not exist. */
@@ -35,9 +35,10 @@ export async function readableChannels(db: D1Database, v: Viewer, state: "active
   return all.filter((c) => mine.has(c.project_id));
 }
 
-/** An active agent of the caller's tenant, by slug with or without `@`. */
-export async function agentInTenant(ctx: Ctx, name: string): Promise<Agent> {
+/** An active agent of the caller's tenant, by slug with or without `@`; `includeArchived` also finds archived ones. */
+export async function agentInTenant(ctx: Ctx, name: string, includeArchived = false): Promise<Agent> {
   const agent = await getAgentBySlug(ctx.db, ctx.tenant!, name.trim().replace(/^@/, ""), ctx.env.HUB_DOMAIN);
-  if (!agent || agent.tenant.id !== ctx.tenant!.id || agent.identity.state !== "active" || agent.membership.state !== "active") throw notFound("no such agent");
+  if (!agent || agent.tenant.id !== ctx.tenant!.id) throw notFound("no such agent");
+  if (!includeArchived && (agent.identity.state !== "active" || agent.membership.state !== "active")) throw notFound("no such agent");
   return agent;
 }

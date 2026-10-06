@@ -72,36 +72,33 @@ export async function setChannelState(db: D1Database, tenant_id: string, id: str
 export async function addAgentMember(
   db: D1Database, input: { conversation_id: string; tenant_id: string; identity_id: string; added_by: string }, now: number,
 ): Promise<boolean> {
-  const row = await db.prepare("SELECT removed_at FROM conversation_member WHERE conversation_id = ? AND identity_id = ?")
-    .bind(input.conversation_id, input.identity_id).first<{ removed_at: number | null }>();
-  if (row && row.removed_at === null) return false;
-  if (row) {
-    await db.prepare("UPDATE conversation_member SET added_by = ?, added_at = ?, removed_at = NULL WHERE conversation_id = ? AND identity_id = ?")
-      .bind(input.added_by, now, input.conversation_id, input.identity_id).run();
-    return true;
-  }
-  await db.prepare("INSERT INTO conversation_member (conversation_id, tenant_id, identity_id, role, added_by, added_at, removed_at) VALUES (?, ?, ?, 'agent', ?, ?, NULL)")
+  // Two concurrent adds both reach the INSERT; the loser's OR IGNORE changes nothing and it reports false.
+  const ins = await db.prepare("INSERT OR IGNORE INTO conversation_member (conversation_id, tenant_id, identity_id, role, added_by, added_at, removed_at) VALUES (?, ?, ?, 'agent', ?, ?, NULL)")
     .bind(input.conversation_id, input.tenant_id, input.identity_id, input.added_by, now).run();
-  return true;
+  if (ins.meta.changes === 1) return true;
+  const back = await db.prepare(
+    "UPDATE conversation_member SET added_by = ?, added_at = ?, removed_at = NULL WHERE conversation_id = ? AND tenant_id = ? AND identity_id = ? AND removed_at IS NOT NULL",
+  ).bind(input.added_by, now, input.conversation_id, input.tenant_id, input.identity_id).run();
+  return back.meta.changes === 1;
 }
 
-export async function removeAgentMember(db: D1Database, conversation_id: string, identity_id: string, now: number): Promise<boolean> {
-  const r = await db.prepare("UPDATE conversation_member SET removed_at = ? WHERE conversation_id = ? AND identity_id = ? AND removed_at IS NULL")
-    .bind(now, conversation_id, identity_id).run();
+export async function removeAgentMember(db: D1Database, tenant_id: string, conversation_id: string, identity_id: string, now: number): Promise<boolean> {
+  const r = await db.prepare("UPDATE conversation_member SET removed_at = ? WHERE tenant_id = ? AND conversation_id = ? AND identity_id = ? AND removed_at IS NULL")
+    .bind(now, tenant_id, conversation_id, identity_id).run();
   return r.meta.changes === 1;
 }
 
-export async function listAgentMembers(db: D1Database, conversation_id: string): Promise<Array<{ identity_id: string; operator_id: string | null }>> {
+export async function listAgentMembers(db: D1Database, tenant_id: string, conversation_id: string): Promise<Array<{ identity_id: string; operator_id: string | null }>> {
   const r = await db.prepare(
     `SELECT cm.identity_id, i.operator_id FROM conversation_member cm JOIN identity i ON i.id = cm.identity_id
-      WHERE cm.conversation_id = ? AND cm.removed_at IS NULL AND i.state = 'active' ORDER BY cm.added_at, cm.identity_id`,
-  ).bind(conversation_id).all<{ identity_id: string; operator_id: string | null }>();
+      WHERE cm.tenant_id = ? AND cm.conversation_id = ? AND cm.removed_at IS NULL AND i.state = 'active' ORDER BY cm.added_at, cm.identity_id`,
+  ).bind(tenant_id, conversation_id).all<{ identity_id: string; operator_id: string | null }>();
   return r.results;
 }
 
-export async function isAgentMember(db: D1Database, conversation_id: string, identity_id: string): Promise<boolean> {
-  const r = await db.prepare("SELECT 1 FROM conversation_member WHERE conversation_id = ? AND identity_id = ? AND removed_at IS NULL")
-    .bind(conversation_id, identity_id).first();
+export async function isAgentMember(db: D1Database, tenant_id: string, conversation_id: string, identity_id: string): Promise<boolean> {
+  const r = await db.prepare("SELECT 1 FROM conversation_member WHERE tenant_id = ? AND conversation_id = ? AND identity_id = ? AND removed_at IS NULL")
+    .bind(tenant_id, conversation_id, identity_id).first();
   return r !== null;
 }
 
@@ -126,10 +123,19 @@ export async function setAgentsEnabled(db: D1Database, tenant_id: string, enable
     .bind(tenant_id, enabled ? 1 : 0, by, now, reason).run();
 }
 
-/** `muted_until` null unmutes. `muted_by` is null when the hub itself mutes (tripwire). */
+/**
+ * `muted_until` null unmutes. Otherwise a mute never shortens an existing one (MAX), so an agent muting itself for a
+ * minute cannot undo its operator's mute; `muted_by` and `reason` follow whichever mute is longer.
+ * `muted_by` is null when the hub itself mutes (tripwire).
+ */
 export async function setAgentMute(db: D1Database, tenant_id: string, identity_id: string, muted_until: number | null, muted_by: string | null, reason: string | null): Promise<void> {
-  await db.prepare("INSERT OR REPLACE INTO agent_chat_state (tenant_id, identity_id, muted_until, muted_by, reason) VALUES (?, ?, ?, ?, ?)")
-    .bind(tenant_id, identity_id, muted_until, muted_by, reason).run();
+  await db.prepare(
+    `INSERT INTO agent_chat_state (tenant_id, identity_id, muted_until, muted_by, reason) VALUES (?1, ?2, ?3, ?4, ?5)
+     ON CONFLICT (tenant_id, identity_id) DO UPDATE SET
+       muted_until = CASE WHEN ?3 IS NULL THEN NULL ELSE MAX(COALESCE(muted_until, 0), ?3) END,
+       muted_by = CASE WHEN ?3 IS NULL OR COALESCE(muted_until, 0) < ?3 THEN ?4 ELSE muted_by END,
+       reason = CASE WHEN ?3 IS NULL OR COALESCE(muted_until, 0) < ?3 THEN ?5 ELSE reason END`,
+  ).bind(tenant_id, identity_id, muted_until, muted_by, reason).run();
 }
 
 export async function agentMutedUntil(db: D1Database, tenant_id: string, identity_id: string, now: number): Promise<number | null> {

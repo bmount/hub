@@ -22,6 +22,14 @@ describe("handles", () => {
     expect(skeleton("lead")).not.toBe(skeleton("dev"));
   });
 
+  it("folds confusables independent of order (TR39 style)", () => {
+    for (const [a, b] of [["c1ark", "clark"], ["c-lark", "clark"], ["r-nay", "may"], ["v-vest", "west"]]) expect(skeleton(a!)).toBe(skeleton(b!));
+  });
+
+  it("refuses reserved handles by skeleton", () => {
+    for (const h of ["h-ub", "ad-min", "sys-tem", "r00t"]) expect(isValidHandle(h)).toBe(false);
+  });
+
   it("derives a candidate from an address", () => {
     expect(candidateHandle("Dev.Ops+x@example.com")).toBe("dev-ops-x");
     expect(candidateHandle("1st@example.com")).toBe("u1st");

@@ -1,7 +1,8 @@
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { getControls } from "../src/db/chat";
-import { seedHuman } from "./helpers";
+import { addAgentMember, getChannelBySlug, setAgentMute } from "../src/db/chat";
+import { apiPost, bearer, cookieHeaders, seedHuman } from "./helpers";
 import { call, channelWith, chatWorld, ok } from "./chat-helpers";
 
 describe("channels", () => {
@@ -85,5 +86,70 @@ describe("agent controls", () => {
     await env.HUB_DB.prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(Date.now(), w.lead.session.id).run();
     await ok(w.lead.token, "chat.agents_enable", {});
     expect((await getControls(env.HUB_DB, w.acme.id, Date.now())).agents_enabled).toBe(true);
+  });
+});
+
+describe("channel and project separation (ruling C-2)", () => {
+  it("channels stay out of project.list and the home and archive pages, and project.archive answers 404", async () => {
+    const w = await chatWorld();
+    await ok(w.lead.token, "project.create", { slug: "site", kind: "repo", display_name: "Site" });
+    await ok(w.lead.token, "channel.create", { slug: "general" });
+    const paths = (await ok(w.lead.token, "project.list", {})).projects.map((p: { path: string }) => p.path);
+    expect(paths).toEqual(["site"]);
+    const home = await (await SELF.fetch("https://acme.pimwell.test/", { headers: cookieHeaders(w.lead.token, "acme.pimwell.test") })).text();
+    expect(home).toContain("site");
+    expect(home).not.toContain("general");
+    expect((await call(w.lead.token, "project.archive", { slug: "general" })).status).toBe(404);
+    await ok(w.lead.token, "channel.archive", { c: "general" });
+    expect((await ok(w.lead.token, "project.list", { state: "archived" })).projects).toEqual([]);
+    const archive = await (await SELF.fetch("https://acme.pimwell.test/archive", { headers: cookieHeaders(w.lead.token, "acme.pimwell.test") })).text();
+    expect(archive).not.toContain("general");
+    expect((await call(w.lead.token, "project.unarchive", { slug: "general" })).status).toBe(404);
+  });
+});
+
+describe("channel verb minors", () => {
+  it("channel.archive and unarchive are human-only", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    expect((await call(w.scout.token, "channel.archive", { c: "general" })).status).toBe(403);
+    await ok(w.lead.token, "channel.archive", { c: "general" });
+    expect((await call(w.scout.token, "channel.unarchive", { c: "general" })).status).toBe(403);
+  });
+
+  it("remove_agent works on an archived channel and for an archived agent; add_agent still needs both active", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    await ok(w.lead.token, "channel.archive", { c: "general" });
+    expect((await ok(w.lead.token, "channel.remove_agent", { c: "general", agent: "scout" })).removed).toBe(true);
+    expect((await call(w.lead.token, "channel.add_agent", { c: "general", agent: "scout" })).status).toBe(409);
+    await ok(w.lead.token, "channel.unarchive", { c: "general" });
+    expect((await apiPost("pimwell.test", "agent.archive", { agent_id: w.tidy.agent.identity.id }, bearer(w.dev.token))).status).toBe(200);
+    expect((await ok(w.dev.token, "channel.remove_agent", { c: "general", agent: "tidy" })).removed).toBe(true);
+    expect((await call(w.dev.token, "channel.add_agent", { c: "general", agent: "tidy" })).status).toBe(404);
+  });
+
+  it("concurrent adds of one agent add it once", async () => {
+    const w = await chatWorld();
+    await ok(w.lead.token, "channel.create", { slug: "general" });
+    const ch = (await getChannelBySlug(env.HUB_DB, w.acme.id, "general"))!;
+    const input = { conversation_id: ch.project_id, tenant_id: w.acme.id, identity_id: w.scout.agent.identity.id, added_by: w.lead.identity.id };
+    const results = await Promise.all([addAgentMember(env.HUB_DB, input, Date.now()), addAgentMember(env.HUB_DB, input, Date.now())]);
+    expect(results.filter(Boolean).length).toBe(1);
+  });
+});
+
+describe("mute never shortens (B-I1)", () => {
+  it("an agent muting itself for a minute does not undo its operator's indefinite mute", async () => {
+    const w = await chatWorld();
+    await ok(w.lead.token, "chat.agent_mute", { agent: "scout" });
+    await ok(w.scout.token, "chat.agent_mute", { agent: "scout", minutes: 1 });
+    expect((await getControls(env.HUB_DB, w.acme.id, Date.now())).muted).toEqual([w.scout.agent.identity.id]);
+    const left = await env.HUB_DB.prepare("SELECT muted_until, muted_by FROM agent_chat_state WHERE identity_id = ?").bind(w.scout.agent.identity.id).first<{ muted_until: number; muted_by: string }>();
+    expect(left!.muted_until).toBeGreaterThan(Date.now() + 365 * 86_400_000);
+    expect(left!.muted_by).toBe(w.lead.identity.id);
+    await setAgentMute(env.HUB_DB, w.acme.id, w.scout.agent.identity.id, Date.now() + 1000, null, "x");
+    await ok(w.lead.token, "chat.agent_unmute", { agent: "scout" });
+    expect((await getControls(env.HUB_DB, w.acme.id, Date.now())).muted).toEqual([]);
   });
 });

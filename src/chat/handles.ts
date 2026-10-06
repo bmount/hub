@@ -5,15 +5,20 @@ export const HANDLE_RE = /^[a-z][a-z0-9-]{1,23}$/;
 export const RESERVED_HANDLES = new Set(["channel", "here", "all", "hub", "admin", "root", "system", "everyone"]);
 
 export function isValidHandle(h: string): boolean {
-  return HANDLE_RE.test(h) && !RESERVED_HANDLES.has(h);
+  return HANDLE_RE.test(h) && !RESERVED_HANDLES.has(h) && !RESERVED_SKELETONS.has(skeleton(h));
 }
+
+/** Reserved handles compared by skeleton, so `h-ub`, `ad-min`, `sys-tem`, and `r00t` are refused too. */
+export const RESERVED_SKELETONS = new Set([...RESERVED_HANDLES].map((h) => skeleton(h)));
 
 /**
  * Confusable skeleton (Unicode TR39) for the handle alphabet. Handles are ASCII by grammar, so only the ASCII
  * confusables apply; hyphens are dropped so `ti-dy` cannot sit beside `tidy`.
  */
 export function skeleton(h: string): string {
-  return h.toLowerCase().replace(/rn/g, "m").replace(/vv/g, "w").replace(/cl/g, "d").replace(/0/g, "o").replace(/1/g, "l").replace(/-/g, "");
+  // Single-character maps and hyphen removal first, then every multi-character confusable expanded to its canonical
+  // pair (m→rn, d→cl, w→vv), so the result does not depend on the order of the folds.
+  return h.toLowerCase().replace(/0/g, "o").replace(/1/g, "l").replace(/-/g, "").replace(/m/g, "rn").replace(/d/g, "cl").replace(/w/g, "vv");
 }
 
 /** The handle an address suggests. Agents get their slug: their address is `<slug>@<tenant>.<domain>`. */

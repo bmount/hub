@@ -48,7 +48,7 @@ export function getProjectByPath(db: D1Database, tenant_id: string, namespace_sl
 }
 
 export async function listProjects(db: D1Database, tenant_id: string, state: State): Promise<Project[]> {
-  const r = await db.prepare("SELECT * FROM project WHERE tenant_id = ? AND state = ? ORDER BY namespace_id, slug").bind(tenant_id, state).all<Project>();
+  const r = await db.prepare("SELECT * FROM project WHERE tenant_id = ? AND state = ? AND kind <> 'channel' ORDER BY namespace_id, slug").bind(tenant_id, state).all<Project>();
   return r.results;
 }
 

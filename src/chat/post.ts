@@ -36,7 +36,7 @@ const needsAfter = (a: Author) => a.session_kind === "agent_run" || a.session_ki
 /** D1 is the truth for who may post and be woken (spec 6.2, 6.7, 9.3), read on every command. */
 async function gate(ctx: Ctx, ch: ChannelRow, author: Author): Promise<{ audience: Audience; policy: "open" | "mention_only" }> {
   if (ch.state !== "active") throw conflict("channel is archived");
-  const [controls, members] = await Promise.all([getControls(ctx.db, ch.tenant_id, ctx.now), listAgentMembers(ctx.db, ch.project_id)]);
+  const [controls, members] = await Promise.all([getControls(ctx.db, ch.tenant_id, ctx.now), listAgentMembers(ctx.db, ch.tenant_id, ch.project_id)]);
   if (author.kind === "agent") {
     if (!controls.agents_enabled) throw new HubError(403, "agents_disabled", "agent posting is switched off in this tenant");
     if (controls.muted.includes(author.id)) throw new HubError(403, "muted", "this agent is muted");

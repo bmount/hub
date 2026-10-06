@@ -51,12 +51,13 @@ export const channelSetTopic = defineVerb({
 async function agentMembership(ctx: Ctx, c: string, name: string, add: boolean) {
   const { identity } = requireHuman(ctx);
   const ch = await readableChannel(ctx, c);
-  writable(ch);
-  const agent = await agentInTenant(ctx, name);
+  // Removal stays possible on archived channels and for archived agents, so nobody is left stuck as a member.
+  if (add) writable(ch);
+  const agent = await agentInTenant(ctx, name, !add);
   if (agent.identity.operator_id !== identity.id && rank(ctx.role) < rank("admin")) throw forbidden("only the agent's operator or an admin may do this");
   const changed = add
     ? await addAgentMember(ctx.db, { conversation_id: ch.project_id, tenant_id: ch.tenant_id, identity_id: agent.identity.id, added_by: identity.id }, ctx.now)
-    : await removeAgentMember(ctx.db, ch.project_id, agent.identity.id, ctx.now);
+    : await removeAgentMember(ctx.db, ch.tenant_id, ch.project_id, agent.identity.id, ctx.now);
   if (changed) await channelEvent(ctx, add ? "channel.add_agent" : "channel.remove_agent", ch, `${add ? "Added" : "Removed"} agent ${agent.slug} ${add ? "to" : "from"} #${ch.slug}`);
   return { channel: ch.slug, agent: agent.slug, ...(add ? { added: changed } : { removed: changed }) };
 }
@@ -105,14 +106,14 @@ async function setState(ctx: Ctx, c: string, state: "active" | "archived") {
 }
 
 export const channelArchive = defineVerb({
-  name: "channel.archive", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60,
+  name: "channel.archive", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60, humanOnly: true,
   summary: "Archive a channel: it stays readable and refuses posts.",
   parse: (i) => ({ c: reqString(i, "c", { max: 64 }) }),
   run: (ctx, p) => setState(ctx, p.c, "archived"),
 });
 
 export const channelUnarchive = defineVerb({
-  name: "channel.unarchive", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60,
+  name: "channel.unarchive", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60, humanOnly: true,
   summary: "Unarchive a channel.",
   parse: (i) => ({ c: reqString(i, "c", { max: 64 }) }),
   run: (ctx, p) => setState(ctx, p.c, "active"),

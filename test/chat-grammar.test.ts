@@ -14,6 +14,15 @@ describe("ref and mention grammar", () => {
     expect(parseBody("site@3f9a2c1").refs[0]).toEqual({ kind: "commit", text: "site@3f9a2c1", repo: "site", oid: "3f9a2c1" });
   });
 
+  it("strips fenced blocks in CRLF and CR bodies, then reads what follows", () => {
+    for (const nl of ["\r\n", "\r"]) {
+      const body = ["```", "site#k7q2 @ghost", "```", "hello @scout and web#ab12"].join(nl);
+      const p = parseBody(body);
+      expect(p.handles).toEqual(["scout"]);
+      expect(p.refs.map((r) => r.text)).toEqual(["web#ab12"]);
+    }
+  });
+
   it("ignores code spans, fenced blocks (closed or not), addresses, short prefixes, and bare numbers", () => {
     for (const body of [
       "`site#k7q2` and ``site@3f9a2c1``", "```\nsite@3f9a2c1 @scout\nweb#ab12\n```", "~~~ts\nweb#ab12\n~~~", "mail dev@example.com",
