@@ -28,6 +28,13 @@ const TABLE: Record<string, Decl> = {
   "token.create": T("public", "public", 60, { humanOnly: true }), "token.revoke": T("public", "public", 60, { humanOnly: true }),
   "token.list": T("public", "public", null, { humanOnly: true }),
   "event.list": T("tenant", "member", null, { mcp: "read" }),
+  "channel.create": T("tenant", "member", null, { humanOnly: true }), "channel.set_topic": T("tenant", "member", null, { humanOnly: true }),
+  "channel.add_agent": T("tenant", "member", null, { humanOnly: true }), "channel.remove_agent": T("tenant", "member", null, { humanOnly: true }),
+  "channel.set_agent_policy": T("tenant", "member", null, { humanOnly: true }),
+  "channel.archive": T("tenant", "admin", 60), "channel.unarchive": T("tenant", "admin", 60),
+  "chat.conversations": T("tenant", "reader", null),
+  "chat.agent_mute": T("tenant", "reader", null), "chat.agent_unmute": T("tenant", "member", 60, { humanOnly: true }),
+  "chat.agents_disable": T("tenant", "admin", null), "chat.agents_enable": T("tenant", "admin", 60),
   "oauth.grant.approve": T("hub", "public", 600, { humanOnly: true }),
 };
 

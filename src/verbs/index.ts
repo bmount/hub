@@ -12,6 +12,10 @@ import { tokenCreate, tokenList, tokenRevoke } from "./token";
 import { consentList, consentRevoke } from "./consent";
 import { eventList } from "./event";
 import { oauthGrantApprove } from "./oauth";
+import {
+  channelAddAgent, channelArchive, channelCreate, channelRemoveAgent, channelSetAgentPolicy, channelSetTopic, channelUnarchive,
+} from "./channel";
+import { chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable, chatConversations } from "./chatControl";
 
 export function registerAllVerbs(): void {
   registerVerbs([
@@ -27,5 +31,7 @@ export function registerAllVerbs(): void {
     tokenCreate, tokenRevoke, tokenList,
     eventList,
     oauthGrantApprove,
+    channelCreate, channelSetTopic, channelAddAgent, channelRemoveAgent, channelSetAgentPolicy, channelArchive, channelUnarchive,
+    chatConversations, chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable,
   ]);
 }
