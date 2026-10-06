@@ -98,6 +98,10 @@ reserved address `<slug>@<tenant>.pimwell.com`, see 6.5), `operator_id`
 A human identity is created exactly once, by accepting an invite. A later
 invite to the same email adds a membership instead.
 
+An identity with `state = archived` is treated as signed out everywhere: its
+sessions and tokens resolve to anonymous, its links and invites do not
+consume, and inbound mail from its address is rejected.
+
 ### 4.6 Membership and roles
 
 `membership(identity_id, tenant_id, role, state, created_at)`. Roles:
@@ -136,7 +140,8 @@ hub records `identity_id` and `session_id`.
   invite acceptance, magic-link verification, and the tenant switcher.
 - `<tenant>.pimwell.com` serves that tenant. The Worker resolves the host
   label to a tenant on every request; unknown or archived tenants return 404
-  without revealing which.
+  without revealing which. Anonymous callers and signed-in non-members get
+  the same 404 from a tenant's pages and from its tenant-scoped API verbs.
 - Reserved labels that are never tenant slugs: `www`, `mail`, `mx`, `api`,
   `mcp`, `login`, `signup`, `admin`, `root`, `static`, `cdn`, and any label
   starting with `_`.
@@ -157,11 +162,19 @@ hub records `identity_id` and `session_id`.
 2. The hub never sends the invite. The inviter delivers it out-of-band.
 3. `GET /invite/<token>` renders a page naming the tenant and role, with a
    button. `POST /invite/<token>` consumes it: creates the identity if the
-   email is new, creates the membership, starts a browser session, and
-   redirects to the tenant. The GET/POST split exists because corporate
-   link scanners prefetch URLs and would otherwise burn single-use links.
+   email is new, creates the membership (or sets the root flag), and
+   redirects to the tenant. A browser session is started only when the
+   acceptance created the identity. Accepting for an email that already has
+   an identity adds the membership but never mints a session; if the request
+   already carries that identity's own session it redirects into the tenant,
+   otherwise it shows a page saying access was added. The GET/POST split
+   exists because corporate link scanners prefetch URLs and would otherwise
+   burn single-use links.
 4. Invites are single-use. Expired or consumed links show the same neutral
    page.
+5. Creating an invite for an email that already holds an active membership
+   in the tenant is rejected with 409. Role changes go through
+   `membership.set_role`.
 
 ### 6.2 Consent ledger
 
@@ -249,6 +262,8 @@ The Worker's `email` handler receives mail to `login@` and `signup@`.
   matches the host, or carry a bearer token. This is the CSRF control.
 - Users see and revoke their sessions at `/me/sessions`. Admins can revoke
   any session in their tenant; roots any session.
+- Fresh proof (6.7) is a property of sessions of kind `browser`, enforced
+  whether the token arrives by cookie or by bearer header.
 
 Reserved for later proofs: `proof(id, identity_id, kind, subject,
 created_at)` with `kind` in {`email`, `google`, `passkey`}. Accepting an
@@ -272,7 +287,8 @@ HTML surface redirects to `/login?reproof=1` which sends a `reproof` link to
 the session's own address, using the outbound path, which requires consent.
 A human without consent (never emailed the hub) can only re-prove via the
 inbound path. Agent sessions have no fresh-proof concept; their verbs are
-not in the sensitive set.
+not in the sensitive set. The check applies to every session of kind
+`browser`, by cookie or by bearer; only `agent_run` sessions are exempt.
 
 ## 7. Storage
 
@@ -318,7 +334,7 @@ v1 verbs:
 | `tenant.create`, `tenant.archive`, `tenant.unarchive` | root | 60 min |
 | `namespace.create`, `namespace.archive`, `namespace.unarchive` | admin | 60 min |
 | `project.create`, `project.archive`, `project.unarchive` | member (create), admin (archive) | 60 min for archive |
-| `invite.create`, `invite.revoke`, `invite.list` | admin (root for admin role) | 60 min |
+| `invite.create`, `invite.revoke`, `invite.list` | admin; admin-role invites root only | 60 min (create, revoke) |
 | `invite.accept` | public link | n/a |
 | `login.request`, `login.verify` | public | n/a |
 | `membership.set_role`, `membership.remove` | admin | 60 min |
@@ -328,6 +344,11 @@ v1 verbs:
 | `consent.list`, `consent.revoke` | owner, admin | none |
 | `whoami` | any | none |
 | `event.list` | member (own tenant) | none |
+
+Fresh proof applies to commands, not queries: a verb that only reads (such
+as `invite.list` or `tenant.list`) never demands it. Inviting someone with
+the `admin` role is root-only in v1; tenant admins invite `member` and
+`reader`.
 
 ### 8.2 HTTP
 
@@ -419,3 +440,21 @@ mail; OAuth provider and MCP server; messaging.
 - The hub-wide cookie means one compromised session grants every tenant that
   identity belongs to. Mitigated by revocation and fresh proof, accepted for
   an internal deployment.
+
+## Amendments (2026-10-06)
+
+Rulings from the phase 1 reviews, folded into the sections above:
+
+1. 6.1: accepting an invite for an email that already has an identity adds
+   the membership or root flag but never mints a session; only an identity
+   created by that acceptance gets one. A request already carrying that
+   identity's session is redirected into the tenant.
+2. 6.1: an invite for an email with an active membership in the tenant is
+   rejected (409); role changes come later via `membership.set_role`.
+3. 8.1: fresh proof applies to commands, not queries; admin-role invites are
+   root-only in v1.
+4. 5: anonymous and non-member callers get 404 on tenant-scoped API verbs as
+   well as pages.
+5. 6.6, 6.7: fresh proof is enforced on sessions of kind `browser` whether the
+   token arrives by cookie or bearer.
+6. 4.5: archived identities are treated as signed out everywhere.
