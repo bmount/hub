@@ -4,6 +4,7 @@ import worker from "../src/index";
 import { handleEmail } from "../src/mail/inbound";
 import { hasActiveConsent, listConsent } from "../src/db/consent";
 import { createIdentity } from "../src/db/identities";
+import { takeRate } from "../src/rate";
 import { seedHuman } from "./helpers";
 
 type Calls = { rejects: string[]; replies: Array<{ from: string; to: string }> };
@@ -96,13 +97,46 @@ describe("handleEmail", () => {
     expect(await hasActiveConsent(env.HUB_DB, "a@example.com")).toBe(false);
   });
 
-  it("keeps consent and records an event when reply throws (no DMARC pass)", async () => {
+  it("revokes the new consent and records an event when reply throws (no DMARC pass)", async () => {
     await seedHuman("a@example.com");
     const { message, calls } = fakeMessage("a@example.com", "login@pimwell.test", { replyThrows: true });
     await expect(handleEmail(message, env, ctx)).resolves.toBeUndefined();
     expect(calls.rejects).toEqual([]);
-    expect(await hasActiveConsent(env.HUB_DB, "a@example.com")).toBe(true);
+    expect(await hasActiveConsent(env.HUB_DB, "a@example.com")).toBe(false);
     expect(await eventKinds()).toContain("login.reply_failed");
+  });
+
+  it("keeps pre-existing consent when a later reply fails", async () => {
+    await seedHuman("a@example.com");
+    await handleEmail(fakeMessage("a@example.com", "login@pimwell.test").message, env, ctx);
+    await handleEmail(fakeMessage("a@example.com", "login@pimwell.test", { replyThrows: true }).message, env, ctx);
+    expect(await hasActiveConsent(env.HUB_DB, "a@example.com")).toBe(true);
+  });
+
+  it("grants no consent to a rate-limited message", async () => {
+    await seedHuman("a@example.com");
+    for (let i = 0; i < 3; i++) await takeRate(env.RATE, "addr", "a@example.com", Date.now());
+    const { message, calls } = fakeMessage("a@example.com", "login@pimwell.test");
+    await handleEmail(message, env, ctx);
+    expect(calls.replies).toHaveLength(0);
+    expect(await hasActiveConsent(env.HUB_DB, "a@example.com")).toBe(false);
+    expect(await links()).toHaveLength(0);
+  });
+
+  it("rejects a spoofed header From when the envelope sender is unknown", async () => {
+    await seedHuman("a@example.com");
+    const { message, calls } = fakeMessage("stranger@example.com", "login@pimwell.test");
+    message.headers.set("from", "a@example.com");
+    await handleEmail(message, env, ctx);
+    expect(calls.rejects).toHaveLength(1);
+    expect(calls.replies).toHaveLength(0);
+    expect(await hasActiveConsent(env.HUB_DB, "a@example.com")).toBe(false);
+    expect(await hasActiveConsent(env.HUB_DB, "stranger@example.com")).toBe(false);
+  });
+
+  it("swallows internal failures", async () => {
+    const { message } = fakeMessage("a@example.com", "login@pimwell.test");
+    await expect(handleEmail(message, { ...env, HUB_DB: undefined as unknown as D1Database }, ctx)).resolves.toBeUndefined();
   });
 
   it("replies even when the inbound message has no Message-ID", async () => {
@@ -123,5 +157,17 @@ describe("handleEmail", () => {
     }
     expect(replies).toBe(3);
     expect(await eventKinds()).toContain("login.inbound_limited");
+  });
+
+  it("records exactly one limited event for 6 messages", async () => {
+    await seedHuman("a@example.com");
+    let replies = 0;
+    for (let i = 0; i < 6; i++) {
+      const { message, calls } = fakeMessage("a@example.com", "login@pimwell.test", { messageId: `<m${i}@example.com>` });
+      await handleEmail(message, env, ctx);
+      replies += calls.replies.length;
+    }
+    expect(replies).toBe(3);
+    expect((await eventKinds()).filter((k) => k === "login.inbound_limited")).toHaveLength(1);
   });
 });
