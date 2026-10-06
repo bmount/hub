@@ -6,7 +6,7 @@ import { recordProof } from "../db/proofs";
 import { getTenantById, listTenants } from "../db/tenants";
 import { createBrowserSession, listSessions } from "../db/sessions";
 import { clearSessionCookie, sessionCookie } from "../auth/cookie";
-import { buildContext } from "../auth/context";
+import { buildContext, rank } from "../auth/context";
 import { recordEvent } from "../db/events";
 import { listMembershipsForIdentity } from "../db/memberships";
 import { listNamespaces } from "../db/namespaces";
@@ -135,7 +135,8 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
     return htmlResponse(page("Pimwell", body), 200, extra);
   }
   if (!ctx.tenant || !ctx.role) return notFoundPage(extra);
-  const body = `<h1>${esc(ctx.tenant.display_name)}</h1><p>You are ${esc(ctx.role)} · <a href="/archive">archive</a> · <a href="https://${esc(env.HUB_DOMAIN)}/">hub</a></p>` + (await tenantListing(env, ctx.tenant.id, "active"));
+  const agentsLink = rank(ctx.role) >= rank("admin") ? ` · <a href="/admin/agents">agents</a>` : "";
+  const body = `<h1>${esc(ctx.tenant.display_name)}</h1><p>You are ${esc(ctx.role)} · <a href="/archive">archive</a>${agentsLink} · <a href="https://${esc(env.HUB_DOMAIN)}/">hub</a></p>` + (await tenantListing(env, ctx.tenant.id, "active"));
   return htmlResponse(page(ctx.tenant.display_name, body), 200, extra);
 }
 
