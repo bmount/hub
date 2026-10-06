@@ -56,6 +56,24 @@ describe("code exchange", () => {
     expect(await errorOf(await tokenRequest({ grant_type: "password", client_id: "x" }))).toEqual({ status: 400, error: "unsupported_grant_type" });
   });
 
+  it("a forged code naming the grant has no side effect, even after the real code was used", async () => {
+    const { h } = await member();
+    const c = await connect(h.token);
+    const fields = { grant_type: "authorization_code", code: c.code, redirect_uri: c.redirect, client_id: c.client_id, code_verifier: c.verifier, resource: resourceFor("acme") };
+    const t = (await (await tokenRequest(fields)).json()) as Tokens;
+    expect((await grantRow())!.code_hash).toMatch(/^[0-9a-f]{64}$/);
+    const forged = `${c.code.split(":")[0]}:${c.code.split(":")[1]}:forged`;
+    expect(await errorOf(await tokenRequest({ ...fields, code: forged }))).toEqual({ status: 400, error: "invalid_grant" });
+    expect(await errorOf(await tokenRequest({ ...fields, code: `x:${c.code.split(":")[1]}:y` }))).toEqual({ status: 400, error: "invalid_grant" });
+    expect(await grantRow()).toMatchObject({ revoked_at: null, revoke_reason: null });
+    expect(await validFor("acme", t.access_token)).not.toBeNull();
+    // The real code from another client_id is refused without revoking; from its own client it is replay.
+    await tokenRequest({ ...fields, client_id: "someone-else" });
+    expect((await grantRow())!.revoked_at).toBeNull();
+    expect(await errorOf(await tokenRequest(fields))).toEqual({ status: 400, error: "invalid_grant" });
+    expect(await grantRow()).toMatchObject({ revoke_reason: "code_reuse" });
+  });
+
   it("treats a second exchange of the same code as theft and revokes the grant", async () => {
     const { h } = await member();
     const c = await connect(h.token);

@@ -62,6 +62,17 @@ describe("untrusted text in tool output", () => {
     expect(text).not.toMatch(/^!\[/m);
   });
 
+  it("strips tag characters and zero-width or format characters, keeping the joiner in emoji sequences", () => {
+    const tag = String.fromCodePoint(0xe0001, 0xe0049, 0xe007f);
+    const hidden = `a${tag}b​c⁠d⁤e﻿f`;
+    const md = renderMarkdown("event.list", { events: [{ id: "E1", summary: hidden }] });
+    expect(md).toContain("| `abcdef` |");
+    expect(md).not.toMatch(/[​⁠-⁤﻿]/);
+    expect(md.includes(tag)).toBe(false);
+    const family = "\u{1F468}‍\u{1F469}";
+    expect(renderMarkdown("x", { n: family })).toContain(family);
+  });
+
   it("cuts long cells without splitting a surrogate pair, and says so", () => {
     const md = renderMarkdown("event.list", { events: [{ id: "E1", summary: "a" + "\u{1F600}".repeat(2000) }, { id: "E2", summary: "b".repeat(999) + "\u{1F600}tail" }] });
     expect(LONE.test(md)).toBe(false);

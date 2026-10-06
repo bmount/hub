@@ -9,8 +9,9 @@ const CUT_MARK = " … (cut)";
 
 type Row = Record<string, unknown>;
 
-// C0 and C1 controls, line and paragraph separators, and the bidi controls that reorder or hide text.
-const UNSAFE = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+// C0 and C1 controls, line and paragraph separators, bidi controls, zero-width and format characters (not U+200D, which
+// emoji sequences need), and Unicode tag characters, which can smuggle invisible text.
+const UNSAFE = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069\u200B\u2060-\u2064\uFEFF\u{E0000}-\u{E007F}]/gu;
 const LINE_BREAKS = /[\t\r\n\u0085\u2028\u2029]+/g;
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 

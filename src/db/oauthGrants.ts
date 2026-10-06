@@ -14,7 +14,7 @@ type Row = Record<string, string | number | null>;
 
 const GRANT_COLUMNS = [
   "id", "identity_id", "tenant_id", "session_id", "client_id", "client_name", "client_kind", "redirect_host", "resource", "scopes",
-  "library_grant_id", "refresh_hash", "prev_refresh_hash", "refreshed_at", "approved_by_session_id", "created_at", "expires_at", "revoked_at", "revoked_by", "revoke_reason",
+  "library_grant_id", "refresh_hash", "prev_refresh_hash", "code_hash", "refreshed_at", "approved_by_session_id", "created_at", "expires_at", "revoked_at", "revoked_by", "revoke_reason",
 ] as const;
 
 function pickGrant(row: Row): OAuthGrant {
@@ -38,7 +38,7 @@ export async function createGrant(db: D1Database, input: NewGrant, now: number):
   const grant: OAuthGrant = {
     id: ulid(now), identity_id: input.identity_id, tenant_id: input.tenant_id, session_id: session.id, client_id: input.client_id,
     client_name: input.client_name, client_kind: input.client_kind, redirect_host: input.redirect_host, resource: input.resource,
-    scopes: input.scopes.join(" "), library_grant_id: null, refresh_hash: null, prev_refresh_hash: null, refreshed_at: null,
+    scopes: input.scopes.join(" "), library_grant_id: null, refresh_hash: null, prev_refresh_hash: null, code_hash: null, refreshed_at: null,
     approved_by_session_id: input.approved_by_session_id, created_at: now, expires_at, revoked_at: null, revoked_by: null, revoke_reason: null,
   };
   await db.batch([
@@ -56,9 +56,9 @@ export async function createGrant(db: D1Database, input: NewGrant, now: number):
   return { grant, session };
 }
 
-/** Revoke the identity's other live grants for the same client and resource as `replaced`. Returns the grants it replaced. */
+/** Revoke the identity's earlier live grants (smaller id, so concurrent approvals cannot revoke each other) for the same client and resource as `replaced`. Returns the grants it replaced. */
 export async function replaceEarlierGrants(db: D1Database, grant: OAuthGrant, now: number): Promise<OAuthGrant[]> {
-  const same = "identity_id = ? AND client_id = ? AND resource = ? AND revoked_at IS NULL AND id != ?";
+  const same = "identity_id = ? AND client_id = ? AND resource = ? AND revoked_at IS NULL AND id < ?";
   const binds = [grant.identity_id, grant.client_id, grant.resource, grant.id];
   const old = (await db.prepare(`SELECT * FROM oauth_grant WHERE ${same}`).bind(...binds).all<OAuthGrant>()).results;
   if (old.length === 0) return [];
@@ -81,8 +81,8 @@ export function getGrantBySessionId(db: D1Database, session_id: string): Promise
   return db.prepare("SELECT * FROM oauth_grant WHERE session_id = ?").bind(session_id).first<OAuthGrant>();
 }
 
-export async function setLibraryGrantId(db: D1Database, id: string, library_grant_id: string): Promise<void> {
-  await db.prepare("UPDATE oauth_grant SET library_grant_id = ? WHERE id = ?").bind(library_grant_id, id).run();
+export async function setLibraryGrantId(db: D1Database, id: string, library_grant_id: string, code_hash: string | null = null): Promise<void> {
+  await db.prepare("UPDATE oauth_grant SET library_grant_id = ?, code_hash = ? WHERE id = ?").bind(library_grant_id, code_hash, id).run();
 }
 
 /**

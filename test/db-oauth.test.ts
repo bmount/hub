@@ -32,6 +32,8 @@ describe("oauth grants", () => {
     const other = await seedGrant(blue, h);
     const second = await seedGrant(acme, h);
     expect((await getGrantById(db(), first.grant.id))!.revoked_at).toBeNull();
+    // Only earlier grants are replaced, so two concurrent approvals cannot revoke each other.
+    expect(await replaceEarlierGrants(db(), first.grant, Date.now())).toEqual([]);
     expect((await replaceEarlierGrants(db(), second.grant, Date.now())).map((g) => g.id)).toEqual([first.grant.id]);
     expect(await getGrantById(db(), first.grant.id)).toMatchObject({ revoke_reason: "replaced", revoked_by: h.identity.id });
     expect((await getSessionById(db(), first.session.id))!.revoked_at).not.toBeNull();

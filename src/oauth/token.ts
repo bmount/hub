@@ -55,8 +55,9 @@ async function exchangeCode(env: Env, request: Request, body: string, form: URLS
   if (!used && now - grant.created_at > CODE_TTL_MS) return oauthError("invalid_grant");
   const res = await authServer(env, grant.resource).fetch(forward(env, request, body), env, ectx);
   if (res.status !== 200) {
-    // A code that already produced tokens, presented again by its own client: replay is treated as theft.
-    if (used && sameClient(form, grant)) await revokeOAuthGrant(env, grant, null, "code_reuse", now);
+    // The very code that already produced tokens, presented again by its own client: replay is treated as theft.
+    // A forged code that merely names the grant (its id leaks in the callback URL) matches nothing and changes nothing.
+    if (used && sameClient(form, grant) && grant.code_hash !== null && timingSafeEqual(await sha256Hex(form.get("code") ?? ""), grant.code_hash)) await revokeOAuthGrant(env, grant, null, "code_reuse", now);
     return (await errorOf(res)) === "invalid_target" ? oauthError("invalid_grant") : res;
   }
   if (!(await liveGrant(env.HUB_DB, grant.id, now))) {

@@ -1,7 +1,7 @@
 import { defineVerb } from "./table";
 import { reqString } from "./params";
 import { notFound, unauthorized } from "../errors";
-import { timingSafeEqual } from "../ids";
+import { sha256Hex, timingSafeEqual } from "../ids";
 import { roleFor } from "../auth/context";
 import { getTenantBySlug } from "../db/tenants";
 import { getMembership } from "../db/memberships";
@@ -46,7 +46,7 @@ export const oauthGrantApprove = defineVerb({
     }
     const code = new URL(redirectTo).searchParams.get("code");
     const libraryGrantId = code ? libraryGrantIdOf(code) : null;
-    if (libraryGrantId) await setLibraryGrantId(ctx.db, grant.id, libraryGrantId);
+    if (libraryGrantId && code) await setLibraryGrantId(ctx.db, grant.id, libraryGrantId, await sha256Hex(code));
     // Only now that the library accepted the new grant does the earlier one for the same client and resource go.
     await replaceEarlierGrants(ctx.db, grant, ctx.now);
     await recordEvent(ctx.db, {

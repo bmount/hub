@@ -86,6 +86,25 @@ describe("/mcp token validation", () => {
     expect((await call("not:a:token", Date.now())).status).toBe(401);
   });
 
+  it("refuses a token over 400 characters without calling the library, and charges the anon bucket", async () => {
+    const spy = vi.spyOn(OAuthAuthorizationServer.prototype, "validateToken");
+    const now = minuteStart();
+    expect((await call(`a:b:${"c".repeat(400)}`, now, { ip: "198.51.100.30" })).status).toBe(401);
+    expect(spy).not.toHaveBeenCalled();
+    for (let i = 0; i < 59; i++) await call(`a:b:${"c".repeat(400)}`, now, { ip: "198.51.100.30" });
+    expect((await call(`a:b:${"c".repeat(400)}`, now, { ip: "198.51.100.30" })).status).toBe(429);
+  });
+
+  it("charges the anon bucket when validation throws, and fails open when KV errors", async () => {
+    vi.spyOn(OAuthAuthorizationServer.prototype, "validateToken").mockRejectedValue(new Error("KV unavailable"));
+    const now = minuteStart();
+    for (let i = 0; i < 60; i++) expect((await call("a:b:c", now, { ip: "198.51.100.31" })).status).toBe(503);
+    expect((await call("a:b:c", now, { ip: "198.51.100.31" })).status).toBe(429);
+    const broken = { ...env, RATE: { get: async () => { throw new Error("kv down"); }, put: async () => { throw new Error("kv down"); } } } as unknown as typeof env;
+    const res = await handleMcp(new Request("https://acme.pimwell.test/mcp", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer a:b:c" }, body: "{}" }), broken, undefined, now);
+    expect(res.status).toBe(503);
+  });
+
   it("requires the token's client and user to be the grant's", async () => {
     const { access, grant } = await connected();
     expect((await call(access, Date.now())).status).toBe(200);

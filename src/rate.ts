@@ -83,8 +83,8 @@ export async function takeRateAtomic(db: D1Database, bucket: RateBucket, subject
   const key = `${bucket}:${await sha256Hex(subject.trim().toLowerCase())}`;
   try {
     const row = await db.prepare(
-      `INSERT INTO rate_counter (key, window, count, expires_at) VALUES (?, ?, 1, ?)
-       ON CONFLICT(key, window) DO UPDATE SET count = count + 1 RETURNING count`,
+      `INSERT INTO rate_counter ("key", "window", count, expires_at) VALUES (?, ?, 1, ?)
+       ON CONFLICT("key", "window") DO UPDATE SET count = count + 1 RETURNING count`,
     ).bind(key, window, (window + 2) * windowMs).first<{ count: number }>();
     const count = row?.count ?? 1;
     if (count === 1) {
