@@ -43,7 +43,7 @@ export function inviteIsOpen(invite: Invite, now: number): boolean {
 export async function acceptInvite(db: D1Database, invite: Invite, now: number): Promise<{ identity: Identity; created: boolean; membershipAdded: boolean } | null> {
   if (!inviteIsOpen(invite, now)) return null;
   const pre = await getIdentityByEmail(db, invite.email);
-  if (pre && pre.state !== "active") return null;
+  if (pre && (pre.state !== "active" || pre.kind !== "human")) return null;
   const claim = await db.prepare(
     "UPDATE invite SET accepted_at = ? WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
   ).bind(now, invite.id, now).run();

@@ -1,6 +1,7 @@
 import { defineVerb } from "./table";
 import { optString, reqEnum, reqString } from "./params";
-import { conflict, forbidden, notFound } from "../errors";
+import { badRequest, conflict, forbidden, notFound } from "../errors";
+import { isAgentDomainAddress } from "../db/agents";
 import { getIdentityByEmail } from "../db/identities";
 import { getMembership } from "../db/memberships";
 import { createInvite, inviteIsOpen, listInvites, revokeInvite } from "../db/invites";
@@ -23,6 +24,7 @@ export const inviteCreate = defineVerb({
     display_name: optString(i, "display_name", { max: 80 }),
   }),
   run: async (ctx, p) => {
+    if (isAgentDomainAddress(p.email, ctx.env.HUB_DOMAIN)) throw badRequest("addresses under tenant domains are reserved for agents");
     if (p.role === "admin" && ctx.identity!.is_root !== 1) throw forbidden("only a root may invite admins");
     const existing = await getIdentityByEmail(ctx.db, p.email);
     if (existing) {
