@@ -27,6 +27,7 @@ const TABLE: Record<string, Decl> = {
   "token.create": T("public", "public", 60, { humanOnly: true }), "token.revoke": T("public", "public", 60, { humanOnly: true }),
   "token.list": T("public", "public", null, { humanOnly: true }),
   "event.list": T("tenant", "member", null, { mcp: "read" }),
+  "oauth.grant.approve": T("hub", "public", 600, { humanOnly: true }),
 };
 
 const verbs = () => listVerbs().filter((v) => !v.name.startsWith("test."));
@@ -88,7 +89,8 @@ describe("verb table", () => {
     const s = await seedAgent(acme, op.identity);
     for (const v of verbs().filter((x) => x.humanOnly)) {
       const res = await apiPost("acme.pimwell.test", v.name, {}, bearer(s.token));
-      expect({ verb: v.name, status: res.status }).toEqual({ verb: v.name, status: 403 });
+      // Hub verbs do not exist on a tenant host, and an agent credential is anonymous on the apex.
+      expect({ verb: v.name, status: res.status }).toEqual({ verb: v.name, status: v.scope === "hub" ? 404 : 403 });
     }
   });
 });

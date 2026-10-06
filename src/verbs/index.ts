@@ -11,6 +11,7 @@ import { agentArchive, agentCreate } from "./agent";
 import { tokenCreate, tokenList, tokenRevoke } from "./token";
 import { consentList, consentRevoke } from "./consent";
 import { eventList } from "./event";
+import { oauthGrantApprove } from "./oauth";
 
 export function registerAllVerbs(): void {
   registerVerbs([
@@ -25,5 +26,6 @@ export function registerAllVerbs(): void {
     agentCreate, agentArchive,
     tokenCreate, tokenRevoke, tokenList,
     eventList,
+    oauthGrantApprove,
   ]);
 }

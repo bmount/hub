@@ -19,9 +19,15 @@ export const NEUTRAL_LOGIN_MESSAGE = "If that address is known and has consented
 
 const EMAIL_SHAPE = /^[^@\s]+@[^@\s]+$/;
 
+/** An assistant consent page: the only path `next` may name, so sign-in can return to it (MCP spec 7.2). */
+const CONSENT_NEXT = /^\/oauth\/consent\/[A-Za-z0-9_-]{43}$/;
+
+/** `next` is a tenant slug or a consent page path; anything else is dropped. */
 export function cleanNext(next: string | null | undefined): string | null {
   if (!next) return null;
-  const s = next.trim().toLowerCase();
+  const raw = next.trim();
+  if (CONSENT_NEXT.test(raw)) return raw;
+  const s = raw.toLowerCase();
   return isValidTenantSlug(s) ? s : null;
 }
 
@@ -92,6 +98,7 @@ export async function landingUrl(env: Env, identity: Identity, next: string | nu
   const home = `https://${env.HUB_DOMAIN}/`;
   const slug = cleanNext(next);
   if (!slug) return home;
+  if (slug.startsWith("/")) return `https://${env.HUB_DOMAIN}${slug}`;
   const tenant = await getTenantBySlug(env.HUB_DB, slug);
   if (!tenant || tenant.state !== "active") return home;
   const there = `https://${slug}.${env.HUB_DOMAIN}/`;

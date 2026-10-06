@@ -8,6 +8,7 @@ import { adminAgentsPage } from "./http/adminAgents";
 import { handleEmail } from "./mail/inbound";
 import { introspect } from "./http/internal";
 import { asMetadataPage, protectedResourcePage } from "./http/oauthMeta";
+import { authorizePage, consentPage, consentPost } from "./http/oauthAuthorize";
 import { registerEndpoint } from "./http/oauthRegister";
 import { handleMcp } from "./mcp/handler";
 import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sessionsPage } from "./http/pages";
@@ -37,6 +38,9 @@ app.get("/.well-known/oauth-authorization-server", (c) => asMetadataPage(c.req.r
 app.get("/.well-known/oauth-protected-resource", (c) => protectedResourcePage(c.req.raw, c.env));
 app.get("/.well-known/oauth-protected-resource/mcp", (c) => protectedResourcePage(c.req.raw, c.env));
 app.post("/oauth/register", (c) => registerEndpoint(c.req.raw, c.env, workerCtx(c.executionCtx)));
+app.get("/oauth/authorize", (c) => authorizePage(c.req.raw, c.env));
+app.get("/oauth/consent/:id", (c) => consentPage(c.req.raw, c.env));
+app.post("/oauth/consent/:id", (c) => consentPost(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.all("/mcp", (c) => handleMcp(c.req.raw, c.env));
 app.notFound(() => notFoundPage());
 
