@@ -92,4 +92,11 @@ describe("sendMail", () => {
     expect(replies).toEqual([{ from: "signup@pimwell.test", to: "a@example.com" }]);
     expect(sent).toHaveLength(0);
   });
+
+  it("returns failed, not a throw, when the consent lookup errors", async () => {
+    capture();
+    const broken = { ...env, HUB_DB: { prepare: () => { throw new Error("d1 down"); } } as unknown as D1Database };
+    expect(await sendMail(broken, { to: "a@example.com", subject: "s", text: "t" }, Date.now())).toBe("failed");
+    expect(sent).toHaveLength(0);
+  });
 });

@@ -25,9 +25,9 @@ export function senderAddress(env: Env): string {
 export async function sendMail(env: Env, mail: Outbound, now: number, opts: { replyTo?: ForwardableEmailMessage } = {}): Promise<SendResult> {
   const reply = opts.replyTo ?? null;
   const to = normalizeEmail(reply ? reply.from : mail.to);
-  if (!(await hasActiveConsent(env.HUB_DB, to))) return "no_consent";
-  const from = reply ? reply.to.trim().toLowerCase() : senderAddress(env);
   try {
+    if (!(await hasActiveConsent(env.HUB_DB, to))) return "no_consent";
+    const from = reply ? reply.to.trim().toLowerCase() : senderAddress(env);
     const raw = buildMime({
       from, to, subject: mail.subject, text: mail.text,
       messageId: `<${ulid(now)}@${env.HUB_DOMAIN}>`, date: new Date(now),

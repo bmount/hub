@@ -71,16 +71,21 @@ export async function issueLink(
 
 // Outbound path (spec 6.3). Returns nothing: callers always answer neutrally.
 export async function requestLink(env: Env, req: LinkRequest, now: number): Promise<void> {
-  const email = normalizeEmail(req.email);
-  if (email.length > 254 || !EMAIL_SHAPE.test(email)) return;
-  if (!(await takeRate(env.RATE, "ip", req.ip, now))) return;
-  const identity = await getIdentityByEmail(env.HUB_DB, email);
-  if (!identity || identity.kind !== "human" || identity.state !== "active") return;
-  // Early exit so no link or rate budget is spent; sendMail enforces the same rule.
-  if (!(await hasActiveConsent(env.HUB_DB, email))) return;
-  if (!(await takeRate(env.RATE, "addr", email, now))) return;
-  const url = await issueLink(env, { identity, purpose: req.purpose, next: req.next, via: "outbound", session_id: req.session_id }, now);
-  await sendMail(env, { to: email, ...linkMail(req.purpose, url) }, now);
+  try {
+    const email = normalizeEmail(req.email);
+    if (email.length > 254 || !EMAIL_SHAPE.test(email)) return;
+    if (!(await takeRate(env.RATE, "ip", req.ip, now))) return;
+    const identity = await getIdentityByEmail(env.HUB_DB, email);
+    if (!identity || identity.kind !== "human" || identity.state !== "active") return;
+    // Early exit so no link or rate budget is spent; sendMail enforces the same rule.
+    if (!(await hasActiveConsent(env.HUB_DB, email))) return;
+    if (!(await takeRate(env.RATE, "addr", email, now))) return;
+    const url = await issueLink(env, { identity, purpose: req.purpose, next: req.next, via: "outbound", session_id: req.session_id }, now);
+    await sendMail(env, { to: email, ...linkMail(req.purpose, url) }, now);
+  } catch (e) {
+    // Fail closed and silent: an error must not distinguish known addresses.
+    console.log("login request failed", e instanceof Error ? e.name : "error");
+  }
 }
 
 export async function landingUrl(env: Env, identity: Identity, next: string | null): Promise<string> {

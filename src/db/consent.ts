@@ -17,16 +17,19 @@ export async function grantConsent(
   input: { email: string; kind: string; source_message_id: string | null; evidence: string | null },
   now: number,
 ): Promise<{ consent: Consent; created: boolean }> {
-  const existing = await getActiveConsent(db, input.email);
-  if (existing) return { consent: existing, created: false };
   const row: Consent = {
     id: ulid(now), email: normalizeEmail(input.email), tenant_id: null, kind: input.kind, granted_at: now,
     revoked_at: null, source_message_id: input.source_message_id, evidence: input.evidence,
   };
-  await db.prepare(
-    "INSERT INTO consent (id, email, tenant_id, kind, granted_at, revoked_at, source_message_id, evidence) VALUES (?, ?, NULL, ?, ?, NULL, ?, ?)",
-  ).bind(row.id, row.email, row.kind, row.granted_at, row.source_message_id, row.evidence).run();
-  return { consent: row, created: true };
+  // Single statement: concurrent grants cannot both insert an active row.
+  const r = await db.prepare(
+    `INSERT INTO consent (id, email, tenant_id, kind, granted_at, revoked_at, source_message_id, evidence)
+     SELECT ?, ?, NULL, ?, ?, NULL, ?, ? WHERE NOT EXISTS (SELECT 1 FROM consent WHERE email = ? AND revoked_at IS NULL)`,
+  ).bind(row.id, row.email, row.kind, row.granted_at, row.source_message_id, row.evidence, row.email).run();
+  if (r.meta.changes === 1) return { consent: row, created: true };
+  const existing = await getActiveConsent(db, row.email);
+  if (existing) return { consent: existing, created: false };
+  return { consent: row, created: (await db.prepare("SELECT 1 FROM consent WHERE id = ?").bind(row.id).first()) !== null };
 }
 
 export async function listConsent(db: D1Database, email: string): Promise<Consent[]> {

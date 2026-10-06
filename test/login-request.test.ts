@@ -112,3 +112,23 @@ describe("helpers", () => {
     expect(linkMail("login", "https://pimwell.test/auth/pml_x").text).toContain("https://pimwell.test/auth/pml_x");
   });
 });
+
+describe("requestLink fails closed", () => {
+  const stub = (over: Partial<KVNamespace>) => ({ ...env, RATE: { get: async () => null, put: async () => undefined, ...over } as unknown as KVNamespace });
+  const attempt = (e: typeof env) => requestLink(e, { email: "a@example.com", purpose: "login", ip: "198.51.100.1", next: null, session_id: null }, Date.now());
+
+  it("resolves and sends nothing when KV put throws", async () => {
+    await seedHuman("a@example.com");
+    await consent("a@example.com");
+    await expect(attempt(stub({ put: async () => { throw new Error("429") as never; } }))).resolves.toBeUndefined();
+    expect(sent).toHaveLength(0);
+    expect(await linkCount()).toBe(0);
+  });
+
+  it("resolves and sends nothing when KV get throws", async () => {
+    await seedHuman("a@example.com");
+    await consent("a@example.com");
+    await expect(attempt(stub({ get: async () => { throw new Error("down") as never; } }))).resolves.toBeUndefined();
+    expect(sent).toHaveLength(0);
+  });
+});
