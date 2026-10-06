@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const EXPECTED = [
   "api_token", "auth_link", "consent", "event", "identity", "invite", "membership",
-  "meta", "namespace", "project", "proof", "session", "tenant",
+  "meta", "namespace", "oauth_grant", "oauth_redirect_allow", "project", "proof", "session", "tenant",
 ];
 
 describe("schema", () => {
@@ -14,9 +14,16 @@ describe("schema", () => {
     expect(rows.results.map((r) => r.name)).toEqual(EXPECTED);
   });
 
-  it("records schema version 1", async () => {
+  it("records schema version 2", async () => {
     const row = await env.HUB_DB.prepare("SELECT value FROM meta WHERE key='schema_version'").first<{ value: string }>();
-    expect(row?.value).toBe("1");
+    expect(row?.value).toBe("2");
+  });
+
+  it("seeds the redirect allowlist with Claude and loopback only", async () => {
+    const rows = await env.HUB_DB.prepare("SELECT pattern FROM oauth_redirect_allow ORDER BY pattern").all<{ pattern: string }>();
+    expect(rows.results.map((r) => r.pattern)).toEqual([
+      "http://127.0.0.1/callback", "http://localhost/callback", "https://claude.ai/api/mcp/auth_callback",
+    ]);
   });
 
   it("enforces unique top-level project slug per tenant", async () => {

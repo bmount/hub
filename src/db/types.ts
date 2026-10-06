@@ -19,7 +19,7 @@ export type Invite = {
   accepted_at: number | null; accepted_session_id: string | null; revoked_at: number | null;
 };
 export type Session = {
-  id: string; identity_id: string; tenant_id: string | null; kind: "browser" | "agent_run"; label: string | null;
+  id: string; identity_id: string; tenant_id: string | null; kind: "browser" | "agent_run" | "oauth"; label: string | null;
   token_hash: string; created_at: number; last_seen_at: number; expires_at: number; last_proof_at: number;
   revoked_at: number | null; parent_token_id: string | null;
 };
@@ -45,3 +45,10 @@ export type ApiToken = {
   created_by: string; created_at: number; expires_at: number | null; last_used_at: number | null; revoked_at: number | null;
 };
 export type Agent = { identity: Identity; membership: Membership; tenant: Tenant; slug: string };
+
+export type OAuthGrant = {
+  id: string; identity_id: string; tenant_id: string; session_id: string; client_id: string; client_name: string;
+  client_kind: "dcr" | "cimd"; redirect_host: string; resource: string; scopes: string; library_grant_id: string | null;
+  refresh_hash: string | null; refreshed_at: number | null; approved_by_session_id: string; created_at: number; expires_at: number;
+  revoked_at: number | null; revoked_by: string | null; revoke_reason: string | null;
+};

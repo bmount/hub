@@ -21,6 +21,7 @@
   ],
   "send_email": [{ "name": "MAIL", "allowed_sender_addresses": ["login@pimwell.com"] }],
   "kv_namespaces": [
-    { "binding": "RATE", "id": "bb594176ceb94d83ac5a74ff160ac53c" }
+    { "binding": "RATE", "id": "bb594176ceb94d83ac5a74ff160ac53c" },
+    { "binding": "OAUTH_KV", "id": "oauth-kv-pending-deploy" }
   ]
 }
