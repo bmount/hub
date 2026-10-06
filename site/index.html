@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pimwell</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one wide animated stage up top (camera pans right along a conveyor of stations,
+   then tilts and drops down a timeline), then quiet left-aligned chapters: hands, diagram, git, overview. */
+:root{
+  --ink:#07090d;        /* deep blue-black ground */
+  --haze:#121a26;       /* raised surfaces */
+  --line:#223049;       /* diagram strokes */
+  --paper:#e6ecf4;      /* text */
+  --dim:#8a97ab;        /* secondary text */
+  --phosphor:#6cf5a4;   /* matrix green */
+  --signal:#58c7ff;     /* diagram cyan */
+  --clay:#ffb454;       /* cartoon amber */
+  --rose:#ff7a9e;       /* the spark */
+  --display:"Syne",ui-sans-serif,system-ui,sans-serif;
+  --body:"Instrument Sans",ui-sans-serif,system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--ink);color:var(--paper);font:16px/1.55 var(--body);overflow-x:hidden}
+a{color:var(--signal)}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0}
+p{margin:0}
+.wrap{max-width:72rem;margin:0 auto;padding-inline:16px}
+:focus-visible{outline:2px solid var(--signal);outline-offset:3px}
+
+/* ---------- hero / stage ---------- */
+.hero{position:relative;padding-block:3rem 1rem}
+.hero .wrap{display:grid;gap:1rem}
+.brand{font-family:var(--display);font-weight:800;font-size:clamp(2.6rem,9vw,7rem);line-height:.95;letter-spacing:-.02em}
+.brand .glyph{display:inline-block;min-width:.55em;transition:color .3s}
+.brand .glyph.settled{color:var(--paper)}
+.brand .glyph.flux{color:var(--phosphor);font-family:var(--mono);font-weight:500}
+.lede{font-size:clamp(1.05rem,2.2vw,1.35rem);max-width:34em;color:var(--dim)}
+.lede strong{color:var(--paper);font-weight:600}
+
+.stage{position:relative;margin-top:1.5rem;height:min(62vh,560px);min-height:360px;border:1px solid var(--line);
+  border-radius:18px;overflow:hidden;background:
+  radial-gradient(120% 80% at 50% 120%,#0d1b2a 0%,transparent 60%),var(--ink)}
+.stage canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.55}
+.scene{position:absolute;inset:0;perspective:1100px;perspective-origin:50% 40%}
+.world{position:absolute;left:50%;top:52%;transform-style:preserve-3d;
+  animation:camera 26s cubic-bezier(.65,.02,.35,1) infinite}
+.belt{position:absolute;left:-200px;top:70px;width:2200px;height:140px;transform:rotateX(62deg);transform-origin:top;
+  background:
+   repeating-linear-gradient(90deg,transparent 0 56px,rgba(88,199,255,.25) 56px 58px),
+   linear-gradient(180deg,rgba(88,199,255,.18),rgba(88,199,255,.02));
+  border-top:2px solid rgba(88,199,255,.55);box-shadow:0 0 40px rgba(88,199,255,.15)}
+.belt::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(90deg,transparent 0 24px,rgba(108,245,164,.18) 24px 26px);
+  animation:beltrun 1.6s linear infinite}
+.station{position:absolute;top:-120px;width:200px;transform-style:preserve-3d}
+.card{position:relative;background:var(--haze);border:1px solid var(--line);border-radius:12px;padding:.8rem .9rem;
+  box-shadow:0 18px 40px rgba(0,0,0,.45);transform:translateZ(0)}
+.card::before{content:"";position:absolute;inset:0;border-radius:12px;background:var(--haze);border:1px solid var(--line);
+  transform:translateZ(-22px) translate(10px,10px);filter:brightness(.55);z-index:-1}
+.card .k{font-family:var(--mono);font-size:.68rem;color:var(--signal);letter-spacing:.02em}
+.card .t{font-family:var(--display);font-weight:700;font-size:1.05rem;margin-top:.15rem;line-height:1.15}
+.card .d{font-size:.78rem;color:var(--dim);margin-top:.3rem}
+.card svg{display:block;margin-top:.45rem;width:100%;height:auto}
+.s1{left:-100px}.s2{left:230px}.s3{left:560px}.s4{left:890px}.s5{left:1220px}.s6{left:1550px}.s7{left:1880px}
+/* vertical column after the pan */
+.column{position:absolute;left:1870px;top:60px;width:220px;transform-style:preserve-3d}
+.row{position:absolute;left:0;width:260px;font-family:var(--mono);font-size:.7rem;line-height:1.3;padding:.45rem .6rem;
+  background:rgba(18,26,38,.92);border-left:2px solid var(--phosphor);border-radius:0 8px 8px 0;color:var(--paper);
+  box-shadow:0 10px 30px rgba(0,0,0,.4)}
+.row b{color:var(--phosphor);font-weight:500}
+.row i{color:var(--signal);font-style:normal}
+.r1{top:0}.r2{top:170px}.r3{top:340px}.r4{top:510px}.r5{top:680px}.r6{top:850px}.r7{top:1020px}
+/* the crate character */
+.crate{position:absolute;top:-10px;left:-130px;width:64px;height:54px;transform-style:preserve-3d;animation:ride 26s cubic-bezier(.65,.02,.35,1) infinite}
+.crate .box{position:absolute;inset:0;background:var(--clay);border-radius:8px;border:2px solid #3a2a0f;
+  box-shadow:inset -8px -8px 0 rgba(0,0,0,.18),0 10px 20px rgba(0,0,0,.4)}
+.crate .box::before{content:"";position:absolute;left:8px;right:8px;top:14px;height:2px;background:#3a2a0f;opacity:.5}
+.crate .eye{position:absolute;top:22px;width:10px;height:12px;background:#1a1208;border-radius:50%;animation:blink 4.2s infinite}
+.crate .eye.l{left:16px}.crate .eye.r{right:16px;animation-delay:.1s}
+.crate .eye::after{content:"";position:absolute;left:2px;top:2px;width:3px;height:3px;background:#fff;border-radius:50%}
+.crate .tag{position:absolute;right:-18px;top:-14px;font:500 .55rem var(--mono);color:#1a1208;background:var(--phosphor);padding:1px 4px;border-radius:3px;transform:rotate(12deg)}
+.caption{position:absolute;left:0;right:0;bottom:0;padding:1rem 1.1rem 1.1rem;background:linear-gradient(180deg,transparent,rgba(7,9,13,.92) 40%);
+  display:flex;gap:1rem;align-items:end;justify-content:space-between;flex-wrap:wrap}
+.caption .say{font-family:var(--display);font-weight:700;font-size:clamp(1rem,2.3vw,1.45rem);min-height:2.6em;max-width:36em}
+.caption .say .flux{color:var(--phosphor);font-family:var(--mono);font-weight:500}
+.ctl{display:flex;gap:.5rem}
+.ctl button{font:500 .8rem var(--mono);color:var(--paper);background:rgba(18,26,38,.9);border:1px solid var(--line);border-radius:999px;padding:.4rem .8rem;cursor:pointer}
+.ctl button:hover{border-color:var(--signal)}
+
+@keyframes camera{
+  0%  {transform:translate3d(0,0,0) rotateX(0) rotateY(0)}
+  8%  {transform:translate3d(0,0,0) rotateX(0) rotateY(0)}
+  58% {transform:translate3d(-1980px,0,0) rotateX(0) rotateY(0)}
+  64% {transform:translate3d(-1980px,-40px,-120px) rotateX(16deg) rotateY(-6deg)}
+  94% {transform:translate3d(-1980px,-1060px,-120px) rotateX(16deg) rotateY(-6deg)}
+  100%{transform:translate3d(0,0,0) rotateX(0) rotateY(0)}
+}
+@keyframes ride{
+  0%,8%{transform:translate3d(0,0,40px) rotateZ(0)}
+  12%{transform:translate3d(130px,-12px,40px) rotateZ(-6deg)}
+  58%{transform:translate3d(1980px,0,40px) rotateZ(0)}
+  64%{transform:translate3d(1990px,80px,40px) rotateZ(90deg)}
+  94%{transform:translate3d(1990px,1100px,40px) rotateZ(90deg)}
+  100%{transform:translate3d(0,0,40px) rotateZ(0)}
+}
+@keyframes beltrun{to{background-position:-26px 0}}
+@keyframes blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
+
+/* ---------- chapters ---------- */
+.chapter{padding-block:5rem 2rem}
+.chapter h2{font-size:clamp(1.7rem,4vw,2.6rem);font-weight:800;letter-spacing:-.015em}
+.chapter .sub{color:var(--dim);max-width:40em;margin-top:.6rem;font-size:1.05rem}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:2rem;align-items:start}
+@media (max-width:760px){.grid2{grid-template-columns:1fr}}
+
+/* hands */
+.hands{margin-top:2.5rem;position:relative;border:1px solid var(--line);border-radius:18px;background:var(--haze);overflow:hidden;padding:1.2rem 0}
+.hands .pair{display:flex;justify-content:center;align-items:center;gap:0;position:relative}
+.hand{font:400 clamp(4.5px,1.05vw,10.5px)/1.08 var(--mono);white-space:pre;margin:0;color:var(--dim);letter-spacing:0}
+.hand span{display:inline-block;color:inherit;transition:color .2s,text-shadow .2s}
+.hand span.on{color:var(--phosphor);text-shadow:0 0 8px rgba(108,245,164,.55)}
+.hand span.hot{color:var(--rose);text-shadow:0 0 10px rgba(255,122,158,.8)}
+.hand.adam{transform:translateX(-5vw)}
+.hand.god{transform:translateX(5vw)}
+.hands.go .hand.adam{animation:reachL 11s cubic-bezier(.6,.05,.3,1) infinite}
+.hands.go .hand.god{animation:reachR 11s cubic-bezier(.6,.05,.3,1) infinite}
+@keyframes reachL{0%{transform:translateX(-5vw)}34%,72%{transform:translateX(0)}100%{transform:translateX(-5vw)}}
+@keyframes reachR{0%{transform:translateX(5vw)}34%,72%{transform:translateX(0)}100%{transform:translateX(5vw)}}
+.spark{position:absolute;left:50%;top:50%;width:0;height:0;pointer-events:none}
+.spark i{position:absolute;left:0;top:0;width:3px;height:3px;border-radius:50%;background:var(--rose);opacity:0;box-shadow:0 0 12px var(--rose)}
+.hands.spark-on .spark i{animation:burst 1.1s ease-out forwards}
+@keyframes burst{0%{opacity:1;transform:translate(0,0) scale(1)}100%{opacity:0;transform:translate(var(--dx),var(--dy)) scale(.2)}}
+.hands .legend{display:flex;justify-content:space-between;padding:0 1.2rem;margin-top:.8rem;font:500 .75rem var(--mono);color:var(--dim)}
+
+/* diagram */
+.diagram{margin-top:2.5rem;border:1px solid var(--line);border-radius:18px;background:
+  linear-gradient(rgba(34,48,73,.35) 1px,transparent 1px) 0 0/40px 40px,
+  linear-gradient(90deg,rgba(34,48,73,.35) 1px,transparent 1px) 0 0/40px 40px,var(--ink);overflow:hidden}
+.diagram svg{display:block;width:100%;height:auto}
+.diagram text{font-family:var(--mono);font-size:12px;fill:var(--paper)}
+.diagram .lbl{fill:var(--dim);font-size:11px}
+.diagram .hd{font-family:var(--display);font-weight:700;font-size:14px;fill:var(--paper)}
+.diagram .node{fill:var(--haze);stroke:var(--line);stroke-width:1.2}
+.diagram .node.hot{stroke:var(--signal)}
+.diagram .edge{fill:none;stroke:var(--signal);stroke-width:1.4;stroke-dasharray:6 8;animation:flow 2.4s linear infinite;opacity:.85}
+.diagram .edge.g{stroke:var(--phosphor)}
+.diagram .edge.slow{animation-duration:4s}
+@keyframes flow{to{stroke-dashoffset:-28}}
+.diagram .pulse{fill:var(--phosphor);animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
+
+/* git */
+.gitviz{margin-top:2rem;border:1px solid var(--line);border-radius:18px;background:var(--haze);padding:1rem;overflow-x:auto}
+.gitviz svg{display:block;min-width:640px;width:100%;height:auto}
+.gitviz text{font-family:var(--mono);font-size:11px;fill:var(--dim)}
+.gitviz .c{fill:var(--ink);stroke:var(--signal);stroke-width:2}
+.gitviz .c.a{stroke:var(--clay)}
+.gitviz .c.f{stroke:var(--phosphor)}
+.gitviz .l{stroke:var(--line);stroke-width:2;fill:none}
+.gitviz .l.f{stroke:var(--phosphor);stroke-dasharray:4 6;animation:flow 3s linear infinite}
+.gitviz .bubble{fill:var(--haze);stroke:var(--line)}
+.gitviz .bt{fill:var(--paper);font-size:11px}
+.facts{display:grid;gap:1rem;margin-top:1.4rem}
+.fact{display:grid;grid-template-columns:auto 1fr;gap:.9rem;align-items:start}
+.fact .glyph{font:500 .95rem var(--mono);color:var(--phosphor);padding-top:.15rem}
+.fact h3{font-size:1.05rem;font-weight:700}
+.fact p{color:var(--dim);margin-top:.15rem}
+
+/* overview */
+.overview{padding-block:4rem 6rem}
+.overview .big{font-family:var(--display);font-weight:800;font-size:clamp(1.5rem,3.6vw,2.4rem);letter-spacing:-.015em;max-width:24em;line-height:1.15}
+.overview .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:1.4rem 2rem;margin-top:2.2rem}
+.overview h3{font-size:1rem;font-weight:700;color:var(--signal)}
+.overview p{color:var(--dim);margin-top:.3rem;font-size:.95rem}
+.ticker{margin-top:3rem;font:500 .8rem var(--mono);color:var(--dim);border-top:1px solid var(--line);padding-top:1rem;display:flex;flex-wrap:wrap;gap:.4rem 1.6rem}
+.ticker b{color:var(--phosphor);font-weight:500}
+
+@media (prefers-reduced-motion:reduce){
+  .world,.crate,.belt::after,.hand.adam,.hand.god,.spark i,.edge,.pulse,.l.f,.crate .eye{animation:none!important}
+  .hand.adam,.hand.god{transform:none}
+}
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="wrap">
+    <h1 class="brand" id="brand" aria-label="Pimwell">Pimwell</h1>
+    <p class="lede"><strong>Everything your team and its agents know about the product</strong>, in one hub: the repos, the tickets, the mail, the conversations, and who did what in which run.</p>
+
+    <div class="stage" id="stage" aria-label="Animated tour of the hub">
+      <canvas id="rain"></canvas>
+      <div class="scene">
+        <div class="world" id="world">
+          <div class="belt"></div>
+
+          <div class="station s1"><div class="card">
+            <div class="k">acme.pimwell.com</div><div class="t">One tenant, one subdomain</div>
+            <div class="d">Departments get their own, isolated.</div>
+            <svg viewBox="0 0 160 40"><rect x="2" y="6" width="60" height="28" rx="5" fill="none" stroke="#58c7ff" stroke-width="1.5"/><rect x="70" y="6" width="40" height="28" rx="5" fill="none" stroke="#223049" stroke-width="1.5"/><rect x="118" y="6" width="40" height="28" rx="5" fill="none" stroke="#223049" stroke-width="1.5"/><text x="8" y="24" font-size="9" fill="#58c7ff" font-family="IBM Plex Mono,monospace">research/</text></svg>
+          </div></div>
+
+          <div class="station s2"><div class="card">
+            <div class="k">principals</div><div class="t">People and agents, both first-class</div>
+            <div class="d">Every agent has a human operator.</div>
+            <svg viewBox="0 0 160 44"><circle cx="24" cy="16" r="9" fill="none" stroke="#e6ecf4" stroke-width="1.5"/><path d="M8 42c2-10 8-14 16-14s14 4 16 14" fill="none" stroke="#e6ecf4" stroke-width="1.5"/><rect x="70" y="8" width="22" height="18" rx="4" fill="none" stroke="#6cf5a4" stroke-width="1.5"/><circle cx="77" cy="17" r="2" fill="#6cf5a4"/><circle cx="85" cy="17" r="2" fill="#6cf5a4"/><path d="M81 8V2" stroke="#6cf5a4" stroke-width="1.5"/><path d="M64 42c2-10 8-14 17-14s15 4 17 14" fill="none" stroke="#6cf5a4" stroke-width="1.5"/><path d="M112 10h40M112 20h40M112 30h26" stroke="#223049" stroke-width="2"/><text x="112" y="42" font-size="8" fill="#8a97ab" font-family="IBM Plex Mono,monospace">operator → agent</text></svg>
+          </div></div>
+
+          <div class="station s3"><div class="card">
+            <div class="k">session pms_7f3a…</div><div class="t">Every run is a session</div>
+            <div class="d">Start, label, expire. Nothing happens unattributed.</div>
+            <svg viewBox="0 0 160 36"><rect x="2" y="12" width="156" height="12" rx="6" fill="#223049"/><rect x="2" y="12" width="98" height="12" rx="6" fill="#6cf5a4"/><text x="4" y="8" font-size="8" fill="#8a97ab" font-family="IBM Plex Mono,monospace">started 02:14</text><text x="112" y="34" font-size="8" fill="#8a97ab" font-family="IBM Plex Mono,monospace">ttl 24h</text></svg>
+          </div></div>
+
+          <div class="station s4"><div class="card">
+            <div class="k">ardi · git over https</div><div class="t">Repos that remember who, and which run</div>
+            <div class="d">Plain git clients. Append-only shared branches.</div>
+            <svg viewBox="0 0 160 44"><path d="M10 22h140" stroke="#223049" stroke-width="2"/><circle cx="24" cy="22" r="5" fill="#07090d" stroke="#58c7ff" stroke-width="2"/><circle cx="60" cy="22" r="5" fill="#07090d" stroke="#58c7ff" stroke-width="2"/><circle cx="96" cy="22" r="5" fill="#07090d" stroke="#58c7ff" stroke-width="2"/><path d="M96 22c10-14 20-14 36-14" fill="none" stroke="#6cf5a4" stroke-width="2" stroke-dasharray="3 4"/><circle cx="134" cy="8" r="4" fill="#07090d" stroke="#6cf5a4" stroke-width="2"/><circle cx="134" cy="22" r="5" fill="#07090d" stroke="#58c7ff" stroke-width="2"/><text x="100" y="42" font-size="7.5" fill="#6cf5a4" font-family="IBM Plex Mono,monospace">refs/ardi/forks/…</text></svg>
+          </div></div>
+
+          <div class="station s5"><div class="card">
+            <div class="k">tickets · annotations</div><div class="t">Tracker lives in the repo</div>
+            <div class="d">Each edit is an artifact. Clones carry the whole tracker.</div>
+            <svg viewBox="0 0 160 40"><rect x="4" y="4" width="46" height="32" rx="4" fill="none" stroke="#ffb454" stroke-width="1.5"/><rect x="58" y="4" width="46" height="32" rx="4" fill="none" stroke="#ffb454" stroke-width="1.5"/><rect x="112" y="4" width="46" height="32" rx="4" fill="none" stroke="#ffb454" stroke-width="1.5"/><text x="9" y="18" font-size="7" fill="#ffb454" font-family="IBM Plex Mono,monospace">#a91f open</text><text x="63" y="18" font-size="7" fill="#ffb454" font-family="IBM Plex Mono,monospace">#a91f active</text><text x="117" y="18" font-size="7" fill="#ffb454" font-family="IBM Plex Mono,monospace">#a91f done</text><text x="9" y="30" font-size="7" fill="#8a97ab" font-family="IBM Plex Mono,monospace">claim 1h</text><text x="63" y="30" font-size="7" fill="#8a97ab" font-family="IBM Plex Mono,monospace">agent 7f3a</text><text x="117" y="30" font-size="7" fill="#8a97ab" font-family="IBM Plex Mono,monospace">link 9c2</text></svg>
+          </div></div>
+
+          <div class="station s6"><div class="card">
+            <div class="k">login@ · signup@</div><div class="t">Mail that only ever answers</div>
+            <div class="d">Nothing is sent unless you wrote first. Agents too.</div>
+            <svg viewBox="0 0 160 40"><path d="M6 10h64v24H6z" fill="none" stroke="#e6ecf4" stroke-width="1.5"/><path d="M6 10l32 18 32-18" fill="none" stroke="#e6ecf4" stroke-width="1.5"/><path d="M78 22h24" stroke="#6cf5a4" stroke-width="2"/><path d="M98 16l8 6-8 6" fill="none" stroke="#6cf5a4" stroke-width="2"/><rect x="112" y="8" width="42" height="26" rx="4" fill="none" stroke="#6cf5a4" stroke-width="1.5"/><text x="116" y="24" font-size="8" fill="#6cf5a4" font-family="IBM Plex Mono,monospace">consent</text></svg>
+          </div></div>
+
+          <div class="station s7"><div class="card">
+            <div class="k">one verb table</div><div class="t">CLI, HTTP, MCP, web</div>
+            <div class="d">Defined once. Claude or ChatGPT plug in with a consent screen.</div>
+            <svg viewBox="0 0 160 44"><rect x="4" y="14" width="40" height="16" rx="3" fill="none" stroke="#58c7ff" stroke-width="1.5"/><text x="9" y="25" font-size="8" fill="#58c7ff" font-family="IBM Plex Mono,monospace">verb</text><path d="M44 22h16M60 22l16-14M60 22h16M60 22l16 14M60 22l16 20" stroke="#223049" stroke-width="1.5" fill="none"/><text x="80" y="10" font-size="8" fill="#e6ecf4" font-family="IBM Plex Mono,monospace">cli</text><text x="80" y="25" font-size="8" fill="#e6ecf4" font-family="IBM Plex Mono,monospace">http</text><text x="80" y="39" font-size="8" fill="#e6ecf4" font-family="IBM Plex Mono,monospace">mcp</text><text x="112" y="25" font-size="8" fill="#8a97ab" font-family="IBM Plex Mono,monospace">html·md·json</text></svg>
+          </div></div>
+
+          <div class="column">
+            <div class="row r1"><b>02:14:07</b> agent <i>scout</i> run 7f3a started · label "triage inbox"</div>
+            <div class="row r2"><b>02:14:31</b> <i>scout/7f3a</i> claimed ticket #a91f for 1h</div>
+            <div class="row r3"><b>02:16:02</b> <i>scout/7f3a</i> pushed 3 commits to <i>research/site</i> main</div>
+            <div class="row r4"><b>02:16:03</b> mlink: 4 paths changed · 1 rename detected</div>
+            <div class="row r5"><b>02:18:40</b> <i>ada</i> annotated 9c2e: reviewed</div>
+            <div class="row r6"><b>02:19:12</b> <i>scout/7f3a</i> replied to mail from a consented address</div>
+            <div class="row r7"><b>02:20:00</b> session 7f3a ended · 6 events · 0 forks</div>
+          </div>
+
+          <div class="crate" aria-hidden="true"><div class="box"><span class="eye l"></span><span class="eye r"></span><span class="tag">v1.4</span></div></div>
+        </div>
+      </div>
+      <div class="caption">
+        <div class="say" id="say">A product is a thing you can hold.</div>
+        <div class="ctl"><button type="button" id="pause">pause</button><button type="button" id="replay">replay</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="wrap">
+    <h2>Hand to hand.</h2>
+    <p class="sub">People and agents touch the same objects. Each touch is attributed to a person or to an agent run, and nothing is ever rewritten out of history.</p>
+    <div class="hands" id="hands" aria-label="Two ASCII hands reaching toward each other">
+      <div class="pair">
+<pre class="hand adam" id="adam" aria-hidden="true">                                                         ____
+                                                 __..--''    `-.
+                                          __..--''              `-._
+  ___________________________________..--''                         `-.____________
+ /                                                                               `--.._
+|                                                                                      `-.
+|           _______________________________________________________________               `.
+|          /                                                               `-.._            `.
+|         |                                                                     `--..__       )
+|          \_________________________________________________________________________ `----'
+ \                                                                                    `--.
+  `--.___                                                                                 )
+         `--.___________________________________________________________________________.'</pre>
+<pre class="hand god" id="god" aria-hidden="true">          ____
+       .-'    ``--..__
+     .'               ``--..__
+  .-'                        ``--..______________________________________________
+ /                                                                               ``-..__________
+|                                                                                              `.
+|            ____________________________________________________________________________       |
+|           /                                                                             `.     |
+|          |                                                                               |     |
+|           \_____________________________________________________________________________/     |
+ \                                                                                             .'
+  `-.                                                                                        .'
+     `--.___________________________________________________________________________________.'</pre>
+        <div class="spark" id="spark" aria-hidden="true"></div>
+      </div>
+      <div class="legend"><span>agent · session 7f3a</span><span id="touch">reaching</span><span>human · ada</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="wrap">
+    <h2>One table of verbs, four doors.</h2>
+    <p class="sub">Every operation is declared once with its parameters, its result, and who may call it. The command line, the HTTP API, the MCP tools, and the web pages are all generated from that one table, so nothing exists on one surface without the others.</p>
+    <div class="diagram" aria-label="System diagram: tenants, principals, verb table, surfaces">
+      <svg viewBox="0 0 960 520" role="img">
+        <!-- tenant block -->
+        <rect class="node hot" x="30" y="40" width="300" height="200" rx="14"/>
+        <text class="hd" x="50" y="70">acme.pimwell.com</text>
+        <rect class="node" x="50" y="90" width="120" height="56" rx="8"/><text x="60" y="112">research/</text><text class="lbl" x="60" y="130">namespace</text>
+        <rect class="node" x="190" y="90" width="120" height="56" rx="8"/><text x="200" y="112">site</text><text class="lbl" x="200" y="130">project · repo</text>
+        <rect class="node" x="50" y="160" width="120" height="56" rx="8"/><text x="60" y="182">tracker</text><text class="lbl" x="60" y="200">project · tickets</text>
+        <rect class="node" x="190" y="160" width="120" height="56" rx="8"/><text x="200" y="182">cooler</text><text class="lbl" x="200" y="200">archived, still readable</text>
+
+        <!-- second tenant, faded -->
+        <rect class="node" x="30" y="270" width="300" height="60" rx="14" opacity=".6"/>
+        <text class="hd" x="50" y="305" opacity=".6">blue.pimwell.com</text>
+        <text class="lbl" x="230" y="305">another department</text>
+
+        <!-- principals -->
+        <rect class="node" x="30" y="370" width="140" height="110" rx="14"/>
+        <text class="hd" x="48" y="396">people</text>
+        <text class="lbl" x="48" y="418">root · admin</text><text class="lbl" x="48" y="436">member · reader</text>
+        <text class="lbl" x="48" y="462">magic link, passkey</text>
+        <rect class="node" x="190" y="370" width="140" height="110" rx="14"/>
+        <text class="hd" x="208" y="396">agents</text>
+        <text class="lbl" x="208" y="418">token → session</text><text class="lbl" x="208" y="436">per run, labelled</text>
+        <text class="lbl" x="208" y="462">always has an operator</text>
+
+        <!-- verb table -->
+        <rect class="node hot" x="420" y="180" width="180" height="150" rx="14"/>
+        <text class="hd" x="440" y="208">verb table</text>
+        <text class="lbl" x="440" y="232">name · params · result</text>
+        <text class="lbl" x="440" y="250">role · fresh proof</text>
+        <text class="lbl" x="440" y="268">idempotency key</text>
+        <text class="lbl" x="440" y="286">output-size hint</text>
+        <text class="lbl" x="440" y="312">~30 verbs in v1</text>
+        <circle class="pulse" cx="586" cy="196" r="4"/>
+
+        <!-- edges tenant/principals -> verb table -->
+        <path class="edge" d="M330 140 C 380 140, 380 220, 420 220"/>
+        <path class="edge" d="M330 300 C 380 300, 380 260, 420 260"/>
+        <path class="edge g" d="M170 425 C 380 425, 380 300, 420 300"/>
+        <path class="edge g" d="M330 425 C 390 425, 395 310, 420 310"/>
+
+        <!-- surfaces -->
+        <rect class="node" x="700" y="60" width="230" height="64" rx="12"/><text class="hd" x="718" y="88">pimwell (cli)</text><text class="lbl" x="718" y="108">static binary · --json when piped</text>
+        <rect class="node" x="700" y="150" width="230" height="64" rx="12"/><text class="hd" x="718" y="178">POST /api/&lt;verb&gt;</text><text class="lbl" x="718" y="198">cursors when truncated</text>
+        <rect class="node hot" x="700" y="240" width="230" height="64" rx="12"/><text class="hd" x="718" y="268">/mcp</text><text class="lbl" x="718" y="288">OAuth consent on pimwell.com</text>
+        <rect class="node" x="700" y="330" width="230" height="64" rx="12"/><text class="hd" x="718" y="358">pages</text><text class="lbl" x="718" y="378">html for people · markdown for models</text>
+        <rect class="node" x="700" y="420" width="230" height="64" rx="12"/><text class="hd" x="718" y="448">login@ · signup@</text><text class="lbl" x="718" y="468">replies only, after you wrote first</text>
+
+        <path class="edge" d="M600 230 C 650 230, 650 92, 700 92"/>
+        <path class="edge" d="M600 250 C 650 250, 650 182, 700 182"/>
+        <path class="edge" d="M600 270 C 650 270, 650 272, 700 272"/>
+        <path class="edge" d="M600 290 C 650 290, 650 362, 700 362"/>
+        <path class="edge g slow" d="M600 310 C 650 310, 650 452, 700 452"/>
+
+        <!-- claude / chatgpt -->
+        <text class="lbl" x="700" y="30">Claude · ChatGPT · any MCP client</text>
+        <path class="edge slow" d="M815 36 L 815 60"/>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="wrap">
+    <h2>Git that knows who pushed, and which run did it.</h2>
+    <p class="sub">Ardi hosts the repos. Standard git clients clone and push over HTTPS, unchanged. Underneath, a live index in the style of Fossil answers "what did that agent do in the last hour" in one query.</p>
+    <div class="grid2">
+      <div>
+        <div class="gitviz" aria-label="Commit graph with a fork and an annotation">
+          <svg viewBox="0 0 640 220" role="img">
+            <path class="l" d="M40 120 H 600"/>
+            <path class="l f" d="M300 120 C 340 120, 340 60, 380 60 H 500 C 540 60, 540 120, 580 120"/>
+            <circle class="c" cx="80" cy="120" r="8"/><text x="66" y="150">1a2b</text>
+            <circle class="c" cx="190" cy="120" r="8"/><text x="176" y="150">8e1c</text>
+            <circle class="c" cx="300" cy="120" r="8"/><text x="286" y="150">9c2e</text>
+            <circle class="c" cx="410" cy="120" r="8"/><text x="396" y="150">b770</text>
+            <circle class="c" cx="520" cy="120" r="8"/><text x="506" y="150">c04d</text>
+            <circle class="c a" cx="580" cy="120" r="8"/><text x="562" y="150">merge</text>
+            <circle class="c f" cx="440" cy="60" r="8"/><text x="400" y="40">refs/ardi/forks/main/7f3a</text>
+            <text x="40" y="190">main is append-only: a diverged push lands as a fork, is shown in the timeline, and merges when ready.</text>
+            <rect class="bubble" x="120" y="60" width="150" height="34" rx="8"/>
+            <text class="bt" x="130" y="74">ada · reviewed 9c2e</text><text x="130" y="88">annotation, not a rewrite</text>
+            <path class="l" d="M270 90 L 296 112"/>
+          </svg>
+        </div>
+      </div>
+      <div class="facts">
+        <div class="fact"><div class="glyph">plink</div><div><h3>History never loses a commit</h3><p>Shared branches refuse non fast-forward pushes. Your rewritten history becomes new commits plus a "supersedes" note on the old ones.</p></div></div>
+        <div class="fact"><div class="glyph">mlink</div><div><h3>Who last touched this file</h3><p>Every commit is indexed into parent links and path changes, with the pushing principal and session, so blame and churn are table lookups.</p></div></div>
+        <div class="fact"><div class="glyph">refs/ardi</div><div><h3>Tickets ride along in the clone</h3><p>Ticket edits and annotations are content-addressed artifacts committed under their own ref. Concurrent edits merge without conflict.</p></div></div>
+        <div class="fact"><div class="glyph">archive</div><div><h3>One file is the whole thing</h3><p>A repository, its index, tickets, notes, and provenance export as a single SQLite file anyone can open.</p></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="overview">
+  <div class="wrap">
+    <p class="big">Where it ends up: a private hub for a few people and many agents, where every product fact, decision, and change has a name on it.</p>
+    <div class="cols">
+      <div><h3>Tenants</h3><p>Each department on its own subdomain, with optional namespaces, projects, and a cooler for what's done. One identity can belong to several.</p></div>
+      <div><h3>Identity</h3><p>Invite links delivered by a person, not by the hub. Sign in with a link you asked for by mail, or a passkey. Sessions last months; sensitive actions ask for a fresh proof.</p></div>
+      <div><h3>Agents</h3><p>Real principals with mailboxes and tokens. Every run is a session you can read end to end, and every agent answers to a named operator.</p></div>
+      <div><h3>Git</h3><p>Ardi: cheap hosting on Workers or a laptop, a Fossil-style index, forks instead of force, tickets as artifacts, archive to one file.</p></div>
+      <div><h3>Mail</h3><p>Humans and agents send only in reply to a validated address that wrote first. The consent ledger is the single gate.</p></div>
+      <div><h3>Everywhere</h3><p>CLI, HTTP, MCP, and pages from one verb table. Help fits in a few hundred tokens so an agent can decide fast.</p></div>
+    </div>
+    <div class="ticker" id="ticker">
+      <span><b>pimwell.com</b> private · invite only</span>
+      <span><b>ardi</b> git over https · no ssh · no lfs</span>
+      <span><b>mcp</b> consent on pimwell.com</span>
+      <span><b>mail</b> replies only</span>
+    </div>
+  </div>
+</section>
+
+<script>
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const GLYPHS = 'ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789ABCDEFpmw_<>/{}#:';
+  const rnd = n => GLYPHS[Math.floor(Math.random() * n)] ;
+  const pick = () => GLYPHS[Math.floor(Math.random() * GLYPHS.length)];
+
+  /* ---- title decode ---- */
+  const brand = document.getElementById('brand');
+  const word = 'Pimwell';
+  brand.textContent = '';
+  const glyphs = [...word].map(ch => { const s = document.createElement('span'); s.className = 'glyph flux'; s.textContent = pick(); brand.appendChild(s); return s; });
+  function decodeTitle() {
+    if (reduce) { glyphs.forEach((s, i) => { s.textContent = word[i]; s.className = 'glyph settled'; }); return; }
+    let t = 0; const id = setInterval(() => {
+      t++;
+      glyphs.forEach((s, i) => {
+        if (t > 10 + i * 5) { s.textContent = word[i]; s.className = 'glyph settled'; }
+        else s.textContent = pick();
+      });
+      if (t > 10 + word.length * 5) clearInterval(id);
+    }, 45);
+  }
+  decodeTitle();
+
+  /* ---- scramble helper ---- */
+  function scrambleInto(el, text, done) {
+    if (reduce) { el.textContent = text; done && done(); return; }
+    let t = 0; const n = text.length;
+    const id = setInterval(() => {
+      t++;
+      let out = '';
+      for (let i = 0; i < n; i++) {
+        const ch = text[i];
+        if (ch === ' ' || t > 6 + i * 1.2) out += ch;
+        else out += `<span class="flux">${pick()}</span>`;
+      }
+      el.innerHTML = out;
+      if (t > 6 + n * 1.2) { clearInterval(id); el.textContent = text; done && done(); }
+    }, 28);
+  }
+
+  /* ---- matrix rain ---- */
+  const canvas = document.getElementById('rain');
+  const ctx = canvas.getContext('2d');
+  let cols = [], fs = 14, w = 0, h = 0, raf = 0, last = 0, running = !reduce;
+  function size() {
+    const r = canvas.getBoundingClientRect();
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    w = canvas.width = Math.floor(r.width * dpr); h = canvas.height = Math.floor(r.height * dpr);
+    fs = Math.max(11, Math.round(13 * dpr));
+    const n = Math.floor(w / fs);
+    cols = Array.from({ length: n }, (_, i) => cols[i] ?? Math.random() * -60);
+    ctx.font = `${fs}px "IBM Plex Mono", monospace`;
+  }
+  function rain(ts) {
+    if (!running) return;
+    if (ts - last > 66) {
+      last = ts;
+      ctx.fillStyle = 'rgba(7,9,13,0.16)'; ctx.fillRect(0, 0, w, h);
+      for (let i = 0; i < cols.length; i++) {
+        const y = cols[i] * fs;
+        const head = Math.random() < 0.08;
+        ctx.fillStyle = head ? '#dfffe9' : (Math.random() < 0.3 ? '#58c7ff' : '#6cf5a4');
+        ctx.globalAlpha = head ? 1 : 0.55;
+        ctx.fillText(pick(), i * fs, y);
+        ctx.globalAlpha = 1;
+        if (y > h && Math.random() > 0.975) cols[i] = 0; else cols[i] += 1;
+      }
+    }
+    raf = requestAnimationFrame(rain);
+  }
+  size(); addEventListener('resize', size);
+  if (!reduce) raf = requestAnimationFrame(rain);
+  else { ctx.fillStyle = '#0a1018'; ctx.fillRect(0, 0, w, h); }
+
+  /* ---- stage captions, synced to the 26 s camera loop ---- */
+  const say = document.getElementById('say');
+  const world = document.getElementById('world');
+  const crate = document.querySelector('.crate');
+  const script = [
+    [0.00, 'A product is a thing you can hold.'],
+    [0.09, 'It lives in one tenant, on its own subdomain.'],
+    [0.17, 'People and agents work on it as distinct principals.'],
+    [0.25, 'Every agent run is a session. Everything is attributed.'],
+    [0.33, 'Its code lives in git that remembers who pushed, and which run.'],
+    [0.41, 'Its tickets and notes ride in the same repo.'],
+    [0.49, 'Its mail only ever answers.'],
+    [0.56, 'One verb table serves CLI, HTTP, MCP, and the web.'],
+    [0.64, 'Then the timeline: one query for an agent’s whole hour.'],
+    [0.80, 'Forks instead of force. Nothing lost. Nobody blocked.'],
+  ];
+  let t0 = performance.now(), idx = -1, paused = false;
+  function tick(now) {
+    if (!paused) {
+      const p = ((now - t0) / 26000) % 1;
+      let i = script.findIndex((s, k) => p >= s[0] && (k === script.length - 1 || p < script[k + 1][0]));
+      if (i !== idx) { idx = i; scrambleInto(say, script[i][1]); }
+    }
+    requestAnimationFrame(tick);
+  }
+  if (!reduce) requestAnimationFrame(tick); else say.textContent = script[0][1];
+
+  const pauseBtn = document.getElementById('pause'), replayBtn = document.getElementById('replay');
+  pauseBtn.addEventListener('click', () => {
+    paused = !paused;
+    const st = paused ? 'paused' : 'running';
+    world.style.animationPlayState = st; crate.style.animationPlayState = st;
+    document.querySelectorAll('.crate .eye').forEach(e => e.style.animationPlayState = st);
+    pauseBtn.textContent = paused ? 'play' : 'pause';
+    if (paused) { running = false; cancelAnimationFrame(raf); } else if (!reduce) { running = true; raf = requestAnimationFrame(rain); }
+  });
+  replayBtn.addEventListener('click', () => {
+    [world, crate].forEach(el => { el.style.animation = 'none'; void el.offsetWidth; el.style.animation = ''; el.style.animationPlayState = 'running'; });
+    t0 = performance.now(); idx = -1; paused = false; pauseBtn.textContent = 'pause';
+    if (!reduce && !running) { running = true; raf = requestAnimationFrame(rain); }
+    decodeTitle();
+  });
+
+  /* ---- hands: wrap each glyph so life can flow ---- */
+  const hands = document.getElementById('hands');
+  const adam = document.getElementById('adam'), god = document.getElementById('god');
+  function wrap(pre) {
+    const lines = pre.textContent.replace(/\s+$/, '').split('\n');
+    const width = Math.max(...lines.map(l => l.length));
+    pre.textContent = '';
+    const cells = [];
+    lines.forEach((line, r) => {
+      for (let c = 0; c < width; c++) {
+        const ch = line[c] ?? ' ';
+        const s = document.createElement('span'); s.textContent = ch;
+        if (ch !== ' ') cells.push({ s, c, r });
+        pre.appendChild(s);
+      }
+      if (r < lines.length - 1) pre.appendChild(document.createTextNode('\n'));
+    });
+    return { cells, width };
+  }
+  const A = wrap(adam), G = wrap(god);
+  const touch = document.getElementById('touch');
+  const spark = document.getElementById('spark');
+  for (let i = 0; i < 26; i++) {
+    const d = document.createElement('i'); const a = (i / 26) * Math.PI * 2; const r = 60 + Math.random() * 70;
+    d.style.setProperty('--dx', `${Math.cos(a) * r}px`); d.style.setProperty('--dy', `${Math.sin(a) * r}px`);
+    d.style.animationDelay = `${Math.random() * 120}ms`; spark.appendChild(d);
+  }
+  if (!reduce) hands.classList.add('go');
+  const PERIOD = 11000;
+  function handsLoop(now) {
+    const p = ((now % PERIOD) / PERIOD);
+    const touching = p > 0.34 && p < 0.72;
+    hands.classList.toggle('spark-on', p > 0.34 && p < 0.46);
+    touch.textContent = p < 0.34 ? 'reaching' : touching ? 'attributed: ada → scout/7f3a' : 'released';
+    // life flows from god's fingertip (left edge) into adam (right edge), as a wave across columns
+    const wave = touching ? (p - 0.34) / 0.38 : -1; // 0..1
+    const gTip = 0, aTip = A.width - 1;
+    G.cells.forEach(({ s, c }) => {
+      const d = c / G.width; // 0 at fingertip
+      const lit = wave >= 0 && d < wave * 1.2;
+      s.className = lit ? (d > wave * 1.2 - 0.08 ? 'hot' : 'on') : '';
+    });
+    A.cells.forEach(({ s, c }) => {
+      const d = (aTip - c) / A.width; // 0 at fingertip
+      const lit = wave >= 0 && d < Math.max(0, wave * 1.3 - 0.15);
+      s.className = lit ? (d > wave * 1.3 - 0.23 ? 'hot' : 'on') : '';
+    });
+    requestAnimationFrame(handsLoop);
+  }
+  if (!reduce) requestAnimationFrame(handsLoop);
+  else { touch.textContent = 'attributed: ada → scout/7f3a'; G.cells.forEach(({ s }) => s.className = 'on'); A.cells.forEach(({ s }) => s.className = 'on'); }
+})();
+</script>
+</body>
+</html>
