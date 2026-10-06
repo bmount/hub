@@ -6,7 +6,14 @@ import { recordEvent } from "../db/events";
 import { isValidTenantSlug } from "../tenant";
 import { takeRate } from "../rate";
 import { sendMail } from "../mail/send";
-import type { Identity, LinkPurpose } from "../db/types";
+import type { Ctx } from "./context";
+import { getIdentityById } from "../db/identities";
+import { authLinkIsOpen, claimAuthLink, findAuthLinkByToken } from "../db/authLinks";
+import { recordProof } from "../db/proofs";
+import { createBrowserSession, setLastProof } from "../db/sessions";
+import { getTenantBySlug } from "../db/tenants";
+import { getMembership } from "../db/memberships";
+import type { AuthLink, Identity, LinkPurpose, Session } from "../db/types";
 
 export const NEUTRAL_LOGIN_MESSAGE = "If that address is known and has consented, a link is on its way. It expires in 15 minutes.";
 
@@ -74,4 +81,56 @@ export async function requestLink(env: Env, req: LinkRequest, now: number): Prom
   if (!(await takeRate(env.RATE, "addr", email, now))) return;
   const url = await issueLink(env, { identity, purpose: req.purpose, next: req.next, via: "outbound", session_id: req.session_id }, now);
   await sendMail(env, { to: email, ...linkMail(req.purpose, url) }, now);
+}
+
+export async function landingUrl(env: Env, identity: Identity, next: string | null): Promise<string> {
+  const home = `https://${env.HUB_DOMAIN}/`;
+  const slug = cleanNext(next);
+  if (!slug) return home;
+  const tenant = await getTenantBySlug(env.HUB_DB, slug);
+  if (!tenant || tenant.state !== "active") return home;
+  const there = `https://${slug}.${env.HUB_DOMAIN}/`;
+  if (identity.is_root === 1) return there;
+  const m = await getMembership(env.HUB_DB, identity.id, tenant.id);
+  return m && m.state === "active" ? there : home;
+}
+
+export async function openLink(env: Env, token: string, now: number): Promise<{ link: AuthLink; identity: Identity } | null> {
+  const link = await findAuthLinkByToken(env.HUB_DB, token);
+  if (!link || !authLinkIsOpen(link, now)) return null;
+  const identity = await getIdentityById(env.HUB_DB, link.identity_id);
+  if (!identity || identity.kind !== "human" || identity.state !== "active") return null;
+  return { link, identity };
+}
+
+export type ConsumeResult =
+  | { kind: "invalid" }
+  | { kind: "wrong_browser" }
+  | { kind: "ok"; identity: Identity; session: Session; newToken: string | null; purpose: LinkPurpose; location: string };
+
+export async function consumeLink(env: Env, ctx: Ctx, token: string, next: string | null, now: number): Promise<ConsumeResult> {
+  const open = await openLink(env, token, now);
+  if (!open) return { kind: "invalid" };
+  const { link, identity } = open;
+  const own = ctx.identity?.id === identity.id && ctx.session?.kind === "browser" ? ctx.session : null;
+  // A reproof link refreshes the session that asked; anywhere else, leave it unused.
+  if (link.purpose === "reproof" && !own) return { kind: "wrong_browser" };
+  if (!(await claimAuthLink(env.HUB_DB, link.id, now))) return { kind: "invalid" };
+  await recordProof(env.HUB_DB, { identity_id: identity.id, kind: "email", subject: identity.email }, now);
+  let session: Session;
+  let newToken: string | null = null;
+  if (own) {
+    await setLastProof(env.HUB_DB, own.id, now);
+    session = { ...own, last_proof_at: now };
+  } else {
+    const created = await createBrowserSession(env.HUB_DB, identity.id, now);
+    session = created.session;
+    newToken = created.token;
+  }
+  await recordEvent(env.HUB_DB, {
+    tenant_id: null, identity_id: identity.id, session_id: session.id,
+    kind: link.purpose === "reproof" ? "login.reproof" : "login.verify", target_kind: "auth_link", target_id: link.id,
+    summary: link.purpose === "reproof" ? "Re-proved control of email" : newToken ? "Signed in with an email link" : "Refreshed proof with an email link",
+  }, now);
+  return { kind: "ok", identity, session, newToken, purpose: link.purpose, location: await landingUrl(env, identity, next) };
 }
