@@ -74,6 +74,8 @@ and send it with a matching `Origin` header:
 | token.create (`agent_id`, `name`, optional `expires_in_days` 1-365, default no expiry), token.revoke (`token_id`) | any | humans: the agent's operator, or a tenant admin | 60 min |
 | token.list | any | humans: operator, or tenant admin | |
 | session.start | tenant | long-lived `pmw_` token only | |
+| event.list (`limit` 1-100, default 25; `cursor`; `session_id`) | tenant | member | |
+| oauth.grant.approve | apex | the consent page's signed-in human, member of the tenant | 600 min |
 
 ### Signing in and re-proving
 
@@ -141,4 +143,28 @@ const res = await env.HUB.fetch("https://hub.internal/internal/introspect", {
   headers: { "content-type": "application/json", "x-hub-internal": env.HUB_INTERNAL_SECRET },
   body: JSON.stringify({ token, tenant: "acme" }),
 });
+```
+
+## Assistants (MCP)
+
+Every tenant has an MCP endpoint at `https://<tenant>.pimwell.com/mcp`. An assistant connects as the person who approves it, in that one tenant, with read-only tools for now: `whoami`, `project_list`, and (members and above) `event_list`. The authorization server is `https://pimwell.com` (OAuth 2.1, PKCE S256, dynamic client registration for Claude's callback and loopback callbacks only).
+
+Claude Code:
+
+```sh
+claude mcp add --transport http pimwell-blue https://blue.pimwell.com/mcp
+```
+
+Then run `/mcp` in Claude Code, pick `pimwell-blue`, and choose Authenticate. A browser opens on `pimwell.com`: sign in if asked (a sign-in that needs an email link comes back to the same page), check that codes go to `localhost:<port>` and that the workspace is the one you meant, and approve. claude.ai: Settings, Connectors, Add custom connector, URL `https://blue.pimwell.com/mcp`; the consent page shows `claude.ai` as the destination.
+
+Approval needs a sign-in proof from the last 10 hours. Access tokens last an hour; the assistant refreshes them for up to 30 days of idleness and 90 days in all. Every tool call is an `mcp.call` event recorded under the connection's session id: `event.list` with that `session_id` shows what the assistant did.
+
+Revoke at `https://pimwell.com/me` (Assistants, Revoke); it takes effect on the assistant's next call. Tenant admins can revoke a member's assistant with `session.revoke` and its session id. Archiving a tenant revokes all of its assistants. A refresh token used twice is treated as stolen and revokes the connection; the assistant must authorize again.
+
+Deploying this for the first time needs one more KV namespace and migration 0002:
+
+```sh
+npx wrangler kv namespace create OAUTH_KV   # paste the id into wrangler.jsonc
+npm run migrate:remote
+npm run deploy
 ```
