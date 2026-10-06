@@ -5,7 +5,7 @@ import { recordEvent } from "../db/events";
 import { runVerb } from "../verbs/dispatch";
 import type { VerbDef } from "../verbs/table";
 import { exposedVerbs, toolName } from "./policy";
-import { DATA_NOTE, cleanText, cutText, renderMarkdown } from "./render";
+import { DATA_NOTE, MCP_TEXT_LIMIT, cleanDeep, cleanText, cutText, renderMarkdown } from "./render";
 
 const SCOPE_LINE: Record<string, string> = {
   read: "Scope: read. Looks things up; changes nothing.",
@@ -93,6 +93,15 @@ function errorResult(error: string, reason: string): CallToolResult {
   return { isError: true, content: [{ type: "text", text: JSON.stringify({ error, reason }) }] };
 }
 
+/** MCP spec 8.6: Markdown text plus structuredContent; verbs with a chat renderer write their own text (messaging spec 11.3). */
+export function toolResult(verb: VerbDef<unknown, unknown>, result: unknown): CallToolResult {
+  const render = verb.mcp?.render;
+  if (!render) return { content: [{ type: "text", text: renderMarkdown(verb.name, result) }], structuredContent: result as Record<string, unknown> };
+  let text = render(result);
+  if (!text.startsWith(DATA_NOTE)) text = `${DATA_NOTE}\n\n${text}`;
+  return { content: [{ type: "text", text: cutText(text, MCP_TEXT_LIMIT).text }], structuredContent: cleanDeep(result) as Record<string, unknown> };
+}
+
 /** One tools/call: run the verb through the dispatcher as the grant's session, and record it either way (MCP spec 8.5, 9). */
 export async function callTool(ctx: Ctx, name: string, args: Record<string, unknown>): Promise<CallToolResult> {
   const verb = toolsFor(ctx).find((v) => toolName(v.name) === name);
@@ -104,7 +113,7 @@ export async function callTool(ctx: Ctx, name: string, args: Record<string, unkn
   try {
     const result = await runVerb(ctx, verb, args);
     await audit(ctx, "mcp.call", verb.name, "ok", args, verb, false);
-    return { content: [{ type: "text", text: renderMarkdown(verb.name, result) }], structuredContent: result as Record<string, unknown> };
+    return toolResult(verb, result);
   } catch (e) {
     if (!(e instanceof HubError)) console.error("tool failed", verb.name, e instanceof Error ? e.name : "error");
     const reason = e instanceof HubError ? e.reason : "internal";

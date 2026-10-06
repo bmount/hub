@@ -24,6 +24,8 @@ export function mcpViolations(v: VerbDef<unknown, unknown>): string[] {
   if (v.kind === "query" && v.mcp.destructive) out.push("destructive query");
   if (!TOOL_NAME.test(toolName(v.name))) out.push("tool name");
   if (v.mcp.input.type !== "object" || v.mcp.input.additionalProperties !== false) out.push("input schema");
+  // Messaging spec 13: message text reaches a model only through the chat renderer, never as raw table cells.
+  if (/^(chat|ref|inbox)\./.test(v.name) && !v.mcp.render) out.push("member text needs the chat renderer");
   return out;
 }
 

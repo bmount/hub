@@ -11,8 +11,12 @@ export type McpInputSchema = {
   additionalProperties: false;
 };
 
-/** MCP exposure (MCP spec 8.2). Opt-in per verb; the table test enforces MCP spec 8.3 on every verb that sets it. */
-export type McpDecl = { scope: "read" | "write"; destructive: boolean; title: string; input: McpInputSchema };
+/**
+ * MCP exposure (MCP spec 8.2). Opt-in per verb; the table test enforces MCP spec 8.3 on every verb that sets it.
+ * `render`: verbs whose results carry member-written text (messages) write their own text with the chat renderer
+ * (messaging spec 11.3); the tool result then starts with DATA_NOTE and its structuredContent is cleaned.
+ */
+export type McpDecl = { scope: "read" | "write"; destructive: boolean; title: string; input: McpInputSchema; render?: (result: unknown) => string };
 
 export type VerbDef<P, R> = {
   name: string;

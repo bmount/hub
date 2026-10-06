@@ -29,6 +29,21 @@ export function cutText(s: string, max: number): { text: string; cut: boolean } 
   return { text: s.slice(0, end), cut: true };
 }
 
+const ANY_BREAK = /\r\n|[\n\r\u0085\u2028\u2029]/;
+
+/** Multi-line member text with every line cleaned as `cleanText` cleans one; line breaks kept as "\n". */
+export function cleanLines(s: string): string {
+  return s.split(ANY_BREAK).map(cleanText).join("\n");
+}
+
+/** Every string inside a JSON value through `cleanLines` (structuredContent of results that carry member text). */
+export function cleanDeep(v: unknown): unknown {
+  if (typeof v === "string") return cleanLines(v);
+  if (Array.isArray(v)) return v.map(cleanDeep);
+  if (v !== null && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, cleanDeep(x)]));
+  return v;
+}
+
 /** `s` as a Markdown code span, fenced with more backticks than its longest run so nothing inside it can end the span or render. */
 function codeSpan(s: string): string {
   let longest = 0;
