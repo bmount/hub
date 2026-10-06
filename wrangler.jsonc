@@ -5,7 +5,7 @@
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
   "routes": [
-    { "pattern": "pimwell.com/*", "zone_name": "pimwell.com" },
+    { "pattern": "pimwell.com", "custom_domain": true },
     { "pattern": "*.pimwell.com/*", "zone_name": "pimwell.com" }
   ],
   "vars": { "HUB_DOMAIN": "pimwell.com" },
@@ -13,11 +13,11 @@
     {
       "binding": "HUB_DB",
       "database_name": "pimwell-hub",
-      "database_id": "local-placeholder-until-d1-create",
+      "database_id": "c4f3cf5f-ddae-47ed-bffc-5db014a34f6e",
       "migrations_dir": "migrations"
     }
   ],
   "kv_namespaces": [
-    { "binding": "RATE", "id": "local-placeholder-until-kv-create" }
+    { "binding": "RATE", "id": "bb594176ceb94d83ac5a74ff160ac53c" }
   ]
 }
