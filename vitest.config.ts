@@ -17,6 +17,17 @@ export default defineWorkersConfig(async () => {
               HUB_BOOTSTRAP_TOKEN: "test-bootstrap-token",
               HUB_INTERNAL_SECRET: "test-internal-secret",
             },
+            // Stands in for the Ardi Worker: echoes what reached it, so tests can check the forward.
+            serviceBindings: {
+              async ARDI(request: Request) {
+                const body = request.body ? await request.text() : "";
+                return Response.json({
+                  method: request.method, url: request.url, authorization: request.headers.get("authorization"),
+                  cookie: request.headers.get("cookie"), gitProtocol: request.headers.get("git-protocol"),
+                  contentType: request.headers.get("content-type"), body,
+                }, { headers: { "x-ardi-stub": "1" } });
+              },
+            },
           },
         },
       },

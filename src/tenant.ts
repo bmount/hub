@@ -1,5 +1,5 @@
 export const RESERVED_LABELS: Set<string> = new Set([
-  "www", "mail", "mx", "api", "mcp", "login", "signup", "admin", "root", "static", "cdn",
+  "www", "mail", "mx", "api", "mcp", "login", "signup", "admin", "root", "static", "cdn", "git", "ardi",
 ]);
 
 export const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;

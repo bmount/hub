@@ -20,6 +20,8 @@
     }
   ],
   "send_email": [{ "name": "MAIL", "allowed_sender_addresses": ["login@pimwell.com"] }],
+  // Git smart HTTP on tenant hosts goes to Ardi (docs/superpowers/specs/2026-10-06-ardi-hub-integration.md).
+  "services": [{ "binding": "ARDI", "service": "ardi-pimwell" }],
   "kv_namespaces": [
     { "binding": "RATE", "id": "bb594176ceb94d83ac5a74ff160ac53c" },
     { "binding": "OAUTH_KV", "id": "f4d9750c9bdd4cbc839b8efc7d17ab3c" }

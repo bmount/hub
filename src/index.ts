@@ -7,6 +7,7 @@ import { mePage } from "./http/me";
 import { adminAgentsPage } from "./http/adminAgents";
 import { handleEmail } from "./mail/inbound";
 import { introspect } from "./http/internal";
+import { forwardGit } from "./http/git";
 import { asMetadataPage, protectedResourcePage } from "./http/oauthMeta";
 import { authorizePage, consentPage, consentPost } from "./http/oauthAuthorize";
 import { tokenEndpoint } from "./oauth/token";
@@ -17,6 +18,13 @@ import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sess
 registerAllVerbs();
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Git smart HTTP on tenant hosts belongs to Ardi (integration spec 3); everything else stays here.
+app.use("*", async (c, next) => {
+  const forwarded = await forwardGit(c.req.raw, c.env);
+  if (forwarded) return forwarded;
+  await next();
+});
 
 /** Hono types its execution context separately from workers-types; at runtime it is the Worker's own. */
 const workerCtx = (c: unknown): ExecutionContext => c as ExecutionContext;
