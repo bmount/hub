@@ -8,6 +8,7 @@ import { sessionEnd, sessionList, sessionRevoke } from "./session";
 import { loginRequest, loginVerify } from "./login";
 import { inviteCreate, inviteList, inviteRevoke } from "./invite";
 import { agentArchive, agentCreate } from "./agent";
+import { tokenCreate, tokenList, tokenRevoke } from "./token";
 import { consentList, consentRevoke } from "./consent";
 
 export function registerAllVerbs(): void {
@@ -21,5 +22,6 @@ export function registerAllVerbs(): void {
     loginRequest, loginVerify,
     consentList, consentRevoke,
     agentCreate, agentArchive,
+    tokenCreate, tokenRevoke, tokenList,
   ]);
 }
