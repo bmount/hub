@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { HubError } from "../errors";
+import { htmlResponse, page } from "../html";
 import { getVerb } from "../verbs/table";
 
 async function readBody(request: Request): Promise<{ input: Record<string, unknown>; isForm: boolean }> {
@@ -52,29 +53,41 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
       if (origin !== expected) throw new HubError(403, "bad_origin");
     }
 
+    // A long-lived pmw_ token may only start a run or ask whoami (spec 6.5).
+    if (ctx.authKind === "token" && verb.longLivedToken !== true) {
+      throw new HubError(403, "forbidden", "a long-lived token may only call session.start and whoami");
+    }
+
     if (verb.minRole !== "public") {
       if (verb.scope === "tenant" && ctx.role === null) throw new HubError(404, "not_found");
       if (!ctx.identity) throw new HubError(401, "unauthorized");
       const effective = verb.scope === "hub" ? (ctx.identity.is_root === 1 ? "root" : null) : ctx.role;
       if (rank(effective) < rank(verb.minRole)) throw new HubError(403, "forbidden");
-      // Agent sessions are exempt; browser sessions need fresh proof regardless of transport.
-      if (verb.freshProofMinutes !== null && ctx.session && ctx.session.kind === "browser") {
-        if (ctx.now - ctx.session.last_proof_at > verb.freshProofMinutes * 60_000) throw new HubError(403, "reproof_required");
-      }
+    }
+    if (verb.humanOnly === true && ctx.identity && ctx.identity.kind !== "human") throw new HubError(403, "forbidden", "agents may not call this verb");
+    // Fresh proof is a property of browser sessions, by cookie or bearer; agent runs and long-lived tokens are exempt (spec 6.7).
+    if (verb.freshProofMinutes !== null && ctx.session && ctx.session.kind === "browser") {
+      if (ctx.now - ctx.session.last_proof_at > verb.freshProofMinutes * 60_000) throw new HubError(403, "reproof_required");
     }
 
     const params = verb.parse(body.input);
     const result = await verb.run(ctx, params);
+    if (isForm && verb.renderForm) return finish(ctx, env, htmlResponse(page(verb.name, verb.renderForm(result))));
     if (isForm) {
       const self = `${url.protocol}//${url.host}`;
       let back = "/";
-      try {
-        const ref = request.headers.get("referer");
-        if (ref) {
-          const r = new URL(ref);
-          if (r.origin === self) back = ref;
-        }
-      } catch { /* malformed referer: fall back to / */ }
+      const asked = body.input._back;
+      if (typeof asked === "string" && /^\/[A-Za-z0-9/_.?=&-]*$/.test(asked) && !asked.startsWith("//")) {
+        back = asked;
+      } else {
+        try {
+          const ref = request.headers.get("referer");
+          if (ref) {
+            const r = new URL(ref);
+            if (r.origin === self) back = ref;
+          }
+        } catch { /* malformed referer: fall back to / */ }
+      }
       return finish(ctx, env, new Response(null, { status: 303, headers: { location: back, "cache-control": "no-store" } }));
     }
     return finish(ctx, env, json({ ok: true, result }, 200));

@@ -36,3 +36,11 @@ export function optBool(input: Input, key: string): boolean | null {
   if (v === false || v === "false" || v === "0" || v === "off") return false;
   throw badRequest(`${key} must be a boolean`);
 }
+
+export function optInt(input: Input, key: string, opts: { min: number; max: number }): number | null {
+  const v = input[key];
+  if (v === undefined || v === null || v === "") return null;
+  const n = typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v.trim()) ? Number(v.trim()) : NaN;
+  if (!Number.isSafeInteger(n) || n < opts.min || n > opts.max) throw badRequest(`${key} must be an integer from ${opts.min} to ${opts.max}`);
+  return n;
+}

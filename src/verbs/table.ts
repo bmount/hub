@@ -10,6 +10,12 @@ export type VerbDef<P, R> = {
   minRole: Role | "public";
   freshProofMinutes: number | null;
   summary: string;
+  /** Callable with a long-lived pmw_ token. Spec 6.5: only session.start and whoami. */
+  longLivedToken?: boolean;
+  /** Refused for agent identities: agents never create agents or manage credentials (spec 2). */
+  humanOnly?: boolean;
+  /** For form posts: render this HTML body instead of redirecting (used to show a new token once). */
+  renderForm?: (result: R) => string;
   parse: (input: Record<string, unknown>) => P;
   run: (ctx: Ctx, params: P) => Promise<R>;
 };

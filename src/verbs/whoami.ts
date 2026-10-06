@@ -7,14 +7,20 @@ export const whoami = defineVerb({
   scope: "public",
   minRole: "public",
   freshProofMinutes: null,
-  summary: "Describe the caller: identity, session, role on this tenant, and memberships.",
+  longLivedToken: true,
+  summary: "Describe the caller: identity, session or long-lived token, role on this tenant, and memberships.",
   parse: () => ({}),
   run: async (ctx) => {
-    if (!ctx.identity || !ctx.session) return { identity: null };
+    if (!ctx.identity) return { identity: null };
     const memberships = await listMembershipsForIdentity(ctx.db, ctx.identity.id);
+    const s = ctx.session;
     return {
-      identity: { id: ctx.identity.id, email: ctx.identity.email, display_name: ctx.identity.display_name, is_root: ctx.identity.is_root === 1, kind: ctx.identity.kind },
-      session: { id: ctx.session.id, kind: ctx.session.kind, created_at: ctx.session.created_at, last_proof_at: ctx.session.last_proof_at },
+      identity: {
+        id: ctx.identity.id, email: ctx.identity.email, display_name: ctx.identity.display_name, is_root: ctx.identity.is_root === 1,
+        kind: ctx.identity.kind, operator_id: ctx.identity.operator_id,
+      },
+      session: s ? { id: s.id, kind: s.kind, label: s.label, created_at: s.created_at, expires_at: s.expires_at, last_proof_at: s.last_proof_at } : null,
+      token: ctx.apiToken ? { id: ctx.apiToken.id, name: ctx.apiToken.name } : null,
       tenant: ctx.tenant && ctx.role !== null ? { id: ctx.tenant.id, slug: ctx.tenant.slug, role: ctx.role } : null,
       memberships: memberships.map((m) => ({ slug: m.tenant.slug, display_name: m.tenant.display_name, role: m.membership.role })),
     };
