@@ -83,3 +83,27 @@ export async function listAgentRunsForOperator(db: D1Database, operator_id: stri
   ).bind(operator_id, now).all<Session & { agent_email: string; tenant_slug: string }>();
   return r.results.map(({ agent_email, tenant_slug, ...session }) => ({ session: { ...session, token_hash: "" }, agent_email, tenant_slug }));
 }
+
+export const GIT_SESSION_TTL_S = 90 * 24 * 3600;
+
+/**
+ * A human's git credential (integration spec 4): pinned to one tenant, a fixed 90-day expiry (never rolled),
+ * no parent token, and usable only through introspection.
+ */
+export async function createGitSession(
+  db: D1Database,
+  input: { identity_id: string; tenant_id: string; label: string },
+  now: number,
+): Promise<{ session: Session; token: string }> {
+  const token = randomToken("pms_");
+  const session: Session = {
+    id: ulid(now), identity_id: input.identity_id, tenant_id: input.tenant_id, kind: "git", label: input.label,
+    token_hash: await sha256Hex(token), created_at: now, last_seen_at: now, expires_at: now + GIT_SESSION_TTL_S * 1000,
+    last_proof_at: now, revoked_at: null, parent_token_id: null,
+  };
+  await db.prepare(
+    `INSERT INTO session (id, identity_id, tenant_id, kind, label, token_hash, created_at, last_seen_at, expires_at, last_proof_at, revoked_at, parent_token_id)
+     VALUES (?, ?, ?, 'git', ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+  ).bind(session.id, session.identity_id, session.tenant_id, session.label, session.token_hash, now, now, session.expires_at, now).run();
+  return { session, token };
+}

@@ -2,13 +2,15 @@ import { createExecutionContext, env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { introspect } from "../src/http/internal";
-import { revokeSession } from "../src/db/sessions";
+import { createGitSession, revokeSession } from "../src/db/sessions";
 import { revokeApiToken } from "../src/db/apiTokens";
 import { seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const SECRET = "test-internal-secret";
 const req = (body: unknown, headers: Record<string, string> = { "x-hub-internal": SECRET }) =>
   new Request("https://hub.internal/internal/introspect", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: typeof body === "string" ? body : JSON.stringify(body) });
+const gitFor = async (identityId: string, tenantId: string) =>
+  createGitSession(env.HUB_DB, { identity_id: identityId, tenant_id: tenantId, label: "laptop" }, Date.now());
 const call = async (body: unknown, headers?: Record<string, string>) => {
   const res = await introspect(req(body, headers), env);
   return { status: res.status, text: await res.text() };
@@ -36,26 +38,29 @@ describe("internal introspection", () => {
     expect(empty.status).toBe(404);
   });
 
-  it("describes a human browser session that is a member of the tenant, without echoing the token", async () => {
-    const { human } = await setup();
-    const r = await call({ token: human.token, tenant: "acme" });
+  it("describes a human git session that is a member of the tenant, without echoing the token", async () => {
+    const { human, acme } = await setup();
+    const g = await gitFor(human.identity.id, acme.id);
+    const r = await call({ token: g.token, tenant: "acme" });
     expect(r.status).toBe(200);
     expect(JSON.parse(r.text)).toEqual({
       ok: true,
       identity: { id: human.identity.id, kind: "human", display_name: "m", email: "m@example.com", operator_id: null },
-      session: { id: human.session.id, kind: "browser", label: null },
+      session: { id: g.session.id, kind: "git", label: "laptop" },
       tenant: { slug: "acme" },
       role: "member",
     });
-    expect(r.text).not.toContain(human.token);
+    expect(r.text).not.toContain(g.token);
   });
 
   it("gives roots their role on any tenant and refuses non-members", async () => {
-    await setup();
+    const { acme, blue } = await setup();
     const root = await seedHuman("root@example.com", { is_root: true });
     const out = await seedHuman("out@example.com");
-    expect(JSON.parse((await call({ token: root.token, tenant: "blue" })).text).role).toBe("root");
-    expect(JSON.parse((await call({ token: out.token, tenant: "acme" })).text)).toEqual({ ok: false });
+    const rootGit = await gitFor(root.identity.id, blue.id);
+    const outGit = await gitFor(out.identity.id, acme.id);
+    expect(JSON.parse((await call({ token: rootGit.token, tenant: "blue" })).text).role).toBe("root");
+    expect(JSON.parse((await call({ token: outGit.token, tenant: "acme" })).text)).toEqual({ ok: false });
   });
 
   it("describes an agent run on its own tenant and refuses it elsewhere", async () => {
@@ -83,8 +88,9 @@ describe("internal introspection", () => {
   });
 
   it("is routed for POST only", async () => {
-    const { human } = await setup();
-    const post = await worker.fetch!(req({ token: human.token, tenant: "acme" }) as never, env, createExecutionContext());
+    const { human, acme } = await setup();
+    const g = await gitFor(human.identity.id, acme.id);
+    const post = await worker.fetch!(req({ token: g.token, tenant: "acme" }) as never, env, createExecutionContext());
     expect(post.status).toBe(200);
     expect(((await post.json()) as any).ok).toBe(true);
     const get = await worker.fetch!(new Request("https://hub.internal/internal/introspect", { headers: { "x-hub-internal": SECRET } }) as never, env, createExecutionContext());

@@ -47,15 +47,22 @@ export function roleFor(identity: Identity | null, membership: Membership | null
  * Humans: browser sessions only, except on /mcp (`via: "mcp"`), where only an `oauth` session pinned to this
  * tenant counts (MCP spec 5.3). Agents: pinned to one tenant and alive only while agent, parent token, and
  * operator are (spec 6.5, 10); agents never use /mcp in v1.
+ * Git sessions: only with via "introspect" (the Ardi service binding), pinned to their tenant.
+ * Introspection accepts only `git` and `agent_run` sessions; browser and oauth sessions never introspect.
  */
 export async function credentialUsable(
-  db: D1Database, identity: Identity, session: Session | null, apiToken: ApiToken | null, tenant: Tenant | null, via: "http" | "mcp" = "http",
+  db: D1Database, identity: Identity, session: Session | null, apiToken: ApiToken | null, tenant: Tenant | null, via: "http" | "mcp" | "introspect" = "http",
 ): Promise<boolean> {
   if (identity.state !== "active") return false;
   if (via === "mcp" || (session !== null && session.kind === "oauth")) {
     return via === "mcp" && identity.kind === "human" && apiToken === null && session !== null && session.kind === "oauth"
       && tenant !== null && session.tenant_id === tenant.id;
   }
+  // Git credentials (integration spec 4) count only for internal introspection, for their human, on their own tenant.
+  if (session !== null && session.kind === "git") {
+    return via === "introspect" && identity.kind === "human" && apiToken === null && tenant !== null && session.tenant_id === tenant.id;
+  }
+  if (via === "introspect" && (session === null || session.kind !== "agent_run")) return false;
   if (identity.kind === "human") return apiToken === null && session !== null && session.kind === "browser";
   if (session && session.parent_token_id === null) return false;
   if (session && session.kind !== "agent_run") return false;

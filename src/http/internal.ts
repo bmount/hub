@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { credentialUsable, roleFor } from "../auth/context";
-import { getSessionByToken } from "../db/sessions";
+import { getSessionByToken, touchSession } from "../db/sessions";
 import { getIdentityById } from "../db/identities";
 import { getTenantBySlug } from "../db/tenants";
 import { getMembership } from "../db/memberships";
@@ -44,9 +44,11 @@ export async function introspect(request: Request, env: Env, now: number = Date.
   const [session, tenant] = await Promise.all([getSessionByToken(db, token, now), getTenantBySlug(db, slug)]);
   if (!session || !tenant || tenant.state !== "active") return denied();
   const identity = await getIdentityById(db, session.identity_id);
-  if (!identity || !(await credentialUsable(db, identity, session, null, tenant))) return denied();
+  if (!identity || !(await credentialUsable(db, identity, session, null, tenant, "introspect"))) return denied();
   const role = roleFor(identity, await getMembership(db, identity.id, tenant.id));
   if (!role) return denied();
+  // Shows on /me when a credential was last used; at most one write per hour, expiry unchanged.
+  if (session.kind === "git") await touchSession(db, session, now);
   return json({
     ok: true,
     identity: { id: identity.id, kind: identity.kind, display_name: identity.display_name, email: identity.email, operator_id: identity.operator_id },

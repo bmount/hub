@@ -19,7 +19,7 @@ export type Invite = {
   accepted_at: number | null; accepted_session_id: string | null; revoked_at: number | null;
 };
 export type Session = {
-  id: string; identity_id: string; tenant_id: string | null; kind: "browser" | "agent_run" | "oauth"; label: string | null;
+  id: string; identity_id: string; tenant_id: string | null; kind: "browser" | "agent_run" | "oauth" | "git"; label: string | null;
   token_hash: string; created_at: number; last_seen_at: number; expires_at: number; last_proof_at: number;
   revoked_at: number | null; parent_token_id: string | null;
 };
