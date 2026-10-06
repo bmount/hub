@@ -44,7 +44,7 @@ app.post("/oauth/token", (c) => tokenEndpoint(c.req.raw, c.env, workerCtx(c.exec
 app.post("/oauth/revoke", (c) => tokenEndpoint(c.req.raw, c.env, workerCtx(c.executionCtx)));
 app.get("/oauth/consent/:id", (c) => consentPage(c.req.raw, c.env));
 app.post("/oauth/consent/:id", (c) => consentPost(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
-app.all("/mcp", (c) => handleMcp(c.req.raw, c.env));
+app.all("/mcp", (c) => handleMcp(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.notFound(() => notFoundPage());
 
 export default { fetch: app.fetch, email: handleEmail } satisfies ExportedHandler<Env>;
