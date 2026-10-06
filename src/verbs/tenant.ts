@@ -3,6 +3,8 @@ import { reqString, stateParam } from "./params";
 import { conflict, notFound } from "../errors";
 import { createTenant, getTenantBySlug, listTenants, setTenantState } from "../db/tenants";
 import { recordEvent } from "../db/events";
+import { revokeGrantsFor } from "../db/oauthGrants";
+import { dropLibraryGrant } from "../oauth/revoke";
 import type { Ctx } from "../auth/context";
 import type { State } from "../db/types";
 
@@ -15,6 +17,10 @@ async function setState(ctx: Ctx, slug: string, state: State, verb: string) {
     tenant_id: t.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: verb, target_kind: "tenant", target_id: t.id,
     summary: `${state === "archived" ? "Archived" : "Unarchived"} tenant ${t.slug}`,
   }, ctx.now);
+  // Cascade (MCP spec 10.3): archiving a tenant revokes its assistant grants; unarchiving does not restore them.
+  if (state === "archived") {
+    for (const g of await revokeGrantsFor(ctx.db, { tenant_id: t.id }, ctx.identity!.id, "tenant_archived", ctx.now)) await dropLibraryGrant(ctx.env, g);
+  }
   return { ok: true };
 }
 

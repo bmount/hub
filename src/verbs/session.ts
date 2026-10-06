@@ -7,6 +7,8 @@ import {
 import { markApiTokenUsed } from "../db/apiTokens";
 import { getIdentityById } from "../db/identities";
 import { recordEvent } from "../db/events";
+import { getGrantBySessionId } from "../db/oauthGrants";
+import { revokeOAuthGrant } from "../oauth/revoke";
 import { rank, type Ctx } from "../auth/context";
 import { roleIn } from "../auth/authority";
 import type { Session } from "../db/types";
@@ -25,7 +27,8 @@ async function mayRevoke(ctx: Ctx, target: Session): Promise<boolean> {
   if (target.tenant_id === null) return false;
   const role = await roleIn(ctx, target.tenant_id);
   if (owner && owner.kind === "agent" && owner.operator_id === me.id && rank(role) >= rank("member")) return true;
-  return target.kind === "agent_run" && rank(role) >= rank("admin");
+  // Tenant admins revoke agent runs and assistant grants in their tenant (spec 6.6, MCP spec 10.2), never browser sessions.
+  return (target.kind === "agent_run" || target.kind === "oauth") && rank(role) >= rank("admin");
 }
 
 export const sessionList = defineVerb({
@@ -52,6 +55,11 @@ export const sessionRevoke = defineVerb({
     if (!target || !(await mayRevoke(ctx, target))) throw notFound("no such session");
     await revokeSession(ctx.db, target.id, ctx.now);
     await recordEvent(ctx.db, { tenant_id: target.tenant_id, identity_id: identity.id, session_id: session.id, kind: "session.revoke", target_kind: "session", target_id: target.id, summary: `Revoked session ${target.id}` }, ctx.now);
+    // An oauth session is an assistant grant: revoking one revokes the other (MCP spec 10.2).
+    if (target.kind === "oauth") {
+      const grant = await getGrantBySessionId(ctx.db, target.id);
+      if (grant) await revokeOAuthGrant(ctx.env, grant, { identity_id: identity.id, session_id: session.id }, target.identity_id === identity.id ? "user" : "admin", ctx.now);
+    }
     return { ok: true };
   },
 });

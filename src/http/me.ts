@@ -8,6 +8,7 @@ import { listTenants } from "../db/tenants";
 import { listAgentsForOperator } from "../db/agents";
 import { listApiTokensForOperator } from "../db/apiTokens";
 import { listConsent } from "../db/consent";
+import { listLiveGrantsForIdentity } from "../db/oauthGrants";
 import { notFoundPage } from "./pages";
 
 const when = (ms: number | null) => (ms === null ? "never" : new Date(ms).toISOString().slice(0, 16).replace("T", " "));
@@ -33,13 +34,14 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
     return htmlResponse(page("Sign in", `<h1>Sign in required</h1><p><a href="/login">Sign in</a></p>`), 401, extra);
   }
   const me = ctx.identity;
-  const [sessions, memberships, agents, tokens, runs, consents] = await Promise.all([
+  const [sessions, memberships, agents, tokens, runs, consents, grants] = await Promise.all([
     listSessions(ctx.db, me.id, ctx.now),
     listMembershipsForIdentity(ctx.db, me.id),
     listAgentsForOperator(ctx.db, me.id),
     listApiTokensForOperator(ctx.db, me.id, ctx.now),
     listAgentRunsForOperator(ctx.db, me.id, ctx.now),
     listConsent(ctx.db, me.email),
+    listLiveGrantsForIdentity(ctx.db, me.id, ctx.now),
   ]);
   const creatable = me.is_root === 1
     ? (await listTenants(ctx.db, "active")).map((t) => t.slug)
@@ -51,6 +53,12 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
     `${esc(s.id)}${s.id === ctx.session!.id ? " (this one)" : ""}`, esc(s.kind), when(s.created_at), when(s.last_seen_at),
     button("session.revoke", { session_id: s.id }, "Revoke"),
   ])) + `<form method="post" action="/api/session.end"><button type="submit">Sign out</button></form>`;
+
+  body += `<h2>Assistants</h2><p>Assistants you connected. Each acts as you in one tenant; its activity is listed by <code>event.list</code> with its session id.</p>`
+    + table(["Assistant", "Sends codes to", "Tenant", "Scopes", "Connected", "Last used", "Session", ""], grants.map(({ grant, tenant_slug, last_seen_at }) => [
+      `"${esc(grant.client_name)}"`, `<code>${esc(grant.redirect_host)}</code>`, esc(tenant_slug), esc(grant.scopes), when(grant.created_at), when(last_seen_at),
+      `<code>${esc(grant.session_id)}</code>`, button("session.revoke", { session_id: grant.session_id }, "Revoke"),
+    ]));
 
   body += `<h2>Agents you operate</h2>` + table(["Address", "Name", "Tenant", "Role", "Created", ""], agents.map((a) => [
     `<code>${esc(a.identity.email)}</code>`, esc(a.identity.display_name), esc(a.tenant.slug), esc(a.membership.role), when(a.identity.created_at),
