@@ -70,6 +70,10 @@ and send it with a matching `Origin` header:
 | login.request | apex | public (neutral answer; `reproof: true` needs a browser session) | |
 | login.verify | apex | public (link token) | |
 | consent.list, consent.revoke | any | signed in (own address; tenant admin: a member's; root: any) | |
+| agent.create, agent.archive | any (`tenant` param on the apex) | humans: member for own agents, admin for any agent in the tenant | 60 min |
+| token.create, token.revoke | any | humans: the agent's operator, or a tenant admin | 60 min |
+| token.list | any | humans: operator, or tenant admin | |
+| session.start | tenant | long-lived `pmw_` token only | |
 
 ### Signing in and re-proving
 
@@ -100,3 +104,41 @@ Pending user actions (as of 2026-10-06):
 - Create the login@ and signup@ routing rules: `./scripts/email-routing.sh` with a token, or the dashboard steps above.
 - Confirm Email Sending is onboarded for pimwell.com (the deploy accepted the `MAIL` binding; real delivery is untested).
 - Run the smoke test above, then set DMARC to `p=reject`.
+
+## Agents
+
+An agent is an identity with the reserved address `<slug>@<tenant>.pimwell.com`, a membership in one tenant, and a human operator. Create agents and mint tokens on `https://pimwell.com/me` (the new token is shown once). Tenant admins see every agent at `https://<tenant>.pimwell.com/admin/agents`.
+
+A run starts by trading the long-lived token for a run session on the agent's tenant host:
+
+```sh
+curl -s https://acme.pimwell.com/api/session.start \
+  -H "authorization: Bearer $PMW_TOKEN" -H 'content-type: application/json' \
+  -d '{"label":"nightly build","ttl":86400}'
+```
+
+Use the returned `pms_` token as the bearer for everything else in the run, always on `https://acme.pimwell.com`. On any other host the run is anonymous. The long-lived token itself may only call `session.start` and `whoami`.
+
+Revoking a token ends every run it started. Archiving an agent revokes all its tokens and runs. An agent works only while its operator is an active member (or root) of its tenant; if the operator leaves, the agent stops until the membership is restored.
+
+## Internal introspection (Ardi)
+
+`POST /internal/introspect` turns a `pms_` session token into `{ok, identity, session, tenant, role}` for one tenant. It answers only service-binding calls that carry `x-hub-internal: <HUB_INTERNAL_SECRET>`; requests through the public routes (which always carry `cf-connecting-ip`) get 404.
+
+```sh
+openssl rand -base64 32 | npx wrangler secret put HUB_INTERNAL_SECRET
+```
+
+In the calling Worker's `wrangler.jsonc`, bind the hub and give it the same secret:
+
+```jsonc
+"services": [{ "binding": "HUB", "service": "pimwell-hub" }]
+```
+
+```ts
+const res = await env.HUB.fetch("https://hub.internal/internal/introspect", {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-hub-internal": env.HUB_INTERNAL_SECRET },
+  body: JSON.stringify({ token, tenant: "acme" }),
+});
+```
