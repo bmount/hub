@@ -50,9 +50,16 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
   let body = `<h1>Your account</h1><p>${esc(me.display_name)} &lt;${esc(me.email)}&gt; · <a href="/">hub</a></p>`;
 
   body += `<h2>Sessions</h2>` + table(["Id", "Kind", "Started", "Last seen", ""], sessions.map((s) => [
-    `${esc(s.id)}${s.id === ctx.session!.id ? " (this one)" : ""}`, esc(s.kind), when(s.created_at), when(s.last_seen_at),
+    `${esc(s.id)}${s.id === ctx.session!.id ? " (this one)" : ""}`, esc(s.kind) + (s.kind === "git" && s.label ? ` (${esc(s.label)})` : ""), when(s.created_at), when(s.last_seen_at),
     button("session.revoke", { session_id: s.id }, "Revoke"),
   ])) + `<form method="post" action="/api/session.end"><button type="submit">Sign out</button></form>`;
+
+  const gitTenants = me.is_root === 1 ? (await listTenants(ctx.db, "active")).map((t) => t.slug) : memberships.map((m) => m.tenant.slug);
+  body += `<h2>Git credentials</h2><p>A password for <code>git clone https://&lt;tenant&gt;.${esc(env.HUB_DOMAIN)}/&lt;repo&gt;.git</code>, with your email as the username. It works only for git on that tenant, lasts 90 days, and is listed under Sessions as <code>git</code>.</p>`
+    + (gitTenants.length === 0 ? "<p>You are not a member of any tenant.</p>" : gitTenants.map((slug) =>
+      `<form method="post" action="/api/session.git"><input type="hidden" name="tenant" value="${esc(slug)}">`
+      + `<label>Label <input name="label" required maxlength="80" placeholder="laptop"></label> `
+      + `<button type="submit">New git credential for ${esc(slug)}</button></form>`).join(""));
 
   body += `<h2>Assistants</h2><p>Assistants you connected. Each acts as you in one tenant; its activity is listed by <code>event.list</code> with its session id.</p>`
     + table(["Assistant", "Sends codes to", "Tenant", "Scopes", "Connected", "Last used", "Session", ""], grants.map(({ grant, tenant_slug, last_seen_at }) => [

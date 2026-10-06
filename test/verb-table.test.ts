@@ -21,6 +21,7 @@ const TABLE: Record<string, Decl> = {
   "invite.create": T("tenant", "admin", 60), "invite.revoke": T("tenant", "admin", 60), "invite.list": T("tenant", "admin", null),
   "session.list": T("public", "public", null), "session.revoke": T("public", "public", null), "session.end": T("public", "public", null),
   "session.start": T("tenant", "reader", null, { longLived: true }),
+  "session.git": T("public", "public", 60, { humanOnly: true }),
   "login.request": T("hub", "public", null), "login.verify": T("hub", "public", null),
   "consent.list": T("public", "public", null), "consent.revoke": T("public", "public", null),
   "agent.create": T("public", "public", 60, { humanOnly: true }), "agent.archive": T("public", "public", 60, { humanOnly: true }),

@@ -74,6 +74,7 @@ and send it with a matching `Origin` header:
 | token.create (`agent_id`, `name`, optional `expires_in_days` 1-365, default no expiry), token.revoke (`token_id`) | any | humans: the agent's operator, or a tenant admin | 60 min |
 | token.list | any | humans: operator, or tenant admin | |
 | session.start | tenant | long-lived `pmw_` token only | |
+| session.git (`label`, `tenant` on the apex) | any | humans: any role in the tenant | 60 min |
 | event.list (`limit` 1-100, default 25; `cursor`; `session_id`) | tenant | member | |
 | oauth.grant.approve | apex | the consent page's signed-in human, member of the tenant | 600 min |
 

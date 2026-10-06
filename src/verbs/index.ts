@@ -4,7 +4,7 @@ import { whoami } from "./whoami";
 import { tenantArchive, tenantCreate, tenantList, tenantUnarchive } from "./tenant";
 import { namespaceArchive, namespaceCreate, namespaceUnarchive } from "./namespace";
 import { projectArchive, projectCreate, projectList, projectUnarchive } from "./project";
-import { sessionEnd, sessionList, sessionRevoke, sessionStart } from "./session";
+import { sessionEnd, sessionGit, sessionList, sessionRevoke, sessionStart } from "./session";
 import { loginRequest, loginVerify } from "./login";
 import { inviteCreate, inviteList, inviteRevoke } from "./invite";
 import { agentArchive, agentCreate } from "./agent";
@@ -20,7 +20,7 @@ export function registerAllVerbs(): void {
     namespaceCreate, namespaceArchive, namespaceUnarchive,
     projectCreate, projectArchive, projectUnarchive, projectList,
     inviteCreate, inviteRevoke, inviteList,
-    sessionList, sessionRevoke, sessionEnd, sessionStart,
+    sessionList, sessionRevoke, sessionEnd, sessionStart, sessionGit,
     loginRequest, loginVerify,
     consentList, consentRevoke,
     agentCreate, agentArchive,

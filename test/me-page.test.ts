@@ -38,7 +38,8 @@ describe("/me", () => {
     expect(html).toContain(`name="session_id" value="${s.session.id}"`);
     expect(html).toContain('action="/api/agent.create"');
     expect(html).toContain('name="tenant" value="acme"');
-    expect(html).not.toContain('name="tenant" value="blue"');
+    expect(html).not.toContain("Create agent in blue"); // reader: no agent form (the credential form still lists blue)
+    expect(html).toContain("New git credential for blue");
     expect(html).toContain("inbound_email");
     expect(html).toContain('action="/api/consent.revoke"');
     expect(html).toContain('name="_back" value="/me"');

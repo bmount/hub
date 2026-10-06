@@ -1,8 +1,8 @@
 import { defineVerb } from "./table";
-import { optInt, reqString } from "./params";
+import { optInt, optString, reqString } from "./params";
 import { badRequest, forbidden, notFound, unauthorized } from "../errors";
 import {
-  AGENT_SESSION_DEFAULT_TTL_S, AGENT_SESSION_MAX_TTL_S, createAgentSession, getSessionById, listSessions, revokeSession,
+  AGENT_SESSION_DEFAULT_TTL_S, AGENT_SESSION_MAX_TTL_S, createAgentSession, createGitSession, getSessionById, listSessions, revokeSession,
 } from "../db/sessions";
 import { markApiTokenUsed } from "../db/apiTokens";
 import { getIdentityById } from "../db/identities";
@@ -10,7 +10,8 @@ import { recordEvent } from "../db/events";
 import { getGrantBySessionId } from "../db/oauthGrants";
 import { revokeOAuthGrant } from "../oauth/revoke";
 import { rank, type Ctx } from "../auth/context";
-import { roleIn } from "../auth/authority";
+import { requireHuman, roleIn, targetTenant } from "../auth/authority";
+import { esc } from "../html";
 import type { Session } from "../db/types";
 
 function requireIdentity(ctx: Ctx) {
@@ -94,4 +95,32 @@ export const sessionStart = defineVerb({
     }, ctx.now);
     return { session_id: session.id, session_token: token, expires_at: session.expires_at, tenant: ctx.tenant!.slug };
   },
+});
+
+type GitCredential = { session_id: string; token: string; username: string; tenant: string; expires_at: number; clone_example: string };
+
+export const sessionGit = defineVerb({
+  name: "session.git", kind: "command", scope: "public", minRole: "public", freshProofMinutes: 60, humanOnly: true,
+  summary: "Mint a git credential: a pms_ token for one tenant's git host, valid 90 days, usable nowhere else. Shown once.",
+  parse: (i) => ({ tenant: optString(i, "tenant", { max: 63 }), label: reqString(i, "label", { max: 80 }).trim() }),
+  run: async (ctx, p): Promise<GitCredential> => {
+    const { identity, session } = requireHuman(ctx);
+    if (!p.label) throw badRequest("label is required");
+    const { tenant } = await targetTenant(ctx, p.tenant);
+    const git = await createGitSession(ctx.db, { identity_id: identity.id, tenant_id: tenant.id, label: p.label }, ctx.now);
+    await recordEvent(ctx.db, {
+      tenant_id: tenant.id, identity_id: identity.id, session_id: session.id, kind: "session.git", target_kind: "session", target_id: git.session.id,
+      summary: `Created git credential "${p.label}"`,
+    }, ctx.now);
+    return {
+      session_id: git.session.id, token: git.token, username: identity.email, tenant: tenant.slug, expires_at: git.session.expires_at,
+      clone_example: `git clone https://${tenant.slug}.${ctx.env.HUB_DOMAIN.toLowerCase()}/<repo>.git`,
+    };
+  },
+  renderForm: (r: GitCredential) => `<h1>New git credential for ${esc(r.tenant)}</h1>
+<p>Copy the password now: it will not be shown again. It works only for git on ${esc(r.tenant)} and expires in 90 days.</p>
+<p>Username: <code>${esc(r.username)}</code></p>
+<p>Password:</p>
+<pre>${esc(r.token)}</pre>
+<p>Try it: <code>${esc(r.clone_example)}</code>. Revoke it under Sessions on <a href="/me">your account</a>.</p>`,
 });
