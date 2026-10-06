@@ -39,6 +39,7 @@ describe("long-lived tokens in the dispatcher", () => {
     const who = (await (await apiPost("acme.pimwell.test", "whoami", {}, bearer(s.longLived))).json()) as any;
     expect(who.result.identity).toMatchObject({ id: s.agent.identity.id, kind: "agent", email: "bot@acme.pimwell.test", operator_id: op.identity.id, is_root: false });
     expect(who.result.session).toBeNull();
+    expect(JSON.stringify(who)).not.toContain("token_hash");
     expect(who.result.token).toEqual({ id: s.apiToken.id, name: "ci" });
     expect(who.result.tenant.role).toBe("member");
     const denied = await apiPost("acme.pimwell.test", "test.member", {}, bearer(s.longLived));
@@ -68,6 +69,27 @@ describe("fresh proof and forms", () => {
     await stale(s.session.id);
     expect((await apiPost("acme.pimwell.test", "test.fresh", {}, bearer(s.token))).status).toBe(200);
     expect((await apiPost("pimwell.test", "test.fresh", {})).status).toBe(200);
+  });
+
+  it("applies fresh proof to a cookie session on a public verb", async () => {
+    const { op } = await setup();
+    expect((await apiPost("pimwell.test", "test.fresh", {}, cookieHeaders(op.token, "pimwell.test"))).status).toBe(200);
+    await stale(op.session.id);
+    const res = await apiPost("pimwell.test", "test.fresh", {}, cookieHeaders(op.token, "pimwell.test"));
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as any).error).toBe("reproof_required");
+  });
+
+  it("serves pmw_ tokens on the API only, not on pages", async () => {
+    const { s } = await setup();
+    for (const path of ["/", "/archive"]) {
+      const res = await SELF.fetch(`https://acme.pimwell.test${path}`, { headers: bearer(s.longLived), redirect: "manual" });
+      expect(res.status).toBe(404);
+    }
+    const me = await SELF.fetch("https://pimwell.test/me", { headers: bearer(s.longLived), redirect: "manual" });
+    expect(me.status).not.toBe(200);
+    expect(await me.text()).not.toContain("bot@acme");
+    expect((await apiPost("acme.pimwell.test", "whoami", {}, bearer(s.longLived))).status).toBe(200);
   });
 
   it("renders a page for verbs with renderForm, JSON otherwise", async () => {

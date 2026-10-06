@@ -6,7 +6,7 @@ import { seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const db = () => env.HUB_DB;
 const ctxFor = (host: string, headers: Record<string, string>, now = Date.now() + 1) =>
-  buildContext(new Request(`https://${host}/`, { headers }), env, now);
+  buildContext(new Request(`https://${host}/`, { headers }), env, now, undefined, { longLivedToken: true });
 
 async function setup() {
   const acme = await seedTenant("acme");
@@ -103,5 +103,21 @@ describe("agent credentials in buildContext", () => {
     await ctxFor("blue.pimwell.test", { authorization: `Bearer ${s.token}` }, later);
     const row = await db().prepare("SELECT last_seen_at FROM session WHERE id = ?").bind(s.session.id).first<{ last_seen_at: number }>();
     expect(row!.last_seen_at).toBe(s.session.last_seen_at);
+  });
+
+  it("resolves a pmw_ token to anonymous unless the caller opts in", async () => {
+    const { s } = await setup();
+    const ctx = await buildContext(new Request("https://acme.pimwell.test/", { headers: { authorization: `Bearer ${s.longLived}` } }), env, Date.now() + 1);
+    expect(ctx.identity).toBeNull();
+    expect(ctx.apiToken).toBeNull();
+    expect(ctx.authKind).toBeNull();
+  });
+
+  it("rejects an agent whose own membership is archived, and a run with no parent token", async () => {
+    const { acme, s } = await setup();
+    await db().prepare("UPDATE session SET parent_token_id = NULL WHERE id = ?").bind(s.session.id).run();
+    expect((await ctxFor("acme.pimwell.test", { authorization: `Bearer ${s.token}` })).identity).toBeNull();
+    await db().prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ? AND tenant_id = ?").bind(s.agent.identity.id, acme.id).run();
+    expect((await ctxFor("acme.pimwell.test", { authorization: `Bearer ${s.longLived}` })).identity).toBeNull();
   });
 });

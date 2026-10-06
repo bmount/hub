@@ -20,5 +20,7 @@ export async function agentCredentialOk(db: D1Database, agent: Identity, tenant_
       .bind(parent_token_id).first<{ identity_id: string; tenant_id: string; revoked_at: number | null }>();
     if (!t || t.revoked_at !== null || t.identity_id !== agent.id || t.tenant_id !== tenant_id) return false;
   }
+  const own = await getMembership(db, agent.id, tenant_id);
+  if (!own || own.state !== "active") return false;
   return operatorActiveIn(db, agent.operator_id, tenant_id);
 }

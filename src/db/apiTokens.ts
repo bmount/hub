@@ -30,16 +30,18 @@ export function getApiTokenById(db: D1Database, id: string): Promise<ApiToken | 
   return db.prepare("SELECT * FROM api_token WHERE id = ?").bind(id).first<ApiToken>();
 }
 
+const hide = (t: ApiToken): ApiToken => ({ ...t, token_hash: "" });
+
 const LIVE = "revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)";
 
 export async function listApiTokensForIdentity(db: D1Database, identity_id: string, now: number): Promise<ApiToken[]> {
   const r = await db.prepare(`SELECT * FROM api_token WHERE identity_id = ? AND ${LIVE} ORDER BY created_at DESC`).bind(identity_id, now).all<ApiToken>();
-  return r.results;
+  return r.results.map(hide);
 }
 
 export async function listApiTokensForTenant(db: D1Database, tenant_id: string, now: number): Promise<ApiToken[]> {
   const r = await db.prepare(`SELECT * FROM api_token WHERE tenant_id = ? AND ${LIVE} ORDER BY created_at DESC`).bind(tenant_id, now).all<ApiToken>();
-  return r.results;
+  return r.results.map(hide);
 }
 
 export async function listApiTokensForOperator(db: D1Database, operator_id: string, now: number): Promise<Array<{ token: ApiToken; agent_email: string; tenant_slug: string }>> {
@@ -50,7 +52,7 @@ export async function listApiTokensForOperator(db: D1Database, operator_id: stri
         AND a.revoked_at IS NULL AND (a.expires_at IS NULL OR a.expires_at > ?)
       ORDER BY a.created_at DESC`,
   ).bind(operator_id, now).all<ApiToken & { agent_email: string; tenant_slug: string }>();
-  return r.results.map(({ agent_email, tenant_slug, ...token }) => ({ token, agent_email, tenant_slug }));
+  return r.results.map(({ agent_email, tenant_slug, ...token }) => ({ token: hide(token), agent_email, tenant_slug }));
 }
 
 /** Revoke the token and every session it started, in one batch (spec 6.5). */

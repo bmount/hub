@@ -41,7 +41,7 @@ export async function listSessions(db: D1Database, identity_id: string, now: num
   const r = await db.prepare(
     "SELECT * FROM session WHERE identity_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC",
   ).bind(identity_id, now).all<Session>();
-  return r.results;
+  return r.results.map((x) => ({ ...x, token_hash: "" }));
 }
 
 export async function setLastProof(db: D1Database, id: string, now: number): Promise<void> {
@@ -81,5 +81,5 @@ export async function listAgentRunsForOperator(db: D1Database, operator_id: stri
       WHERE i.operator_id = ? AND s.kind = 'agent_run' AND s.revoked_at IS NULL AND s.expires_at > ?
       ORDER BY s.created_at DESC`,
   ).bind(operator_id, now).all<Session & { agent_email: string; tenant_slug: string }>();
-  return r.results.map(({ agent_email, tenant_slug, ...session }) => ({ session, agent_email, tenant_slug }));
+  return r.results.map(({ agent_email, tenant_slug, ...session }) => ({ session: { ...session, token_hash: "" }, agent_email, tenant_slug }));
 }

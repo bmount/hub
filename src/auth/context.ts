@@ -42,13 +42,14 @@ export function roleFor(identity: Identity | null, membership: Membership | null
 export async function credentialUsable(db: D1Database, identity: Identity, session: Session | null, apiToken: ApiToken | null, tenant: Tenant | null): Promise<boolean> {
   if (identity.state !== "active") return false;
   if (identity.kind === "human") return apiToken === null && session !== null && session.kind === "browser";
+  if (session && session.parent_token_id === null) return false;
   if (session && session.kind !== "agent_run") return false;
   const pinned = session ? session.tenant_id : apiToken ? apiToken.tenant_id : null;
   if (!tenant || pinned !== tenant.id) return false;
   return agentCredentialOk(db, identity, tenant.id, session ? session.parent_token_id : null);
 }
 
-export async function buildContext(request: Request, env: Env, now: number = Date.now(), waitUntil?: (p: Promise<unknown>) => void): Promise<Ctx> {
+export async function buildContext(request: Request, env: Env, now: number = Date.now(), waitUntil?: (p: Promise<unknown>) => void, opts: { longLivedToken?: boolean } = {}): Promise<Ctx> {
   const db = env.HUB_DB;
   const host = classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN);
 
@@ -70,7 +71,8 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
     session = await getSessionByToken(db, bearer, now);
     if (session) authKind = "bearer";
   } else if (bearer && bearer.startsWith(API_TOKEN_PREFIX)) {
-    apiToken = await getApiTokenByToken(db, bearer, now);
+    // pmw_ tokens authenticate on the API only (spec 6.5); every other caller sees anonymous.
+    if (opts.longLivedToken === true) apiToken = await getApiTokenByToken(db, bearer, now);
     if (apiToken) authKind = "token";
   } else if (cookieToken) {
     session = await getSessionByToken(db, cookieToken, now);

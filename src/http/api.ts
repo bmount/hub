@@ -42,7 +42,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     if (isForm && name === "login.verify") throw new HubError(400, "bad_request", "login.verify does not accept form bodies");
     const verb = getVerb(name);
     if (!verb) throw new HubError(404, "unknown_verb");
-    ctx = await buildContext(request, env, Date.now(), waitUntil);
+    ctx = await buildContext(request, env, Date.now(), waitUntil, { longLivedToken: true });
 
     if (verb.scope === "tenant" && !ctx.tenant) throw new HubError(404, "not_found");
     if (verb.scope === "hub" && ctx.host.kind !== "apex") throw new HubError(404, "not_found");
