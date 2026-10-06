@@ -124,9 +124,13 @@ Use the returned `pms_` token as the bearer for everything else in the run, alwa
 
 Revoking a token ends every run it started. Archiving an agent revokes all its tokens and runs. An agent works only while its operator is an active member (or root) of its tenant; if the operator leaves, the agent stops until the membership is restored.
 
+## Git (Ardi)
+
+Git smart HTTP on a tenant host (`https://<tenant>.pimwell.com/<repo>.git`) is forwarded to Ardi, which authenticates with hub session tokens. Humans mint a credential on /me ("New git credential for <tenant>") and use it as the password. The username is ignored; by convention use your email. Repos are created on Ardi at `https://ardi-pimwell.bvmount.workers.dev/t/<tenant>/api/repo.create` with an admin credential. The staging tenant is `blue`.
+
 ## Internal introspection (Ardi)
 
-`POST /internal/introspect` turns a `pms_` session token into `{ok, identity, session, tenant, role}` for one tenant. It answers only service-binding calls that carry `x-hub-internal: <HUB_INTERNAL_SECRET>`; requests through the public routes (which always carry `cf-connecting-ip`) get 404. Callers must construct the headers themselves and never forward inbound request headers: a forwarded `cf-connecting-ip` gets 404 by design.
+`POST /internal/introspect` accepts `git` and `agent_run` sessions only (browser and oauth sessions are refused). It turns a `pms_` session token into `{ok, identity, session, tenant, role}` for one tenant. It answers only service-binding calls that carry `x-hub-internal: <HUB_INTERNAL_SECRET>`; requests through the public routes (which always carry `cf-connecting-ip`) get 404. Callers must construct the headers themselves and never forward inbound request headers: a forwarded `cf-connecting-ip` gets 404 by design.
 
 ```sh
 openssl rand -base64 32 | npx wrangler secret put HUB_INTERNAL_SECRET

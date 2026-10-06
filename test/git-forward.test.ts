@@ -38,6 +38,52 @@ describe("git forwarding to Ardi", () => {
     expect(((await res.json()) as any).cookie).toBeNull();
   });
 
+  it("streams a multi-MB body and Ardi receives every byte", async () => {
+    await seedTenant("acme");
+    const chunk = new Uint8Array(1024 * 1024).fill(97);
+    let sent = 0;
+    const total = 5;
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) { if (sent++ < total) c.enqueue(chunk); else c.close(); },
+    });
+    const res = await SELF.fetch("https://acme.pimwell.test/site.git/git-receive-pack", {
+      method: "POST", headers: { "content-type": "application/x-git-receive-pack-request" }, body, duplex: "half",
+    } as RequestInit);
+    expect(forwarded(res)).toBe(true);
+    expect(((await res.json()) as any).length).toBe(total * 1024 * 1024);
+  });
+
+  it("passes Ardi's 401 challenge through unchanged, with no content-security-policy", async () => {
+    await seedTenant("acme");
+    const res = await SELF.fetch("https://acme.pimwell.test/site.git/info/refs?service=git-receive-pack", { headers: { "x-stub-401": "1" } });
+    expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toBe('Basic realm="ardi"');
+    expect(res.headers.get("content-security-policy")).toBeNull();
+    expect(await res.text()).toBe("denied\n");
+  });
+
+  it("forwards a dot-segment path with the normalised URL", async () => {
+    await seedTenant("acme");
+    const res = await SELF.fetch("https://acme.pimwell.test/x/../site.git/info/refs?service=git-upload-pack");
+    expect(forwarded(res)).toBe(true);
+    expect(((await res.json()) as any).url).toBe("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack");
+  });
+
+  it("does not forward Ardi API paths", async () => {
+    await seedTenant("acme");
+    const res = await SELF.fetch("https://acme.pimwell.test/t/acme/api/x");
+    expect(forwarded(res)).toBe(false);
+  });
+
+  it("drops client-supplied x-ardi-* headers before forwarding", async () => {
+    await seedTenant("acme");
+    const res = await SELF.fetch("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", {
+      headers: { "x-ardi-principal": "admin", "X-Ardi-Tenant": "blue", "x-other": "1" },
+    });
+    expect(forwarded(res)).toBe(true);
+    expect(((await res.json()) as any).xArdi).toEqual([]);
+  });
+
   it("404s unknown and archived tenants without forwarding", async () => {
     const unknown = await SELF.fetch("https://nosuch.pimwell.test/site.git/info/refs?service=git-upload-pack");
     expect(unknown.status).toBe(404);

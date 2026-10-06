@@ -53,6 +53,8 @@ describe("oauth sessions as credentials", () => {
     expect(await credentialUsable(env.HUB_DB, h.identity, session, null, acme)).toBe(false);
     expect(await credentialUsable(env.HUB_DB, h.identity, session, null, blue, "mcp")).toBe(false);
     expect(await credentialUsable(env.HUB_DB, h.identity, h.session, null, acme, "mcp")).toBe(false);
+    // oauth sessions never introspect (ruling A-1).
+    expect(await credentialUsable(env.HUB_DB, h.identity, session, null, acme, "introspect")).toBe(false);
   });
 
   it("never authenticate /api or pages, by cookie or bearer", async () => {

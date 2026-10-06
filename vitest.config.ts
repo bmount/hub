@@ -20,8 +20,11 @@ export default defineWorkersConfig(async () => {
             // Stands in for the Ardi Worker: echoes what reached it, so tests can check the forward.
             serviceBindings: {
               async ARDI(request: Request) {
-                const body = request.body ? await request.text() : "";
+                const bytes = request.body ? new Uint8Array(await request.arrayBuffer()) : new Uint8Array();
+                if (request.headers.get("x-stub-401")) return new Response("denied\n", { status: 401, headers: { "www-authenticate": 'Basic realm="ardi"', "x-ardi-stub": "1" } });
+                const body = bytes.length > 4096 ? "" : new TextDecoder().decode(bytes);
                 return Response.json({
+                  length: bytes.length, xArdi: [...request.headers.keys()].filter((k) => k.startsWith("x-ardi-")),
                   method: request.method, url: request.url, authorization: request.headers.get("authorization"),
                   cookie: request.headers.get("cookie"), gitProtocol: request.headers.get("git-protocol"),
                   contentType: request.headers.get("content-type"), body,

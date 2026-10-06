@@ -25,8 +25,10 @@ export async function forwardGit(request: Request, env: Env): Promise<Response |
   const tenant = await getTenantBySlug(env.HUB_DB, host.slug);
   if (!tenant || tenant.state !== "active") return notFoundPage();
   if (!env.ARDI) return new Response("git service unavailable\n", { status: 503, headers: { "content-type": "text/plain; charset=utf-8" } });
-  // The original request, except the hub-wide session cookie, which Ardi never needs.
+  // The original request, except the hub-wide session cookie, which Ardi never needs, and any `x-ardi-*` header.
   const headers = new Headers(request.headers);
   headers.delete("cookie");
+  // Defence in depth: `x-ardi-*` is Ardi's own header namespace; a client must never be able to set one.
+  for (const name of [...headers.keys()]) if (name.startsWith("x-ardi-")) headers.delete(name);
   return env.ARDI.fetch(new Request(request, { headers }));
 }

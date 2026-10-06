@@ -9,6 +9,13 @@ spec (`2026-10-06-identity-design.md`) and Ardi's design
 Plans: hub side `docs/superpowers/plans/2026-10-06-ardi-hub-hub-side.md` (this
 repo); Ardi side `docs/superpowers/plans/2026-10-06-hub-identity.md` (Ardi repo).
 
+## Rulings
+
+- A-1: introspection accepts only `git` and `agent_run` sessions; `browser` and
+  `oauth` sessions are refused.
+- A-3: Ardi is deployed for the hub as a separate Worker, `ardi-pimwell`, so the
+  existing `ardi` Worker is untouched. The hub's `ARDI` binding targets it.
+
 ## 1. Outcome
 
 ```
@@ -27,14 +34,14 @@ git client --HTTPS--> pimwell-hub (owns *.pimwell.com)
                         | tenant host + git path + active tenant?
                         | yes: env.ARDI.fetch(original request)
                         v
-                      ardi (no public route; workers.dev for admin)
+                      ardi-pimwell (no public route; workers.dev for admin)
                         | Basic auth: local token? else pms_ secret:
                         | env.HUB.fetch(POST /internal/introspect)
                         v
                       pimwell-hub /internal/introspect  -> {ok, identity, session, tenant, role}
 ```
 
-Two service bindings, one in each direction: hub `ARDI` -> service `ardi`;
+Two service bindings, one in each direction: hub `ARDI` -> service `ardi-pimwell`;
 Ardi `HUB` -> service `pimwell-hub`. Neither Worker is reachable from the
 other over the public internet.
 
@@ -90,8 +97,8 @@ they can copy. New verb `session.git`:
   calls `session.git` and shows the token once.
 - Introspection touches `git` sessions (`last_seen_at`, at most hourly) so
   `/me` shows when a credential was last used.
-- Introspection keeps accepting browser and agent-run sessions as today.
-  Agents use their run token (`pms_` from `session.start`) as the password.
+- Introspection accepts only `git` and `agent_run` sessions (ruling A-1); browser
+  and oauth sessions are refused. Agents use their run token (`pms_` from `session.start`) as the password.
 
 ## 5. Ardi: authentication
 
