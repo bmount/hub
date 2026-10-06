@@ -7,6 +7,7 @@ import { createBrowserSession } from "../db/sessions";
 import { sessionCookie } from "../auth/cookie";
 import { buildContext } from "../auth/context";
 import { recordEvent } from "../db/events";
+import { listSessions } from "../db/sessions";
 
 export function neutralInvitePage(): string {
   return page("Invite", `<h1>This invite link is not valid</h1><p>It may have expired, been used already, or been revoked. Ask the person who invited you for a new link.</p>`);
@@ -76,4 +77,23 @@ export async function acceptInvitePage(request: Request, env: Env): Promise<Resp
     summary: `${accepted.identity.email} accepted invite as ${invite.role}`,
   }, now);
   return new Response(null, { status: 303, headers: { location, "set-cookie": sessionCookie(sessionToken, env.HUB_DOMAIN), "cache-control": "no-store" } });
+}
+
+export async function sessionsPage(request: Request, env: Env): Promise<Response> {
+  const ctx = await buildContext(request, env);
+  if (ctx.host.kind !== "apex") return notFoundPage();
+  if (!ctx.identity || !ctx.session) return htmlResponse(page("Sign in", `<h1>Sign in required</h1>`), 401);
+  const rows = await listSessions(env.HUB_DB, ctx.identity.id, ctx.now);
+  const tr = rows.map((s) => `<tr>
+<td>${esc(s.id)}${s.id === ctx.session!.id ? " (this one)" : ""}</td>
+<td>${esc(s.kind)}</td>
+<td>${new Date(s.created_at).toISOString()}</td>
+<td>${new Date(s.last_seen_at).toISOString()}</td>
+<td><form class="inline" method="post" action="/api/session.revoke"><input type="hidden" name="session_id" value="${esc(s.id)}"><button type="submit">Revoke</button></form></td>
+</tr>`).join("");
+  const body = `<h1>Your sessions</h1>
+<p>${esc(ctx.identity.display_name)} &lt;${esc(ctx.identity.email)}&gt;</p>
+<table><thead><tr><th>Id</th><th>Kind</th><th>Started</th><th>Last seen</th><th></th></tr></thead><tbody>${tr}</tbody></table>
+<form method="post" action="/api/session.end"><button type="submit">Sign out</button></form>`;
+  return htmlResponse(page("Sessions", body));
 }
