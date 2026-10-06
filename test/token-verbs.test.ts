@@ -23,6 +23,7 @@ describe("token.create", () => {
     const r = ((await res.json()) as any).result;
     expect(r.token).toMatch(/^pmw_[A-Za-z0-9_-]{43}$/);
     expect(r).toMatchObject({ name: "deploy", agent_id: s.agent.identity.id, agent: "bot@acme.pimwell.test", tenant: "acme" });
+    expect(r.start_url).toBe("https://acme.pimwell.test/api/session.start");
     expect(r.expires_at).toBeGreaterThanOrEqual(before + 30 * 86_400_000);
     expect(r.expires_at).toBeLessThanOrEqual(Date.now() + 30 * 86_400_000);
     expect((await getApiTokenByToken(env.HUB_DB, r.token, Date.now()))!.id).toBe(r.token_id);
@@ -66,6 +67,7 @@ describe("token.create", () => {
     expect(html).toContain("will not be shown again");
     expect(html).toContain("&lt;b&gt;web&lt;/b&gt;");
     expect(html).not.toContain("<b>web</b>");
+    expect(html).toContain("https://acme.pimwell.test/api/session.start");
   });
 });
 
@@ -78,6 +80,17 @@ describe("token.revoke", () => {
     const ev = await env.HUB_DB.prepare("SELECT tenant_id, target_id FROM event WHERE kind = 'token.revoke'").first<Record<string, string>>();
     expect(ev).toEqual({ tenant_id: acme.id, target_id: s.apiToken.id });
     expect((await apiPost("pimwell.test", "token.revoke", { token_id: s.apiToken.id }, bearer(op.token))).status).toBe(409);
+  });
+
+  it("answers identically for an unmanageable token and a nonexistent one", async () => {
+    const { s } = await setup();
+    const blue = await seedTenant("blue");
+    const blueAdmin = await seedHuman("ba@example.com", { memberships: [{ tenant_id: blue.id, role: "admin" }] });
+    const a = await apiPost("pimwell.test", "token.revoke", { token_id: s.apiToken.id }, bearer(blueAdmin.token));
+    const b = await apiPost("pimwell.test", "token.revoke", { token_id: "01NONEXISTENT0000000000000" }, bearer(blueAdmin.token));
+    expect(a.status).toBe(404);
+    expect(b.status).toBe(404);
+    expect(await a.text()).toBe(await b.text());
   });
 
   it("lets an admin revoke and hides tokens from other members", async () => {

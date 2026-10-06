@@ -48,6 +48,8 @@ describe("agent repository", () => {
     expect(isAgentDomainAddress(" X@Acme.Pimwell.Test ", "pimwell.test")).toBe(true);
     expect(isAgentDomainAddress("login@pimwell.test", "pimwell.test")).toBe(false);
     expect(isAgentDomainAddress("a@example.com", "pimwell.test")).toBe(false);
+    expect(isAgentDomainAddress("x@acme.pimwell.test.", "pimwell.test")).toBe(true);
+    expect(isAgentDomainAddress("a@b@acme.pimwell.test", "pimwell.test")).toBe(true);
     expect(isAgentDomainAddress("a@notpimwell.test", "pimwell.test")).toBe(false);
   });
 });

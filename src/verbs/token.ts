@@ -1,6 +1,6 @@
 import { defineVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
-import { badRequest, conflict, notFound } from "../errors";
+import { badRequest, conflict, HubError, notFound } from "../errors";
 import { getAgentById } from "../db/agents";
 import {
   createApiToken, getApiTokenById, listApiTokensForIdentity, listApiTokensForOperator, listApiTokensForTenant, revokeApiToken,
@@ -18,7 +18,7 @@ export function tokenView(t: ApiToken) {
   };
 }
 
-type Created = { token: string; token_id: string; name: string; agent_id: string; agent: string; tenant: string; expires_at: number | null };
+type Created = { token: string; token_id: string; name: string; agent_id: string; agent: string; tenant: string; expires_at: number | null; start_url: string };
 
 export const tokenCreate = defineVerb({
   name: "token.create", kind: "command", scope: "public", minRole: "public", freshProofMinutes: 60, humanOnly: true,
@@ -42,12 +42,13 @@ export const tokenCreate = defineVerb({
       tenant_id: agent.tenant.id, identity_id: identity.id, session_id: session.id, kind: "token.create", target_kind: "api_token", target_id: token.id,
       summary: `Created token "${token.name}" for ${agent.identity.email}`,
     }, ctx.now);
-    return { token: plaintext, token_id: token.id, name: token.name, agent_id: agent.identity.id, agent: agent.identity.email, tenant: agent.tenant.slug, expires_at };
+    return { token: plaintext, token_id: token.id, name: token.name, agent_id: agent.identity.id, agent: agent.identity.email, tenant: agent.tenant.slug, expires_at,
+      start_url: `https://${agent.tenant.slug}.${ctx.env.HUB_DOMAIN.toLowerCase()}/api/session.start` };
   },
   renderForm: (r: Created) => `<h1>New token for ${esc(r.agent)}</h1>
 <p>Token <strong>${esc(r.name)}</strong>. Copy it now: it will not be shown again.</p>
 <pre>${esc(r.token)}</pre>
-<p>Start a run with <code>POST https://${esc(r.tenant)}.&lt;hub&gt;/api/session.start</code> and <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+<p>Start a run with <code>POST ${esc(r.start_url)}</code> and <code>Authorization: Bearer &lt;token&gt;</code>.</p>
 <p><a href="/me">Back</a></p>`,
 });
 
@@ -59,7 +60,12 @@ export const tokenRevoke = defineVerb({
     const { identity, session } = requireHuman(ctx);
     const t = await getApiTokenById(ctx.db, p.token_id);
     if (!t) throw notFound("no such token");
-    await manageableAgent(ctx, await getAgentById(ctx.db, t.identity_id));
+    try {
+      await manageableAgent(ctx, await getAgentById(ctx.db, t.identity_id));
+    } catch (e) {
+      if (e instanceof HubError && e.status === 404) throw notFound("no such token");
+      throw e;
+    }
     if (t.revoked_at !== null) throw conflict("token already revoked");
     const r = await revokeApiToken(ctx.db, t.id, ctx.now);
     if (!r.revoked) throw conflict("token already revoked");

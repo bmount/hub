@@ -30,5 +30,7 @@ export function htmlResponse(body: string, status = 200, headers: HeadersInit = 
   h.set("cache-control", "no-store");
   h.set("referrer-policy", "no-referrer");
   h.set("x-content-type-options", "nosniff");
+  h.set("content-security-policy", "frame-ancestors 'none'");
+  h.set("x-frame-options", "DENY");
   return new Response(body, { status, headers: h });
 }

@@ -19,7 +19,8 @@ export function agentAddress(slug: string, tenantSlug: string, hubDomain: string
 
 /** True for any address under a tenant subdomain of the hub: those are reserved for agents (spec 6.5). */
 export function isAgentDomainAddress(email: string, hubDomain: string): boolean {
-  const domain = email.trim().toLowerCase().split("@")[1] ?? "";
+  const e = email.trim().toLowerCase();
+  const domain = e.slice(e.lastIndexOf("@") + 1).replace(/\.$/, "");
   return domain.endsWith("." + hubDomain.toLowerCase());
 }
 

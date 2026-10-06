@@ -44,6 +44,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     if (!verb) throw new HubError(404, "unknown_verb");
     ctx = await buildContext(request, env, Date.now(), waitUntil, { longLivedToken: true });
 
+    if (ctx.host.kind === "unknown") throw new HubError(404, "not_found");
     if (verb.scope === "tenant" && !ctx.tenant) throw new HubError(404, "not_found");
     if (verb.scope === "hub" && ctx.host.kind !== "apex") throw new HubError(404, "not_found");
 

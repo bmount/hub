@@ -1,6 +1,6 @@
 import { defineVerb } from "./table";
 import { optInt, reqString } from "./params";
-import { forbidden, notFound, unauthorized } from "../errors";
+import { badRequest, forbidden, notFound, unauthorized } from "../errors";
 import {
   AGENT_SESSION_DEFAULT_TTL_S, AGENT_SESSION_MAX_TTL_S, createAgentSession, getSessionById, listSessions, revokeSession,
 } from "../db/sessions";
@@ -22,8 +22,10 @@ async function mayRevoke(ctx: Ctx, target: Session): Promise<boolean> {
   if (target.identity_id === me.id || me.is_root === 1) return true;
   if (me.kind !== "human") return false;
   const owner = await getIdentityById(ctx.db, target.identity_id);
-  if (owner && owner.kind === "agent" && owner.operator_id === me.id) return true;
-  return target.tenant_id !== null && rank(await roleIn(ctx, target.tenant_id)) >= rank("admin");
+  if (target.tenant_id === null) return false;
+  const role = await roleIn(ctx, target.tenant_id);
+  if (owner && owner.kind === "agent" && owner.operator_id === me.id && rank(role) >= rank("member")) return true;
+  return target.kind === "agent_run" && rank(role) >= rank("admin");
 }
 
 export const sessionList = defineVerb({
@@ -69,9 +71,10 @@ export const sessionEnd = defineVerb({
 export const sessionStart = defineVerb({
   name: "session.start", kind: "command", scope: "tenant", minRole: "reader", freshProofMinutes: null, longLivedToken: true,
   summary: "Start an agent run: trade a long-lived pmw_ token for a pms_ session token pinned to this tenant (ttl in seconds, default 1 day, max 7).",
-  parse: (i) => ({ label: reqString(i, "label", { max: 80 }), ttl: optInt(i, "ttl", { min: 60, max: AGENT_SESSION_MAX_TTL_S }) }),
+  parse: (i) => ({ label: reqString(i, "label", { max: 80 }).trim(), ttl: optInt(i, "ttl", { min: 60, max: AGENT_SESSION_MAX_TTL_S }) }),
   run: async (ctx, p) => {
     if (ctx.authKind !== "token" || !ctx.apiToken || !ctx.identity) throw forbidden("session.start needs a long-lived pmw_ token");
+    if (!p.label) throw badRequest("label is required");
     const { session, token } = await createAgentSession(ctx.db, {
       identity_id: ctx.identity.id, tenant_id: ctx.apiToken.tenant_id, label: p.label, parent_token_id: ctx.apiToken.id,
       ttl_s: p.ttl ?? AGENT_SESSION_DEFAULT_TTL_S,

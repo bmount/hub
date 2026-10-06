@@ -1,11 +1,12 @@
 import { getMembership } from "../db/memberships";
 import { getTenantBySlug } from "../db/tenants";
-import { badRequest, notFound, unauthorized } from "../errors";
+import { badRequest, forbidden, notFound, unauthorized } from "../errors";
 import { rank, roleFor, type Ctx } from "./context";
 import type { Agent, Identity, Role, Session, Tenant } from "../db/types";
 
 export function requireHuman(ctx: Ctx): { identity: Identity; session: Session } {
   if (!ctx.identity || !ctx.session) throw unauthorized();
+  if (ctx.identity.kind !== "human") throw forbidden("agents may not call this verb");
   return { identity: ctx.identity, session: ctx.session };
 }
 
