@@ -69,6 +69,7 @@ and send it with a matching `Origin` header:
 | session.list, session.revoke, session.end | any | signed in | |
 | login.request | apex | public (neutral answer; `reproof: true` needs a browser session) | |
 | login.verify | apex | public (link token) | |
+| consent.list, consent.revoke | any | signed in (own address; tenant admin: a member's; root: any) | |
 
 ### Signing in and re-proving
 

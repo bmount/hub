@@ -7,6 +7,7 @@ import { projectArchive, projectCreate, projectList, projectUnarchive } from "./
 import { sessionEnd, sessionList, sessionRevoke } from "./session";
 import { loginRequest, loginVerify } from "./login";
 import { inviteCreate, inviteList, inviteRevoke } from "./invite";
+import { consentList, consentRevoke } from "./consent";
 
 export function registerAllVerbs(): void {
   registerVerbs([
@@ -17,5 +18,6 @@ export function registerAllVerbs(): void {
     inviteCreate, inviteRevoke, inviteList,
     sessionList, sessionRevoke, sessionEnd,
     loginRequest, loginVerify,
+    consentList, consentRevoke,
   ]);
 }
