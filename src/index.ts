@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "./env";
 import { handleApi } from "./http/api";
 import { registerAllVerbs } from "./verbs/index";
+import { acceptInvitePage, invitePage } from "./http/pages";
 
 registerAllVerbs();
 
@@ -9,5 +10,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.get("/healthz", (c) => c.text("ok"));
 app.post("/api/*", (c) => handleApi(c.req.raw, c.env));
+app.get("/invite/:token", (c) => invitePage(c.req.raw, c.env));
+app.post("/invite/:token", (c) => acceptInvitePage(c.req.raw, c.env));
 
 export default app;

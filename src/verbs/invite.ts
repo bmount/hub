@@ -1,0 +1,51 @@
+import { defineVerb } from "./table";
+import { optString, reqEnum, reqString } from "./params";
+import { conflict, notFound } from "../errors";
+import { createInvite, inviteIsOpen, listInvites, revokeInvite } from "../db/invites";
+import { recordEvent } from "../db/events";
+import type { Invite } from "../db/types";
+
+function status(i: Invite, now: number): "open" | "accepted" | "revoked" | "expired" {
+  if (i.accepted_at !== null) return "accepted";
+  if (i.revoked_at !== null) return "revoked";
+  if (i.expires_at <= now) return "expired";
+  return "open";
+}
+
+export const inviteCreate = defineVerb({
+  name: "invite.create", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60,
+  summary: "Create a single-use invite link for an email. The link is returned once and never emailed.",
+  parse: (i) => ({
+    email: reqString(i, "email", { max: 254 }),
+    role: reqEnum(i, "role", ["admin", "member", "reader"] as const),
+    display_name: optString(i, "display_name", { max: 80 }),
+  }),
+  run: async (ctx, p) => {
+    const { invite, token } = await createInvite(ctx.db, { tenant_id: ctx.tenant!.id, email: p.email, role: p.role, display_name: p.display_name, created_by: ctx.identity!.id }, ctx.now);
+    await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "invite.create", target_kind: "invite", target_id: invite.id, summary: `Invited ${invite.email} as ${invite.role}` }, ctx.now);
+    return { invite_id: invite.id, invite_url: `https://${ctx.env.HUB_DOMAIN}/invite/${token}`, expires_at: invite.expires_at };
+  },
+});
+
+export const inviteRevoke = defineVerb({
+  name: "invite.revoke", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60, summary: "Revoke an open invite.",
+  parse: (i) => ({ invite_id: reqString(i, "invite_id", { max: 26 }) }),
+  run: async (ctx, p) => {
+    const invite = await ctx.db.prepare("SELECT * FROM invite WHERE id = ? AND tenant_id = ?").bind(p.invite_id, ctx.tenant!.id).first<Invite>();
+    if (!invite) throw notFound("no such invite");
+    if (!inviteIsOpen(invite, ctx.now)) throw conflict(`invite is ${status(invite, ctx.now)}`);
+    await revokeInvite(ctx.db, ctx.tenant!.id, invite.id, ctx.now);
+    await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "invite.revoke", target_kind: "invite", target_id: invite.id, summary: `Revoked invite for ${invite.email}` }, ctx.now);
+    return { ok: true };
+  },
+});
+
+export const inviteList = defineVerb({
+  name: "invite.list", kind: "query", scope: "tenant", minRole: "admin", freshProofMinutes: null, summary: "List invites for this tenant.",
+  parse: () => ({}),
+  run: async (ctx) => ({
+    invites: (await listInvites(ctx.db, ctx.tenant!.id)).map((i) => ({
+      id: i.id, email: i.email, role: i.role, display_name: i.display_name, created_at: i.created_at, expires_at: i.expires_at, status: status(i, ctx.now),
+    })),
+  }),
+});

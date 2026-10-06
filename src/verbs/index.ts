@@ -4,6 +4,7 @@ import { whoami } from "./whoami";
 import { tenantArchive, tenantCreate, tenantList, tenantUnarchive } from "./tenant";
 import { namespaceArchive, namespaceCreate, namespaceUnarchive } from "./namespace";
 import { projectArchive, projectCreate, projectList, projectUnarchive } from "./project";
+import { inviteCreate, inviteList, inviteRevoke } from "./invite";
 
 export function registerAllVerbs(): void {
   registerVerbs([
@@ -11,5 +12,6 @@ export function registerAllVerbs(): void {
     tenantCreate, tenantArchive, tenantUnarchive, tenantList,
     namespaceCreate, namespaceArchive, namespaceUnarchive,
     projectCreate, projectArchive, projectUnarchive, projectList,
+    inviteCreate, inviteRevoke, inviteList,
   ]);
 }
