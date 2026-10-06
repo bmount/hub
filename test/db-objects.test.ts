@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createTenant, getTenantBySlug, listTenants, setTenantState } from "../src/db/tenants";
 import { createNamespace, listNamespaces, setNamespaceState } from "../src/db/namespaces";
-import { createProject, getProjectByPath, listProjects, setProjectState } from "../src/db/projects";
+import { createProject, getProjectById, getProjectByPath, listProjects, setProjectState } from "../src/db/projects";
 import { listEvents, recordEvent } from "../src/db/events";
 
 const db = () => env.HUB_DB;
@@ -51,13 +51,22 @@ describe("namespaces and projects", () => {
     const ns = await createNamespace(db(), { tenant_id: t.id, slug: "research", display_name: "Research" }, now);
     await createProject(db(), { tenant_id: t.id, namespace_id: ns.id, slug: "a", kind: "repo", display_name: "A" }, now);
     const top = await createProject(db(), { tenant_id: t.id, namespace_id: null, slug: "b", kind: "repo", display_name: "B" }, now);
-    await setNamespaceState(db(), ns.id, "archived");
+    await setNamespaceState(db(), t.id, ns.id, "archived");
     expect((await listProjects(db(), t.id, "active")).map((p) => p.id)).toEqual([top.id]);
     expect((await listNamespaces(db(), t.id, "archived")).length).toBe(1);
-    await setNamespaceState(db(), ns.id, "active");
+    await setNamespaceState(db(), t.id, ns.id, "active");
     expect((await listProjects(db(), t.id, "active")).length).toBe(2);
-    expect(await setProjectState(db(), top.id, "archived")).toBe(true);
-    expect(await setProjectState(db(), "nope", "archived")).toBe(false);
+    expect(await setProjectState(db(), t.id, top.id, "archived")).toBe(true);
+    expect(await setProjectState(db(), t.id, "nope", "archived")).toBe(false);
+  });
+
+  it("cross-tenant state change is a no-op", async () => {
+    const a = await createTenant(db(), { slug: "acme", display_name: "Acme" }, now);
+    const b = await createTenant(db(), { slug: "blue", display_name: "Blue" }, now);
+    const p = await createProject(db(), { tenant_id: a.id, namespace_id: null, slug: "site", kind: "repo", display_name: "A" }, now);
+    expect(await setProjectState(db(), b.id, p.id, "archived")).toBe(false);
+    expect((await getProjectById(db(), a.id, p.id))?.state).toBe("active");
+    expect(await getProjectById(db(), b.id, p.id)).toBeNull();
   });
 
   it("isolates tenants", async () => {

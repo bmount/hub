@@ -30,6 +30,21 @@ describe("identities and memberships", () => {
 });
 
 describe("invites", () => {
+  it("rejects blank display_name and empty email local part", async () => {
+    const t = await createTenant(db(), { slug: "acme", display_name: "Acme" }, now);
+    await expect(createInvite(db(), { tenant_id: t.id, email: "a@example.com", role: "member", display_name: "  ", created_by: null }, now)).rejects.toMatchObject({ status: 400 });
+    await expect(createInvite(db(), { tenant_id: t.id, email: "@example.com", role: "member", display_name: null, created_by: null }, now)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("does not claim an invite whose email belongs to an archived identity", async () => {
+    const t = await createTenant(db(), { slug: "acme", display_name: "Acme" }, now);
+    const id = await createIdentity(db(), { kind: "human", email: "gone@example.com", display_name: "Gone", is_root: 0, operator_id: null }, now);
+    await db().prepare("UPDATE identity SET state = 'archived' WHERE id = ?").bind(id.id).run();
+    const { invite, token } = await createInvite(db(), { tenant_id: t.id, email: "gone@example.com", role: "member", display_name: null, created_by: null }, now);
+    expect(await acceptInvite(db(), invite, now + 1)).toBeNull();
+    expect((await findInviteByToken(db(), token))?.accepted_at).toBeNull();
+  });
+
   it("creates an invite with a hashed token and 7 day expiry", async () => {
     const t = await createTenant(db(), { slug: "acme", display_name: "Acme" }, now);
     const { invite, token } = await createInvite(db(), { tenant_id: t.id, email: "New@Example.com", role: "member", display_name: null, created_by: null }, now);
@@ -77,7 +92,7 @@ describe("invites", () => {
   it("revoked invites are not open", async () => {
     const t = await createTenant(db(), { slug: "acme", display_name: "Acme" }, now);
     const { invite, token } = await createInvite(db(), { tenant_id: t.id, email: "x@example.com", role: "member", display_name: null, created_by: null }, now);
-    expect(await revokeInvite(db(), invite.id, now + 1)).toBe(true);
+    expect(await revokeInvite(db(), t.id, invite.id, now + 1)).toBe(true);
     const after = await findInviteByToken(db(), token);
     expect(inviteIsOpen(after!, now + 2)).toBe(false);
     expect(await acceptInvite(db(), after!, now + 3)).toBeNull();

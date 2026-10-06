@@ -34,8 +34,8 @@ export async function createProject(
   return row;
 }
 
-export function getProjectById(db: D1Database, id: string): Promise<Project | null> {
-  return db.prepare("SELECT * FROM project WHERE id = ?").bind(id).first<Project>();
+export function getProjectById(db: D1Database, tenant_id: string, id: string): Promise<Project | null> {
+  return db.prepare("SELECT * FROM project WHERE id = ? AND tenant_id = ?").bind(id, tenant_id).first<Project>();
 }
 
 export function getProjectByPath(db: D1Database, tenant_id: string, namespace_slug: string | null, slug: string): Promise<Project | null> {
@@ -52,7 +52,7 @@ export async function listProjects(db: D1Database, tenant_id: string, state: Sta
   return r.results;
 }
 
-export async function setProjectState(db: D1Database, id: string, state: State): Promise<boolean> {
-  const r = await db.prepare("UPDATE project SET state = ? WHERE id = ? AND state <> ?").bind(state, id, state).run();
+export async function setProjectState(db: D1Database, tenant_id: string, id: string, state: State): Promise<boolean> {
+  const r = await db.prepare("UPDATE project SET state = ? WHERE id = ? AND tenant_id = ? AND state <> ?").bind(state, id, tenant_id, state).run();
   return r.meta.changes === 1;
 }

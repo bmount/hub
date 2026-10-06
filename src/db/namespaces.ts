@@ -28,8 +28,8 @@ export function getNamespaceBySlug(db: D1Database, tenant_id: string, slug: stri
   return db.prepare("SELECT * FROM namespace WHERE tenant_id = ? AND slug = ?").bind(tenant_id, slug).first<Namespace>();
 }
 
-export function getNamespaceById(db: D1Database, id: string): Promise<Namespace | null> {
-  return db.prepare("SELECT * FROM namespace WHERE id = ?").bind(id).first<Namespace>();
+export function getNamespaceById(db: D1Database, tenant_id: string, id: string): Promise<Namespace | null> {
+  return db.prepare("SELECT * FROM namespace WHERE id = ? AND tenant_id = ?").bind(id, tenant_id).first<Namespace>();
 }
 
 export async function listNamespaces(db: D1Database, tenant_id: string, state: State): Promise<Namespace[]> {
@@ -37,10 +37,10 @@ export async function listNamespaces(db: D1Database, tenant_id: string, state: S
   return r.results;
 }
 
-export async function setNamespaceState(db: D1Database, id: string, state: State): Promise<boolean> {
+export async function setNamespaceState(db: D1Database, tenant_id: string, id: string, state: State): Promise<boolean> {
   const [ns] = await db.batch([
-    db.prepare("UPDATE namespace SET state = ? WHERE id = ? AND state <> ?").bind(state, id, state),
-    db.prepare("UPDATE project SET state = ? WHERE namespace_id = ? AND state <> ?").bind(state, id, state),
+    db.prepare("UPDATE namespace SET state = ? WHERE id = ? AND tenant_id = ? AND state <> ?").bind(state, id, tenant_id, state),
+    db.prepare("UPDATE project SET state = ? WHERE namespace_id = ? AND tenant_id = ? AND state <> ?").bind(state, id, tenant_id, state),
   ]);
   return ns!.meta.changes === 1;
 }
