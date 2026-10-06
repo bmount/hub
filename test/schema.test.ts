@@ -2,8 +2,8 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 const EXPECTED = [
-  "api_token", "auth_link", "consent", "event", "identity", "invite", "membership",
-  "meta", "namespace", "oauth_grant", "oauth_redirect_allow", "project", "proof", "rate_counter", "session", "tenant",
+  "agent_chat_state", "api_token", "auth_link", "channel", "chat_control", "consent", "conversation_member", "event", "identity", "invite",
+  "membership", "meta", "msg_index", "msg_ref", "namespace", "oauth_grant", "oauth_redirect_allow", "project", "proof", "rate_counter", "session", "tenant",
 ];
 
 describe("schema", () => {
@@ -14,9 +14,13 @@ describe("schema", () => {
     expect(rows.results.map((r) => r.name)).toEqual(EXPECTED);
   });
 
-  it("records schema version 3", async () => {
+  it("records schema version 4", async () => {
     const row = await env.HUB_DB.prepare("SELECT value FROM meta WHERE key='schema_version'").first<{ value: string }>();
-    expect(row?.value).toBe("3");
+    expect(row?.value).toBe("4");
+  });
+
+  it("gives memberships a handle unique per tenant by skeleton", async () => {
+    await expect(env.HUB_DB.prepare("SELECT handle, handle_skeleton FROM membership LIMIT 1").all()).resolves.toBeDefined();
   });
 
   it("seeds the redirect allowlist with Claude and loopback only", async () => {

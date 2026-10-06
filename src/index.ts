@@ -15,6 +15,9 @@ import { registerEndpoint } from "./http/oauthRegister";
 import { handleMcp } from "./mcp/handler";
 import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sessionsPage } from "./http/pages";
 
+export { Conversation } from "./chat/conversationDO";
+export { Inbox } from "./chat/inboxDO";
+
 registerAllVerbs();
 
 const app = new Hono<{ Bindings: Env }>();

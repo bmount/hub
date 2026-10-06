@@ -25,5 +25,12 @@
   "kv_namespaces": [
     { "binding": "RATE", "id": "bb594176ceb94d83ac5a74ff160ac53c" },
     { "binding": "OAUTH_KV", "id": "f4d9750c9bdd4cbc839b8efc7d17ab3c" }
-  ]
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "CONVERSATION", "class_name": "Conversation" },
+      { "name": "INBOX", "class_name": "Inbox" }
+    ]
+  },
+  "migrations": [{ "tag": "chat-v1", "new_sqlite_classes": ["Conversation", "Inbox"] }]
 }
