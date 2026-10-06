@@ -14,6 +14,7 @@ export default defineWorkersConfig(async () => {
               TEST_MIGRATIONS: migrations,
               HUB_DOMAIN: "pimwell.test",
               HUB_BOOTSTRAP_TOKEN: "test-bootstrap-token",
+              HUB_INTERNAL_SECRET: "test-internal-secret",
             },
           },
         },

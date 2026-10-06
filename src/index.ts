@@ -6,6 +6,7 @@ import { authLinkPage, consumeLinkPage, loginPage, loginPostPage } from "./http/
 import { mePage } from "./http/me";
 import { adminAgentsPage } from "./http/adminAgents";
 import { handleEmail } from "./mail/inbound";
+import { introspect } from "./http/internal";
 import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sessionsPage } from "./http/pages";
 
 registerAllVerbs();
@@ -25,6 +26,7 @@ app.post("/auth/:token", (c) => consumeLinkPage(c.req.raw, c.env));
 app.get("/me", (c) => mePage(c.req.raw, c.env));
 app.get("/admin/agents", (c) => adminAgentsPage(c.req.raw, c.env));
 app.get("/me/sessions", (c) => sessionsPage(c.req.raw, c.env));
+app.post("/internal/introspect", (c) => introspect(c.req.raw, c.env));
 app.notFound(() => notFoundPage());
 
 export default { fetch: app.fetch, email: handleEmail } satisfies ExportedHandler<Env>;

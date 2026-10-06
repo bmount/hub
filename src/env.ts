@@ -4,4 +4,5 @@ export type Env = {
   MAIL: SendEmail;
   HUB_DOMAIN: string;
   HUB_BOOTSTRAP_TOKEN: string;
+  HUB_INTERNAL_SECRET?: string;
 };
