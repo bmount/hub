@@ -1475,3 +1475,930 @@ git commit -m "feat: identity, membership, invite repositories"
 ```
 
 ---
+
+### Task 8: Browser sessions and the session cookie
+
+**Files:**
+- Create: `src/db/sessions.ts`, `src/auth/cookie.ts`, `test/sessions.test.ts`
+
+**Interfaces:**
+- Consumes: `ulid`, `randomToken`, `sha256Hex` from `src/ids.ts`; `Session` from `src/db/types.ts`.
+- Produces:
+  - `SESSION_ROLLING_MS = 180 days`, `SESSION_MAX_MS = 365 days`, `SESSION_TOUCH_INTERVAL_MS = 1 hour`.
+  - `createBrowserSession(db, identity_id, now): Promise<{ session: Session; token: string }>` (token prefix `pms_`, `last_proof_at = now`).
+  - `getSessionByToken(db, token, now): Promise<Session | null>` returning only unrevoked, unexpired sessions.
+  - `touchSession(db, session, now): Promise<Session>` which, when `now - last_seen_at >= 1 hour`, sets `last_seen_at = now` and `expires_at = min(now + 180d, created_at + 365d)`; otherwise returns the row unchanged.
+  - `revokeSession(db, id, now): Promise<boolean>`; `listSessions(db, identity_id, now): Promise<Session[]>` (active only, newest first); `setLastProof(db, id, now)`.
+  - `COOKIE_NAME = "pmw_session"`; `sessionCookie(token: string, hubDomain: string): string` (a `Set-Cookie` header value); `clearSessionCookie(hubDomain: string): string`; `readSessionToken(request: Request): string | null`.
+
+- [ ] **Step 1: Write the failing test**
+
+`test/sessions.test.ts`:
+```ts
+import { env } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+import { createIdentity } from "../src/db/identities";
+import {
+  SESSION_MAX_MS, SESSION_ROLLING_MS, createBrowserSession, getSessionByToken, listSessions, revokeSession, touchSession,
+} from "../src/db/sessions";
+import { COOKIE_NAME, clearSessionCookie, readSessionToken, sessionCookie } from "../src/auth/cookie";
+
+const db = () => env.HUB_DB;
+const now = 1_700_000_000_000;
+const HOUR = 3600 * 1000;
+
+async function ident() {
+  return createIdentity(db(), { kind: "human", email: "a@example.com", display_name: "A", is_root: 0, operator_id: null }, now);
+}
+
+describe("sessions", () => {
+  it("creates and finds by token; token is not stored", async () => {
+    const id = await ident();
+    const { session, token } = await createBrowserSession(db(), id.id, now);
+    expect(token).toMatch(/^pms_/);
+    expect(session.kind).toBe("browser");
+    expect(session.last_proof_at).toBe(now);
+    expect(session.expires_at).toBe(now + SESSION_ROLLING_MS);
+    expect((await getSessionByToken(db(), token, now + 1))?.id).toBe(session.id);
+    expect(await getSessionByToken(db(), "pms_bogus", now)).toBeNull();
+  });
+
+  it("is invisible after expiry or revocation", async () => {
+    const id = await ident();
+    const { session, token } = await createBrowserSession(db(), id.id, now);
+    expect(await getSessionByToken(db(), token, now + SESSION_ROLLING_MS)).toBeNull();
+    expect(await revokeSession(db(), session.id, now + 1)).toBe(true);
+    expect(await revokeSession(db(), session.id, now + 2)).toBe(false);
+    expect(await getSessionByToken(db(), token, now + 3)).toBeNull();
+    expect(await listSessions(db(), id.id, now + 4)).toEqual([]);
+  });
+
+  it("touch refreshes at most hourly and respects the absolute cap", async () => {
+    const id = await ident();
+    const { session } = await createBrowserSession(db(), id.id, now);
+    const same = await touchSession(db(), session, now + HOUR - 1);
+    expect(same.last_seen_at).toBe(now);
+    const moved = await touchSession(db(), session, now + HOUR);
+    expect(moved.last_seen_at).toBe(now + HOUR);
+    expect(moved.expires_at).toBe(now + HOUR + SESSION_ROLLING_MS);
+    const late = await touchSession(db(), moved, now + SESSION_MAX_MS - HOUR);
+    expect(late.expires_at).toBe(now + SESSION_MAX_MS);
+  });
+});
+
+describe("cookie", () => {
+  it("sets a hub-wide secure cookie and clears it", () => {
+    const v = sessionCookie("pms_abc", "pimwell.test");
+    expect(v).toContain(`${COOKIE_NAME}=pms_abc`);
+    expect(v).toContain("Domain=.pimwell.test");
+    expect(v).toContain("Secure");
+    expect(v).toContain("HttpOnly");
+    expect(v).toContain("SameSite=Lax");
+    expect(v).toContain("Path=/");
+    expect(clearSessionCookie("pimwell.test")).toContain("Max-Age=0");
+  });
+  it("omits Domain for localhost", () => {
+    expect(sessionCookie("pms_abc", "localhost")).not.toContain("Domain=");
+  });
+  it("reads the token from the request", () => {
+    const req = new Request("https://pimwell.test/", { headers: { cookie: `other=1; ${COOKIE_NAME}=pms_xyz; z=2` } });
+    expect(readSessionToken(req)).toBe("pms_xyz");
+    expect(readSessionToken(new Request("https://pimwell.test/"))).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run test/sessions.test.ts`
+Expected: FAIL, modules not found.
+
+- [ ] **Step 3: Implement**
+
+`src/db/sessions.ts`:
+```ts
+import { randomToken, sha256Hex, ulid } from "../ids";
+import type { Session } from "./types";
+
+export const SESSION_ROLLING_MS = 180 * 24 * 3600 * 1000;
+export const SESSION_MAX_MS = 365 * 24 * 3600 * 1000;
+export const SESSION_TOUCH_INTERVAL_MS = 3600 * 1000;
+
+export async function createBrowserSession(db: D1Database, identity_id: string, now: number): Promise<{ session: Session; token: string }> {
+  const token = randomToken("pms_");
+  const session: Session = {
+    id: ulid(now), identity_id, tenant_id: null, kind: "browser", label: null, token_hash: await sha256Hex(token),
+    created_at: now, last_seen_at: now, expires_at: now + SESSION_ROLLING_MS, last_proof_at: now, revoked_at: null, parent_token_id: null,
+  };
+  await db.prepare(
+    `INSERT INTO session (id, identity_id, tenant_id, kind, label, token_hash, created_at, last_seen_at, expires_at, last_proof_at, revoked_at, parent_token_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+  ).bind(session.id, session.identity_id, session.tenant_id, session.kind, session.label, session.token_hash,
+    session.created_at, session.last_seen_at, session.expires_at, session.last_proof_at).run();
+  return { session, token };
+}
+
+export async function getSessionByToken(db: D1Database, token: string, now: number): Promise<Session | null> {
+  return db.prepare("SELECT * FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?")
+    .bind(await sha256Hex(token), now).first<Session>();
+}
+
+export async function touchSession(db: D1Database, session: Session, now: number): Promise<Session> {
+  if (now - session.last_seen_at < SESSION_TOUCH_INTERVAL_MS) return session;
+  const expires_at = Math.min(now + SESSION_ROLLING_MS, session.created_at + SESSION_MAX_MS);
+  await db.prepare("UPDATE session SET last_seen_at = ?, expires_at = ? WHERE id = ?").bind(now, expires_at, session.id).run();
+  return { ...session, last_seen_at: now, expires_at };
+}
+
+export async function revokeSession(db: D1Database, id: string, now: number): Promise<boolean> {
+  const r = await db.prepare("UPDATE session SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").bind(now, id).run();
+  return r.meta.changes === 1;
+}
+
+export async function listSessions(db: D1Database, identity_id: string, now: number): Promise<Session[]> {
+  const r = await db.prepare(
+    "SELECT * FROM session WHERE identity_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC",
+  ).bind(identity_id, now).all<Session>();
+  return r.results;
+}
+
+export async function setLastProof(db: D1Database, id: string, now: number): Promise<void> {
+  await db.prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(now, id).run();
+}
+```
+
+`src/auth/cookie.ts`:
+```ts
+export const COOKIE_NAME = "pmw_session";
+
+function domainAttr(hubDomain: string): string {
+  return hubDomain === "localhost" ? "" : `; Domain=.${hubDomain}`;
+}
+
+export function sessionCookie(token: string, hubDomain: string): string {
+  return `${COOKIE_NAME}=${token}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${365 * 24 * 3600}${domainAttr(hubDomain)}`;
+}
+
+export function clearSessionCookie(hubDomain: string): string {
+  return `${COOKIE_NAME}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0${domainAttr(hubDomain)}`;
+}
+
+export function readSessionToken(request: Request): string | null {
+  const header = request.headers.get("cookie");
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (k === COOKIE_NAME) return rest.join("=") || null;
+  }
+  return null;
+}
+```
+
+The cookie `Max-Age` is the absolute cap; the real expiry is the server row. Chrome and Firefox accept `Secure` cookies from `http://localhost`, so local dev works unchanged.
+
+- [ ] **Step 4: Run tests**
+
+Run: `npx vitest run test/sessions.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/db/sessions.ts src/auth/cookie.ts test/sessions.test.ts
+git commit -m "feat: browser sessions with rolling expiry and session cookie"
+```
+
+---
+
+### Task 9: Request context
+
+**Files:**
+- Create: `src/auth/context.ts`, `test/context.test.ts`
+
+**Interfaces:**
+- Consumes: `classifyHost`, `HostKind` from `src/tenant.ts`; `getTenantBySlug`; `getSessionByToken`, `touchSession`; `getIdentityById`; `getMembership`; `readSessionToken`.
+- Produces:
+  - `type Ctx = { env: Env; db: D1Database; now: number; host: HostKind; tenant: Tenant | null; identity: Identity | null; session: Session | null; role: Role | null; authKind: "cookie" | "bearer" | null; staleCookie: boolean }`.
+  - `buildContext(request: Request, env: Env, now?: number): Promise<Ctx>`.
+  - `roleFor(identity: Identity | null, membership: Membership | null): Role | null` (root flag wins, then membership role, else null).
+  - `rank(role: Role | null): number` (root 4, admin 3, member 2, reader 1, null 0).
+
+Rules: a bearer token with prefix `pms_` is looked up as a session; `Authorization` wins over the cookie when both are present. `tenant` is set only when the host is a tenant label, the tenant row exists, and is active. `role` is set only when identity, tenant, and an active membership exist, or the identity is root. `staleCookie` is true when a cookie was present but resolved to no session, so the response can clear it.
+
+- [ ] **Step 1: Write the failing test**
+
+`test/context.test.ts`:
+```ts
+import { env } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+import { buildContext, rank, roleFor } from "../src/auth/context";
+import { createTenant, setTenantState } from "../src/db/tenants";
+import { createIdentity } from "../src/db/identities";
+import { addMembership } from "../src/db/memberships";
+import { createBrowserSession, revokeSession } from "../src/db/sessions";
+import { COOKIE_NAME } from "../src/auth/cookie";
+
+const db = () => env.HUB_DB;
+const now = 1_700_000_000_000;
+
+async function seed() {
+  const tenant = await createTenant(db(), { slug: "acme", display_name: "Acme" }, now);
+  const identity = await createIdentity(db(), { kind: "human", email: "a@example.com", display_name: "A", is_root: 0, operator_id: null }, now);
+  await addMembership(db(), { identity_id: identity.id, tenant_id: tenant.id, role: "admin" }, now);
+  const { session, token } = await createBrowserSession(db(), identity.id, now);
+  return { tenant, identity, session, token };
+}
+
+describe("buildContext", () => {
+  it("resolves tenant, identity and role from a cookie", async () => {
+    const s = await seed();
+    const req = new Request("https://acme.pimwell.test/", { headers: { cookie: `${COOKIE_NAME}=${s.token}` } });
+    const ctx = await buildContext(req, env, now + 1);
+    expect(ctx.host).toEqual({ kind: "tenant", slug: "acme" });
+    expect(ctx.tenant?.id).toBe(s.tenant.id);
+    expect(ctx.identity?.id).toBe(s.identity.id);
+    expect(ctx.role).toBe("admin");
+    expect(ctx.authKind).toBe("cookie");
+    expect(ctx.staleCookie).toBe(false);
+  });
+
+  it("prefers a bearer session token and reports no role off-tenant", async () => {
+    const s = await seed();
+    const req = new Request("https://pimwell.test/", { headers: { authorization: `Bearer ${s.token}`, cookie: `${COOKIE_NAME}=pms_stale` } });
+    const ctx = await buildContext(req, env, now + 1);
+    expect(ctx.authKind).toBe("bearer");
+    expect(ctx.identity?.id).toBe(s.identity.id);
+    expect(ctx.tenant).toBeNull();
+    expect(ctx.role).toBeNull();
+  });
+
+  it("treats a revoked session cookie as anonymous and flags it stale", async () => {
+    const s = await seed();
+    await revokeSession(db(), s.session.id, now + 1);
+    const req = new Request("https://acme.pimwell.test/", { headers: { cookie: `${COOKIE_NAME}=${s.token}` } });
+    const ctx = await buildContext(req, env, now + 2);
+    expect(ctx.identity).toBeNull();
+    expect(ctx.staleCookie).toBe(true);
+  });
+
+  it("archived tenant resolves to no tenant", async () => {
+    const s = await seed();
+    await setTenantState(db(), s.tenant.id, "archived", now + 1);
+    const req = new Request("https://acme.pimwell.test/", { headers: { cookie: `${COOKIE_NAME}=${s.token}` } });
+    const ctx = await buildContext(req, env, now + 2);
+    expect(ctx.tenant).toBeNull();
+    expect(ctx.role).toBeNull();
+  });
+
+  it("root gets role root on any tenant without a membership", async () => {
+    const tenant = await createTenant(db(), { slug: "blue", display_name: "Blue" }, now);
+    const root = await createIdentity(db(), { kind: "human", email: "r@example.com", display_name: "R", is_root: 1, operator_id: null }, now);
+    const { token } = await createBrowserSession(db(), root.id, now);
+    const req = new Request("https://blue.pimwell.test/", { headers: { cookie: `${COOKIE_NAME}=${token}` } });
+    const ctx = await buildContext(req, env, now + 1);
+    expect(ctx.tenant?.id).toBe(tenant.id);
+    expect(ctx.role).toBe("root");
+  });
+});
+
+describe("roleFor and rank", () => {
+  it("orders roles", () => {
+    expect(rank("root") > rank("admin") && rank("admin") > rank("member") && rank("member") > rank("reader") && rank("reader") > rank(null)).toBe(true);
+    expect(roleFor(null, null)).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run test/context.test.ts`
+Expected: FAIL, module not found.
+
+- [ ] **Step 3: Implement**
+
+`src/auth/context.ts`:
+```ts
+import type { Env } from "../env";
+import { classifyHost, type HostKind } from "../tenant";
+import { getTenantBySlug } from "../db/tenants";
+import { getIdentityById } from "../db/identities";
+import { getMembership } from "../db/memberships";
+import { getSessionByToken, touchSession } from "../db/sessions";
+import { readSessionToken } from "./cookie";
+import type { Identity, Membership, Role, Session, Tenant } from "../db/types";
+
+export type Ctx = {
+  env: Env;
+  db: D1Database;
+  now: number;
+  host: HostKind;
+  tenant: Tenant | null;
+  identity: Identity | null;
+  session: Session | null;
+  role: Role | null;
+  authKind: "cookie" | "bearer" | null;
+  staleCookie: boolean;
+};
+
+const RANK: Record<Role, number> = { root: 4, admin: 3, member: 2, reader: 1 };
+
+export function rank(role: Role | null): number {
+  return role ? RANK[role] : 0;
+}
+
+export function roleFor(identity: Identity | null, membership: Membership | null): Role | null {
+  if (!identity || identity.state !== "active") return null;
+  if (identity.is_root === 1) return "root";
+  if (membership && membership.state === "active") return membership.role;
+  return null;
+}
+
+export async function buildContext(request: Request, env: Env, now: number = Date.now()): Promise<Ctx> {
+  const db = env.HUB_DB;
+  const host = classifyHost(request.headers.get("host"), env.HUB_DOMAIN);
+
+  let tenant: Tenant | null = null;
+  if (host.kind === "tenant") {
+    const t = await getTenantBySlug(db, host.slug);
+    tenant = t && t.state === "active" ? t : null;
+  }
+
+  const auth = request.headers.get("authorization");
+  const bearer = auth?.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : null;
+  const cookieToken = readSessionToken(request);
+
+  let session: Session | null = null;
+  let authKind: Ctx["authKind"] = null;
+  if (bearer && bearer.startsWith("pms_")) {
+    session = await getSessionByToken(db, bearer, now);
+    if (session) authKind = "bearer";
+  } else if (cookieToken) {
+    session = await getSessionByToken(db, cookieToken, now);
+    if (session) authKind = "cookie";
+  }
+  const staleCookie = cookieToken !== null && authKind !== "bearer" && session === null;
+
+  let identity: Identity | null = null;
+  if (session) {
+    session = await touchSession(db, session, now);
+    identity = await getIdentityById(db, session.identity_id);
+  }
+
+  let role: Role | null = null;
+  if (identity && tenant) {
+    const membership = await getMembership(db, identity.id, tenant.id);
+    role = roleFor(identity, membership);
+  } else if (identity && identity.is_root === 1 && host.kind === "apex") {
+    role = "root";
+  }
+
+  return { env, db, now, host, tenant, identity, session, role, authKind, staleCookie };
+}
+```
+
+- [ ] **Step 4: Run tests**
+
+Run: `npx vitest run test/context.test.ts`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/auth/context.ts test/context.test.ts
+git commit -m "feat: request context with host, tenant, session, role resolution"
+```
+
+---
+
+### Task 10: Verb table, params, and the API dispatcher
+
+**Files:**
+- Create: `src/verbs/table.ts`, `src/verbs/params.ts`, `src/http/api.ts`, `test/api.test.ts`
+- Modify: `src/index.ts`
+
+**Interfaces:**
+- Consumes: `Ctx`, `buildContext`, `rank`; `HubError`; `clearSessionCookie`.
+- Produces:
+  - `type VerbScope = "public" | "hub" | "tenant"`.
+  - `type VerbDef<P, R> = { name: string; kind: "query" | "command"; scope: VerbScope; minRole: Role | "public"; freshProofMinutes: number | null; summary: string; parse: (input: Record<string, unknown>) => P; run: (ctx: Ctx, params: P) => Promise<R> }`.
+  - `defineVerb<P, R>(def: VerbDef<P, R>): VerbDef<P, R>`; `registerVerbs(defs: VerbDef<any, any>[])`; `getVerb(name): VerbDef<any, any> | undefined`; `listVerbs(): VerbDef<any, any>[]`.
+  - `src/verbs/params.ts`: `reqString(input, key, opts?: { max?: number }): string`; `optString(input, key, opts?): string | null`; `reqEnum<T extends string>(input, key, values: readonly T[]): T`; `optBool(input, key): boolean | null`. All throw `badRequest` with the key name.
+  - `handleApi(request: Request, env: Env): Promise<Response>` mounted at `POST /api/:verb`. It accepts JSON or `application/x-www-form-urlencoded` bodies. Success: `200 {"ok":true,"result":...}`. Error: `{"ok":false,"error":reason,"detail":...}` with the `HubError` status. For form bodies on success it responds `303` to the `Referer` or `/`.
+
+Dispatcher order: parse body → find verb (404 `unknown_verb`) → build context → scope check (`tenant` scope with `ctx.tenant === null` is 404 `not_found`; `hub` scope needs apex host, else 404) → CSRF: if `authKind === "cookie"`, the `Origin` header must equal `https://<host>` or the request is 403 `bad_origin` → auth: `minRole !== "public"` and no identity is 401 → role: `rank(ctx.role) < rank(minRole)` is 403 `forbidden` (for `hub` scope, `minRole: "root"` means `identity.is_root === 1`) → fresh proof: `freshProofMinutes !== null` and `authKind === "cookie"` and `now - session.last_proof_at > minutes*60_000` is 403 `reproof_required` → `parse` → `run`. Every response clears the cookie when `ctx.staleCookie`.
+
+- [ ] **Step 1: Write the failing test**
+
+`test/api.test.ts`:
+```ts
+import { env, SELF } from "cloudflare:test";
+import { beforeAll, describe, expect, it } from "vitest";
+import { defineVerb, registerVerbs } from "../src/verbs/table";
+import { reqString } from "../src/verbs/params";
+import { createTenant } from "../src/db/tenants";
+import { createIdentity } from "../src/db/identities";
+import { addMembership } from "../src/db/memberships";
+import { createBrowserSession } from "../src/db/sessions";
+import { COOKIE_NAME } from "../src/auth/cookie";
+
+const db = () => env.HUB_DB;
+const HOUR = 3600 * 1000;
+
+beforeAll(() => {
+  registerVerbs([
+    defineVerb({
+      name: "test.echo", kind: "query", scope: "tenant", minRole: "member", freshProofMinutes: null, summary: "echo",
+      parse: (i) => ({ msg: reqString(i, "msg", { max: 20 }) }),
+      run: async (ctx, p) => ({ msg: p.msg, tenant: ctx.tenant!.slug, who: ctx.identity!.email }),
+    }),
+    defineVerb({
+      name: "test.admin", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60, summary: "admin",
+      parse: () => ({}),
+      run: async () => ({ done: true }),
+    }),
+    defineVerb({
+      name: "test.open", kind: "query", scope: "public", minRole: "public", freshProofMinutes: null, summary: "open",
+      parse: () => ({}),
+      run: async () => ({ hi: true }),
+    }),
+  ]);
+});
+
+async function seed(role: "member" | "admin" = "member") {
+  const tenant = await createTenant(db(), { slug: "acme", display_name: "Acme" }, Date.now());
+  const identity = await createIdentity(db(), { kind: "human", email: "a@example.com", display_name: "A", is_root: 0, operator_id: null }, Date.now());
+  await addMembership(db(), { identity_id: identity.id, tenant_id: tenant.id, role }, Date.now());
+  const { session, token } = await createBrowserSession(db(), identity.id, Date.now());
+  return { tenant, identity, session, token };
+}
+
+function post(host: string, verb: string, body: unknown, headers: Record<string, string> = {}) {
+  return SELF.fetch(`https://${host}/api/${verb}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+describe("api dispatcher", () => {
+  it("runs a public verb with no auth", async () => {
+    const res = await post("pimwell.test", "test.open", {});
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, result: { hi: true } });
+  });
+
+  it("404s unknown verbs and unknown tenants alike", async () => {
+    expect((await post("pimwell.test", "nope", {})).status).toBe(404);
+    expect((await post("zzz.pimwell.test", "test.echo", { msg: "x" })).status).toBe(404);
+  });
+
+  it("requires auth, then role, with a bearer token", async () => {
+    const s = await seed("member");
+    expect((await post("acme.pimwell.test", "test.echo", { msg: "x" })).status).toBe(401);
+    const ok = await post("acme.pimwell.test", "test.echo", { msg: "hi" }, { authorization: `Bearer ${s.token}` });
+    expect(await ok.json()).toEqual({ ok: true, result: { msg: "hi", tenant: "acme", who: "a@example.com" } });
+    const denied = await post("acme.pimwell.test", "test.admin", {}, { authorization: `Bearer ${s.token}` });
+    expect(denied.status).toBe(403);
+    expect((await denied.json()).error).toBe("forbidden");
+  });
+
+  it("rejects cookie auth without a matching Origin", async () => {
+    const s = await seed("admin");
+    const noOrigin = await post("acme.pimwell.test", "test.echo", { msg: "x" }, { cookie: `${COOKIE_NAME}=${s.token}` });
+    expect(noOrigin.status).toBe(403);
+    expect((await noOrigin.json()).error).toBe("bad_origin");
+    const wrong = await post("acme.pimwell.test", "test.echo", { msg: "x" }, { cookie: `${COOKIE_NAME}=${s.token}`, origin: "https://evil.example" });
+    expect(wrong.status).toBe(403);
+    const right = await post("acme.pimwell.test", "test.echo", { msg: "x" }, { cookie: `${COOKIE_NAME}=${s.token}`, origin: "https://acme.pimwell.test" });
+    expect(right.status).toBe(200);
+  });
+
+  it("enforces fresh proof for cookie sessions", async () => {
+    const s = await seed("admin");
+    await db().prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(Date.now() - 61 * 60 * 1000, s.session.id).run();
+    const stale = await post("acme.pimwell.test", "test.admin", {}, { cookie: `${COOKIE_NAME}=${s.token}`, origin: "https://acme.pimwell.test" });
+    expect(stale.status).toBe(403);
+    expect((await stale.json()).error).toBe("reproof_required");
+    await db().prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(Date.now() - 59 * 60 * 1000, s.session.id).run();
+    const fresh = await post("acme.pimwell.test", "test.admin", {}, { cookie: `${COOKIE_NAME}=${s.token}`, origin: "https://acme.pimwell.test" });
+    expect(fresh.status).toBe(200);
+  });
+
+  it("validates params", async () => {
+    const s = await seed("member");
+    const res = await post("acme.pimwell.test", "test.echo", { msg: "x".repeat(21) }, { authorization: `Bearer ${s.token}` });
+    expect(res.status).toBe(400);
+    expect((await res.json()).detail).toContain("msg");
+  });
+
+  it("accepts form bodies and redirects", async () => {
+    const s = await seed("member");
+    const res = await SELF.fetch("https://acme.pimwell.test/api/test.echo", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie: `${COOKIE_NAME}=${s.token}`, origin: "https://acme.pimwell.test", referer: "https://acme.pimwell.test/somewhere" },
+      body: "msg=hi",
+    });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("https://acme.pimwell.test/somewhere");
+  });
+
+  it("clears a stale cookie", async () => {
+    const res = await post("pimwell.test", "test.open", {}, { cookie: `${COOKIE_NAME}=pms_stale` });
+    expect(res.headers.get("set-cookie")).toContain("Max-Age=0");
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run test/api.test.ts`
+Expected: FAIL, modules not found.
+
+- [ ] **Step 3: Implement the table and params**
+
+`src/verbs/table.ts`:
+```ts
+import type { Ctx } from "../auth/context";
+import type { Role } from "../db/types";
+
+export type VerbScope = "public" | "hub" | "tenant";
+
+export type VerbDef<P, R> = {
+  name: string;
+  kind: "query" | "command";
+  scope: VerbScope;
+  minRole: Role | "public";
+  freshProofMinutes: number | null;
+  summary: string;
+  parse: (input: Record<string, unknown>) => P;
+  run: (ctx: Ctx, params: P) => Promise<R>;
+};
+
+const REGISTRY = new Map<string, VerbDef<unknown, unknown>>();
+
+export function defineVerb<P, R>(def: VerbDef<P, R>): VerbDef<P, R> {
+  return def;
+}
+
+export function registerVerbs(defs: Array<VerbDef<never, unknown>> | Array<VerbDef<any, any>>): void {
+  for (const d of defs) REGISTRY.set(d.name, d as VerbDef<unknown, unknown>);
+}
+
+export function getVerb(name: string): VerbDef<unknown, unknown> | undefined {
+  return REGISTRY.get(name);
+}
+
+export function listVerbs(): VerbDef<unknown, unknown>[] {
+  return [...REGISTRY.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+```
+
+`src/verbs/params.ts`:
+```ts
+import { badRequest } from "../errors";
+
+type Input = Record<string, unknown>;
+
+export function reqString(input: Input, key: string, opts: { max?: number } = {}): string {
+  const v = input[key];
+  if (typeof v !== "string" || v.length === 0) throw badRequest(`${key} is required`);
+  if (opts.max !== undefined && v.length > opts.max) throw badRequest(`${key} is too long`);
+  return v;
+}
+
+export function optString(input: Input, key: string, opts: { max?: number } = {}): string | null {
+  const v = input[key];
+  if (v === undefined || v === null || v === "") return null;
+  if (typeof v !== "string") throw badRequest(`${key} must be a string`);
+  if (opts.max !== undefined && v.length > opts.max) throw badRequest(`${key} is too long`);
+  return v;
+}
+
+export function reqEnum<T extends string>(input: Input, key: string, values: readonly T[]): T {
+  const v = input[key];
+  if (typeof v !== "string" || !(values as readonly string[]).includes(v)) throw badRequest(`${key} must be one of ${values.join(", ")}`);
+  return v as T;
+}
+
+export function optBool(input: Input, key: string): boolean | null {
+  const v = input[key];
+  if (v === undefined || v === null || v === "") return null;
+  if (v === true || v === "true" || v === "1" || v === "on") return true;
+  if (v === false || v === "false" || v === "0" || v === "off") return false;
+  throw badRequest(`${key} must be a boolean`);
+}
+```
+
+- [ ] **Step 4: Implement the dispatcher and mount it**
+
+`src/http/api.ts`:
+```ts
+import type { Env } from "../env";
+import { buildContext, rank, type Ctx } from "../auth/context";
+import { clearSessionCookie } from "../auth/cookie";
+import { HubError } from "../errors";
+import { getVerb } from "../verbs/table";
+
+async function readBody(request: Request): Promise<{ input: Record<string, unknown>; isForm: boolean }> {
+  const ct = request.headers.get("content-type") ?? "";
+  if (ct.startsWith("application/x-www-form-urlencoded") || ct.startsWith("multipart/form-data")) {
+    const fd = await request.formData();
+    const input: Record<string, unknown> = {};
+    for (const [k, v] of fd.entries()) input[k] = typeof v === "string" ? v : "";
+    return { input, isForm: true };
+  }
+  if (ct.startsWith("application/json")) {
+    const text = await request.text();
+    const parsed: unknown = text ? JSON.parse(text) : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new HubError(400, "bad_request", "body must be a JSON object");
+    return { input: parsed as Record<string, unknown>, isForm: false };
+  }
+  return { input: {}, isForm: false };
+}
+
+function finish(ctx: Ctx | null, env: Env, res: Response): Response {
+  if (ctx?.staleCookie) res.headers.append("set-cookie", clearSessionCookie(env.HUB_DOMAIN));
+  return res;
+}
+
+function json(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+}
+
+export async function handleApi(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const name = url.pathname.slice("/api/".length);
+  let ctx: Ctx | null = null;
+  let isForm = false;
+  try {
+    const body = await readBody(request);
+    isForm = body.isForm;
+    const verb = getVerb(name);
+    if (!verb) throw new HubError(404, "unknown_verb");
+    ctx = await buildContext(request, env);
+
+    if (verb.scope === "tenant" && !ctx.tenant) throw new HubError(404, "not_found");
+    if (verb.scope === "hub" && ctx.host.kind !== "apex") throw new HubError(404, "not_found");
+
+    if (ctx.authKind === "cookie") {
+      const origin = request.headers.get("origin");
+      const expected = `${url.protocol}//${url.host}`;
+      if (origin !== expected) throw new HubError(403, "bad_origin");
+    }
+
+    if (verb.minRole !== "public") {
+      if (!ctx.identity) throw new HubError(401, "unauthorized");
+      const effective = verb.scope === "hub" ? (ctx.identity.is_root === 1 ? "root" : null) : ctx.role;
+      if (rank(effective) < rank(verb.minRole)) throw new HubError(403, "forbidden");
+      if (verb.freshProofMinutes !== null && ctx.authKind === "cookie" && ctx.session) {
+        if (ctx.now - ctx.session.last_proof_at > verb.freshProofMinutes * 60_000) throw new HubError(403, "reproof_required");
+      }
+    }
+
+    const params = verb.parse(body.input);
+    const result = await verb.run(ctx, params);
+    if (isForm) {
+      const back = request.headers.get("referer") ?? `${url.protocol}//${url.host}/`;
+      return finish(ctx, env, new Response(null, { status: 303, headers: { location: back } }));
+    }
+    return finish(ctx, env, json({ ok: true, result }, 200));
+  } catch (e) {
+    if (e instanceof HubError) return finish(ctx, env, json({ ok: false, error: e.reason, detail: e.detail ?? null }, e.status));
+    if (e instanceof SyntaxError) return finish(ctx, env, json({ ok: false, error: "bad_request", detail: "invalid JSON" }, 400));
+    console.error("verb failed", name, e instanceof Error ? e.message : String(e));
+    return finish(ctx, env, json({ ok: false, error: "internal", detail: null }, 500));
+  }
+}
+```
+
+Replace `src/index.ts`:
+```ts
+import { Hono } from "hono";
+import type { Env } from "./env";
+import { handleApi } from "./http/api";
+
+const app = new Hono<{ Bindings: Env }>();
+
+app.get("/healthz", (c) => c.text("ok"));
+app.post("/api/*", (c) => handleApi(c.req.raw, c.env));
+
+export default app;
+```
+
+- [ ] **Step 5: Run tests**
+
+Run: `npx vitest run`
+Expected: all pass, including `test/api.test.ts`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/verbs/table.ts src/verbs/params.ts src/http/api.ts src/index.ts test/api.test.ts
+git commit -m "feat: verb table and POST /api dispatcher with role, origin, fresh-proof checks"
+```
+
+---
+
+### Task 11: Bootstrap and whoami verbs
+
+**Files:**
+- Create: `src/verbs/bootstrap.ts`, `src/verbs/whoami.ts`, `src/verbs/index.ts`, `test/helpers.ts`, `test/bootstrap.test.ts`
+- Modify: `src/index.ts`
+
+**Interfaces:**
+- Consumes: `defineVerb`, `registerVerbs`; `reqString`, `optString`; `timingSafeEqual`; `rootExists`; `createInvite`, `findInviteByToken`, `inviteIsOpen`; `listMembershipsForIdentity`; `recordEvent`.
+- Produces:
+  - `bootstrap` verb: scope `public`, minRole `public`, params `{ token, email, display_name }`. Behaviour: if `timingSafeEqual(token, env.HUB_BOOTSTRAP_TOKEN)` fails → 403 `forbidden`. If a root identity exists → 409 `conflict` "bootstrap already done". If an open root invite exists → 409 `conflict` "root invite pending". Otherwise create a root invite and return `{ invite_url: "https://<HUB_DOMAIN>/invite/<token>", expires_at }`. Records an event with `kind: "bootstrap"`.
+  - `whoami` verb: scope `public`, minRole `public`, returns `{ identity: null }` when anonymous, else `{ identity: { id, email, display_name, is_root, kind }, session: { id, kind, created_at, last_proof_at }, tenant: { id, slug, role } | null, memberships: [{ slug, display_name, role }] }`.
+  - `registerAllVerbs()` in `src/verbs/index.ts`, called once at module load in `src/index.ts`.
+  - `test/helpers.ts`: `apiPost(host, verb, body, headers?)`, `seedTenant(slug)`, `seedHuman(email, { is_root?, memberships?: [{ tenant_id, role }] })` returning `{ identity, session, token }`, `cookieHeaders(token, host)` returning `{ cookie, origin }`.
+
+- [ ] **Step 1: Write helpers and the failing test**
+
+`test/helpers.ts`:
+```ts
+import { env, SELF } from "cloudflare:test";
+import { COOKIE_NAME } from "../src/auth/cookie";
+import { createTenant } from "../src/db/tenants";
+import { createIdentity } from "../src/db/identities";
+import { addMembership } from "../src/db/memberships";
+import { createBrowserSession } from "../src/db/sessions";
+import type { Role } from "../src/db/types";
+
+export function apiPost(host: string, verb: string, body: unknown, headers: Record<string, string> = {}) {
+  return SELF.fetch(`https://${host}/api/${verb}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+export function seedTenant(slug: string) {
+  return createTenant(env.HUB_DB, { slug, display_name: slug.toUpperCase() }, Date.now());
+}
+
+export async function seedHuman(email: string, opts: { is_root?: boolean; memberships?: Array<{ tenant_id: string; role: Role }> } = {}) {
+  const identity = await createIdentity(env.HUB_DB, { kind: "human", email, display_name: email.split("@")[0]!, is_root: opts.is_root ? 1 : 0, operator_id: null }, Date.now());
+  for (const m of opts.memberships ?? []) await addMembership(env.HUB_DB, { identity_id: identity.id, tenant_id: m.tenant_id, role: m.role }, Date.now());
+  const { session, token } = await createBrowserSession(env.HUB_DB, identity.id, Date.now());
+  return { identity, session, token };
+}
+
+export function cookieHeaders(token: string, host: string): Record<string, string> {
+  return { cookie: `${COOKIE_NAME}=${token}`, origin: `https://${host}` };
+}
+
+export function bearer(token: string): Record<string, string> {
+  return { authorization: `Bearer ${token}` };
+}
+```
+
+`test/bootstrap.test.ts`:
+```ts
+import { env } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
+import { apiPost, bearer, seedHuman, seedTenant } from "./helpers";
+import { findInviteByToken } from "../src/db/invites";
+
+describe("bootstrap", () => {
+  it("rejects a wrong token", async () => {
+    const res = await apiPost("pimwell.test", "bootstrap", { token: "wrong", email: "r@example.com", display_name: "Root" });
+    expect(res.status).toBe(403);
+  });
+
+  it("creates a root invite once, then refuses", async () => {
+    const res = await apiPost("pimwell.test", "bootstrap", { token: "test-bootstrap-token", email: "r@example.com", display_name: "Root" });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { result: { invite_url: string } };
+    expect(body.result.invite_url).toMatch(/^https:\/\/pimwell\.test\/invite\/pmi_/);
+    const token = body.result.invite_url.split("/invite/")[1]!;
+    const invite = await findInviteByToken(env.HUB_DB, token);
+    expect(invite?.role).toBe("root");
+    expect(invite?.tenant_id).toBeNull();
+    const again = await apiPost("pimwell.test", "bootstrap", { token: "test-bootstrap-token", email: "r@example.com", display_name: "Root" });
+    expect(again.status).toBe(409);
+  });
+
+  it("refuses once a root exists", async () => {
+    await seedHuman("root@example.com", { is_root: true });
+    const res = await apiPost("pimwell.test", "bootstrap", { token: "test-bootstrap-token", email: "r2@example.com", display_name: "R2" });
+    expect(res.status).toBe(409);
+  });
+});
+
+describe("whoami", () => {
+  it("is null when anonymous", async () => {
+    const res = await apiPost("pimwell.test", "whoami", {});
+    expect(await res.json()).toEqual({ ok: true, result: { identity: null } });
+  });
+
+  it("describes identity, tenant role and memberships", async () => {
+    const t = await seedTenant("acme");
+    const h = await seedHuman("a@example.com", { memberships: [{ tenant_id: t.id, role: "admin" }] });
+    const res = await apiPost("acme.pimwell.test", "whoami", {}, bearer(h.token));
+    const body = await res.json() as { result: any };
+    expect(body.result.identity.email).toBe("a@example.com");
+    expect(body.result.tenant).toEqual({ id: t.id, slug: "acme", role: "admin" });
+    expect(body.result.memberships).toEqual([{ slug: "acme", display_name: "ACME", role: "admin" }]);
+    expect(body.result.session.id).toBe(h.session.id);
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run test/bootstrap.test.ts`
+Expected: FAIL, 404 unknown_verb.
+
+- [ ] **Step 3: Implement**
+
+`src/verbs/bootstrap.ts`:
+```ts
+import { defineVerb } from "./table";
+import { reqString } from "./params";
+import { timingSafeEqual } from "../ids";
+import { conflict, forbidden } from "../errors";
+import { rootExists } from "../db/identities";
+import { createInvite } from "../db/invites";
+import { recordEvent } from "../db/events";
+
+export const bootstrap = defineVerb({
+  name: "bootstrap",
+  kind: "command",
+  scope: "public",
+  minRole: "public",
+  freshProofMinutes: null,
+  summary: "Create the first root invite using the bootstrap secret. Disabled once a root exists.",
+  parse: (i) => ({ token: reqString(i, "token", { max: 512 }), email: reqString(i, "email", { max: 254 }), display_name: reqString(i, "display_name", { max: 80 }) }),
+  run: async (ctx, p) => {
+    if (!ctx.env.HUB_BOOTSTRAP_TOKEN || !timingSafeEqual(p.token, ctx.env.HUB_BOOTSTRAP_TOKEN)) throw forbidden();
+    if (await rootExists(ctx.db)) throw conflict("bootstrap already done");
+    const pending = await ctx.db.prepare(
+      "SELECT 1 FROM invite WHERE role = 'root' AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ? LIMIT 1",
+    ).bind(ctx.now).first();
+    if (pending) throw conflict("root invite pending");
+    const { invite, token } = await createInvite(ctx.db, { tenant_id: null, email: p.email, role: "root", display_name: p.display_name, created_by: null }, ctx.now);
+    await recordEvent(ctx.db, { tenant_id: null, identity_id: null, session_id: null, kind: "bootstrap", target_kind: "invite", target_id: invite.id, summary: "Root invite created by bootstrap" }, ctx.now);
+    return { invite_url: `https://${ctx.env.HUB_DOMAIN}/invite/${token}`, expires_at: invite.expires_at };
+  },
+});
+```
+
+`src/verbs/whoami.ts`:
+```ts
+import { defineVerb } from "./table";
+import { listMembershipsForIdentity } from "../db/memberships";
+
+export const whoami = defineVerb({
+  name: "whoami",
+  kind: "query",
+  scope: "public",
+  minRole: "public",
+  freshProofMinutes: null,
+  summary: "Describe the caller: identity, session, role on this tenant, and memberships.",
+  parse: () => ({}),
+  run: async (ctx) => {
+    if (!ctx.identity || !ctx.session) return { identity: null };
+    const memberships = await listMembershipsForIdentity(ctx.db, ctx.identity.id);
+    return {
+      identity: { id: ctx.identity.id, email: ctx.identity.email, display_name: ctx.identity.display_name, is_root: ctx.identity.is_root === 1, kind: ctx.identity.kind },
+      session: { id: ctx.session.id, kind: ctx.session.kind, created_at: ctx.session.created_at, last_proof_at: ctx.session.last_proof_at },
+      tenant: ctx.tenant ? { id: ctx.tenant.id, slug: ctx.tenant.slug, role: ctx.role } : null,
+      memberships: memberships.map((m) => ({ slug: m.tenant.slug, display_name: m.tenant.display_name, role: m.membership.role })),
+    };
+  },
+});
+```
+
+`src/verbs/index.ts`:
+```ts
+import { registerVerbs } from "./table";
+import { bootstrap } from "./bootstrap";
+import { whoami } from "./whoami";
+
+export function registerAllVerbs(): void {
+  registerVerbs([bootstrap, whoami]);
+}
+```
+
+In `src/index.ts`, add after the imports:
+```ts
+import { registerAllVerbs } from "./verbs/index";
+
+registerAllVerbs();
+```
+
+- [ ] **Step 4: Run tests**
+
+Run: `npx vitest run`
+Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/verbs test/helpers.ts test/bootstrap.test.ts src/index.ts
+git commit -m "feat: bootstrap and whoami verbs"
+```
+
+---
