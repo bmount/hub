@@ -164,6 +164,21 @@ p{margin:0}
 .closing .sig{margin-top:2rem;font:500 .85rem var(--mono);color:var(--muted)}
 @media (max-width:520px){.item{grid-template-columns:44px minmax(0,1fr);gap:.8rem}.item svg{width:44px;height:44px}}
 
+
+/* walking explainer card */
+.tour{position:absolute;z-index:5;right:clamp(16px,4vw,48px);top:calc(env(safe-area-inset-top,0px) + 60px);width:min(27rem,calc(100vw - 32px));
+  background:rgba(255,255,255,.94);border-radius:16px;padding:1rem 1.15rem 1.1rem;border-left:6px solid var(--tint,#cfe3ff);
+  box-shadow:0 14px 40px rgba(31,42,68,.12);opacity:0;transform:translateY(-10px);transition:opacity .35s ease,transform .35s ease;pointer-events:none}
+.tour.show{opacity:1;transform:none}
+.tour .where{font:600 .8rem var(--body);color:var(--muted)}
+.tour h2{font-size:clamp(1.25rem,2.4vw,1.6rem);font-weight:800;line-height:1.12;margin-top:.15rem}
+.tour p{margin-top:.45rem;font-size:clamp(.95rem,1.4vw,1.02rem);line-height:1.55}
+.recap{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1.6rem 2rem;margin-top:2.6rem}
+.recap .r{display:grid;grid-template-columns:44px minmax(0,1fr);gap:.8rem;align-items:start}
+.recap svg{width:44px;height:44px}
+.recap h3{font-size:1.08rem;font-weight:700;line-height:1.2}
+.recap p{color:var(--muted);font-size:.95rem;margin-top:.2rem}
+
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important}
   .plane{display:none}
@@ -391,6 +406,7 @@ p{margin:0}
       <p>A nice walk down a quiet street. Underneath, your team and its AI helpers are busy getting things done.</p>
     </div>
     <div class="chip" id="chip" aria-hidden="true">Pimwell</div>
+    <div class="tour" id="tour" aria-live="polite"><div class="where" id="tWhere"></div><h2 id="tTitle"></h2><p id="tBody"></p></div>
     <div class="cue" id="cue">Scroll to take a walk</div>
   </div>
 </section>
@@ -399,83 +415,18 @@ p{margin:0}
   <div class="rail" id="rail" aria-hidden="true"><div class="tube"><div class="flow"></div></div><div class="tube"><div class="flow"></div></div><div class="tube"><div class="flow"></div></div></div>
   <div class="copy">
     <p class="kicker">Under the street</p>
-    <h2>The busy part, explained.</h2>
-    <p class="intro">Pimwell is a shared workplace on the web for a small team and the AI helpers that work alongside it. Every shop on that street is one thing it does for you.</p>
-
-    <div class="items">
-      <div class="item">
-        <svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="24" r="20" fill="#bfe8c8"/><path d="M32 60V14" stroke="#8a6a4a" stroke-width="5" stroke-linecap="round"/><path d="M32 40c0-8 14-6 14-16" stroke="#8a6a4a" stroke-width="4" fill="none" stroke-linecap="round"/><circle cx="32" cy="48" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="32" cy="30" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="46" cy="24" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="32" cy="14" r="5" fill="#ffc845" stroke="#1f2a44" stroke-width="2"/></svg>
-        <div>
-          <h3>Leveled-up source control</h3>
-          <p class="plain"><b>New to this?</b> Source control keeps every version of your files, so nothing is ever truly lost and anyone can see what changed, when, and why. Most software teams use a tool called git for it.</p>
-          <p class="ours">Pimwell speaks ordinary git, and adds a memory for who did each thing. It knows whether a person or an AI made a change, and which helper on which run. When two people change the same thing at once, both versions stay side by side instead of one quietly winning.</p>
-        </div>
-      </div>
-
-      <div class="item">
-        <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="8" width="44" height="50" rx="5" fill="#ffe3b8"/><circle cx="32" cy="24" r="11" fill="#fff" stroke="#1f2a44" stroke-width="2"/><path d="M32 24V17M32 24l5 3" stroke="#ff6b5e" stroke-width="2.5" stroke-linecap="round"/><rect x="16" y="40" width="10" height="9" rx="1" fill="#9fe3b5"/><rect x="28" y="40" width="10" height="9" rx="1" fill="#9fe3b5"/><rect x="40" y="40" width="10" height="9" rx="1" fill="#ffe27a"/></svg>
-        <div>
-          <h3>Project management, where absolutely necessary</h3>
-          <p class="plain"><b>New to this?</b> Project management is the list of what needs doing and who is on it. It usually becomes a second job.</p>
-          <p class="ours">Here, the list mostly keeps itself. Tasks get opened, picked up, and closed as the work happens. A helper that grabs a task holds it for a while, so nobody doubles up. You drop by when you're curious, or when something actually needs a person.</p>
-        </div>
-      </div>
-
-      <div class="item">
-        <svg viewBox="0 0 64 64" aria-hidden="true"><g fill="#fff" stroke="#c9cff0" stroke-width="2"><circle cx="22" cy="36" r="13"/><circle cx="36" cy="28" r="16"/><circle cx="48" cy="38" r="11"/></g><rect x="16" y="36" width="40" height="13" rx="6" fill="#fff"/><circle cx="31" cy="35" r="2" fill="#1f2a44"/><circle cx="41" cy="35" r="2" fill="#1f2a44"/><path d="M33 41q3 3 6 0" stroke="#1f2a44" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M52 8l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#ffc845"/></svg>
-        <div>
-          <h3>Let your AI do it for you</h3>
-          <p class="plain"><b>New to this?</b> Assistants like Claude and ChatGPT can now use other software on your behalf. The common plug they use is called MCP.</p>
-          <p class="ours">Connect your assistant to Pimwell and approve it once, on Pimwell's own sign-in page. From then on you can ask it to open a task, check what changed this morning, or tidy up a project. Everything it does shows up with its name on it.</p>
-        </div>
-      </div>
-
-      <div class="item">
-        <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="16" width="48" height="34" rx="4" fill="#cfe3ff"/><path d="M8 18l24 18 24-18" stroke="#5d7fb8" stroke-width="3" fill="none"/><path d="M40 6l14 4-6 4z" fill="#ff6b5e"/></svg>
-        <div>
-          <h3>Mail with manners</h3>
-          <p class="plain"><b>New to this?</b> Most software can send email to anyone at any time, which is how inboxes fill with noise.</p>
-          <p class="ours">Pimwell never writes first. Send it a note and it can answer you. The same rule applies to every helper that has its own inbox, so nothing goes out that nobody asked for.</p>
-        </div>
-      </div>
-
-      <div class="item">
-        <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="12" y="8" width="40" height="30" rx="8" fill="#fff" stroke="#1f2a44" stroke-width="2.5"/><circle cx="25" cy="23" r="3" fill="#0f9e8c"/><circle cx="39" cy="23" r="3" fill="#0f9e8c"/><rect x="14" y="40" width="36" height="18" rx="4" fill="#c8bcff" stroke="#1f2a44" stroke-width="2.5"/><rect x="18" y="44" width="28" height="9" fill="#fff"/><text x="32" y="51" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" font-weight="600" fill="#1f2a44">scout</text></svg>
-        <div>
-          <h3>Everyone wears a name tag</h3>
-          <p class="plain"><b>New to this?</b> When an AI helper does work, it is often hard to tell afterwards what it did, or who set it loose.</p>
-          <p class="ours">People sign in with a link they receive. Each helper gets its own identity and a named person responsible for it. Every time a helper starts working, that stretch gets its own record you can read from start to finish.</p>
-        </div>
-      </div>
-
-      <div class="item">
-        <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="8" width="44" height="50" rx="3" fill="#d7f0e6"/><g fill="#fff"><rect x="16" y="14" width="10" height="9" rx="1"/><rect x="28" y="14" width="10" height="9" rx="1"/><rect x="40" y="14" width="10" height="9" rx="1"/><rect x="16" y="27" width="10" height="9" rx="1"/><rect x="40" y="27" width="10" height="9" rx="1"/></g><rect x="28" y="27" width="10" height="9" rx="1" fill="#ffc845"/><rect x="26" y="42" width="12" height="16" rx="2" fill="#5aa889"/></svg>
-        <div>
-          <h3>A room for every team</h3>
-          <p class="plain"><b>New to this?</b> Teams want their own space without setting up their own software.</p>
-          <p class="ours">Each team gets its own address, like design.pimwell.com, with its own people and projects. Group things however you like. Finished work goes to the cooler, out of the way but still readable whenever you need it.</p>
-        </div>
-      </div>
-
-      <div class="item">
-        <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="22" width="48" height="34" rx="3" fill="#fff0c2"/><path d="M6 22h52v8H6z" fill="#ffc845"/><ellipse cx="32" cy="48" rx="12" ry="5" fill="#9aa3bf"/><circle cx="43" cy="44" r="5" fill="#9aa3bf"/><text x="48" y="16" font-size="11" font-family="Bricolage Grotesque,sans-serif" font-weight="700" fill="#6c5ce7">z</text></svg>
-        <div>
-          <h3>Small, cheap, and yours</h3>
-          <p class="plain"><b>New to this?</b> Hosted tools usually cost money every hour, whether anyone is using them or not.</p>
-          <p class="ours">Pimwell naps when nobody is around and wakes when you arrive. Any project can be packed into a single file you can open with ordinary tools, so your work never depends on us to stay readable.</p>
-        </div>
-      </div>
-
-      <div class="item">
-        <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="20" width="52" height="38" rx="3" fill="#ffe8a3"/><path d="M4 20h56v9H4z" fill="#ff6b5e"/><rect x="10" y="4" width="26" height="13" rx="6" fill="#fff" stroke="#d9def0" stroke-width="2"/><rect x="30" y="8" width="26" height="13" rx="6" fill="#fff" stroke="#d9def0" stroke-width="2"/></svg>
-        <div>
-          <h3>Next door, opening soon</h3>
-          <p class="plain"><b>New to this?</b> Most teams talk in one app and work in another, and the context gets lost between them.</p>
-          <p class="ours">Conversations are coming to the same street, with the same name tags, so a decision made in chat can point straight at the work it changed.</p>
-        </div>
-      </div>
+    <h2>The whole street at a glance.</h2>
+    <p class="intro">Pimwell is a shared workplace for a small team and the AI helpers that work alongside it. The street is the calm part you see. The pipes are where the work gets done for you.</p>
+    <div class="recap">
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="24" r="20" fill="#bfe8c8"/><path d="M32 60V14" stroke="#8a6a4a" stroke-width="5" stroke-linecap="round"/><path d="M32 40c0-8 14-6 14-16" stroke="#8a6a4a" stroke-width="4" fill="none" stroke-linecap="round"/><circle cx="32" cy="48" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="32" cy="30" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="46" cy="24" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="32" cy="14" r="5" fill="#ffc845" stroke="#1f2a44" stroke-width="2"/></svg><div><h3>Leveled-up source control</h3><p>Every version kept, every change signed by the person or helper who made it.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="8" width="44" height="50" rx="5" fill="#ffe3b8"/><circle cx="32" cy="24" r="11" fill="#fff" stroke="#1f2a44" stroke-width="2"/><path d="M32 24V17M32 24l5 3" stroke="#ff6b5e" stroke-width="2.5" stroke-linecap="round"/><rect x="16" y="40" width="10" height="9" rx="1" fill="#9fe3b5"/><rect x="28" y="40" width="10" height="9" rx="1" fill="#9fe3b5"/><rect x="40" y="40" width="10" height="9" rx="1" fill="#ffe27a"/></svg><div><h3>Project management, where absolutely necessary</h3><p>The list keeps itself. Drop by when you're curious.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><g fill="#fff" stroke="#c9cff0" stroke-width="2"><circle cx="22" cy="36" r="13"/><circle cx="36" cy="28" r="16"/><circle cx="48" cy="38" r="11"/></g><rect x="16" y="36" width="40" height="13" rx="6" fill="#fff"/><circle cx="31" cy="35" r="2" fill="#1f2a44"/><circle cx="41" cy="35" r="2" fill="#1f2a44"/><path d="M33 41q3 3 6 0" stroke="#1f2a44" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M52 8l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#ffc845"/></svg><div><h3>Let your AI do it for you</h3><p>Connect Claude, ChatGPT, or any MCP assistant, approve once, then just ask.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="16" width="48" height="34" rx="4" fill="#cfe3ff"/><path d="M8 18l24 18 24-18" stroke="#5d7fb8" stroke-width="3" fill="none"/><path d="M40 6l14 4-6 4z" fill="#ff6b5e"/></svg><div><h3>Mail with manners</h3><p>Pimwell and its helpers only ever write back.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="12" y="8" width="40" height="30" rx="8" fill="#fff" stroke="#1f2a44" stroke-width="2.5"/><circle cx="25" cy="23" r="3" fill="#0f9e8c"/><circle cx="39" cy="23" r="3" fill="#0f9e8c"/><rect x="14" y="40" width="36" height="18" rx="4" fill="#c8bcff" stroke="#1f2a44" stroke-width="2.5"/><rect x="18" y="44" width="28" height="9" fill="#fff"/><text x="32" y="51" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" font-weight="600" fill="#1f2a44">scout</text></svg><div><h3>Hand to hand</h3><p>People and helpers work the same things, and every touch carries a name.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="8" width="44" height="50" rx="3" fill="#d7f0e6"/><g fill="#fff"><rect x="16" y="14" width="10" height="9" rx="1"/><rect x="28" y="14" width="10" height="9" rx="1"/><rect x="40" y="14" width="10" height="9" rx="1"/><rect x="16" y="27" width="10" height="9" rx="1"/><rect x="40" y="27" width="10" height="9" rx="1"/></g><rect x="28" y="27" width="10" height="9" rx="1" fill="#ffc845"/><rect x="26" y="42" width="12" height="16" rx="2" fill="#5aa889"/></svg><div><h3>A room for every team</h3><p>Your own address, people, and projects, with a cooler for finished work.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="22" width="48" height="34" rx="3" fill="#fff0c2"/><path d="M6 22h52v8H6z" fill="#ffc845"/><ellipse cx="32" cy="48" rx="12" ry="5" fill="#9aa3bf"/><circle cx="43" cy="44" r="5" fill="#9aa3bf"/><text x="48" y="16" font-size="11" font-family="Bricolage Grotesque,sans-serif" font-weight="700" fill="#6c5ce7">z</text></svg><div><h3>Small, cheap, and yours</h3><p>Naps when idle, and any project packs into one file you can keep.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="20" width="52" height="38" rx="3" fill="#ffe8a3"/><path d="M4 20h56v9H4z" fill="#ff6b5e"/><rect x="10" y="4" width="26" height="13" rx="6" fill="#fff" stroke="#d9def0" stroke-width="2"/><rect x="30" y="8" width="26" height="13" rx="6" fill="#fff" stroke="#d9def0" stroke-width="2"/></svg><div><h3>Conversations, opening soon</h3><p>Chat that points straight at the work it changed.</p></div></div>
     </div>
-
     <div class="closing">
       <h2>Pimwell is private, for now.</h2>
       <p>It's invite-only while the street gets built. If someone sent you an invite link, open it to move in.</p>
@@ -643,6 +594,50 @@ p{margin:0}
     cue.style.opacity = p > 0.03 && p < 0.97 ? 0 : 1;
     cue.textContent = p >= 0.97 ? 'Keep going, under the street' : 'Scroll to take a walk';
     walked += Math.abs(off - lastOff) / s; lastOff = off;
+    tourAt(p);
+  }
+
+
+  /* ---------- explainer cards that ride along with the walk ---------- */
+  const STOPS = [
+    { from: 270, to: 600, where: 'Repo & Co.', tint: '#ffd9c7', title: 'Leveled-up source control',
+      body: 'Every version of your work is kept, so nothing is ever really lost. Pimwell also remembers who made each change, a person or an AI helper, and when two edits collide it keeps both instead of quietly picking a winner. It speaks ordinary git, so the tools you already use just work.' },
+    { from: 600, to: 860, where: 'The clock tower', tint: '#ffe3b8', title: 'Project management, where absolutely necessary',
+      body: 'Somebody has to keep the list. Ideally not you. Tasks open, get picked up, and close as the work happens, and a helper that grabs one holds onto it so nobody doubles up. Drop by when you’re curious, or when something genuinely needs a person.' },
+    { from: 860, to: 1170, where: 'The antenna', tint: '#e3dcff', title: 'Let your AI do it for you',
+      body: 'Point Claude, ChatGPT, or any assistant that speaks MCP at Pimwell and approve it once. After that, just ask: open a task, see what changed overnight, tidy up a project. Whatever it does is signed with its name.' },
+    { from: 1170, to: 1540, where: 'The post office', tint: '#cfe3ff', title: 'Mail with manners',
+      body: 'Most software will email anyone, any time, which is how inboxes fill with noise. Pimwell never writes first. Send it a note and it answers, and every AI helper with its own inbox plays by the same rule.' },
+    { from: 1540, to: 2290, where: 'The mural', tint: '#f3cdb9', title: 'Hand to hand',
+      body: 'People and AI helpers work on the same things. Everyone signs in with a link, every helper wears a name tag and answers to a named person, and each stretch of a helper’s work is written down from start to finish. You can always see who touched what.' },
+    { from: 2290, to: 2620, where: 'Chatter', tint: '#ffe8a3', title: 'Conversations, opening soon',
+      body: 'Talk is moving onto the same street, with the same name tags, so a decision made in chat can point straight at the work it changed.' },
+    { from: 2620, to: 3010, where: 'The apartments', tint: '#d7f0e6', title: 'A room for every team',
+      body: 'Each team gets its own address, like design.pimwell.com, with its own people and projects, grouped however you like. One person can live in more than one.' },
+    { from: 3010, to: 3300, where: 'The Cooler', tint: '#ffd6e7', title: 'Finished, never thrown out',
+      body: 'Work that’s done moves to the cooler: out of the way, still readable whenever you need it, and one step from coming back.' },
+    { from: 3300, to: 3680, where: 'The helpers’ garage', tint: '#e3dcff', title: 'Helpers that clock in',
+      body: 'Set up as many AI helpers as the work needs. They pick up tasks while you’re away, and every shift they work leaves a tidy record behind.' },
+    { from: 3680, to: 3960, where: 'The kiosk', tint: '#fff0c2', title: 'Small, cheap, and yours',
+      body: 'Pimwell naps when nobody’s around and wakes the moment you arrive, so it costs next to nothing. Any project packs into a single file you can open with ordinary tools, so your work never depends on us.' },
+    { from: 3960, to: 4400, where: 'End of the road', tint: '#ffc845', title: 'That’s the street',
+      body: 'Keep scrolling to go under it, where everything you just walked past fits on one page.' },
+  ];
+  const tour = $('tour'), tWhere = $('tWhere'), tTitle = $('tTitle'), tBody = $('tBody');
+  let stopIdx = -2, swapTimer = 0;
+  function tourAt(p) {
+    const walkerV = (-off + VW * 0.24) / s + 50;
+    const i = p < 0.035 ? -1 : STOPS.findIndex(st => walkerV >= st.from && walkerV < st.to);
+    if (i === stopIdx) return;
+    stopIdx = i; clearTimeout(swapTimer);
+    tour.classList.remove('show');
+    if (i < 0) return;
+    swapTimer = setTimeout(() => {
+      const st = STOPS[i];
+      tWhere.textContent = st.where; tTitle.textContent = st.title; tBody.textContent = st.body;
+      tour.style.setProperty('--tint', st.tint);
+      tour.classList.add('show');
+    }, reduce ? 0 : 220);
   }
 
   // walkers
