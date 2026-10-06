@@ -1,10 +1,477 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
-import { bindOnce } from "./bound";
+import { ulid } from "../ids";
+import { bindOnce, storedBinding } from "./bound";
+import { inboxStub } from "./stubs";
+import { LIMITS, computeHop, gateRefuses, nextAgentRun, pairTrip, wakesAllowed } from "./rules";
+import type {
+  AuthorKind, ChatSessionKind, Digest, DigestQuery, MsgView, PostInput, PostOk, PostOutcome, ReadPage, ReadQuery, StoredRef, Suppressed,
+  Version, VersionInput, WakeItem, WakeKind,
+} from "./types";
 
+const SCHEMA = [
+  "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+  `CREATE TABLE IF NOT EXISTS artifact (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, msg_id TEXT NOT NULL, rev INTEGER NOT NULL,
+     kind TEXT NOT NULL, author_id TEXT NOT NULL, session_id TEXT, session_kind TEXT NOT NULL, thread_root TEXT, body TEXT NOT NULL,
+     body_sha256 TEXT NOT NULL, meta_json TEXT NOT NULL, hop INTEGER NOT NULL, cause_seq INTEGER, created_at INTEGER NOT NULL)`,
+  "CREATE INDEX IF NOT EXISTS artifact_msg ON artifact (msg_id, rev)",
+  "CREATE INDEX IF NOT EXISTS artifact_author ON artifact (author_id, created_at)",
+  `CREATE TABLE IF NOT EXISTS msg (msg_id TEXT PRIMARY KEY, first_seq INTEGER NOT NULL UNIQUE, last_seq INTEGER NOT NULL, rev INTEGER NOT NULL,
+     kind TEXT NOT NULL, author_id TEXT NOT NULL, author_kind TEXT NOT NULL, session_id TEXT, session_kind TEXT NOT NULL, thread_root TEXT,
+     hop INTEGER NOT NULL, retracted INTEGER NOT NULL DEFAULT 0, reply_count INTEGER NOT NULL DEFAULT 0, last_reply_seq INTEGER,
+     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+  "CREATE INDEX IF NOT EXISTS msg_thread ON msg (thread_root, first_seq)",
+  "CREATE TABLE IF NOT EXISTS ref (seq INTEGER NOT NULL, msg_id TEXT NOT NULL, rev INTEGER NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, title_snapshot TEXT, PRIMARY KEY (seq, kind, key))",
+  "CREATE TABLE IF NOT EXISTS thread_sub (thread_root TEXT NOT NULL, identity_id TEXT NOT NULL, kind TEXT NOT NULL, via TEXT NOT NULL, PRIMARY KEY (thread_root, identity_id))",
+  "CREATE TABLE IF NOT EXISTS scope_state (scope TEXT PRIMARY KEY, agent_run INTEGER NOT NULL, gate_noted INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS pair_block (a TEXT NOT NULL, b TEXT NOT NULL, until INTEGER NOT NULL, PRIMARY KEY (a, b))",
+  "CREATE TABLE IF NOT EXISTS idem (identity_id TEXT NOT NULL, key TEXT NOT NULL, result_json TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (identity_id, key))",
+  "CREATE TABLE IF NOT EXISTS inbox_outbox (key TEXT PRIMARY KEY, identity_id TEXT NOT NULL, item_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)",
+  "CREATE TABLE IF NOT EXISTS index_outbox (seq INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0)",
+];
+
+type MsgRow = {
+  msg_id: string; first_seq: number; last_seq: number; rev: number; kind: string; author_id: string; author_kind: string;
+  session_id: string | null; session_kind: string; thread_root: string | null; hop: number; retracted: number; reply_count: number;
+  last_reply_seq: number | null; created_at: number; updated_at: number; body: string; meta_json: string;
+};
+type ArtifactRow = {
+  seq: number; msg_id: string; rev: number; kind: string; author_id: string; session_id: string | null; session_kind: string;
+  thread_root: string | null; body: string; meta_json: string; hop: number; created_at: number;
+};
+type Meta = { mentions?: string[]; hop_limited?: boolean; retracted?: boolean; loop?: string[]; gate?: boolean };
+type NewMessage = {
+  kind: "say" | "system"; author_id: string; author_kind: AuthorKind; session_id: string | null; session_kind: ChatSessionKind;
+  thread_root: string | null; body: string; body_sha256: string; meta: Meta; hop: number; cause_seq: number | null; now: number;
+};
+
+export const SYSTEM_GATE = "Agents have posted 8 messages in a row here. Agent posts are paused until a human posts.";
+export const SYSTEM_LOOP = "Two agents kept answering each other. Wakes between them are paused for 30 minutes.";
+
+const MSG_SELECT = "SELECT m.*, a.body, a.meta_json FROM msg m JOIN artifact a ON a.seq = m.last_seq";
+
+/** Messaging spec 9.1: one per channel. Serializes every write to the conversation and assigns `seq`. */
 export class Conversation extends DurableObject<Env> {
-  async head(tenant_id: string, conversation_id: string): Promise<number> {
+  #tenant = "";
+  #id = "";
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    for (const s of SCHEMA) this.ctx.storage.sql.exec(s);
+  }
+
+  #q<T extends Record<string, SqlStorageValue>>(query: string, ...binds: SqlStorageValue[]): T[] {
+    return this.ctx.storage.sql.exec<T>(query, ...binds).toArray();
+  }
+
+  #run(query: string, ...binds: SqlStorageValue[]): void {
+    this.ctx.storage.sql.exec(query, ...binds);
+  }
+
+  #bind(tenant_id: string, conversation_id: string): void {
     bindOnce(this.ctx.storage.sql, tenant_id, conversation_id);
-    return 0;
+    this.#tenant = tenant_id;
+    this.#id = conversation_id;
+  }
+
+  #head(): number {
+    return this.#q<{ h: number | null }>("SELECT MAX(seq) AS h FROM artifact")[0]?.h ?? 0;
+  }
+
+  /** A message by its number (decimal seq) or its msg_id, joined to its latest version. */
+  #msg(ref: string): MsgRow | null {
+    const bySeq = /^\d{1,12}$/.test(ref);
+    return this.#q<MsgRow>(`${MSG_SELECT} WHERE ${bySeq ? "m.first_seq = ?" : "m.msg_id = ?"}`, bySeq ? Number(ref) : ref)[0] ?? null;
+  }
+
+  #view(r: MsgRow): MsgView {
+    const meta = JSON.parse(r.meta_json) as Meta;
+    const root = r.thread_root ? this.#q<{ first_seq: number }>("SELECT first_seq FROM msg WHERE msg_id = ?", r.thread_root)[0]?.first_seq ?? null : null;
+    const refs = this.#q<{ kind: string; key: string; title: string | null }>("SELECT kind, key, title_snapshot AS title FROM ref WHERE seq = ? ORDER BY rowid", r.last_seq)
+      .map((x) => ({ kind: x.kind as StoredRef["kind"], key: x.key, title: x.title }));
+    return {
+      seq: r.first_seq, msg_id: r.msg_id, rev: r.rev, kind: r.kind === "system" ? "system" : "say", thread_root: r.thread_root, root_seq: root,
+      author_id: r.author_id, author_kind: r.author_kind as AuthorKind, session_id: r.session_id, session_kind: r.session_kind as ChatSessionKind,
+      hop: r.hop, body: r.body, edited: r.rev > 1 && r.retracted === 0, retracted: r.retracted === 1, reply_count: r.reply_count,
+      last_reply_seq: r.last_reply_seq, refs, mentions: meta.mentions ?? [], hop_limited: meta.hop_limited === true,
+      created_at: r.created_at, updated_at: r.updated_at,
+    };
+  }
+
+  #append(a: Omit<NewMessage, "author_kind"> & { msg_id: string; rev: number }): number {
+    this.#run(
+      `INSERT INTO artifact (id, msg_id, rev, kind, author_id, session_id, session_kind, thread_root, body, body_sha256, meta_json, hop, cause_seq, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ulid(a.now), a.msg_id, a.rev, a.kind, a.author_id, a.session_id, a.session_kind, a.thread_root, a.body, a.body_sha256,
+      JSON.stringify(a.meta), a.hop, a.cause_seq, a.now,
+    );
+    const seq = this.#q<{ s: number }>("SELECT last_insert_rowid() AS s")[0]!.s;
+    this.#run("INSERT INTO index_outbox (seq) VALUES (?)", seq);
+    return seq;
+  }
+
+  #newMessage(a: NewMessage): { seq: number; msg_id: string } {
+    const msg_id = ulid(a.now);
+    const seq = this.#append({ ...a, msg_id, rev: 1 });
+    this.#run(
+      `INSERT INTO msg (msg_id, first_seq, last_seq, rev, kind, author_id, author_kind, session_id, session_kind, thread_root, hop, created_at, updated_at)
+       VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      msg_id, seq, seq, a.kind, a.author_id, a.author_kind, a.session_id, a.session_kind, a.thread_root, a.hop, a.now, a.now,
+    );
+    if (a.thread_root) this.#run("UPDATE msg SET reply_count = reply_count + 1, last_reply_seq = ? WHERE msg_id = ?", seq, a.thread_root);
+    return { seq, msg_id };
+  }
+
+  #system(body: string, thread_root: string | null, meta: Meta, now: number): { seq: number; msg_id: string } {
+    return this.#newMessage({
+      kind: "system", author_id: "hub", author_kind: "hub", session_id: null, session_kind: "hub", thread_root, body, body_sha256: "", meta, hop: 0,
+      cause_seq: null, now,
+    });
+  }
+
+  #storeRefs(seq: number, msg_id: string, rev: number, refs: StoredRef[]): void {
+    for (const r of refs) this.#run("INSERT OR IGNORE INTO ref (seq, msg_id, rev, kind, key, title_snapshot) VALUES (?, ?, ?, ?, ?, ?)", seq, msg_id, rev, r.kind, r.key, r.title);
+  }
+
+  #replay(identity_id: string, key: string | null): PostOk | null {
+    if (!key) return null;
+    const r = this.#q<{ result_json: string }>("SELECT result_json FROM idem WHERE identity_id = ? AND key = ?", identity_id, key)[0];
+    return r ? { ...(JSON.parse(r.result_json) as PostOk), replayed: true } : null;
+  }
+
+  #remember(identity_id: string, key: string | null, result: PostOk, now: number): void {
+    if (key) this.#run("INSERT OR IGNORE INTO idem (identity_id, key, result_json, created_at) VALUES (?, ?, ?, ?)", identity_id, key, JSON.stringify(result), now);
+  }
+
+  /** Spec 6.4: messages by others, not system, newer than `after` in the scope (the thread, or the top level). */
+  #stale(me: string, after: number, root: string | null): MsgView[] {
+    const scope = root ? "(thread_root = ? OR msg_id = ?)" : "thread_root IS NULL";
+    const ids = this.#q<{ msg_id: string }>(
+      `SELECT msg_id FROM artifact WHERE seq > ? AND author_id <> ? AND kind <> 'system' AND ${scope} GROUP BY msg_id ORDER BY MIN(seq) LIMIT 50`,
+      after, me, ...(root ? [root, root] : []),
+    );
+    return ids.map((x) => this.#view(this.#msg(x.msg_id)!));
+  }
+
+  #blocked(x: string, y: string, now: number): boolean {
+    const [a, b] = x < y ? [x, y] : [y, x];
+    return this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM pair_block WHERE a = ? AND b = ? AND until > ?", a, b, now)[0]!.n > 0;
+  }
+
+  #subscribe(root: string, identity_id: string, kind: "human" | "agent", via: "author" | "mention"): void {
+    this.#run(
+      `INSERT INTO thread_sub (thread_root, identity_id, kind, via) VALUES (?, ?, ?, ?)
+       ON CONFLICT (thread_root, identity_id) DO UPDATE SET via = CASE WHEN excluded.via = 'mention' THEN 'mention' ELSE thread_sub.via END`,
+      root, identity_id, kind, via,
+    );
+  }
+
+  #enqueue(identity_id: string, item: Omit<WakeItem, "key" | "conversation_id">, key: string): void {
+    const full: WakeItem = { ...item, key: `${this.#id}:${key}`, conversation_id: this.#id };
+    this.#run("INSERT OR IGNORE INTO inbox_outbox (key, identity_id, item_json) VALUES (?, ?, ?)", full.key, identity_id, JSON.stringify(full));
+  }
+
+  async head(tenant_id: string, conversation_id: string): Promise<number> {
+    this.#bind(tenant_id, conversation_id);
+    return this.#head();
+  }
+
+  async replay(tenant_id: string, conversation_id: string, identity_id: string, key: string): Promise<PostOk | null> {
+    this.#bind(tenant_id, conversation_id);
+    return this.#replay(identity_id, key);
+  }
+
+  async post(input: PostInput): Promise<PostOutcome> {
+    this.#bind(input.tenant_id, input.conversation_id);
+    const outcome = this.ctx.storage.transactionSync(() => this.#post(input));
+    await this.#drain();
+    return outcome;
+  }
+
+  #post(p: PostInput): PostOutcome {
+    const me = p.author;
+    const prior = this.#replay(me.id, p.idempotency_key);
+    if (prior) return prior;
+    let target: MsgRow | null = null;
+    if (p.reply_to !== null) {
+      target = this.#msg(p.reply_to);
+      if (!target || target.kind === "system") return { refused: "not_found" };
+    }
+    const root = target ? target.thread_root ?? target.msg_id : null;
+    if (me.kind === "agent" && p.policy === "mention_only") {
+      const mentioned = root !== null && this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM thread_sub WHERE thread_root = ? AND identity_id = ? AND via = 'mention'", root, me.id)[0]!.n > 0;
+      if (!mentioned) return { refused: "forbidden", detail: "this channel takes agent posts only as replies in threads that mention the agent" };
+    }
+    if (p.after !== null) {
+      const missed = this.#stale(me.id, p.after, root);
+      if (missed.length > 0) return { refused: "stale_view", head: this.#head(), missed };
+    }
+    const dup = this.#q<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM artifact WHERE author_id = ? AND body_sha256 = ? AND kind = 'say' AND created_at > ?", me.id, p.body_sha256, p.now - LIMITS.DUPLICATE_WINDOW_MS,
+    )[0]!.n;
+    if (dup > 0) return { refused: "duplicate" };
+    if (me.kind === "agent") {
+      const recent = this.#q<{ at: number }>("SELECT created_at AS at FROM artifact WHERE session_kind = 'agent_run' AND kind = 'say' AND created_at > ? ORDER BY created_at", p.now - 60_000)
+        .map((r) => r.at);
+      if (recent.length >= LIMITS.CONV_AGENT_PER_MIN) {
+        return { refused: "rate", retry_after_s: Math.max(1, Math.ceil((recent[recent.length - LIMITS.CONV_AGENT_PER_MIN]! + 60_000 - p.now) / 1000)) };
+      }
+    }
+    const scope = root ?? "top";
+    const state = this.#q<{ agent_run: number; gate_noted: number }>("SELECT agent_run, gate_noted FROM scope_state WHERE scope = ?", scope)[0] ?? { agent_run: 0, gate_noted: 0 };
+    if (gateRefuses(me.kind, state.agent_run)) {
+      if (state.gate_noted === 0) {
+        this.#system(SYSTEM_GATE, root, { gate: true }, p.now);
+        this.#run("INSERT INTO scope_state (scope, agent_run, gate_noted) VALUES (?, ?, 1) ON CONFLICT (scope) DO UPDATE SET gate_noted = 1", scope, state.agent_run);
+      }
+      return { refused: "needs_human" };
+    }
+
+    const hop = computeHop(me.kind, target ? target.hop : p.wake_hop);
+    const { seq, msg_id } = this.#newMessage({
+      kind: "say", author_id: me.id, author_kind: me.kind, session_id: me.session_id, session_kind: me.session_kind, thread_root: root,
+      body: p.body, body_sha256: p.body_sha256, meta: { mentions: p.mentions.map((m) => m.identity_id), hop_limited: !wakesAllowed(hop) },
+      hop, cause_seq: target ? target.last_seq : null, now: p.now,
+    });
+    this.#storeRefs(seq, msg_id, 1, p.refs);
+    const run = nextAgentRun(me.kind, state.agent_run);
+    this.#run(
+      `INSERT INTO scope_state (scope, agent_run, gate_noted) VALUES (?, ?, 0)
+       ON CONFLICT (scope) DO UPDATE SET agent_run = excluded.agent_run, gate_noted = CASE WHEN excluded.agent_run = 0 THEN 0 ELSE scope_state.gate_noted END`,
+      scope, run,
+    );
+    const thread = root ?? msg_id;
+    this.#subscribe(thread, me.id, me.kind, "author");
+    for (const m of p.mentions) if (m.identity_id !== me.id) this.#subscribe(thread, m.identity_id, m.kind, "mention");
+
+    let loop: { a: string; b: string } | null = null;
+    if (me.kind === "agent") {
+      const recent = this.#q<{ author_id: string; author_kind: string; created_at: number }>(
+        "SELECT author_id, author_kind, created_at FROM msg WHERE kind = 'say' AND created_at > ? ORDER BY first_seq DESC LIMIT 32", p.now - LIMITS.PAIR_WINDOW_MS,
+      ).reverse();
+      const trip = pairTrip(recent.map((r) => ({ author_id: r.author_id, author_kind: r.author_kind as AuthorKind, created_at: r.created_at })), p.now);
+      if (trip && !this.#blocked(trip.a, trip.b, p.now)) {
+        this.#run("INSERT INTO pair_block (a, b, until) VALUES (?, ?, ?) ON CONFLICT (a, b) DO UPDATE SET until = excluded.until", trip.a, trip.b, p.now + LIMITS.PAIR_BLOCK_MS);
+        const sys = this.#system(SYSTEM_LOOP, null, { loop: [trip.a, trip.b] }, p.now);
+        for (const agentId of [trip.a, trip.b]) {
+          const op = p.audience.operators[agentId];
+          if (op) {
+            this.#enqueue(op, { kind: "loop_tripped", seq: sys.seq, msg_id: sys.msg_id, thread_root: null, hop: 0, author_id: "hub", wake: false, created_at: p.now }, `loop:${sys.seq}:${op}`);
+          }
+        }
+        loop = trip;
+      }
+    }
+
+    // Spec 6.3: mentions and replies in subscribed threads; never the author; agents only where they may be woken.
+    const targets = new Map<string, { kind: "human" | "agent"; why: WakeKind }>();
+    if (root) {
+      for (const s of this.#q<{ identity_id: string; kind: string }>("SELECT identity_id, kind FROM thread_sub WHERE thread_root = ?", root)) {
+        targets.set(s.identity_id, { kind: s.kind === "agent" ? "agent" : "human", why: "reply" });
+      }
+    }
+    for (const m of p.mentions) targets.set(m.identity_id, { kind: m.kind, why: "mention" });
+    targets.delete(me.id);
+    const woke: string[] = [];
+    const suppressed: Suppressed[] = [];
+    for (const [id, t] of targets) {
+      let reason: Suppressed["reason"] | null = null;
+      if (t.kind === "agent") {
+        if (!p.audience.agent_members.includes(id)) reason = "not_member";
+        else if (!p.audience.agents_enabled || p.audience.muted_agents.includes(id)) reason = "muted";
+        else if (!wakesAllowed(hop)) reason = "hop_limit";
+        else if (me.kind === "agent" && this.#blocked(me.id, id, p.now)) reason = "pair_block";
+      }
+      if (reason) {
+        suppressed.push({ identity_id: id, reason });
+        continue;
+      }
+      this.#enqueue(id, { kind: t.why, seq, msg_id, thread_root: root, hop, author_id: me.id, wake: t.kind === "agent", created_at: p.now }, `${seq}:${id}`);
+      woke.push(id);
+    }
+
+    const result: PostOk = { refused: null, seq, msg_id, rev: 1, hop, head: this.#head(), woke, suppressed, loop_tripped: loop, replayed: false };
+    this.#remember(me.id, p.idempotency_key, result, p.now);
+    return result;
+  }
+
+  async version(input: VersionInput): Promise<PostOutcome> {
+    this.#bind(input.tenant_id, input.conversation_id);
+    const outcome = this.ctx.storage.transactionSync(() => this.#version(input));
+    await this.#drain();
+    return outcome;
+  }
+
+  /** Spec 4.4: a new artifact with rev + 1. Edits by the author only; retraction also by an agent's operator or an admin. */
+  #version(v: VersionInput): PostOutcome {
+    const me = v.actor;
+    const prior = this.#replay(me.id, v.idempotency_key);
+    if (prior) return prior;
+    const m = this.#msg(v.msg);
+    if (!m) return { refused: "not_found" };
+    if (m.kind === "system") return { refused: "forbidden", detail: "system messages have no versions" };
+    const retract = v.body === null;
+    const own = m.author_id === me.id;
+    const mayRetractAgent = retract && m.author_kind === "agent" && (v.operator_of.includes(m.author_id) || v.is_admin);
+    if (!own && !mayRetractAgent) {
+      return { refused: "forbidden", detail: retract ? "only the author, the agent's operator, or an admin may retract this" : "only the author may edit" };
+    }
+    if (m.retracted === 1) return { refused: "conflict", detail: "message is retracted" };
+    if (m.rev >= LIMITS.VERSIONS_MAX) return { refused: "edit_cap" };
+    if (!retract && v.after !== null) {
+      const missed = this.#stale(me.id, v.after, m.thread_root);
+      if (missed.length > 0) return { refused: "stale_view", head: this.#head(), missed };
+    }
+    const rev = m.rev + 1;
+    const seq = this.#append({
+      msg_id: m.msg_id, rev, kind: "say", author_id: me.id, session_id: me.session_id, session_kind: me.session_kind, thread_root: m.thread_root,
+      body: retract ? "" : v.body!, body_sha256: retract ? "" : v.body_sha256,
+      meta: retract ? { retracted: true } : { mentions: v.mentions.map((x) => x.identity_id), hop_limited: !wakesAllowed(m.hop) },
+      hop: m.hop, cause_seq: m.last_seq, now: v.now,
+    });
+    if (!retract) this.#storeRefs(seq, m.msg_id, rev, v.refs);
+    this.#run("UPDATE msg SET last_seq = ?, rev = ?, retracted = ?, updated_at = ? WHERE msg_id = ?", seq, rev, retract ? 1 : 0, v.now, m.msg_id);
+    const result: PostOk = { refused: null, seq, msg_id: m.msg_id, rev, hop: m.hop, head: this.#head(), woke: [], suppressed: [], loop_tripped: null, replayed: false };
+    this.#remember(me.id, v.idempotency_key, result, v.now);
+    return result;
+  }
+
+  async read(q: ReadQuery): Promise<ReadPage> {
+    this.#bind(q.tenant_id, q.conversation_id);
+    const head = this.#head();
+    let root: MsgRow | null = null;
+    if (q.thread !== null) {
+      root = this.#msg(q.thread);
+      if (root && root.thread_root) root = this.#msg(root.thread_root);
+      if (!root) return { head, found: false, root: null, messages: [], has_more: false };
+    }
+    const cond = [root ? "m.thread_root = ?" : "m.thread_root IS NULL"];
+    const args: SqlStorageValue[] = root ? [root.msg_id] : [];
+    // A top-level message changed when it was edited or got a reply.
+    const touched = root ? "m.last_seq" : "MAX(m.last_seq, COALESCE(m.last_reply_seq, 0))";
+    let order = "DESC";
+    if (q.after !== null) {
+      cond.push(`${touched} > ?`);
+      args.push(q.after);
+      order = "ASC";
+    }
+    if (q.before !== null) {
+      cond.push("m.first_seq < ?");
+      args.push(q.before);
+    }
+    const rows = this.#q<MsgRow>(`${MSG_SELECT} WHERE ${cond.join(" AND ")} ORDER BY m.first_seq ${order} LIMIT ?`, ...args, q.limit + 1);
+    const has_more = rows.length > q.limit;
+    const page = rows.slice(0, q.limit);
+    if (order === "DESC") page.reverse();
+    return { head, found: true, root: root ? this.#view(root) : null, messages: page.map((r) => this.#view(r)), has_more };
+  }
+
+  async getMessage(tenant_id: string, conversation_id: string, ref: string): Promise<MsgView | null> {
+    this.#bind(tenant_id, conversation_id);
+    const m = this.#msg(ref);
+    return m ? this.#view(m) : null;
+  }
+
+  async history(tenant_id: string, conversation_id: string, ref: string): Promise<{ msg: MsgView; versions: Version[] } | null> {
+    this.#bind(tenant_id, conversation_id);
+    const m = this.#msg(ref);
+    if (!m) return null;
+    const versions = this.#q<{ seq: number; rev: number; body: string; meta_json: string; author_id: string; session_id: string | null; session_kind: string; created_at: number }>(
+      "SELECT seq, rev, body, meta_json, author_id, session_id, session_kind, created_at FROM artifact WHERE msg_id = ? ORDER BY rev", m.msg_id,
+    ).map((a) => ({
+      seq: a.seq, rev: a.rev, body: a.body, retracted: (JSON.parse(a.meta_json) as Meta).retracted === true, author_id: a.author_id,
+      session_id: a.session_id, session_kind: a.session_kind as ChatSessionKind, created_at: a.created_at,
+    }));
+    return { msg: this.#view(m), versions };
+  }
+
+  /** Extractive material for catch-up (spec 7.4 tiers 2, 4, 5, 6), for one reader since one cursor. */
+  async digest(q: DigestQuery): Promise<Digest> {
+    this.#bind(q.tenant_id, q.conversation_id);
+    const since = q.since;
+    const counts = this.#q<{ n: number; agents: number }>(
+      "SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN author_kind = 'agent' THEN 1 ELSE 0 END), 0) AS agents FROM msg WHERE kind = 'say' AND first_seq > ?", since,
+    )[0]!;
+    // Identity ids are ULIDs, so a quoted id inside meta_json is an exact match.
+    const mentions_me = this.#q<MsgRow>(
+      `${MSG_SELECT} WHERE m.kind = 'say' AND m.first_seq > ? AND m.author_id <> ? AND m.retracted = 0 AND a.meta_json LIKE ? ORDER BY m.first_seq LIMIT ?`,
+      since, q.me, `%"${q.me}"%`, q.max_items,
+    ).map((r) => this.#view(r));
+    const my_threads = this.#q<{ thread_root: string; n: number; newest: number }>(
+      `SELECT thread_root, COUNT(*) AS n, MAX(first_seq) AS newest FROM msg WHERE kind = 'say' AND first_seq > ? AND author_id <> ?
+         AND thread_root IN (SELECT thread_root FROM thread_sub WHERE identity_id = ?) GROUP BY thread_root ORDER BY newest DESC LIMIT ?`,
+      since, q.me, q.me, q.max_items,
+    ).map((t) => ({ root: this.#view(this.#msg(t.thread_root)!), replies: t.n, newest: this.#view(this.#msg(String(t.newest))!) }));
+    const threads = this.#q<{ thread_root: string; n: number }>(
+      "SELECT thread_root, COUNT(*) AS n FROM msg WHERE kind = 'say' AND first_seq > ? AND thread_root IS NOT NULL GROUP BY thread_root ORDER BY n DESC, thread_root LIMIT 5", since,
+    ).map((t) => ({ root: this.#view(this.#msg(t.thread_root)!), replies: t.n }));
+    const authors = this.#q<{ author_id: string }>("SELECT author_id FROM msg WHERE kind = 'say' AND first_seq > ? GROUP BY author_id ORDER BY MIN(first_seq)", since)
+      .map((r) => r.author_id);
+    const refs = this.#q<{ kind: string; key: string; title: string | null }>(
+      "SELECT kind, key, MAX(title_snapshot) AS title FROM ref WHERE seq > ? GROUP BY kind, key ORDER BY MIN(seq) LIMIT 20", since,
+    ).map((r) => ({ kind: r.kind as StoredRef["kind"], key: r.key, title: r.title }));
+    return { head: this.#head(), since, new_messages: counts.n, agent_messages: counts.agents, mentions_me, my_threads, threads, authors, refs };
+  }
+
+  async alarm(): Promise<void> {
+    const b = storedBinding(this.ctx.storage.sql);
+    if (!b) return;
+    this.#tenant = b.tenant_id;
+    this.#id = b.owner_id;
+    await this.#drain();
+  }
+
+  /** Deliver queued inbox items and index rows now; anything that fails stays queued for the alarm (spec 9.2, 9.3). */
+  async #drain(): Promise<void> {
+    const pending = this.#q<{ key: string; identity_id: string; item_json: string }>("SELECT key, identity_id, item_json FROM inbox_outbox ORDER BY rowid LIMIT 200");
+    const byIdentity = new Map<string, Array<{ key: string; item: WakeItem }>>();
+    for (const p of pending) {
+      const list = byIdentity.get(p.identity_id) ?? [];
+      list.push({ key: p.key, item: JSON.parse(p.item_json) as WakeItem });
+      byIdentity.set(p.identity_id, list);
+    }
+    for (const [identity, list] of byIdentity) {
+      try {
+        await inboxStub(this.env, this.#tenant, identity).deliver(this.#tenant, identity, list.map((x) => x.item));
+        for (const x of list) this.#run("DELETE FROM inbox_outbox WHERE key = ?", x.key);
+      } catch (e) {
+        console.log("inbox delivery failed", e instanceof Error ? e.name : "error");
+        for (const x of list) this.#run("UPDATE inbox_outbox SET attempts = attempts + 1 WHERE key = ?", x.key);
+      }
+    }
+    await this.#flushIndex();
+    const left = this.#q<{ n: number }>("SELECT (SELECT COUNT(*) FROM inbox_outbox) + (SELECT COUNT(*) FROM index_outbox) AS n")[0]!.n;
+    if (left > 0 && (await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + 5_000);
+  }
+
+  /** Idempotent upserts keyed by (conversation_id, seq); a new version replaces the message's refs in msg_ref. */
+  async #flushIndex(): Promise<void> {
+    const seqs = this.#q<{ seq: number }>("SELECT seq FROM index_outbox ORDER BY seq LIMIT 50").map((r) => r.seq);
+    if (seqs.length === 0) return;
+    const db = this.env.HUB_DB;
+    const stmts: D1PreparedStatement[] = [];
+    for (const seq of seqs) {
+      const a = this.#q<ArtifactRow>("SELECT seq, msg_id, rev, kind, author_id, session_id, session_kind, thread_root, body, meta_json, hop, created_at FROM artifact WHERE seq = ?", seq)[0];
+      if (!a) continue;
+      const retracted = (JSON.parse(a.meta_json) as Meta).retracted === true;
+      stmts.push(db.prepare(
+        `INSERT OR IGNORE INTO msg_index (tenant_id, conversation_id, msg_id, seq, rev, kind, author_id, session_id, thread_root, hop, title, state, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      ).bind(this.#tenant, this.#id, a.msg_id, a.seq, a.rev, a.kind, a.author_id, a.session_id, a.thread_root, a.hop, retracted ? "retracted" : "live", a.created_at));
+      if (a.rev > 1) stmts.push(db.prepare("DELETE FROM msg_ref WHERE conversation_id = ? AND msg_id = ? AND rev < ?").bind(this.#id, a.msg_id, a.rev));
+      for (const r of this.#q<{ kind: string; key: string }>("SELECT kind, key FROM ref WHERE seq = ?", seq)) {
+        stmts.push(db.prepare(
+          `INSERT OR IGNORE INTO msg_ref (tenant_id, target_kind, target_key, conversation_id, msg_id, rev, seq, msg_kind, author_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).bind(this.#tenant, r.kind, r.key, this.#id, a.msg_id, a.rev, a.seq, a.kind, a.author_id, a.created_at));
+      }
+    }
+    try {
+      if (stmts.length > 0) await db.batch(stmts);
+      for (const s of seqs) this.#run("DELETE FROM index_outbox WHERE seq = ?", s);
+    } catch (e) {
+      console.log("index flush failed", e instanceof Error ? e.name : "error");
+      for (const s of seqs) this.#run("UPDATE index_outbox SET attempts = attempts + 1 WHERE seq = ?", s);
+    }
   }
 }
