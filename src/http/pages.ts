@@ -2,12 +2,15 @@ import type { Env } from "../env";
 import { esc, htmlResponse, page } from "../html";
 import { classifyHost } from "../tenant";
 import { acceptInvite, findInviteByToken, inviteIsOpen, setInviteAcceptedSession } from "../db/invites";
-import { getTenantById } from "../db/tenants";
-import { createBrowserSession } from "../db/sessions";
-import { sessionCookie } from "../auth/cookie";
+import { getTenantById, listTenants } from "../db/tenants";
+import { createBrowserSession, listSessions } from "../db/sessions";
+import { clearSessionCookie, sessionCookie } from "../auth/cookie";
 import { buildContext } from "../auth/context";
 import { recordEvent } from "../db/events";
-import { listSessions } from "../db/sessions";
+import { listMembershipsForIdentity } from "../db/memberships";
+import { listNamespaces } from "../db/namespaces";
+import { listProjects } from "../db/projects";
+import type { State } from "../db/types";
 
 export function neutralInvitePage(): string {
   return page("Invite", `<h1>This invite link is not valid</h1><p>It may have expired, been used already, or been revoked. Ask the person who invited you for a new link.</p>`);
@@ -96,4 +99,42 @@ export async function sessionsPage(request: Request, env: Env): Promise<Response
 <table><thead><tr><th>Id</th><th>Kind</th><th>Started</th><th>Last seen</th><th></th></tr></thead><tbody>${tr}</tbody></table>
 <form method="post" action="/api/session.end"><button type="submit">Sign out</button></form>`;
   return htmlResponse(page("Sessions", body));
+}
+
+function listSection(title: string, items: string[]): string {
+  return `<h2>${esc(title)}</h2>` + (items.length ? `<ul>${items.map((i) => `<li>${i}</li>`).join("")}</ul>` : `<p>None.</p>`);
+}
+
+async function tenantListing(env: Env, tenant_id: string, state: State): Promise<string> {
+  const namespaces = await listNamespaces(env.HUB_DB, tenant_id, state);
+  const all = new Map([...namespaces, ...(await listNamespaces(env.HUB_DB, tenant_id, state === "active" ? "archived" : "active"))].map((n) => [n.id, n]));
+  const projects = await listProjects(env.HUB_DB, tenant_id, state);
+  const paths = projects.map((p) => (p.namespace_id ? `${all.get(p.namespace_id)?.slug ?? "?"}/${p.slug}` : p.slug)).sort();
+  return listSection("Namespaces", namespaces.map((n) => esc(n.slug))) + listSection("Projects", paths.map((p) => `<code>${esc(p)}</code>`));
+}
+
+export async function homePage(request: Request, env: Env): Promise<Response> {
+  const ctx = await buildContext(request, env);
+  const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
+  if (ctx.host.kind === "apex") {
+    if (!ctx.identity) return htmlResponse(page("Pimwell", `<h1>Pimwell</h1><p>Sign in with an invite link.</p>`), 200, extra);
+    const memberships = await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id);
+    let body = `<h1>Pimwell</h1><p>${esc(ctx.identity.display_name)} · <a href="/me/sessions">sessions</a></p>`;
+    body += listSection("Your tenants", memberships.map((m) => `<a href="https://${esc(m.tenant.slug)}.${esc(env.HUB_DOMAIN)}/">${esc(m.tenant.display_name)}</a> (${esc(m.membership.role)})`));
+    if (ctx.identity.is_root === 1) {
+      const tenants = await listTenants(env.HUB_DB, "active");
+      body += listSection("All tenants", tenants.map((t) => `<a href="https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/">${esc(t.display_name)}</a>`));
+    }
+    return htmlResponse(page("Pimwell", body), 200, extra);
+  }
+  if (!ctx.tenant || !ctx.role) return notFoundPage();
+  const body = `<h1>${esc(ctx.tenant.display_name)}</h1><p>You are ${esc(ctx.role)} · <a href="/archive">archive</a> · <a href="https://${esc(env.HUB_DOMAIN)}/">hub</a></p>` + (await tenantListing(env, ctx.tenant.id, "active"));
+  return htmlResponse(page(ctx.tenant.display_name, body), 200, extra);
+}
+
+export async function archivePage(request: Request, env: Env): Promise<Response> {
+  const ctx = await buildContext(request, env);
+  if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role) return notFoundPage();
+  const body = `<h1>${esc(ctx.tenant.display_name)} archive</h1><p><a href="/">back</a></p>` + (await tenantListing(env, ctx.tenant.id, "archived"));
+  return htmlResponse(page("Archive", body));
 }
