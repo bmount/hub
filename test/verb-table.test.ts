@@ -3,20 +3,21 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { listVerbs } from "../src/verbs/table";
 import { registerAllVerbs } from "../src/verbs/index";
 import { rank } from "../src/auth/context";
+import { mcpViolations } from "../src/mcp/policy";
 import type { Role } from "../src/db/types";
 import { apiPost, bearer, seedAgent, seedHuman, seedTenant } from "./helpers";
 
 beforeAll(() => registerAllVerbs());
 
-type Decl = { scope: string; minRole: string; fresh: number | null; longLived?: true; humanOnly?: true };
+type Decl = { scope: string; minRole: string; fresh: number | null; longLived?: true; humanOnly?: true; mcp?: "read" | "write" };
 const T = (scope: string, minRole: string, fresh: number | null, flags: Partial<Decl> = {}): Decl => ({ scope, minRole, fresh, ...flags });
 
 const TABLE: Record<string, Decl> = {
   bootstrap: T("hub", "public", null),
-  whoami: T("public", "public", null, { longLived: true }),
+  whoami: T("public", "public", null, { longLived: true, mcp: "read" }),
   "tenant.create": T("hub", "root", 60), "tenant.archive": T("hub", "root", 60), "tenant.unarchive": T("hub", "root", 60), "tenant.list": T("hub", "root", null),
   "namespace.create": T("tenant", "admin", 60), "namespace.archive": T("tenant", "admin", 60), "namespace.unarchive": T("tenant", "admin", 60),
-  "project.create": T("tenant", "member", null), "project.archive": T("tenant", "admin", 60), "project.unarchive": T("tenant", "admin", 60), "project.list": T("tenant", "reader", null),
+  "project.create": T("tenant", "member", null), "project.archive": T("tenant", "admin", 60), "project.unarchive": T("tenant", "admin", 60), "project.list": T("tenant", "reader", null, { mcp: "read" }),
   "invite.create": T("tenant", "admin", 60), "invite.revoke": T("tenant", "admin", 60), "invite.list": T("tenant", "admin", null),
   "session.list": T("public", "public", null), "session.revoke": T("public", "public", null), "session.end": T("public", "public", null),
   "session.start": T("tenant", "reader", null, { longLived: true }),
@@ -25,6 +26,7 @@ const TABLE: Record<string, Decl> = {
   "agent.create": T("public", "public", 60, { humanOnly: true }), "agent.archive": T("public", "public", 60, { humanOnly: true }),
   "token.create": T("public", "public", 60, { humanOnly: true }), "token.revoke": T("public", "public", 60, { humanOnly: true }),
   "token.list": T("public", "public", null, { humanOnly: true }),
+  "event.list": T("tenant", "member", null, { mcp: "read" }),
 };
 
 const verbs = () => listVerbs().filter((v) => !v.name.startsWith("test."));
@@ -38,10 +40,15 @@ describe("verb table", () => {
       const got: Decl = { scope: v.scope, minRole: v.minRole, fresh: v.freshProofMinutes };
       if (v.longLivedToken) got.longLived = true;
       if (v.humanOnly) got.humanOnly = true;
+      if (v.mcp) got.mcp = v.mcp.scope;
       expect({ name: v.name, ...got }).toEqual({ name: v.name, ...d });
       if (v.kind === "query") expect(v.freshProofMinutes).toBeNull();
     }
   });
+  it("keeps every MCP-exposed verb inside MCP spec 8.3", () => {
+    for (const v of verbs()) expect({ verb: v.name, violations: mcpViolations(v) }).toEqual({ verb: v.name, violations: [] });
+  });
+
 
   it("demands fresh proof from a stale browser session on every verb that declares it", async () => {
     await seedTenant("acme");

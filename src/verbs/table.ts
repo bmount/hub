@@ -3,6 +3,17 @@ import type { Role } from "../db/types";
 
 export type VerbScope = "public" | "hub" | "tenant";
 
+/** JSON Schema (draft 2020-12) for an MCP tool's arguments; `verb.parse` stays the validator of record. */
+export type McpInputSchema = {
+  type: "object";
+  properties: Record<string, Record<string, unknown>>;
+  required?: string[];
+  additionalProperties: false;
+};
+
+/** MCP exposure (MCP spec 8.2). Opt-in per verb; the table test enforces MCP spec 8.3 on every verb that sets it. */
+export type McpDecl = { scope: "read" | "write"; destructive: boolean; title: string; input: McpInputSchema };
+
 export type VerbDef<P, R> = {
   name: string;
   kind: "query" | "command";
@@ -16,6 +27,8 @@ export type VerbDef<P, R> = {
   humanOnly?: boolean;
   /** For form posts: render this HTML body instead of redirecting (used to show a new token once). */
   renderForm?: (result: R) => string;
+  /** Exposed as an MCP tool to assistant connections holding this scope. */
+  mcp?: McpDecl;
   parse: (input: Record<string, unknown>) => P;
   run: (ctx: Ctx, params: P) => Promise<R>;
 };

@@ -7,6 +7,7 @@ import { getSessionByToken, touchSession } from "../db/sessions";
 import { readSessionToken } from "./cookie";
 import { API_TOKEN_PREFIX, getApiTokenByToken } from "../db/apiTokens";
 import { agentCredentialOk } from "./agent";
+import type { LiveGrant } from "../db/oauthGrants";
 import type { ApiToken, Identity, Membership, Role, Session, Tenant } from "../db/types";
 
 export type Ctx = {
@@ -21,9 +22,13 @@ export type Ctx = {
   session: Session | null;
   apiToken: ApiToken | null;
   role: Role | null;
-  authKind: "cookie" | "bearer" | "token" | null;
+  authKind: "cookie" | "bearer" | "token" | "oauth" | null;
   staleCookie: boolean;
+  /** Set only on /mcp requests: the assistant connection this request runs under. */
+  oauth?: OAuthCtx;
 };
+
+export type OAuthCtx = { grant_id: string; client_id: string; client_name: string; scopes: string[] };
 
 const RANK: Record<Role, number> = { root: 4, admin: 3, member: 2, reader: 1 };
 
@@ -38,9 +43,19 @@ export function roleFor(identity: Identity | null, membership: Membership | null
   return null;
 }
 
-/** Humans: browser sessions only. Agents: pinned to one tenant and alive only while agent, parent token, and operator are (spec 6.5, 10). */
-export async function credentialUsable(db: D1Database, identity: Identity, session: Session | null, apiToken: ApiToken | null, tenant: Tenant | null): Promise<boolean> {
+/**
+ * Humans: browser sessions only, except on /mcp (`via: "mcp"`), where only an `oauth` session pinned to this
+ * tenant counts (MCP spec 5.3). Agents: pinned to one tenant and alive only while agent, parent token, and
+ * operator are (spec 6.5, 10); agents never use /mcp in v1.
+ */
+export async function credentialUsable(
+  db: D1Database, identity: Identity, session: Session | null, apiToken: ApiToken | null, tenant: Tenant | null, via: "http" | "mcp" = "http",
+): Promise<boolean> {
   if (identity.state !== "active") return false;
+  if (via === "mcp" || (session !== null && session.kind === "oauth")) {
+    return via === "mcp" && identity.kind === "human" && apiToken === null && session !== null && session.kind === "oauth"
+      && tenant !== null && session.tenant_id === tenant.id;
+  }
   if (identity.kind === "human") return apiToken === null && session !== null && session.kind === "browser";
   if (session && session.parent_token_id === null) return false;
   if (session && session.kind !== "agent_run") return false;
@@ -105,4 +120,16 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
   }
 
   return { env, db, now, ip, waitUntil, host, tenant, identity, session, apiToken, role, authKind, staleCookie };
+}
+
+/** The context for one /mcp request, built from a grant that passed the per-request check (MCP spec 5.3, 8.5). */
+export function oauthContext(
+  env: Env, live: LiveGrant, scopes: string[], opts: { now: number; ip: string; waitUntil?: (p: Promise<unknown>) => void },
+): Ctx {
+  return {
+    env, db: env.HUB_DB, now: opts.now, ip: opts.ip, waitUntil: opts.waitUntil,
+    host: { kind: "tenant", slug: live.tenant.slug }, tenant: live.tenant, identity: live.identity, session: live.session, apiToken: null,
+    role: roleFor(live.identity, live.membership), authKind: "oauth", staleCookie: false,
+    oauth: { grant_id: live.grant.id, client_id: live.grant.client_id, client_name: live.grant.client_name, scopes },
+  };
 }

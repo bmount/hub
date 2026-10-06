@@ -10,6 +10,7 @@ import { inviteCreate, inviteList, inviteRevoke } from "./invite";
 import { agentArchive, agentCreate } from "./agent";
 import { tokenCreate, tokenList, tokenRevoke } from "./token";
 import { consentList, consentRevoke } from "./consent";
+import { eventList } from "./event";
 
 export function registerAllVerbs(): void {
   registerVerbs([
@@ -23,5 +24,6 @@ export function registerAllVerbs(): void {
     consentList, consentRevoke,
     agentCreate, agentArchive,
     tokenCreate, tokenRevoke, tokenList,
+    eventList,
   ]);
 }

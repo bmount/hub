@@ -9,10 +9,13 @@ export const whoami = defineVerb({
   freshProofMinutes: null,
   longLivedToken: true,
   summary: "Describe the caller: identity, session or long-lived token, role on this tenant, and memberships.",
+  mcp: { scope: "read", destructive: false, title: "Who am I", input: { type: "object", properties: {}, additionalProperties: false } },
   parse: () => ({}),
   run: async (ctx) => {
     if (!ctx.identity) return { identity: null };
-    const memberships = await listMembershipsForIdentity(ctx.db, ctx.identity.id);
+    const all = await listMembershipsForIdentity(ctx.db, ctx.identity.id);
+    // An assistant connection is bound to one tenant; it does not learn the human's other tenants.
+    const memberships = ctx.oauth ? all.filter((m) => m.tenant.id === ctx.tenant?.id) : all;
     const s = ctx.session;
     return {
       identity: {
@@ -23,6 +26,7 @@ export const whoami = defineVerb({
       token: ctx.apiToken ? { id: ctx.apiToken.id, name: ctx.apiToken.name } : null,
       tenant: ctx.tenant && ctx.role !== null ? { id: ctx.tenant.id, slug: ctx.tenant.slug, role: ctx.role } : null,
       memberships: memberships.map((m) => ({ slug: m.tenant.slug, display_name: m.tenant.display_name, role: m.membership.role })),
+      ...(ctx.oauth ? { connection: { client: ctx.oauth.client_name, scopes: ctx.oauth.scopes } } : {}),
     };
   },
 });

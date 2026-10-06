@@ -1,5 +1,6 @@
 import type { Env } from "../env";
-import { buildContext, rank, type Ctx } from "../auth/context";
+import { buildContext, type Ctx } from "../auth/context";
+import { checkAccess, checkScope } from "../verbs/dispatch";
 import { clearSessionCookie } from "../auth/cookie";
 import { HubError } from "../errors";
 import { htmlResponse, page } from "../html";
@@ -45,8 +46,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     ctx = await buildContext(request, env, Date.now(), waitUntil, { longLivedToken: true });
 
     if (ctx.host.kind === "unknown") throw new HubError(404, "not_found");
-    if (verb.scope === "tenant" && !ctx.tenant) throw new HubError(404, "not_found");
-    if (verb.scope === "hub" && ctx.host.kind !== "apex") throw new HubError(404, "not_found");
+    checkScope(ctx, verb);
 
     if (ctx.authKind === "cookie") {
       const origin = request.headers.get("origin");
@@ -54,22 +54,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
       if (origin !== expected) throw new HubError(403, "bad_origin");
     }
 
-    // A long-lived pmw_ token may only start a run or ask whoami (spec 6.5).
-    if (ctx.authKind === "token" && verb.longLivedToken !== true) {
-      throw new HubError(403, "forbidden", "a long-lived token may only call session.start and whoami");
-    }
-
-    if (verb.minRole !== "public") {
-      if (verb.scope === "tenant" && ctx.role === null) throw new HubError(404, "not_found");
-      if (!ctx.identity) throw new HubError(401, "unauthorized");
-      const effective = verb.scope === "hub" ? (ctx.identity.is_root === 1 ? "root" : null) : ctx.role;
-      if (rank(effective) < rank(verb.minRole)) throw new HubError(403, "forbidden");
-    }
-    if (verb.humanOnly === true && ctx.identity && ctx.identity.kind !== "human") throw new HubError(403, "forbidden", "agents may not call this verb");
-    // Fresh proof is a property of browser sessions, by cookie or bearer; agent runs and long-lived tokens are exempt (spec 6.7).
-    if (verb.freshProofMinutes !== null && ctx.session && ctx.session.kind === "browser") {
-      if (ctx.now - ctx.session.last_proof_at > verb.freshProofMinutes * 60_000) throw new HubError(403, "reproof_required");
-    }
+    checkAccess(ctx, verb);
 
     const params = verb.parse(body.input);
     const result = await verb.run(ctx, params);

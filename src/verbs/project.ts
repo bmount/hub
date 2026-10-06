@@ -60,6 +60,14 @@ export const projectUnarchive = defineVerb({
 
 export const projectList = defineVerb({
   name: "project.list", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null, summary: "List namespaces and projects by state.",
+  mcp: {
+    scope: "read", destructive: false, title: "Projects",
+    input: {
+      type: "object",
+      properties: { state: { type: "string", enum: ["active", "archived"], description: "Which projects to list, default active." } },
+      additionalProperties: false,
+    },
+  },
   parse: (i) => ({ state: stateParam(i) }),
   run: async (ctx, p) => {
     const all = new Map<string, Namespace>();

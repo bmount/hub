@@ -13,6 +13,21 @@ export async function recordEvent(
   return row;
 }
 
+/**
+ * One page of a tenant's events, newest first. Event ids are ULIDs minted from the same clock as
+ * `created_at`, so id order is time order and the last id on a page is the cursor for the next.
+ */
+export async function listEventsPage(
+  db: D1Database, tenant_id: string, opts: { limit: number; before: string | null; session_id: string | null },
+): Promise<EventRow[]> {
+  const where = ["tenant_id = ?"];
+  const binds: Array<string | number> = [tenant_id];
+  if (opts.before) { where.push("id < ?"); binds.push(opts.before); }
+  if (opts.session_id) { where.push("session_id = ?"); binds.push(opts.session_id); }
+  const r = await db.prepare(`SELECT * FROM event WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`).bind(...binds, opts.limit).all<EventRow>();
+  return r.results;
+}
+
 export async function listEvents(db: D1Database, tenant_id: string, limit: number): Promise<EventRow[]> {
   const r = await db.prepare("SELECT * FROM event WHERE tenant_id = ? ORDER BY created_at DESC, id DESC LIMIT ?").bind(tenant_id, limit).all<EventRow>();
   return r.results;
