@@ -105,3 +105,65 @@ describe("invite acceptance page", () => {
     expect((await getIdentityByEmail(env.HUB_DB, "r@example.com"))?.is_root).toBe(1);
   });
 });
+
+async function sessionCount(identity_id: string): Promise<number> {
+  return (await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM session WHERE identity_id = ?").bind(identity_id).first<{ n: number }>())!.n;
+}
+
+async function inviteFor(email: string) {
+  const t = await seedTenant("acme");
+  const admin = await seedHuman("a@example.com", { memberships: [{ tenant_id: t.id, role: "admin" }] });
+  const res = await apiPost("acme.pimwell.test", "invite.create", { email, role: "member" }, bearer(admin.token));
+  return { t, admin, url: ((await res.json()) as any).result.invite_url as string };
+}
+
+describe("invites for existing identities", () => {
+  it("anonymous accept adds membership but mints no session or cookie", async () => {
+    const victim = await seedHuman("victim@example.com");
+    const { t, url } = await inviteFor("victim@example.com");
+    const post = await SELF.fetch(url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
+    expect(post.status).toBe(200);
+    expect(await post.text()).toContain("You have been added");
+    expect(post.headers.get("set-cookie")).toBeNull();
+    expect((await getMembership(env.HUB_DB, victim.identity.id, t.id))?.role).toBe("member");
+    expect(await sessionCount(victim.identity.id)).toBe(1);
+  });
+
+  it("the identity's own session gets a redirect and no new cookie", async () => {
+    const victim = await seedHuman("victim@example.com");
+    const { t, url } = await inviteFor("victim@example.com");
+    const post = await SELF.fetch(url, { method: "POST", redirect: "manual", headers: cookieHeaders(victim.token, "pimwell.test") });
+    expect(post.status).toBe(303);
+    expect(post.headers.get("location")).toBe("https://acme.pimwell.test/");
+    expect(post.headers.get("set-cookie")).toBeNull();
+    expect((await getMembership(env.HUB_DB, victim.identity.id, t.id))?.role).toBe("member");
+  });
+
+  it("a root invite for an existing identity promotes without a session", async () => {
+    const existing = await seedHuman("r@example.com");
+    const res = await apiPost("pimwell.test", "bootstrap", { token: "test-bootstrap-token", email: "r@example.com", display_name: "Root" });
+    const url = ((await res.json()) as any).result.invite_url as string;
+    const post = await SELF.fetch(url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
+    expect(post.status).toBe(200);
+    expect(await post.text()).toContain("You have been added");
+    expect(post.headers.get("set-cookie")).toBeNull();
+    expect((await getIdentityByEmail(env.HUB_DB, "r@example.com"))?.is_root).toBe(1);
+    expect(await sessionCount(existing.identity.id)).toBe(1);
+  });
+});
+
+describe("invite policy", () => {
+  it("only roots may invite admins", async () => {
+    const t = await seedTenant("acme");
+    const admin = await seedHuman("a@example.com", { memberships: [{ tenant_id: t.id, role: "admin" }] });
+    expect((await apiPost("acme.pimwell.test", "invite.create", { email: "x@example.com", role: "admin" }, bearer(admin.token))).status).toBe(403);
+    const root = await seedHuman("r@example.com", { is_root: true });
+    expect((await apiPost("acme.pimwell.test", "invite.create", { email: "x@example.com", role: "admin" }, bearer(root.token))).status).toBe(200);
+  });
+
+  it("revoking an accepted invite is a conflict", async () => {
+    const { admin, invite_id, url } = await makeInvite();
+    await SELF.fetch(url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
+    expect((await apiPost("acme.pimwell.test", "invite.revoke", { invite_id }, bearer(admin.token))).status).toBe(409);
+  });
+});

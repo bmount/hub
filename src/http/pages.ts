@@ -5,6 +5,7 @@ import { acceptInvite, findInviteByToken, inviteIsOpen, setInviteAcceptedSession
 import { getTenantById } from "../db/tenants";
 import { createBrowserSession } from "../db/sessions";
 import { sessionCookie } from "../auth/cookie";
+import { buildContext } from "../auth/context";
 import { recordEvent } from "../db/events";
 
 export function neutralInvitePage(): string {
@@ -49,16 +50,30 @@ export async function acceptInvitePage(request: Request, env: Env): Promise<Resp
   }
   const accepted = await acceptInvite(env.HUB_DB, invite, now);
   if (!accepted) return htmlResponse(neutralInvitePage());
+  let tenantRow: Awaited<ReturnType<typeof getTenantById>> = null;
+  if (invite.tenant_id) tenantRow = await getTenantById(env.HUB_DB, invite.tenant_id);
+  const location = tenantRow ? `https://${tenantRow.slug}.${env.HUB_DOMAIN}/` : `https://${env.HUB_DOMAIN}/`;
+
+  if (!accepted.created) {
+    // Never mint a session for a pre-existing identity.
+    const ctx = await buildContext(request, env, now);
+    const sameIdentity = ctx.identity !== null && ctx.identity.id === accepted.identity.id;
+    const sid = sameIdentity ? ctx.session?.id ?? null : null;
+    if (sid) await setInviteAcceptedSession(env.HUB_DB, invite.id, sid);
+    await recordEvent(env.HUB_DB, {
+      tenant_id: invite.tenant_id, identity_id: accepted.identity.id, session_id: sid, kind: "invite.accept", target_kind: "invite", target_id: invite.id,
+      summary: `${accepted.identity.email} accepted invite as ${invite.role}`,
+    }, now);
+    if (sameIdentity) return new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
+    const where = tenantRow ? esc(tenantRow.display_name) : "the hub";
+    return htmlResponse(page("Added", `<h1>You have been added</h1><p>Your account <strong>${esc(accepted.identity.email)}</strong> now has access to <strong>${where}</strong>. Sign in with your existing session to continue.</p>`));
+  }
+
   const { session, token: sessionToken } = await createBrowserSession(env.HUB_DB, accepted.identity.id, now);
   await setInviteAcceptedSession(env.HUB_DB, invite.id, session.id);
   await recordEvent(env.HUB_DB, {
     tenant_id: invite.tenant_id, identity_id: accepted.identity.id, session_id: session.id, kind: "invite.accept", target_kind: "invite", target_id: invite.id,
     summary: `${accepted.identity.email} accepted invite as ${invite.role}`,
   }, now);
-  let location = `https://${env.HUB_DOMAIN}/`;
-  if (invite.tenant_id) {
-    const tenant = await getTenantById(env.HUB_DB, invite.tenant_id);
-    location = `https://${tenant!.slug}.${env.HUB_DOMAIN}/`;
-  }
   return new Response(null, { status: 303, headers: { location, "set-cookie": sessionCookie(sessionToken, env.HUB_DOMAIN), "cache-control": "no-store" } });
 }
