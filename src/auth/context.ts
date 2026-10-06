@@ -12,6 +12,7 @@ export type Ctx = {
   db: D1Database;
   now: number;
   ip: string;
+  waitUntil?: (p: Promise<unknown>) => void;
   host: HostKind;
   tenant: Tenant | null;
   identity: Identity | null;
@@ -34,7 +35,7 @@ export function roleFor(identity: Identity | null, membership: Membership | null
   return null;
 }
 
-export async function buildContext(request: Request, env: Env, now: number = Date.now()): Promise<Ctx> {
+export async function buildContext(request: Request, env: Env, now: number = Date.now(), waitUntil?: (p: Promise<unknown>) => void): Promise<Ctx> {
   const db = env.HUB_DB;
   const host = classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN);
 
@@ -82,5 +83,5 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
     role = "root";
   }
 
-  return { env, db, now, ip, host, tenant, identity, session, role, authKind, staleCookie };
+  return { env, db, now, ip, waitUntil, host, tenant, identity, session, role, authKind, staleCookie };
 }

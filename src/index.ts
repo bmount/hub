@@ -10,7 +10,7 @@ registerAllVerbs();
 const app = new Hono<{ Bindings: Env }>();
 
 app.get("/healthz", (c) => c.text("ok"));
-app.post("/api/*", (c) => handleApi(c.req.raw, c.env));
+app.post("/api/*", (c) => handleApi(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.get("/", (c) => homePage(c.req.raw, c.env));
 app.get("/archive", (c) => archivePage(c.req.raw, c.env));
 app.get("/invite/:token", (c) => invitePage(c.req.raw, c.env));

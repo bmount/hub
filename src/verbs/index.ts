@@ -5,6 +5,7 @@ import { tenantArchive, tenantCreate, tenantList, tenantUnarchive } from "./tena
 import { namespaceArchive, namespaceCreate, namespaceUnarchive } from "./namespace";
 import { projectArchive, projectCreate, projectList, projectUnarchive } from "./project";
 import { sessionEnd, sessionList, sessionRevoke } from "./session";
+import { loginRequest, loginVerify } from "./login";
 import { inviteCreate, inviteList, inviteRevoke } from "./invite";
 
 export function registerAllVerbs(): void {
@@ -15,5 +16,6 @@ export function registerAllVerbs(): void {
     projectCreate, projectArchive, projectUnarchive, projectList,
     inviteCreate, inviteRevoke, inviteList,
     sessionList, sessionRevoke, sessionEnd,
+    loginRequest, loginVerify,
   ]);
 }

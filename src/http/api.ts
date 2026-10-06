@@ -30,7 +30,7 @@ function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 }
 
-export async function handleApi(request: Request, env: Env): Promise<Response> {
+export async function handleApi(request: Request, env: Env, waitUntil?: (p: Promise<unknown>) => void): Promise<Response> {
   const url = new URL(request.url);
   const name = url.pathname.slice("/api/".length);
   let ctx: Ctx | null = null;
@@ -40,7 +40,7 @@ export async function handleApi(request: Request, env: Env): Promise<Response> {
     isForm = body.isForm;
     const verb = getVerb(name);
     if (!verb) throw new HubError(404, "unknown_verb");
-    ctx = await buildContext(request, env);
+    ctx = await buildContext(request, env, Date.now(), waitUntil);
 
     if (verb.scope === "tenant" && !ctx.tenant) throw new HubError(404, "not_found");
     if (verb.scope === "hub" && ctx.host.kind !== "apex") throw new HubError(404, "not_found");
