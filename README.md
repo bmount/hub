@@ -54,7 +54,7 @@ and send it with a matching `Origin` header:
 
 `POST /api/<verb>` with a JSON body. Responses are `{"ok":true,"result":...}` or
 `{"ok":false,"error":"<reason>","detail":...}`. Auth is the `pmw_session` cookie (with a matching
-`Origin` header) or `Authorization: Bearer pms_...` for a session token.
+`Origin` header) or `Authorization: Bearer pms_...` for a session token. `session.start` and `whoami` also accept `Authorization: Bearer pmw_...` (a long-lived agent token); every other verb refuses it.
 
 | Verb | Host | Role | Fresh proof |
 | --- | --- | --- | --- |
@@ -70,8 +70,8 @@ and send it with a matching `Origin` header:
 | login.request | apex | public (neutral answer; `reproof: true` needs a browser session) | |
 | login.verify | apex | public (link token) | |
 | consent.list, consent.revoke | any | signed in (own address; tenant admin: a member's; root: any) | |
-| agent.create, agent.archive | any (`tenant` param on the apex) | humans: member for own agents, admin for any agent in the tenant | 60 min |
-| token.create, token.revoke | any | humans: the agent's operator, or a tenant admin | 60 min |
+| agent.create (`tenant`, `slug`, `display_name`, optional `role` member or reader, optional `operator` email), agent.archive (`agent_id` only) | any (`tenant` param on the apex, agent.create only) | humans: member for own agents, admin for any agent in the tenant | 60 min |
+| token.create (`agent_id`, `name`, optional `expires_in_days` 1-365, default no expiry), token.revoke (`token_id`) | any | humans: the agent's operator, or a tenant admin | 60 min |
 | token.list | any | humans: operator, or tenant admin | |
 | session.start | tenant | long-lived `pmw_` token only | |
 
@@ -123,7 +123,7 @@ Revoking a token ends every run it started. Archiving an agent revokes all its t
 
 ## Internal introspection (Ardi)
 
-`POST /internal/introspect` turns a `pms_` session token into `{ok, identity, session, tenant, role}` for one tenant. It answers only service-binding calls that carry `x-hub-internal: <HUB_INTERNAL_SECRET>`; requests through the public routes (which always carry `cf-connecting-ip`) get 404.
+`POST /internal/introspect` turns a `pms_` session token into `{ok, identity, session, tenant, role}` for one tenant. It answers only service-binding calls that carry `x-hub-internal: <HUB_INTERNAL_SECRET>`; requests through the public routes (which always carry `cf-connecting-ip`) get 404. Callers must construct the headers themselves and never forward inbound request headers: a forwarded `cf-connecting-ip` gets 404 by design.
 
 ```sh
 openssl rand -base64 32 | npx wrangler secret put HUB_INTERNAL_SECRET

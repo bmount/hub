@@ -4,6 +4,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
   "routes": [
     { "pattern": "pimwell.com", "custom_domain": true },
     { "pattern": "*.pimwell.com/*", "zone_name": "pimwell.com" }

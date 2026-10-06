@@ -1,2 +1,4 @@
 HUB_DOMAIN=localhost
 HUB_BOOTSTRAP_TOKEN=dev-bootstrap-token-change-me
+# Shared secret for service-binding introspection (/internal/introspect); unset disables it.
+# HUB_INTERNAL_SECRET=
