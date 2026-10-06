@@ -159,9 +159,11 @@ Then run `/mcp` in Claude Code, pick `pimwell-blue`, and choose Authenticate. A 
 
 Approval needs a sign-in proof from the last 10 hours. Access tokens last an hour; the assistant refreshes them for up to 30 days of idleness and 90 days in all. Every tool call is an `mcp.call` event recorded under the connection's session id: `event.list` with that `session_id` shows what the assistant did.
 
-Revoke at `https://pimwell.com/me` (Assistants, Revoke); it takes effect on the assistant's next call. Tenant admins can revoke a member's assistant with `session.revoke` and its session id. Archiving a tenant revokes all of its assistants. A refresh token used twice is treated as stolen and revokes the connection; the assistant must authorize again.
+Revoke at `https://pimwell.com/me` (Assistants, Revoke); it takes effect on the assistant's next call. Tenant admins can revoke a member's assistant with `session.revoke` and its session id. To find the session id, look at `event.list` rows of kind `mcp.call` (or `oauth.grant.approve`): each row's `session_id` is that assistant's connection, and the row's summary names the tool it called. A member finds their own on `https://pimwell.com/me`, which lists each assistant with its session id. Archiving a tenant revokes all of its assistants. A refresh token used twice is treated as stolen and revokes the connection; the assistant must authorize again.
 
-Deploying this for the first time needs one more KV namespace and migration 0002:
+Your assistant can be steered by content it reads; it sees what you can see in this tenant; revoke it any time at /me.
+
+Deploying this for the first time needs one more KV namespace and migrations 0002 and 0003:
 
 ```sh
 npx wrangler kv namespace create OAUTH_KV   # paste the id into wrangler.jsonc

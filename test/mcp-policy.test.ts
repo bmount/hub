@@ -104,6 +104,8 @@ describe("event.list", () => {
     const r = await seedHuman("r@example.com", { memberships: [{ tenant_id: acme.id, role: "reader" }] });
     for (const slug of ["p1", "p2", "p3"]) {
       expect((await apiPost("acme.pimwell.test", "project.create", { slug, kind: "repo", display_name: slug }, bearer(m.token))).status).toBe(200);
+      // Event ids are ULIDs: within one millisecond their order is random, so give each event its own.
+      await new Promise((r) => setTimeout(r, 3));
     }
     const page1 = ((await (await apiPost("acme.pimwell.test", "event.list", { limit: 2 }, bearer(m.token))).json()) as any).result;
     expect(page1.events.map((e: any) => e.summary)).toEqual(["Created project p3", "Created project p2"]);
