@@ -23,6 +23,12 @@ export function reqEnum<T extends string>(input: Input, key: string, values: rea
   return v as T;
 }
 
+export function stateParam(input: Input): "active" | "archived" {
+  const v = optString(input, "state") ?? "active";
+  if (v !== "active" && v !== "archived") throw badRequest("state must be one of active, archived");
+  return v;
+}
+
 export function optBool(input: Input, key: string): boolean | null {
   const v = input[key];
   if (v === undefined || v === null || v === "") return null;
