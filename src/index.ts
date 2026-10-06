@@ -3,6 +3,7 @@ import type { Env } from "./env";
 import { handleApi } from "./http/api";
 import { registerAllVerbs } from "./verbs/index";
 import { authLinkPage, consumeLinkPage, loginPage, loginPostPage } from "./http/login";
+import { mePage } from "./http/me";
 import { handleEmail } from "./mail/inbound";
 import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sessionsPage } from "./http/pages";
 
@@ -20,6 +21,7 @@ app.get("/login", (c) => loginPage(c.req.raw, c.env));
 app.post("/login", (c) => loginPostPage(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.get("/auth/:token", (c) => authLinkPage(c.req.raw, c.env));
 app.post("/auth/:token", (c) => consumeLinkPage(c.req.raw, c.env));
+app.get("/me", (c) => mePage(c.req.raw, c.env));
 app.get("/me/sessions", (c) => sessionsPage(c.req.raw, c.env));
 app.notFound(() => notFoundPage());
 

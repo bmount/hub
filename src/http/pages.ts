@@ -126,7 +126,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
   if (ctx.host.kind === "apex") {
     if (!ctx.identity) return htmlResponse(intro, 200, extra);
     const memberships = await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id);
-    let body = `<h1>Pimwell</h1><p>${esc(ctx.identity.display_name)} · <a href="/me/sessions">sessions</a></p>`;
+    let body = `<h1>Pimwell</h1><p>${esc(ctx.identity.display_name)} · <a href="/me">account</a> · <a href="/me/sessions">sessions</a></p>`;
     body += listSection("Your tenants", memberships.map((m) => `<a href="https://${esc(m.tenant.slug)}.${esc(env.HUB_DOMAIN)}/">${esc(m.tenant.display_name)}</a> (${esc(m.membership.role)})`));
     if (ctx.identity.is_root === 1) {
       const tenants = await listTenants(env.HUB_DB, "active");
