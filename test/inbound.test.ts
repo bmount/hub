@@ -134,6 +134,21 @@ describe("handleEmail", () => {
     expect(await hasActiveConsent(env.HUB_DB, "stranger@example.com")).toBe(false);
   });
 
+  it("revokes new consent when something throws after the grant", async () => {
+    await seedHuman("a@example.com");
+    const db = new Proxy(env.HUB_DB, {
+      get(t, k) {
+        const v = (t as any)[k];
+        if (k === "prepare") return (q: string) => { if (q.includes("INTO auth_link")) throw new TypeError("boom"); return t.prepare(q); };
+        return typeof v === "function" ? v.bind(t) : v;
+      },
+    });
+    const { message, calls } = fakeMessage("a@example.com", "login@pimwell.test");
+    await expect(handleEmail(message, { ...env, HUB_DB: db }, ctx)).resolves.toBeUndefined();
+    expect(calls.replies).toHaveLength(0);
+    expect(await hasActiveConsent(env.HUB_DB, "a@example.com")).toBe(false);
+  });
+
   it("swallows internal failures", async () => {
     const { message } = fakeMessage("a@example.com", "login@pimwell.test");
     await expect(handleEmail(message, { ...env, HUB_DB: undefined as unknown as D1Database }, ctx)).resolves.toBeUndefined();

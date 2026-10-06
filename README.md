@@ -79,7 +79,7 @@ and send it with a matching `Origin` header:
 
 ## Email
 
-Two addresses reach the Worker's `email` handler: `login@pimwell.com` and `signup@pimwell.com` (they behave the same). Writing to either from a known human address records consent and replies with a sign-in link. Outbound mail leaves only through `sendMail` in `src/mail/send.ts`, from the address that received the message (`login@` or `signup@`), and only to addresses with consent. A tenant admin revoking a member's consent is hub-wide for that address.
+Two addresses reach the Worker's `email` handler: `login@pimwell.com` and `signup@pimwell.com` (they behave the same). Writing to either from a known human address records consent and replies with a sign-in link. Outbound mail leaves only through `sendMail` in `src/mail/send.ts`, and only to addresses with consent. Replies to inbound mail come from the address that received it (`login@` or `signup@`); sign-in links requested from the `/login` page come from `login@`. A tenant admin revoking a member's consent is hub-wide for that address.
 
 One-time setup (after `npm run deploy`, since the rules point at the deployed Worker):
 

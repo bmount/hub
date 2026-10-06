@@ -50,20 +50,31 @@ async function handle(message: ForwardableEmailMessage, env: Env, _ctx: Executio
     email: from, kind: "inbound_email", source_message_id: safeMessageId(message.headers.get("message-id")),
     evidence: JSON.stringify({ to: local, received_at: now }),
   }, now);
-  if (created) {
-    await recordEvent(env.HUB_DB, {
-      tenant_id: null, identity_id: identity.id, session_id: null, kind: "consent.grant",
-      target_kind: "consent", target_id: consent.id, summary: `Consent recorded from mail to ${local}@`,
-    }, now);
-  }
-
-  const url = await issueLink(env, { identity, purpose: "login", next: null, via: "inbound", session_id: null }, now);
-  const result = await sendMail(env, { to: from, ...linkMail("login", url) }, now, { replyTo: message });
-  if (result !== "sent") {
-    if (created) await revokeConsentById(env.HUB_DB, consent.id, now);
-    await recordEvent(env.HUB_DB, {
-      tenant_id: null, identity_id: identity.id, session_id: null, kind: "login.reply_failed",
-      target_kind: "identity", target_id: identity.id, summary: `Link not delivered (${result}); consent not kept`,
-    }, now);
+  // Consent from mail sticks only when the DMARC-gated reply went out; any failure after the grant undoes it.
+  let delivered = false;
+  try {
+    if (created) {
+      await recordEvent(env.HUB_DB, {
+        tenant_id: null, identity_id: identity.id, session_id: null, kind: "consent.grant",
+        target_kind: "consent", target_id: consent.id, summary: `Consent recorded from mail to ${local}@`,
+      }, now);
+    }
+    const url = await issueLink(env, { identity, purpose: "login", next: null, via: "inbound", session_id: null }, now);
+    const result = await sendMail(env, { to: from, ...linkMail("login", url) }, now, { replyTo: message });
+    delivered = result === "sent";
+    if (!delivered) {
+      await recordEvent(env.HUB_DB, {
+        tenant_id: null, identity_id: identity.id, session_id: null, kind: "login.reply_failed",
+        target_kind: "identity", target_id: identity.id, summary: `Link not delivered (${result}); consent not kept`,
+      }, now);
+    }
+  } finally {
+    if (created && !delivered) {
+      try {
+        await revokeConsentById(env.HUB_DB, consent.id, now);
+      } catch (e) {
+        console.log("inbound consent revoke failed", e instanceof Error ? e.name : "error");
+      }
+    }
   }
 }
