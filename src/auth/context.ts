@@ -11,6 +11,7 @@ export type Ctx = {
   env: Env;
   db: D1Database;
   now: number;
+  ip: string;
   host: HostKind;
   tenant: Tenant | null;
   identity: Identity | null;
@@ -71,6 +72,8 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
     }
   }
 
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+
   let role: Role | null = null;
   if (identity && tenant) {
     const membership = await getMembership(db, identity.id, tenant.id);
@@ -79,5 +82,5 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
     role = "root";
   }
 
-  return { env, db, now, host, tenant, identity, session, role, authKind, staleCookie };
+  return { env, db, now, ip, host, tenant, identity, session, role, authKind, staleCookie };
 }
