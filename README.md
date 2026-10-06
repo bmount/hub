@@ -18,6 +18,7 @@ Then bootstrap the first root (the token is the one in `.dev.vars`):
 
 Open the returned `invite_url` (it will say `https://localhost/...`; use `http://localhost:8787/invite/<token>`),
 accept, and you are root. Tenants are served at `http://<slug>.localhost:8787/`.
+With `HUB_DOMAIN=localhost` the session cookie is host-only, so after accepting an invite on `localhost:8787` the tenant pages at `<slug>.localhost:8787` will not see the cookie; use the apex pages and the API locally, or set `HUB_DOMAIN` to a wildcard dev domain that resolves to 127.0.0.1 if you need tenant hosts.
 
 ## Test
 
@@ -26,7 +27,7 @@ accept, and you are root. Tenants are served at `http://<slug>.localhost:8787/`.
 
 ## Deploy
 
-One-time, with an account that can create resources:
+First-time setup for a new account or environment only (creating the D1 database and KV namespace); the committed `wrangler.jsonc` already holds this deployment's ids. With an account that can create resources:
 
     npx wrangler d1 create pimwell-hub          # paste database_id into wrangler.jsonc
     npx wrangler kv namespace create RATE       # paste id into wrangler.jsonc
@@ -64,8 +65,7 @@ and send it with a matching `Origin` header:
 | project.create | tenant | member | |
 | project.archive, project.unarchive | tenant | admin | 60 min |
 | project.list | tenant | reader | |
-| invite.create, invite.revoke, invite.list | tenant | admin | 60 min |
+| invite.create, invite.revoke, invite.list | tenant | admin | 60 min (admin-role invites can only be created by a root) |
 | session.list, session.revoke, session.end | any | signed in | |
 
-Phase 1 has no re-proof flow; a session older than 60 minutes cannot run the fresh-proof verbs
-until phase 2 adds magic links. Accept a new invite to get a fresh session in the meantime.
+Phase 1 has no re-proof flow. A browser session older than 60 minutes cannot run the fresh-proof verbs until phase 2 adds magic links. Operator escape hatch: find your session id on `/me/sessions`, then run `npx wrangler d1 execute pimwell-hub --remote --command "UPDATE session SET last_proof_at = <now in ms> WHERE id = '<session id>'"`.
