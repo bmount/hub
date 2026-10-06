@@ -51,4 +51,19 @@ describe("pages", () => {
     expect((await SELF.fetch("https://evil.example/")).status).toBe(404);
     expect((await SELF.fetch("https://pimwell.test/nope")).status).toBe(404);
   });
+
+  it("clears a stale cookie on page responses and not otherwise", async () => {
+    const stale = { cookie: "pmw_session=pms_stale" };
+    const r1 = await SELF.fetch("https://pimwell.test/me/sessions", { headers: stale });
+    expect(r1.status).toBe(401);
+    expect(r1.headers.get("set-cookie")).toContain("Max-Age=0");
+    const t = await seedTenant("acme");
+    const r2 = await SELF.fetch("https://acme.pimwell.test/", { headers: stale });
+    expect(r2.status).toBe(404);
+    expect(r2.headers.get("set-cookie")).toContain("Max-Age=0");
+    const m = await seedHuman("m@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    const r3 = await SELF.fetch("https://acme.pimwell.test/archive", { headers: cookie(m.token) });
+    expect(r3.status).toBe(200);
+    expect(r3.headers.get("set-cookie")).toBeNull();
+  });
 });

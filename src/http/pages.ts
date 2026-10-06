@@ -16,8 +16,8 @@ export function neutralInvitePage(): string {
   return page("Invite", `<h1>This invite link is not valid</h1><p>It may have expired, been used already, or been revoked. Ask the person who invited you for a new link.</p>`);
 }
 
-export function notFoundPage(): Response {
-  return htmlResponse(page("Not found", `<h1>Not found</h1>`), 404);
+export function notFoundPage(headers?: HeadersInit): Response {
+  return htmlResponse(page("Not found", `<h1>Not found</h1>`), 404, headers);
 }
 
 function tokenFromPath(request: Request): string | null {
@@ -84,8 +84,9 @@ export async function acceptInvitePage(request: Request, env: Env): Promise<Resp
 
 export async function sessionsPage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
-  if (ctx.host.kind !== "apex") return notFoundPage();
-  if (!ctx.identity || !ctx.session) return htmlResponse(page("Sign in", `<h1>Sign in required</h1>`), 401);
+  const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
+  if (ctx.host.kind !== "apex") return notFoundPage(extra);
+  if (!ctx.identity || !ctx.session) return htmlResponse(page("Sign in", `<h1>Sign in required</h1>`), 401, extra);
   const rows = await listSessions(env.HUB_DB, ctx.identity.id, ctx.now);
   const tr = rows.map((s) => `<tr>
 <td>${esc(s.id)}${s.id === ctx.session!.id ? " (this one)" : ""}</td>
@@ -98,7 +99,7 @@ export async function sessionsPage(request: Request, env: Env): Promise<Response
 <p>${esc(ctx.identity.display_name)} &lt;${esc(ctx.identity.email)}&gt;</p>
 <table><thead><tr><th>Id</th><th>Kind</th><th>Started</th><th>Last seen</th><th></th></tr></thead><tbody>${tr}</tbody></table>
 <form method="post" action="/api/session.end"><button type="submit">Sign out</button></form>`;
-  return htmlResponse(page("Sessions", body));
+  return htmlResponse(page("Sessions", body), 200, extra);
 }
 
 function listSection(title: string, items: string[]): string {
@@ -127,14 +128,15 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
     }
     return htmlResponse(page("Pimwell", body), 200, extra);
   }
-  if (!ctx.tenant || !ctx.role) return notFoundPage();
+  if (!ctx.tenant || !ctx.role) return notFoundPage(extra);
   const body = `<h1>${esc(ctx.tenant.display_name)}</h1><p>You are ${esc(ctx.role)} · <a href="/archive">archive</a> · <a href="https://${esc(env.HUB_DOMAIN)}/">hub</a></p>` + (await tenantListing(env, ctx.tenant.id, "active"));
   return htmlResponse(page(ctx.tenant.display_name, body), 200, extra);
 }
 
 export async function archivePage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
-  if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role) return notFoundPage();
+  const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
+  if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role) return notFoundPage(extra);
   const body = `<h1>${esc(ctx.tenant.display_name)} archive</h1><p><a href="/">back</a></p>` + (await tenantListing(env, ctx.tenant.id, "archived"));
-  return htmlResponse(page("Archive", body));
+  return htmlResponse(page("Archive", body), 200, extra);
 }
