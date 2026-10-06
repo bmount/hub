@@ -70,6 +70,9 @@ export async function acceptInvitePage(request: Request, env: Env): Promise<Resp
     }, now);
     if (sameIdentity) return new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
     const where = tenantRow ? esc(tenantRow.display_name) : "the hub";
+    if (!accepted.membershipAdded) {
+      return htmlResponse(page("Already a member", `<h1>Already a member</h1><p>Your account <strong>${esc(accepted.identity.email)}</strong> already has access to <strong>${where}</strong>. Sign in with your existing session to continue.</p>`));
+    }
     return htmlResponse(page("Added", `<h1>You have been added</h1><p>Your account <strong>${esc(accepted.identity.email)}</strong> now has access to <strong>${where}</strong>. Sign in with your existing session to continue.</p>`));
   }
 

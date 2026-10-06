@@ -27,6 +27,11 @@ describe("bootstrap", () => {
     const res = await apiPost("pimwell.test", "bootstrap", { token: "test-bootstrap-token", email: "r2@example.com", display_name: "R2" });
     expect(res.status).toBe(409);
   });
+
+  it("only answers on the apex", async () => {
+    const res = await apiPost("acme.pimwell.test", "bootstrap", { token: "test-bootstrap-token", email: "r@example.com", display_name: "Root" });
+    expect(res.status).toBe(404);
+  });
 });
 
 describe("whoami", () => {
@@ -44,5 +49,14 @@ describe("whoami", () => {
     expect(body.result.tenant).toEqual({ id: t.id, slug: "acme", role: "admin" });
     expect(body.result.memberships).toEqual([{ slug: "acme", display_name: "ACME", role: "admin" }]);
     expect(body.result.session.id).toBe(h.session.id);
+  });
+
+  it("reports no tenant and no memberships for a signed-in non-member", async () => {
+    await seedTenant("acme");
+    const h = await seedHuman("out@example.com");
+    const body = await (await apiPost("acme.pimwell.test", "whoami", {}, bearer(h.token))).json() as { result: any };
+    expect(body.result.identity.email).toBe("out@example.com");
+    expect(body.result.tenant).toBeNull();
+    expect(body.result.memberships).toEqual([]);
   });
 });

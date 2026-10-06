@@ -28,5 +28,7 @@ export function htmlResponse(body: string, status = 200, headers: HeadersInit = 
   const h = new Headers(headers);
   h.set("content-type", "text/html; charset=utf-8");
   h.set("cache-control", "no-store");
+  h.set("referrer-policy", "no-referrer");
+  h.set("x-content-type-options", "nosniff");
   return new Response(body, { status, headers: h });
 }

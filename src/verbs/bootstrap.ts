@@ -9,7 +9,7 @@ import { recordEvent } from "../db/events";
 export const bootstrap = defineVerb({
   name: "bootstrap",
   kind: "command",
-  scope: "public",
+  scope: "hub",
   minRole: "public",
   freshProofMinutes: null,
   summary: "Create the first root invite using the bootstrap secret. Disabled once a root exists.",

@@ -1,6 +1,8 @@
 import { defineVerb } from "./table";
 import { optString, reqEnum, reqString } from "./params";
 import { conflict, forbidden, notFound } from "../errors";
+import { getIdentityByEmail } from "../db/identities";
+import { getMembership } from "../db/memberships";
 import { createInvite, inviteIsOpen, listInvites, revokeInvite } from "../db/invites";
 import { recordEvent } from "../db/events";
 import type { Invite } from "../db/types";
@@ -22,6 +24,11 @@ export const inviteCreate = defineVerb({
   }),
   run: async (ctx, p) => {
     if (p.role === "admin" && ctx.identity!.is_root !== 1) throw forbidden("only a root may invite admins");
+    const existing = await getIdentityByEmail(ctx.db, p.email);
+    if (existing) {
+      const m = await getMembership(ctx.db, existing.id, ctx.tenant!.id);
+      if (m && m.state === "active") throw conflict("already a member of this tenant");
+    }
     const { invite, token } = await createInvite(ctx.db, { tenant_id: ctx.tenant!.id, email: p.email, role: p.role, display_name: p.display_name, created_by: ctx.identity!.id }, ctx.now);
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "invite.create", target_kind: "invite", target_id: invite.id, summary: `Invited ${invite.email} as ${invite.role}` }, ctx.now);
     return { invite_id: invite.id, invite_url: `https://${ctx.env.HUB_DOMAIN}/invite/${token}`, expires_at: invite.expires_at };

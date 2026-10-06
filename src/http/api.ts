@@ -52,6 +52,7 @@ export async function handleApi(request: Request, env: Env): Promise<Response> {
     }
 
     if (verb.minRole !== "public") {
+      if (verb.scope === "tenant" && ctx.role === null) throw new HubError(404, "not_found");
       if (!ctx.identity) throw new HubError(401, "unauthorized");
       const effective = verb.scope === "hub" ? (ctx.identity.is_root === 1 ? "root" : null) : ctx.role;
       if (rank(effective) < rank(verb.minRole)) throw new HubError(403, "forbidden");
@@ -64,8 +65,16 @@ export async function handleApi(request: Request, env: Env): Promise<Response> {
     const params = verb.parse(body.input);
     const result = await verb.run(ctx, params);
     if (isForm) {
-      const back = request.headers.get("referer") ?? `${url.protocol}//${url.host}/`;
-      return finish(ctx, env, new Response(null, { status: 303, headers: { location: back } }));
+      const self = `${url.protocol}//${url.host}`;
+      let back = "/";
+      try {
+        const ref = request.headers.get("referer");
+        if (ref) {
+          const r = new URL(ref);
+          if (r.origin === self) back = ref;
+        }
+      } catch { /* malformed referer: fall back to / */ }
+      return finish(ctx, env, new Response(null, { status: 303, headers: { location: back, "cache-control": "no-store" } }));
     }
     return finish(ctx, env, json({ ok: true, result }, 200));
   } catch (e) {

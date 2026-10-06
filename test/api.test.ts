@@ -6,6 +6,7 @@ import { createTenant } from "../src/db/tenants";
 import { createIdentity } from "../src/db/identities";
 import { addMembership } from "../src/db/memberships";
 import { createBrowserSession } from "../src/db/sessions";
+import { seedHuman } from "./helpers";
 import { COOKIE_NAME } from "../src/auth/cookie";
 
 const db = () => env.HUB_DB;
@@ -61,12 +62,18 @@ describe("api dispatcher", () => {
 
   it("requires auth, then role, with a bearer token", async () => {
     const s = await seed("member");
-    expect((await post("acme.pimwell.test", "test.echo", { msg: "x" })).status).toBe(401);
+    expect((await post("acme.pimwell.test", "test.echo", { msg: "x" })).status).toBe(404);
     const ok = await post("acme.pimwell.test", "test.echo", { msg: "hi" }, { authorization: `Bearer ${s.token}` });
     expect(await ok.json()).toEqual({ ok: true, result: { msg: "hi", tenant: "acme", who: "a@example.com" } });
     const denied = await post("acme.pimwell.test", "test.admin", {}, { authorization: `Bearer ${s.token}` });
     expect(denied.status).toBe(403);
     expect(((await denied.json()) as { error: string; detail: string }).error).toBe("forbidden");
+  });
+
+  it("404s a signed-in non-member of the tenant", async () => {
+    await seed("member");
+    const outsider = await seedHuman("out@example.com");
+    expect((await post("acme.pimwell.test", "test.echo", { msg: "x" }, { authorization: `Bearer ${outsider.token}` })).status).toBe(404);
   });
 
   it("rejects cookie auth without a matching Origin", async () => {
@@ -119,6 +126,20 @@ describe("api dispatcher", () => {
     });
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("https://acme.pimwell.test/somewhere");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("ignores a cross-origin referer on form posts", async () => {
+    const s = await seed("member");
+    const res = await SELF.fetch("https://acme.pimwell.test/api/test.echo", {
+      method: "POST",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded", cookie: `${COOKIE_NAME}=${s.token}`, origin: "https://acme.pimwell.test", referer: "https://evil.example/x" },
+      body: "msg=hi",
+    });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/");
+    expect(res.headers.get("cache-control")).toBe("no-store");
   });
 
   it("clears a stale cookie", async () => {

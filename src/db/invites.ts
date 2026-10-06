@@ -1,7 +1,7 @@
 import { randomToken, sha256Hex, ulid } from "../ids";
 import { badRequest, HubError } from "../errors";
 import { createIdentity, getIdentityByEmail, normalizeEmail } from "./identities";
-import { addMembership } from "./memberships";
+import { addMembership, getMembership } from "./memberships";
 import type { Identity, Invite, Role } from "./types";
 
 export const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
@@ -40,7 +40,7 @@ export function inviteIsOpen(invite: Invite, now: number): boolean {
   return invite.accepted_at === null && invite.revoked_at === null && invite.expires_at > now;
 }
 
-export async function acceptInvite(db: D1Database, invite: Invite, now: number): Promise<{ identity: Identity; created: boolean } | null> {
+export async function acceptInvite(db: D1Database, invite: Invite, now: number): Promise<{ identity: Identity; created: boolean; membershipAdded: boolean } | null> {
   if (!inviteIsOpen(invite, now)) return null;
   const pre = await getIdentityByEmail(db, invite.email);
   if (pre && pre.state !== "active") return null;
@@ -62,6 +62,7 @@ export async function acceptInvite(db: D1Database, invite: Invite, now: number):
       if (!(e instanceof HubError) || e.status !== 409) throw e;
       identity = await getIdentityByEmail(db, invite.email);
       if (!identity) throw e;
+      if (identity.state !== "active") return null;
       if (invite.role === "root" && identity.is_root !== 1) {
         await db.prepare("UPDATE identity SET is_root = 1 WHERE id = ?").bind(identity.id).run();
         identity = { ...identity, is_root: 1 };
@@ -71,10 +72,14 @@ export async function acceptInvite(db: D1Database, invite: Invite, now: number):
     await db.prepare("UPDATE identity SET is_root = 1 WHERE id = ?").bind(identity.id).run();
     identity = { ...identity, is_root: 1 };
   }
+  let membershipAdded = invite.role === "root";
   if (invite.role !== "root" && invite.tenant_id !== null) {
-    await addMembership(db, { identity_id: identity.id, tenant_id: invite.tenant_id, role: invite.role }, now);
+    const existing = await getMembership(db, identity.id, invite.tenant_id);
+    const active = existing !== null && existing.state === "active";
+    membershipAdded = !active;
+    if (!active) await addMembership(db, { identity_id: identity.id, tenant_id: invite.tenant_id, role: invite.role }, now);
   }
-  return { identity, created };
+  return { identity, created, membershipAdded };
 }
 
 export async function setInviteAcceptedSession(db: D1Database, invite_id: string, session_id: string): Promise<void> {

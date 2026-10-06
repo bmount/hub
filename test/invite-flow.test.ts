@@ -36,6 +36,22 @@ describe("invite verbs", () => {
     expect((await apiPost("acme.pimwell.test", "invite.create", { email: "x@example.com", role: "root" }, bearer(admin.token))).status).toBe(400);
   });
 
+  it("rejects inviting an email that is already an active member", async () => {
+    const t = await seedTenant("acme");
+    const admin = await seedHuman("a@example.com", { memberships: [{ tenant_id: t.id, role: "admin" }] });
+    await seedHuman("m@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    const res = await apiPost("acme.pimwell.test", "invite.create", { email: "m@example.com", role: "reader" }, bearer(admin.token));
+    expect(res.status).toBe(409);
+  });
+
+  it("shows 'Already a member' when membership appeared after the invite was made", async () => {
+    const { t, url } = await makeInvite();
+    await seedHuman("new@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    const post = await SELF.fetch(url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
+    expect(post.status).toBe(200);
+    expect(await post.text()).toContain("Already a member");
+  });
+
   it("another tenant's admin cannot revoke the invite", async () => {
     const { invite_id } = await makeInvite();
     const blue = await seedTenant("blue");
