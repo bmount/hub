@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
-import { listVerbs } from "../src/verbs/table";
+import { getVerb, listVerbs } from "../src/verbs/table";
 import { registerAllVerbs } from "../src/verbs/index";
 import { rank } from "../src/auth/context";
 import { mcpViolations } from "../src/mcp/policy";
@@ -32,6 +32,7 @@ const TABLE: Record<string, Decl> = {
   "channel.add_agent": T("tenant", "member", null, { humanOnly: true }), "channel.remove_agent": T("tenant", "member", null, { humanOnly: true }),
   "channel.set_agent_policy": T("tenant", "member", null, { humanOnly: true }),
   "channel.archive": T("tenant", "admin", 60), "channel.unarchive": T("tenant", "admin", 60),
+  "chat.post": T("tenant", "member", null), "chat.edit": T("tenant", "member", null), "chat.retract": T("tenant", "member", null),
   "chat.conversations": T("tenant", "reader", null),
   "chat.agent_mute": T("tenant", "reader", null), "chat.agent_unmute": T("tenant", "member", 60, { humanOnly: true }),
   "chat.agents_disable": T("tenant", "admin", null), "chat.agents_enable": T("tenant", "admin", 60),
@@ -100,5 +101,14 @@ describe("verb table", () => {
       // Hub verbs do not exist on a tenant host, and an agent credential is anonymous on the apex.
       expect({ verb: v.name, status: res.status }).toEqual({ verb: v.name, status: v.scope === "hub" ? 404 : 403 });
     }
+  });
+
+  it("lets no chat verb take an author, display name, or avatar (messaging spec 4.6)", () => {
+    const AUTHORISH = /^(author|author_id|by|from|as|on_behalf_of|identity|identity_id|display_name|name_tag|avatar|handle|session_id)$/;
+    for (const v of verbs().filter((x) => /^(chat|channel|inbox|ref)\./.test(x.name))) {
+      expect({ verb: v.name, keys: Object.keys(v.mcp?.input.properties ?? {}).filter((k) => AUTHORISH.test(k)) }).toEqual({ verb: v.name, keys: [] });
+    }
+    const p = getVerb("chat.post")!.parse({ c: "general", body: "hi", author_id: "x", display_name: "x", avatar: "x", handle: "x", session_id: "x" }) as Record<string, unknown>;
+    expect(Object.keys(p).sort()).toEqual(["after", "body", "c", "idempotency_key", "refs", "reply_to"]);
   });
 });

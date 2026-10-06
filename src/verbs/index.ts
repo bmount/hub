@@ -15,6 +15,7 @@ import { oauthGrantApprove } from "./oauth";
 import {
   channelAddAgent, channelArchive, channelCreate, channelRemoveAgent, channelSetAgentPolicy, channelSetTopic, channelUnarchive,
 } from "./channel";
+import { chatEdit, chatPost, chatRetract } from "./chatWrite";
 import { chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable, chatConversations } from "./chatControl";
 
 export function registerAllVerbs(): void {
@@ -32,6 +33,7 @@ export function registerAllVerbs(): void {
     eventList,
     oauthGrantApprove,
     channelCreate, channelSetTopic, channelAddAgent, channelRemoveAgent, channelSetAgentPolicy, channelArchive, channelUnarchive,
+    chatPost, chatEdit, chatRetract,
     chatConversations, chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable,
   ]);
 }

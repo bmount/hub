@@ -83,7 +83,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
         const next = ctx?.tenant ? `&next=${ctx.tenant.slug}` : "";
         return finish(ctx, env, new Response(null, { status: 303, headers: { location: `https://${env.HUB_DOMAIN}/login?reproof=1${next}`, "cache-control": "no-store" } }));
       }
-      return finish(ctx, env, json({ ok: false, error: e.reason, detail: e.detail ?? null }, e.status));
+      return finish(ctx, env, json({ ok: false, error: e.reason, detail: e.detail ?? null, ...(e.data ? { data: e.data } : {}) }, e.status));
     }
     if (e instanceof SyntaxError) return finish(ctx, env, json({ ok: false, error: "bad_request", detail: "invalid JSON" }, 400));
     console.error("verb failed", name, e instanceof Error ? e.name : "error");

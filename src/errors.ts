@@ -3,6 +3,8 @@ export class HubError extends Error {
     public status: number,
     public reason: string,
     public detail?: string,
+    /** Extra machine-readable fields for the caller (for example `head` and `missed` on `stale_view`). */
+    public data?: Record<string, unknown>,
   ) {
     super(detail ?? reason);
     this.name = "HubError";
