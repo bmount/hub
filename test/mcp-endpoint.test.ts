@@ -25,12 +25,13 @@ describe("/mcp with a token", () => {
     const call = await rpcBody(await mcpPost("acme", access, "tools/call", { name: "project_list", arguments: {} }));
     expect(call.result.isError).toBeUndefined();
     expect(call.result.structuredContent.projects.map((p: { path: string }) => p.path)).toEqual(["site"]);
-    expect(call.result.content[0].text).toContain("| site |");
+    expect(call.result.content[0].text).toContain("| `site` |");
     const who = await rpcBody(await mcpPost("acme", access, "tools/call", { name: "whoami", arguments: {} }));
     expect(who.result.structuredContent).toMatchObject({ session: { id: grant.session_id, kind: "oauth" }, tenant: { slug: "acme", role: "member" }, connection: { client: "Claude Code", scopes: ["read"] } });
     expect(who.result.structuredContent.memberships).toEqual([{ slug: "acme", display_name: "ACME", role: "member" }]);
     const ev = await env.HUB_DB.prepare("SELECT * FROM event WHERE kind = 'mcp.call' ORDER BY id").all<Record<string, unknown>>();
-    expect(ev.results.map((e) => [e.target_id, e.session_id, e.tenant_id])).toEqual([
+    // Compared sorted: two events in one millisecond have ULIDs in random order.
+    expect(ev.results.map((e) => [e.target_id, e.session_id, e.tenant_id]).sort()).toEqual([
       ["project.list", grant.session_id, acme.id], ["whoami", grant.session_id, acme.id],
     ]);
     const own = await rpcBody(await mcpPost("acme", access, "tools/call", { name: "event_list", arguments: { session_id: grant.session_id } }));
