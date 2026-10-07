@@ -42,6 +42,15 @@ Everything is at https://console.cloud.google.com/auth (Google Auth Platform). I
 
 Until both secrets exist, the Google button is hidden and `/login/google` answers 503.
 
+**Done 2026-10-06.** Google project `pimwell`, web client with origin `https://pimwell.com` and the redirect above. The
+owner keeps the downloaded client JSON in `~/.auth/pimwell` (mode 600). Both values are Worker secrets on `pimwell-hub`.
+
+**Secret naming across apps.** Cloudflare Worker secrets belong to one Worker script, so `GOOGLE_CLIENT_ID` on
+`pimwell-hub` cannot collide with the same name on another app's Worker, even in the same account and zone. Keep
+plain names per Worker. Give each app its own Google OAuth client, with its own redirect URI. Prefix a name with
+the app (`PIMWELL_...`) only if it ever moves to an account-wide store, such as Cloudflare Secrets Store, or to a
+Worker shared by several apps.
+
 ## Sign-in rules
 
 Rules decide who may create an account by signing in with Google. Grants decide what that account
