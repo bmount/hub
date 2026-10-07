@@ -28,3 +28,13 @@ Plan: docs/superpowers/plans/2026-10-07-overnight.md. One entry per task: what s
 - Each item carries the owner's words and their date; 36 links point to delivering commits. Historian's credentials (1 hour) were revoked after.
 - Ruling: Historian keeps the old helper address form until helpers move to <org>.<name>@pimwell.com (filed as an open errand). Cost if wrong: one address to migrate.
 - Pending: push the hub repository into mcc/pimwell.git with one ordinary push, after the Ardi delete work deploys (it redeploys ardi-pimwell).
+- T3 finished: the hub repository was pushed into mcc/pimwell.git in one ordinary push (2.5 s); its main equals origin/main (d2524ce). The temporary git credential was revoked.
+
+## Ardi boundary (owner ruling, 2026-10-07)
+- The owner asked the hub session to stop changing Ardi. A background agent adding repo delete was stopped before committing; its uncommitted work was saved as docs/requests/ardi-repo-delete-unfinished.patch and discarded, and the Ardi worktree was removed. Ardi main was never touched.
+- What remains, by necessity: branch pimwell-release (8024a7e) on origin, which is what ardi-pimwell runs. docs/requests/2026-10-07-ardi.md asks the Ardi session to own that deployment and to build repo delete and tenant purge.
+
+## T4: navigation shell and deep UI, round 1 (done; continuous)
+- d2524ce: one design system and shell; a deep organization home, project pages with one timeline, the organization-wide Docket, and People and helpers. Each page reads in one D1 batch.
+- Found and fixed: channels (project rows of kind channel) leaked into the new project lookups. Work, pages and mail addresses now all exclude them.
+- Checks: 606/606 tests. Local render 6 to 12 ms per page, 6 to 8 KB of HTML. Screenshots reviewed at desktop and true phone width.
