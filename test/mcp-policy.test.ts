@@ -18,7 +18,7 @@ const input = { type: "object" as const, properties: {}, additionalProperties: f
 
 describe("MCP exposure rules", () => {
   it("exposes exactly these tools", () => {
-    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami", "work.claim", "work.create", "work.link", "work.list", "work.read", "work.update"]);
+    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["capabilities", "chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.history", "project.list", "ref.backlinks", "skill.list", "skill.read", "whoami", "work.claim", "work.create", "work.link", "work.list", "work.read", "work.update"]);
     expect(toolName("project.list")).toBe("project_list");
   });
 
@@ -35,11 +35,11 @@ describe("MCP exposure rules", () => {
   });
 
   it("caps tools by scope and by the human's current role", () => {
-    expect(names(exposedVerbs("reader", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami", "work.list", "work.read"]);
-    expect(names(exposedVerbs("member", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami", "work.list", "work.read"]);
-    expect(names(exposedVerbs("admin", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami", "work.list", "work.read"]);
+    expect(names(exposedVerbs("reader", ["read"]))).toEqual(["capabilities", "chat.catchup", "chat.inbox", "chat.read", "chat.thread", "mail.list", "mail.read", "project.history", "project.list", "ref.backlinks", "skill.list", "skill.read", "whoami", "work.list", "work.read"]);
+    expect(names(exposedVerbs("member", ["read"]))).toEqual(["capabilities", "chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.history", "project.list", "ref.backlinks", "skill.list", "skill.read", "whoami", "work.list", "work.read"]);
+    expect(names(exposedVerbs("admin", ["read"]))).toEqual(["capabilities", "chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.history", "project.list", "ref.backlinks", "skill.list", "skill.read", "whoami", "work.list", "work.read"]);
     expect(names(exposedVerbs("member", []))).toEqual([]);
-    expect(names(exposedVerbs(null, ["read"]))).toEqual(["whoami"]);
+    expect(names(exposedVerbs(null, ["read"]))).toEqual(["capabilities", "skill.list", "skill.read", "whoami"]);
   });
 });
 

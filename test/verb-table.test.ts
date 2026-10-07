@@ -22,6 +22,8 @@ const TABLE: Record<string, Decl> = {
   "work.list": T("tenant", "reader", null, { mcp: "read" }), "work.read": T("tenant", "reader", null, { mcp: "read" }),
   "work.create": T("tenant", "member", null, { mcp: "write" }), "work.update": T("tenant", "member", null, { mcp: "write" }),
   "work.claim": T("tenant", "member", null, { mcp: "write" }), "work.link": T("tenant", "member", null, { mcp: "write" }),
+  "skill.list": T("public", "public", null, { mcp: "read" }), "skill.read": T("public", "public", null, { mcp: "read" }),
+  "capabilities": T("public", "public", null, { mcp: "read" }), "project.history": T("tenant", "reader", null, { mcp: "read" }),
   "provider.status": T("hub", "root", null), "provider.key_verify": T("hub", "root", null), "model.test": T("hub", "root", null),
   "provider.key_add": T("hub", "root", 60, { humanOnly: true }), "provider.key_promote": T("hub", "root", 60, { humanOnly: true }),
   "provider.key_retire": T("hub", "root", 60, { humanOnly: true }), "model.route_set": T("hub", "root", 60, { humanOnly: true }),

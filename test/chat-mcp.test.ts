@@ -23,7 +23,7 @@ describe("chat over MCP", () => {
   it("exposes the read tools only", async () => {
     const w = await chatWorld();
     const ctx = await assistantFor(w);
-    expect(toolsFor(ctx).map((v) => toolDefinition(v).name)).toEqual(["chat_catchup", "chat_inbox", "chat_read", "chat_thread", "event_list", "mail_list", "mail_read", "project_list", "ref_backlinks", "whoami", "work_list", "work_read"]);
+    expect(toolsFor(ctx).map((v) => toolDefinition(v).name)).toEqual(["capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "event_list", "mail_list", "mail_read", "project_history", "project_list", "ref_backlinks", "skill_list", "skill_read", "whoami", "work_list", "work_read"]);
     expect((await callTool(ctx, "chat_post", { c: "general", body: "x" })).isError).toBe(true);
   });
 

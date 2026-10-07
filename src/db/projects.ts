@@ -5,12 +5,19 @@ import type { Project, State } from "./types";
 
 const KINDS = new Set(["repo", "tracker"]);
 
+/** Built-in pages on an organization's host. A project page lives at /<project>, so a project may not take these names. */
+export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
+  "admin", "api", "archive", "auth", "c", "docket", "healthz", "inbox", "internal", "invite", "login", "logout", "m", "mail",
+  "mcp", "me", "oauth", "people", "playground", "privacy", "projects", "search", "settings", "skills", "static", "terms", "well-known",
+]);
+
 export async function createProject(
   db: D1Database,
   input: { tenant_id: string; namespace_id: string | null; slug: string; kind: string; display_name: string },
   now: number,
 ): Promise<Project> {
   if (!isValidSlug(input.slug)) throw badRequest("invalid project slug");
+  if (RESERVED_PROJECT_SLUGS.has(input.slug)) throw badRequest(`"${input.slug}" is the name of a built-in page; choose another project name`);
   if (!KINDS.has(input.kind)) throw badRequest("unknown project kind");
   if (!input.display_name.trim()) throw badRequest("display_name required");
   if (input.namespace_id === null) {
