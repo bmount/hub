@@ -9,6 +9,30 @@ describe("ulid", () => {
     expect(a < b).toBe(true);
     expect(a.slice(0, 10)).toBe(ulid(1_700_000_000_000).slice(0, 10));
   });
+
+  it("is strictly increasing and unique for 10,000 ids at the same now", () => {
+    const now = 1_800_000_000_000;
+    const ids = Array.from({ length: 10_000 }, () => ulid(now));
+    for (let i = 1; i < ids.length; i++) expect(ids[i - 1]! < ids[i]!).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) expect(id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  });
+
+  it("stays increasing across increasing now", () => {
+    const base = 1_900_000_000_000;
+    const ids: string[] = [];
+    for (let i = 0; i < 50; i++) {
+      ids.push(ulid(base + i), ulid(base + i));
+    }
+    for (let i = 1; i < ids.length; i++) expect(ids[i - 1]! < ids[i]!).toBe(true);
+  });
+
+  it("returns a valid id for an explicit past now", () => {
+    ulid(2_000_000_000_000);
+    const past = ulid(1_000_000_000_000);
+    expect(past).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(past < ulid(2_000_000_000_000)).toBe(true);
+  });
 });
 
 describe("randomToken", () => {

@@ -1,14 +1,58 @@
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
+// Monotonic state, per isolate: last timestamp and its 16 base-32 random digits.
+let lastTime = -1;
+let lastRand: number[] = [];
+
+function freshRand(): number[] {
+  const rand = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(rand, (b) => b % 32);
+}
+
+// Increments the base-32 digits in place (with carry); returns false on overflow.
+function incrementRand(digits: number[]): boolean {
+  for (let i = digits.length - 1; i >= 0; i--) {
+    if (digits[i]! < 31) {
+      digits[i]!++;
+      return true;
+    }
+    digits[i] = 0;
+  }
+  return false;
+}
+
+/**
+ * Mints a 26-char Crockford base32 ULID. Ids are strictly increasing per isolate
+ * for non-decreasing `now`: within the same millisecond the random part of the
+ * previous id is incremented instead of redrawn (on random-part overflow the
+ * timestamp advances by 1 ms). An explicit `now` earlier than the last one used
+ * returns a valid id for that time with fresh random bits and does not touch the
+ * monotonic state, so ordering is not guaranteed for such out-of-order calls.
+ */
 export function ulid(now: number = Date.now()): string {
-  const out: string[] = new Array(26);
   let t = now;
+  let rand: number[];
+  if (t < lastTime) {
+    rand = freshRand();
+  } else {
+    if (t === lastTime) {
+      rand = lastRand.slice();
+      if (!incrementRand(rand)) {
+        t = lastTime + 1;
+        rand = freshRand();
+      }
+    } else {
+      rand = freshRand();
+    }
+    lastTime = t;
+    lastRand = rand;
+  }
+  const out: string[] = new Array(26);
   for (let i = 9; i >= 0; i--) {
     out[i] = CROCKFORD[t % 32]!;
     t = Math.floor(t / 32);
   }
-  const rand = crypto.getRandomValues(new Uint8Array(16));
-  for (let i = 0; i < 16; i++) out[10 + i] = CROCKFORD[rand[i]! % 32]!;
+  for (let i = 0; i < 16; i++) out[10 + i] = CROCKFORD[rand[i]!]!;
   return out.join("");
 }
 
