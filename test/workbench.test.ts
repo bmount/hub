@@ -87,4 +87,25 @@ describe("the workbench", () => {
     expect(one).toContain("501 not_implemented");
     expect((await w.get("/planned/nosuch")).status).toBe(404);
   });
+
+  it("links one cached stylesheet and script, offers Log out, and signs out to a page that needs no session", async () => {
+    const w = await world();
+    const html = await (await w.get("/docket")).text();
+    const css = /href="(\/assets\/app\.[a-z0-9]+\.css)"/.exec(html)![1]!;
+    const js = /src="(\/assets\/wb\.[a-z0-9]+\.js)"/.exec(html)![1]!;
+    for (const path of [css, js]) {
+      const res = await SELF.fetch(`https://${HOST}${path}`);
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get("cache-control")).toContain("immutable");
+    }
+    expect(await (await SELF.fetch(`https://${HOST}${css}`)).text()).toContain("--accent:");
+    expect((await SELF.fetch(`https://${HOST}/assets/app.old.css`)).status).toBe(404);
+    expect(html).not.toContain("<style>");
+    expect(html).toContain('<h4>Your account</h4>');
+    expect(html).toContain('action="/api/session.end" data-reload><input type="hidden" name="_back" value="/signed-out">');
+    const out = await SELF.fetch(`https://${HOST}/api/session.end`, { method: "POST", redirect: "manual", headers: { ...w.h, origin: `https://${HOST}`, "content-type": "application/x-www-form-urlencoded" }, body: "_back=%2Fsigned-out" });
+    expect(out.status).toBe(303);
+    expect(out.headers.get("location")).toBe("/signed-out");
+    expect(await (await SELF.fetch(`https://${HOST}/signed-out`)).text()).toContain("re signed out");
+  });
 });

@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { shellFor } from "./shell";
-import { esc, htmlResponse, page } from "../html";
+import { esc, htmlResponse, page, logout } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { listAgentRunsForOperator, listSessions } from "../db/sessions";
@@ -48,7 +48,7 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
     ? (await listTenants(ctx.db, "active")).map((t) => t.slug)
     : memberships.filter((m) => rank(m.membership.role) >= rank("member")).map((m) => m.tenant.slug);
 
-  let body = `<h1>Your account</h1><p>${esc(me.display_name)} &lt;${esc(me.email)}&gt; · <a href="/">hub</a></p>`;
+  let body = `<h1>Your account</h1><p>${esc(me.display_name)} &lt;${esc(me.email)}&gt; · <a href="/">hub</a> · ${logout("/")}</p>`;
 
   body += `<h2>Sessions</h2>` + table(["Id", "Kind", "Started", "Last seen", ""], sessions.map((s) => [
     `${esc(s.id)}${s.id === ctx.session!.id ? " (this one)" : ""}`, esc(s.kind) + (s.kind === "git" && s.label ? ` (${esc(s.label)})` : ""), when(s.created_at), when(s.last_seen_at),

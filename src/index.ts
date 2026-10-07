@@ -1,3 +1,5 @@
+import { assetResponse } from "./assets";
+import { page } from "./html";
 import { Hono } from "hono";
 import type { Env } from "./env";
 import { meteredD1, serverTiming, type Meter } from "./perf";
@@ -66,6 +68,8 @@ app.use("*", async (c, next) => {
 const workerCtx = (c: unknown): ExecutionContext => c as ExecutionContext;
 
 app.get("/healthz", (c) => c.text("ok"));
+app.get("/assets/:file", (c) => assetResponse(new URL(c.req.url).pathname));
+app.get("/signed-out", (c) => c.html(page("Signed out", `<h1>You're signed out</h1><p><a href="https://${c.env.HUB_DOMAIN}/login">Sign in again</a></p>`)));
 app.get("/privacy", () => privacyPage());
 app.get("/terms", () => termsPage());
 app.post("/api/*", (c) => handleApi(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));

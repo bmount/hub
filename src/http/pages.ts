@@ -129,7 +129,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
   if (ctx.host.kind === "apex") {
     if (!ctx.identity) return htmlResponse(intro, 200, extra);
     const memberships = (await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id)).filter((m) => m.tenant.state === "active" && m.membership.state === "active");
-    const card = (slug: string, name: string, note: string) => `<div class="card"><h3><a href="https://${esc(slug)}.${esc(env.HUB_DOMAIN)}/">${esc(name)}</a></h3><p>${esc(note)}</p><p><code>${esc(slug)}@${esc(env.HUB_DOMAIN)}</code></p></div>`;
+    const card = (slug: string, name: string, note: string) => `<a class="card big" href="https://${esc(slug)}.${esc(env.HUB_DOMAIN)}/" data-reload><h3>${esc(name)}</h3><p>${esc(note)}</p><p><code>${esc(slug)}.${esc(env.HUB_DOMAIN)}</code></p></a>`;
     let body = `<h1>Hello, ${esc(ctx.identity.display_name)}</h1><p class="lede">AI can do a lot. Pick an organization to see what is happening, or ask from Claude or ChatGPT over MCP.</p>`;
     body += `<h2>Your organizations</h2>` + (memberships.length ? `<div class="grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, `You are ${m.membership.role}`)).join("")}</div>` : `<p class="lede">None yet. Ask whoever invited you to add you to an organization.</p>`);
     if (ctx.identity.is_root === 1) {
