@@ -18,7 +18,7 @@ const input = { type: "object" as const, properties: {}, additionalProperties: f
 
 describe("MCP exposure rules", () => {
   it("exposes exactly the phase 1 read tools", () => {
-    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["chat.inbox", "chat.read", "chat.thread", "event.list", "project.list", "ref.backlinks", "whoami"]);
+    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "project.list", "ref.backlinks", "whoami"]);
     expect(toolName("project.list")).toBe("project_list");
   });
 
@@ -35,9 +35,9 @@ describe("MCP exposure rules", () => {
   });
 
   it("caps tools by scope and by the human's current role", () => {
-    expect(names(exposedVerbs("reader", ["read"]))).toEqual(["chat.inbox", "chat.read", "chat.thread", "project.list", "ref.backlinks", "whoami"]);
-    expect(names(exposedVerbs("member", ["read"]))).toEqual(["chat.inbox", "chat.read", "chat.thread", "event.list", "project.list", "ref.backlinks", "whoami"]);
-    expect(names(exposedVerbs("admin", ["read"]))).toEqual(["chat.inbox", "chat.read", "chat.thread", "event.list", "project.list", "ref.backlinks", "whoami"]);
+    expect(names(exposedVerbs("reader", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "project.list", "ref.backlinks", "whoami"]);
+    expect(names(exposedVerbs("member", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "project.list", "ref.backlinks", "whoami"]);
+    expect(names(exposedVerbs("admin", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "project.list", "ref.backlinks", "whoami"]);
     expect(names(exposedVerbs("member", []))).toEqual([]);
     expect(names(exposedVerbs(null, ["read"]))).toEqual(["whoami"]);
   });

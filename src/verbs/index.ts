@@ -15,6 +15,7 @@ import { oauthGrantApprove } from "./oauth";
 import {
   channelAddAgent, channelArchive, channelCreate, channelRemoveAgent, channelSetAgentPolicy, channelSetTopic, channelUnarchive,
 } from "./channel";
+import { chatCatchup } from "./chatCatchup";
 import { chatHistory, chatInbox, chatMarkRead, chatRead, chatThread, inboxAck, inboxWait, refBacklinks } from "./chatRead";
 import { chatEdit, chatPost, chatRetract } from "./chatWrite";
 import { chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable, chatConversations } from "./chatControl";
@@ -36,6 +37,6 @@ export function registerAllVerbs(): void {
     channelCreate, channelSetTopic, channelAddAgent, channelRemoveAgent, channelSetAgentPolicy, channelArchive, channelUnarchive,
     chatPost, chatEdit, chatRetract,
     chatRead, chatThread, chatHistory, chatInbox, inboxWait, inboxAck, chatMarkRead, refBacklinks,
-    chatConversations, chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable,
+    chatConversations, chatCatchup, chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable,
   ]);
 }
