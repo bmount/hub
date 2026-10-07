@@ -36,7 +36,7 @@ h2{font-size:1.15rem;margin:1.8rem 0 .6rem}h3{font-size:1rem;margin:.2rem 0}
 .chips{display:flex;flex-wrap:wrap;gap:.4rem;margin:.4rem 0 1rem}.chip{display:inline-block;padding:.15rem .6rem;border-radius:999px;background:var(--soft);color:var(--ink);text-decoration:none;font-size:.88rem}
 .chip[aria-current]{background:var(--ink);color:var(--paper)}.chips+.chips{margin-top:-.5rem}
 form.filters{margin:0 0 1rem}form.filters label{margin-right:.6rem}
-details.edit{margin:1rem 0;max-width:44rem}details.edit summary{cursor:pointer;font-weight:650;color:var(--teal)}details.edit[open] summary{margin-bottom:.4rem}
+details.edit{margin:1rem 0;max-width:44rem}details.edit label{display:block;margin:.5rem 0}details.edit label>input,details.edit label>textarea{display:block;width:100%;margin-top:.2rem}details.edit label>select{display:block;margin-top:.2rem}details.edit .row{display:flex;flex-wrap:wrap;gap:0 1.2rem}.chips .gap{width:.8rem}details.edit summary{cursor:pointer;font-weight:650;color:var(--teal)}details.edit[open] summary{margin-bottom:.4rem}
 .k-wish{color:var(--violet)}.k-snag{color:var(--coral)}.k-errand{color:var(--teal)}.k-quest{color:var(--gold)}.k-call{color:var(--ink)}.k-spark{color:var(--gold)}
 table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:.94rem}
 th,td{padding:.5rem .7rem;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:.8rem;color:var(--muted);font-weight:600;background:var(--soft)}

@@ -77,6 +77,7 @@ function docketBody(ctx: Ctx, project: Project | null, items: WorkItem[], member
   const quick = [
     chip("Anyone's", href(f, { owner: null }), f.owner === null),
     chip("Mine", href(f, { owner: "me" }), f.owner === "me"),
+    `<span class="gap" aria-hidden="true"></span>`,
     chip("Open", href(f, { closed: false }), !f.closed),
     chip("Finished", href(f, { closed: true }), f.closed),
   ].join("");
@@ -154,11 +155,11 @@ export async function workItemPage(request: Request, env: Env, slug: string, num
   const questChoices = parent && !quests.some((q) => q.id === parent.id) ? [parent, ...quests] : quests;
   const edit = canWrite ? `<details class="edit"><summary>Edit</summary>
 <form method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${back}">
-<label>Title <input name="title" required maxlength="200" size="50" value="${esc(w.title)}"></label><br>
-<label>Kind <select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, `${v.name} (${v.plain})`, w.kind === k)).join("")}</select></label>
+<label>Title <input name="title" required maxlength="200" value="${esc(w.title)}"></label>
+<div class="row"><label>Kind <select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, `${v.name} (${v.plain})`, w.kind === k)).join("")}</select></label>
 <label>Owner <select name="owner">${option("none", "Nobody", !owner)}${ownerChoices.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (helper)" : ""}`, owner?.id === m.id)).join("")}</select></label>
-<label>Quest <select name="parent">${option("0", "None", !parent)}${questChoices.map((q) => option(String(q.number), `#${q.number} ${q.title}`, parent?.id === q.id)).join("")}</select></label><br>
-<label>Details <textarea name="body" rows="8" cols="70" maxlength="20000">${esc(w.body)}</textarea></label><br>
+<label>Quest <select name="parent">${option("0", "None", !parent)}${questChoices.map((q) => option(String(q.number), `#${q.number} ${q.title}`, parent?.id === q.id)).join("")}</select></label></div>
+<label>Details <textarea name="body" rows="8" maxlength="20000">${esc(w.body)}</textarea></label>
 <button type="submit">Save changes</button></form></details>` : "";
   const under = children.length
     ? `<h2>Under it</h2><ul>${children.map((c) => `<li><a href="/${esc(project.slug)}/w/${c.number}">#${c.number}</a> ${esc(KINDS[c.kind].name)}: ${esc(c.title)} (${esc(STATES[c.state])})</li>`).join("")}</ul>`
