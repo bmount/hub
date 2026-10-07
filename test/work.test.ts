@@ -81,6 +81,16 @@ describe("work items", () => {
     expect((await w.pat("work.create", { project: "site", kind: "spark", title: "x", source_at: "2999-01-01T00:00:00Z" })).status).toBe(400);
   });
 
+  it("never treats a channel as a project: no work, no page, no mail address", async () => {
+    const w = await world();
+    await env.HUB_DB.prepare("INSERT INTO project (id, tenant_id, namespace_id, slug, kind, display_name, state, created_at) VALUES ('CHAN1', ?, NULL, 'general', 'channel', 'general', 'active', ?)").bind(w.t.id, Date.now()).run();
+    expect((await w.pat("work.create", { project: "general", kind: "snag", title: "x" })).status).toBe(404);
+    const h = cookieHeaders(w.patToken, HOST);
+    expect((await SELF.fetch(`https://${HOST}/general`, { headers: h })).status).toBe(404);
+    expect((await SELF.fetch(`https://${HOST}/general/docket`, { headers: h })).status).toBe(404);
+    expect(await (await SELF.fetch(`https://${HOST}/mail`, { headers: h })).text()).not.toContain("acme.general@");
+  });
+
   it("lets readers read but not file", async () => {
     const w = await world();
     expect((await w.rae("work.create", { project: "site", kind: "snag", title: "x" })).status).toBe(403);

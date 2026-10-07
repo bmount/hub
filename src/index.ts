@@ -8,7 +8,8 @@ import { privacyPage, termsPage } from "./http/privacy";
 import { adminModelsPage } from "./http/adminModels";
 import { adminOrgsPage } from "./http/adminOrgs";
 import { mailListPage, mailReadPage } from "./http/mailPages";
-import { docketPage, workItemPage } from "./http/workPages";
+import { docketPage, orgDocketPage, workItemPage } from "./http/workPages";
+import { peoplePage, projectPage } from "./http/orgPages";
 import { mePage } from "./http/me";
 import { adminAgentsPage } from "./http/adminAgents";
 import { handleEmail } from "./mail/inbound";
@@ -68,6 +69,8 @@ app.get("/m/:msg", (c) => permalinkPage(c.req.raw, c.env, c.req.param("msg")));
 app.get("/inbox", (c) => inboxPage(c.req.raw, c.env));
 app.get("/mail", (c) => mailListPage(c.req.raw, c.env));
 app.get("/mail/:id", (c) => mailReadPage(c.req.raw, c.env, c.req.param("id")));
+app.get("/docket", (c) => orgDocketPage(c.req.raw, c.env));
+app.get("/people", (c) => peoplePage(c.req.raw, c.env));
 app.get("/:project/docket", (c) => docketPage(c.req.raw, c.env, c.req.param("project")));
 app.get("/:project/w/:n", (c) => workItemPage(c.req.raw, c.env, c.req.param("project"), c.req.param("n")));
 app.post("/internal/introspect", (c) => introspect(c.req.raw, c.env));
@@ -83,5 +86,8 @@ app.get("/oauth/consent/:id", (c) => consentPage(c.req.raw, c.env));
 app.post("/oauth/consent/:id", (c) => consentPost(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.all("/mcp", (c) => handleMcp(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.notFound(() => notFoundPage());
+
+// Last: a project's own page, /<project>. Every named page above wins first.
+app.get("/:project", (c) => projectPage(c.req.raw, c.env, c.req.param("project")));
 
 export default { fetch: app.fetch, email: handleEmail } satisfies ExportedHandler<Env>;

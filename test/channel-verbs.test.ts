@@ -97,8 +97,10 @@ describe("channel and project separation (ruling C-2)", () => {
     const paths = (await ok(w.lead.token, "project.list", {})).projects.map((p: { path: string }) => p.path);
     expect(paths).toEqual(["site"]);
     const home = await (await SELF.fetch("https://acme.pimwell.test/", { headers: cookieHeaders(w.lead.token, "acme.pimwell.test") })).text();
-    expect(home).toContain("site");
-    expect(home).not.toContain("general");
+    // Ruling C-2: channels never appear as projects. (Recent activity may still mention that a channel was created.)
+    const projects = home.slice(home.indexOf("<h2>Projects</h2>"), home.indexOf("<h2>Open work</h2>"));
+    expect(projects).toContain("site");
+    expect(projects).not.toContain("general");
     expect((await call(w.lead.token, "project.archive", { slug: "general" })).status).toBe(404);
     await ok(w.lead.token, "channel.archive", { c: "general" });
     expect((await ok(w.lead.token, "project.list", { state: "archived" })).projects).toEqual([]);

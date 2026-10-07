@@ -1,6 +1,7 @@
 // Organizations (admin spec 8.1): every organization with its people and projects; archive, unarchive, and the
 // super-admin delete. Apex, root only. Delete needs the organization archived, a fresh proof, and its name typed.
 import type { Env } from "../env";
+import { shellFor } from "./shell";
 import { esc, htmlResponse, page } from "../html";
 import { buildContext } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
@@ -43,5 +44,5 @@ export async function adminOrgsPage(request: Request, env: Env): Promise<Respons
 <p><small>Deleting removes everything the hub holds for an archived organization: members, projects, conversations, events, keys, and its helper accounts. It cannot be undone. Git data stays with the git host until it can purge it, and until then the name stays reserved.</small></p>
 <h2>Deleted</h2>
 ${deleted.length ? `<table><thead><tr><th>Organization</th><th>Deleted</th><th>Removed</th><th>Git data</th></tr></thead><tbody>${deletedRows}</tbody></table>` : "<p>None.</p>"}`;
-  return htmlResponse(page("Organizations", body), 200, extra);
+  return htmlResponse(page("Organizations", body, shellFor(ctx, env, "admin", "orgs")), 200, extra);
 }

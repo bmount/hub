@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { shellFor } from "./shell";
 import { buildContext, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { HubError } from "../errors";
@@ -14,7 +15,7 @@ import { notFoundPage } from "./pages";
 type Extra = Record<string, string>;
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-const NAV = `<p><a href="/c">channels</a> · <a href="/inbox">inbox</a> · <a href="/">home</a></p>`;
+const NAV = `<p class="chips"><a class="chip" href="/c">Channels</a> <a class="chip" href="/inbox">Inbox</a></p>`;
 
 /** Browser sessions on a tenant host only (spec 11.4); everyone else signs in or gets the ordinary 404. */
 async function pageCtx(request: Request, env: Env): Promise<{ ctx: Ctx; extra: Extra } | Response> {
@@ -81,7 +82,7 @@ export async function channelsPage(request: Request, env: Env): Promise<Response
       + `<input name="slug" placeholder="name" required> <button type="submit">Create</button></form>`
       + `<h2>Add an agent you operate</h2><form method="post" action="/api/channel.add_agent"><input type="hidden" name="_back" value="/c">`
       + `<input name="c" placeholder="channel" required> <input name="agent" placeholder="agent" required> <button type="submit">Add</button></form>`;
-    return htmlResponse(page("Channels", `<h1>Channels</h1>${NAV}<ul>${rows || "<li>None yet.</li>"}</ul>${forms}`), 200, pc.extra);
+    return htmlResponse(page("Channels", `<h1>Channels</h1>${NAV}<ul>${rows || "<li>None yet.</li>"}</ul>${forms}`, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);
   }
@@ -96,7 +97,7 @@ export async function channelPage(request: Request, env: Env, slug: string, draf
     const r = await verb<ReadResult>(pc.ctx, "chat.read", { c: slug, limit: 50, budget: 8000, ...(before && /^\d{1,12}$/.test(before) ? { before } : {}) });
     const older = r.next_before !== null ? `<p><a href="/c/${esc(r.channel)}?before=${r.next_before}">older messages</a></p>` : "";
     const body = `<h1>#${esc(r.channel)}</h1>${NAV}${older}${r.messages.map((m) => msgHtml(r.channel, m, false)).join("")}${compose(`/c/${r.channel}`, r.head, draft, notice, "Post")}`;
-    return htmlResponse(page(`#${r.channel}`, body), 200, pc.extra);
+    return htmlResponse(page(`#${r.channel}`, body, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);
   }
@@ -111,7 +112,7 @@ export async function threadPage(request: Request, env: Env, slug: string, seq: 
     const root = r.messages[0]!;
     const body = `<h1>#${esc(r.channel)} thread #${root.seq}</h1>${NAV}<p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p>`
       + r.messages.map((m) => msgHtml(r.channel, m, true)).join("") + compose(`/c/${r.channel}/t/${root.seq}`, r.head, draft, notice, "Reply");
-    return htmlResponse(page(`#${r.channel} thread`, body), 200, pc.extra);
+    return htmlResponse(page(`#${r.channel} thread`, body, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);
   }
@@ -155,7 +156,7 @@ export async function permalinkPage(request: Request, env: Env, msgId: string): 
     const versions = h.versions.map((x) => `<article><p>r${x.rev} ${when(x.created_at)} ${tagHtml(x.author)}${x.retracted ? " <em>retracted</em>" : ""}</p>`
       + `${x.retracted ? "" : `<pre style="white-space:pre-wrap;margin:.25rem 0">${esc(x.body)}</pre>`}</article>`).join("");
     const body = `<h1>#${esc(h.channel)} message #${h.seq}</h1>${NAV}<p><a href="/c/${esc(h.channel)}/t/${h.seq}">in context</a></p>${versions}`;
-    return htmlResponse(page(`#${h.channel} #${h.seq}`, body), 200, pc.extra);
+    return htmlResponse(page(`#${h.channel} #${h.seq}`, body, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);
   }
@@ -173,7 +174,7 @@ export async function inboxPage(request: Request, env: Env): Promise<Response> {
     const ack = r.items.length > 0
       ? `<form method="post" action="/api/inbox.ack"><input type="hidden" name="_back" value="/inbox"><input type="hidden" name="through" value="${r.head}"><button type="submit">Clear all</button></form>`
       : "";
-    return htmlResponse(page("Inbox", `<h1>Inbox</h1>${NAV}<ul>${rows || "<li>Nothing open.</li>"}</ul>${ack}`), 200, pc.extra);
+    return htmlResponse(page("Inbox", `<h1>Inbox</h1>${NAV}<ul>${rows || "<li>Nothing open.</li>"}</ul>${ack}`, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);
   }

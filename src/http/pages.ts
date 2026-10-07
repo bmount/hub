@@ -1,4 +1,6 @@
 import type { Env } from "../env";
+import { shellFor } from "./shell";
+import { orgHomePage } from "./orgPages";
 import { esc, htmlResponse, page } from "../html";
 import { classifyHost } from "../tenant";
 import { acceptInvite, findInviteByToken, inviteIsOpen, setInviteAcceptedSession } from "../db/invites";
@@ -105,7 +107,7 @@ export async function sessionsPage(request: Request, env: Env): Promise<Response
 <p>${esc(ctx.identity.display_name)} &lt;${esc(ctx.identity.email)}&gt;</p>
 <table><thead><tr><th>Id</th><th>Kind</th><th>Started</th><th>Last seen</th><th></th></tr></thead><tbody>${tr}</tbody></table>
 <form method="post" action="/api/session.end"><button type="submit">Sign out</button></form>`;
-  return htmlResponse(page("Sessions", body), 200, extra);
+  return htmlResponse(page("Sessions", body, shellFor(ctx, env, "hub", "sessions")), 200, extra);
 }
 
 function listSection(title: string, items: string[]): string {
@@ -121,19 +123,22 @@ async function tenantListing(env: Env, tenant_id: string, state: State): Promise
 }
 
 export async function homePage(request: Request, env: Env): Promise<Response> {
+  if (classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN).kind === "tenant") return orgHomePage(request, env);
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind === "apex") {
     if (!ctx.identity) return htmlResponse(intro, 200, extra);
-    const memberships = await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id);
-    let body = `<h1>Pimwell</h1><p>${esc(ctx.identity.display_name)} · <a href="/me">account</a> · <a href="/me/sessions">sessions</a></p>`;
-    body += listSection("Your organizations", memberships.map((m) => `<a href="https://${esc(m.tenant.slug)}.${esc(env.HUB_DOMAIN)}/">${esc(m.tenant.display_name)}</a> (${esc(m.membership.role)})`));
+    const memberships = (await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id)).filter((m) => m.tenant.state === "active" && m.membership.state === "active");
+    const card = (slug: string, name: string, note: string) => `<div class="card"><h3><a href="https://${esc(slug)}.${esc(env.HUB_DOMAIN)}/">${esc(name)}</a></h3><p>${esc(note)}</p><p><code>${esc(slug)}@${esc(env.HUB_DOMAIN)}</code></p></div>`;
+    let body = `<h1>Hello, ${esc(ctx.identity.display_name)}</h1><p class="lede">AI can do a lot. Pick an organization to see what is happening, or ask from Claude or ChatGPT over MCP.</p>`;
+    body += `<h2>Your organizations</h2>` + (memberships.length ? `<div class="grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, `You are ${m.membership.role}`)).join("")}</div>` : `<p class="lede">None yet. Ask whoever invited you to add you to an organization.</p>`);
     if (ctx.identity.is_root === 1) {
-      const tenants = await listTenants(env.HUB_DB, "active");
-      body += listSection("All organizations", tenants.map((t) => `<a href="https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/">${esc(t.display_name)}</a>`));
+      const mine = new Set(memberships.map((m) => m.tenant.id));
+      const others = (await listTenants(env.HUB_DB, "active")).filter((t) => !mine.has(t.id));
+      if (others.length) body += `<h2>Other organizations</h2><div class="grid">${others.map((t) => card(t.slug, t.display_name, "You see this as root")).join("")}</div>`;
       body += `<h2>Hub administration</h2><p><a href="/admin/orgs">Organizations</a> · <a href="/admin/models">Models and keys</a></p>`;
     }
-    return htmlResponse(page("Pimwell", body), 200, extra);
+    return htmlResponse(page("Pimwell", body, shellFor(ctx, env, "home", "apex")), 200, extra);
   }
   if (!ctx.tenant || !ctx.role) return notFoundPage(extra);
   const agentsLink = rank(ctx.role) >= rank("admin") ? ` · <a href="/admin/agents">agents</a>` : "";
@@ -145,6 +150,6 @@ export async function archivePage(request: Request, env: Env): Promise<Response>
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role) return notFoundPage(extra);
-  const body = `<h1>${esc(ctx.tenant.display_name)} archive</h1><p><a href="/">back</a></p>` + (await tenantListing(env, ctx.tenant.id, "archived"));
-  return htmlResponse(page("Archive", body), 200, extra);
+  const body = `<p class="crumbs"><a href="/">${esc(ctx.tenant.display_name)}</a> /</p><h1>Archive</h1><p class="lede">Finished work, kept. Nothing here was thrown away.</p>` + (await tenantListing(env, ctx.tenant.id, "archived"));
+  return htmlResponse(page("Archive", body, shellFor(ctx, env, "home", "archive")), 200, extra);
 }

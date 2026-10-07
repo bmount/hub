@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { shellFor } from "./shell";
 import { esc, htmlResponse, page } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
@@ -94,5 +95,5 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
     + table(["Kind", "Granted", "Revoked"], consents.map((c) => [esc(c.kind), when(c.granted_at), c.revoked_at === null ? "" : when(c.revoked_at)]))
     + (active ? button("consent.revoke", {}, "Stop emails to this address") : `<p>To allow sign-in links by email, write to login@${esc(env.HUB_DOMAIN)} from this address.</p>`);
 
-  return htmlResponse(page("Your account", body), 200, extra);
+  return htmlResponse(page("Your account", body, shellFor(ctx, env, "account")), 200, extra);
 }

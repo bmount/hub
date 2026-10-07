@@ -15,7 +15,7 @@ const kindWords = Object.entries(KINDS).map(([k, v]) => `${k} (${v.plain})`).joi
 const STATE_LIST = ["open", "doing", "done", "dropped"] as const;
 
 async function projectBySlug(ctx: Ctx, slug: string) {
-  const p = await ctx.db.prepare("SELECT id, slug, display_name, state FROM project WHERE tenant_id = ? AND slug = ?").bind(ctx.tenant!.id, slug.trim().toLowerCase())
+  const p = await ctx.db.prepare("SELECT id, slug, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel'").bind(ctx.tenant!.id, slug.trim().toLowerCase())
     .first<{ id: string; slug: string; display_name: string; state: string }>();
   if (!p) throw notFound("no such project");
   return p;

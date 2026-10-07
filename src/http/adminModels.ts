@@ -1,5 +1,6 @@
 // "Models and keys" (admin spec 10.4): what is needed, what is in use, and how to change it. Apex, root only.
 import type { Env } from "../env";
+import { shellFor } from "./shell";
 import { esc, htmlResponse, page } from "../html";
 import { buildContext } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
@@ -78,5 +79,5 @@ ${keys.length ? `<table><thead><tr><th>Provider</th><th>Key</th><th>Status</th><
 <button type="submit">Check and save</button></form>
 <ul>${hints}</ul>
 <p><small>Keys are encrypted at rest with the hub's own secret. They are never shown again, never sent to an assistant, and never written to logs.</small></p>`;
-  return htmlResponse(page("Models and keys", body), 200, extra);
+  return htmlResponse(page("Models and keys", body, shellFor(ctx, env, "admin", "models")), 200, extra);
 }
