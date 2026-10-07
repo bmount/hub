@@ -27,7 +27,12 @@ export function toolDefinition(v: VerbDef<unknown, unknown>): Tool {
 
 /** The tools this request may see: recomputed from the token's scopes and the human's current role (MCP spec 8.5, 10.4). */
 export function toolsFor(ctx: Ctx): VerbDef<unknown, unknown>[] {
-  return exposedVerbs(ctx.role, ctx.oauth?.scopes ?? []);
+  return exposedVerbs(ctx.role, mcpScopes(ctx));
+}
+
+/** The scopes an MCP-style call runs with: the assistant grant's, or the Playground's choice; nothing otherwise. */
+export function mcpScopes(ctx: Ctx): string[] {
+  return ctx.oauth?.scopes ?? ctx.playground?.scopes ?? [];
 }
 
 const ARG_VALUE_MAX = 64;
@@ -78,7 +83,7 @@ const declaredKeys = (v: VerbDef<unknown, unknown> | undefined): string[] =>
 const quotedName = (text: string, max: number) => JSON.stringify(cutText(cleanText(text), max).text);
 
 async function audit(
-  ctx: Ctx, kind: "mcp.call" | "mcp.denied", target: string, outcome: string, args: Record<string, unknown>, verb: VerbDef<unknown, unknown> | undefined,
+  ctx: Ctx, kind: "mcp.call" | "mcp.denied" | "playground.call" | "playground.denied", target: string, outcome: string, args: Record<string, unknown>, verb: VerbDef<unknown, unknown> | undefined,
   keysOnly: boolean,
 ): Promise<void> {
   const label = verb ? target : quotedName(target, 64);
@@ -105,19 +110,20 @@ export function toolResult(verb: VerbDef<unknown, unknown>, result: unknown): Ca
 /** One tools/call: run the verb through the dispatcher as the grant's session, and record it either way (MCP spec 8.5, 9). */
 export async function callTool(ctx: Ctx, name: string, args: Record<string, unknown>): Promise<CallToolResult> {
   const verb = toolsFor(ctx).find((v) => toolName(v.name) === name);
+  const call = ctx.playground ? "playground.call" : "mcp.call";
   if (!verb) {
-    await audit(ctx, "mcp.denied", name, "denied", args, undefined, true);
-    await audit(ctx, "mcp.call", name, "denied", args, undefined, true);
+    await audit(ctx, ctx.playground ? "playground.denied" : "mcp.denied", name, "denied", args, undefined, true);
+    await audit(ctx, call, name, "denied", args, undefined, true);
     return errorResult("not_found", `no tool named ${quotedName(name, 64)} is available to this connection`);
   }
   try {
     const result = await runVerb(ctx, verb, args);
-    await audit(ctx, "mcp.call", verb.name, "ok", args, verb, false);
+    await audit(ctx, call, verb.name, "ok", args, verb, false);
     return toolResult(verb, result);
   } catch (e) {
     if (!(e instanceof HubError)) console.error("tool failed", verb.name, e instanceof Error ? e.name : "error");
     const reason = e instanceof HubError ? e.reason : "internal";
-    await audit(ctx, "mcp.call", verb.name, reason, args, verb, reason === "bad_request");
+    await audit(ctx, call, verb.name, reason, args, verb, reason === "bad_request");
     return errorResult(reason, e instanceof HubError ? e.detail ?? e.reason : "internal error");
   }
 }

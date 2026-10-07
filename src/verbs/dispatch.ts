@@ -16,10 +16,12 @@ export function checkAccess(ctx: Ctx, verb: VerbDef<unknown, unknown>): void {
     throw new HubError(403, "forbidden", "a long-lived token may only call session.start and whoami");
   }
   // An assistant connection runs exposed verbs only, within its scopes and the human's role (MCP spec 8.1, 8.3).
-  if (ctx.authKind === "oauth") {
+  // The Playground runs under the same rules, with the scopes the person chose (never wider than their role).
+  if (ctx.authKind === "oauth" || ctx.playground) {
+    const scopes = ctx.authKind === "oauth" ? ctx.oauth?.scopes : ctx.playground?.scopes;
     if (!verb.mcp) throw new HubError(403, "forbidden", "not available to assistant connections");
-    if (!ctx.oauth || !ctx.oauth.scopes.includes(verb.mcp.scope)) throw new HubError(403, "insufficient_scope", `needs scope ${verb.mcp.scope}`);
-    if (!verbAllowed(verb, ctx.role, ctx.oauth.scopes)) throw new HubError(403, "forbidden");
+    if (!scopes || !scopes.includes(verb.mcp.scope)) throw new HubError(403, "insufficient_scope", `needs scope ${verb.mcp.scope}`);
+    if (!verbAllowed(verb, ctx.role, scopes)) throw new HubError(403, "forbidden");
   }
   if (verb.minRole !== "public") {
     if (verb.scope === "tenant" && ctx.role === null) throw new HubError(404, "not_found");

@@ -37,7 +37,9 @@ export const skillRead = defineVerb({
 
 /** Scopes a connection holds: an assistant's granted scopes, or everything its role allows on pages and the API. */
 function scopesOf(ctx: Ctx): string[] {
-  return ctx.authKind === "oauth" ? [...(ctx.oauth?.scopes ?? [])] : ["read", "write"];
+  if (ctx.authKind === "oauth") return [...(ctx.oauth?.scopes ?? [])];
+  if (ctx.playground) return [...ctx.playground.scopes];
+  return ["read", "write"];
 }
 
 export const capabilities = defineVerb({

@@ -16,6 +16,8 @@ export const RATE_RULES = {
   mcp_anon_ip: { limit: 60, windowMs: MINUTE_MS },
   mcp_grant_minute: { limit: 120, windowMs: MINUTE_MS },
   mcp_grant_hour: { limit: 2000, windowMs: RATE_WINDOW_MS },
+  // The in-context Playground: per browser session, like one assistant connection.
+  playground_session: { limit: 120, windowMs: MINUTE_MS },
 } as const;
 export type RateBucket = keyof typeof RATE_RULES;
 

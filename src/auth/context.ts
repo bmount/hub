@@ -26,6 +26,11 @@ export type Ctx = {
   staleCookie: boolean;
   /** Set only on /mcp requests: the assistant connection this request runs under. */
   oauth?: OAuthCtx;
+  /**
+   * Set only by the in-context Playground: the scopes the person chose. The request then obeys the same MCP exposure
+   * rules as an assistant connection holding exactly these scopes; it can only narrow the person's own authority.
+   */
+  playground?: { scopes: string[] };
 };
 
 export type OAuthCtx = { grant_id: string; client_id: string; client_name: string; scopes: string[] };
