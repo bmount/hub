@@ -20,6 +20,7 @@ export const RATE_RULES = {
   playground_session: { limit: 120, windowMs: MINUTE_MS },
   // Each proposal is a model call: per person, per hour.
   propose_identity: { limit: 20, windowMs: RATE_WINDOW_MS },
+  assistant_turn: { limit: 120, windowMs: RATE_WINDOW_MS },
 } as const;
 export type RateBucket = keyof typeof RATE_RULES;
 

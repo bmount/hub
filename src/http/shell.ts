@@ -39,7 +39,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
       link("/mail", "Mail", "mail", r?.held),
       link("/c", "Conversations", "chat"),
       link("/people", "People and agents", "people"),
-      link("/playground", "Playground", "playground"),
+      link("/assistant", "Assistant", "playground"),
       link("/apps", "Apps", "apps"),
       link("/usage", "AI usage", "usage"),
       ...(rank(ctx.role) >= rank("admin") ? [link("/admin/agents", "Admin", "admin")] : []),
@@ -50,7 +50,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
       { href: "/docket", label: "Docket", active: active === "docket" || active === "project", count: r?.open },
       { href: "/attention", label: "Needs me", active: active === "attention", count: r?.needs },
       { href: "/mail", label: "Mail", active: active === "mail", count: r?.held },
-      { href: "/c", label: "Chat", active: active === "chat" },
+      { href: "/assistant", label: "Assistant", active: active === "playground" },
     ];
     return {
       brandHref: hub, org: { name: ctx.tenant.display_name, href: "/" }, me, tip: tipFor(key), nav, projects, planned, tabs,

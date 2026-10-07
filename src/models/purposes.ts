@@ -22,6 +22,7 @@ export type Purpose = { id: string; title: string; why: string; provider: string
 export const PURPOSES: Purpose[] = [
   { id: "deep", title: "Deep reasoning", why: "Diagnosis from logs and code, first-principles cost estimates, the situation workflow.", provider: "openai", model: "gpt-6-astra" },
   { id: "reasoning", title: "Reasoning", why: "Summaries, plans, status reports, assignment proposals.", provider: "openai", model: "gpt-6.1-sol" },
+  { id: "assistant", title: "Assistant", why: "The in-app Assistant: conversations that call Pimwell's tools for people who don't use an MCP client.", provider: "openai", model: "gpt-6.1-sol" },
   { id: "fast", title: "Fast", why: "Titles, short classifications, quick checks.", provider: "openai", model: "gpt-6-luna" },
   { id: "code", title: "Code", why: "Agents that read and change code, run through the Pi coding agent.", provider: "openai", model: "gpt-6.1-sol" },
 ];

@@ -24,12 +24,22 @@ export const WORKBENCH_JS = String.raw`
   }
   function closeRail() { var r = $("#rail"); if (r) r.classList.remove("open"); if (location.hash === "#rail") history.replaceState(history.state, "", location.pathname + location.search); }
 
+  // Scripts that arrive in a swapped pane never run on their own (parsed HTML is inert); run each one now, once.
+  function revive(root) {
+    $$("script", root).forEach(function (old) {
+      var s = document.createElement("script");
+      for (var i = 0; i < old.attributes.length; i++) s.setAttribute(old.attributes[i].name, old.attributes[i].value);
+      s.textContent = old.textContent;
+      old.replaceWith(s);
+    });
+  }
+
   function swap(doc, url, push) {
     var cur = $("main.panes"), next = doc.querySelector("main.panes");
     if (!cur || !next) { location.href = url; return; }
     ["list", "inspector"].forEach(function (id) {
       var a = document.getElementById(id), b = doc.getElementById(id);
-      if (a && b && (a.getAttribute("data-key") !== b.getAttribute("data-key") || id === "inspector")) a.replaceWith(b);
+      if (a && b && (a.getAttribute("data-key") !== b.getAttribute("data-key") || id === "inspector")) { a.replaceWith(b); revive(b); }
     });
     cur.className = next.className;
     var rail = $("#rail"), nrail = doc.getElementById("rail");

@@ -43,8 +43,9 @@ export async function playgroundPage(request: Request, env: Env): Promise<Respon
 <form class="pg" data-tool="${esc(t.name)}"><label>Arguments (JSON)<br><textarea name="args" rows="4" cols="60" spellcheck="false">${esc(example(t.inputSchema as never))}</textarea></label><br><button type="submit">Run</button></form>
 <details><summary><small>Input schema</small></summary><pre>${esc(JSON.stringify(t.inputSchema, null, 2))}</pre></details>
 <div class="out" hidden></div></details>`).join("");
-  const body = `<h1>MCP Playground</h1>
-<p class="lede">Run any tool exactly as an assistant connected to ${esc(ctx.tenant!.display_name)} would: same tools, same checks, same answers. It acts as you, in this organization only, and every call is on the record.</p>
+  const body = `<div class="chips"><a class="chip" href="/assistant">Chat</a><a class="chip" href="/assistant/tools" aria-current="true">Tools</a></div>
+<h1>Tools</h1>
+<p class="lede">Run any tool directly, exactly as an assistant connected to ${esc(ctx.tenant!.display_name)} would: same tools, same checks, same answers. It acts as you, in this organization only, and every call is on the record.</p>
 <div class="chips"><a class="chip" href="?scopes=read"${set === "read" ? ' aria-current="true"' : ""}>Read only</a><a class="chip" href="?scopes=write"${set === "write" ? ' aria-current="true"' : ""}>Read and write</a></div>
 <p><small>${tools.length} tools with ${set === "read" ? "the read scope" : "the read and write scopes"} at your role (${esc(ctx.role!)}). Write tools change real data.</small></p>
 ${cards || `<p class="lede">No tools for this scope at your role.</p>`}
@@ -63,7 +64,7 @@ for (const f of document.querySelectorAll("form.pg")) f.addEventListener("submit
   add("Request", JSON.stringify(j.request, null, 2)); add("Response", JSON.stringify(j.response, null, 2));
 });
 </script>`;
-  return htmlResponse(page("MCP Playground", body, shellFor(ctx, env, "playground")), 200, extra);
+  return htmlResponse(page("Assistant tools", body, shellFor(ctx, env, "playground", "tools")), 200, extra);
 }
 
 export async function playgroundCall(request: Request, env: Env): Promise<Response> {

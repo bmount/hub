@@ -8,6 +8,14 @@ export function setModelFetchForTest(f: typeof fetch | null): void {
 
 export type AskResult = { text: string; inputTokens: number | null; outputTokens: number | null };
 
+/** A conversation item in the provider's own shape; kept opaque so each turn can hand back exactly what it received. */
+export type TurnItem = Record<string, unknown>;
+export type FunctionTool = { name: string; description: string; parameters: Record<string, unknown> };
+export type TurnResult = {
+  text: string; calls: Array<{ call_id: string; name: string; arguments: string }>; output: TurnItem[];
+  inputTokens: number | null; outputTokens: number | null; cachedTokens: number | null;
+};
+
 export interface Provider {
   id: string;
   name: string;
@@ -17,6 +25,8 @@ export interface Provider {
   /** Ok and the model ids the key can use, or the provider's error. */
   verify: (key: string) => Promise<{ ok: true; models: string[] } | { ok: false; error: string }>;
   ask: (key: string, model: string, input: string, opts: { instructions?: string; maxOutputTokens?: number }) => Promise<AskResult>;
+  /** One step of a tool-using conversation: the model either answers or asks for function calls. Nothing is stored at the provider. */
+  turn: (key: string, model: string, items: TurnItem[], opts: { instructions: string; tools: FunctionTool[]; maxOutputTokens?: number }) => Promise<TurnResult>;
 }
 
 async function errorText(res: Response): Promise<string> {
@@ -61,6 +71,27 @@ const openai: Provider = {
       .map((c) => c.text!)
       .join("");
     return { text, inputTokens: body.usage?.input_tokens ?? null, outputTokens: body.usage?.output_tokens ?? null };
+  },
+  async turn(key, model, items, opts) {
+    const res = await modelFetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        model, input: items, instructions: opts.instructions, store: false,
+        tools: opts.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.parameters, strict: false })),
+        ...(opts.maxOutputTokens ? { max_output_tokens: opts.maxOutputTokens } : {}),
+      }),
+    });
+    if (!res.ok) throw new Error(await errorText(res));
+    const body = (await res.json()) as {
+      output?: Array<Record<string, unknown> & { type: string; content?: Array<{ type: string; text?: string }>; call_id?: string; name?: string; arguments?: string }>;
+      usage?: { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number } };
+    };
+    const output = body.output ?? [];
+    const text = output.filter((o) => o.type === "message").flatMap((o) => o.content ?? []).filter((c) => c.type === "output_text" && typeof c.text === "string").map((c) => c.text!).join("");
+    const calls = output.filter((o) => o.type === "function_call" && typeof o.call_id === "string" && typeof o.name === "string")
+      .map((o) => ({ call_id: o.call_id!, name: o.name!, arguments: typeof o.arguments === "string" ? o.arguments : "{}" }));
+    return { text, calls, output, inputTokens: body.usage?.input_tokens ?? null, outputTokens: body.usage?.output_tokens ?? null, cachedTokens: body.usage?.input_tokens_details?.cached_tokens ?? null };
   },
 };
 

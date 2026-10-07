@@ -1,3 +1,4 @@
+import { assistantChat, assistantPage } from "./http/assistantPages";
 import { onboardBody } from "./skills/onboard";
 import { adminAppsPage, appsPage } from "./http/appsPages";
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -117,7 +118,10 @@ app.get("/planned/:area", (c) => plannedPage(c.req.raw, c.env, c.req.param("area
 app.get("/people", (c) => peoplePage(c.req.raw, c.env));
 app.get("/people/:who", (c) => peoplePage(c.req.raw, c.env, c.req.param("who")));
 app.get("/skills", (c) => skillsPage(c.req.raw, c.env));
-app.get("/playground", (c) => playgroundPage(c.req.raw, c.env));
+app.get("/assistant", (c) => assistantPage(c.req.raw, c.env));
+app.post("/assistant/chat", (c) => assistantChat(c.req.raw, c.env));
+app.get("/assistant/tools", (c) => playgroundPage(c.req.raw, c.env));
+app.get("/playground", (c) => c.redirect("/assistant/tools", 301));
 app.post("/playground/call", (c) => playgroundCall(c.req.raw, c.env));
 app.get("/skills/:name", (c) => skillsPage(c.req.raw, c.env, c.req.param("name")));
 app.get("/:project/docket", (c) => docketPage(c.req.raw, c.env, c.req.param("project")));

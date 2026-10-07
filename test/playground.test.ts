@@ -105,13 +105,13 @@ describe("the in-context Playground", () => {
 
   it("shows the page to members with the tools for the chosen scopes, and to no one else", async () => {
     const w = await world();
-    const page = await (await SELF.fetch(`https://${ACME}/playground`, { headers: cookieHeaders(w.pat.token, ACME) })).text();
-    expect(page).toContain("MCP Playground");
+    const page = await (await SELF.fetch(`https://${ACME}/assistant/tools`, { headers: cookieHeaders(w.pat.token, ACME) })).text();
+    expect(page).toContain("<h1>Tools</h1>");
     expect(page).toContain('data-tool="work_list"');
     expect(page).not.toContain('data-tool="work_create"');
-    const write = await (await SELF.fetch(`https://${ACME}/playground?scopes=write`, { headers: cookieHeaders(w.pat.token, ACME) })).text();
+    const write = await (await SELF.fetch(`https://${ACME}/assistant/tools?scopes=write`, { headers: cookieHeaders(w.pat.token, ACME) })).text();
     expect(write).toContain('data-tool="work_create"');
-    expect((await SELF.fetch(`https://blue.pimwell.test/playground`, { headers: cookieHeaders(w.pat.token, "blue.pimwell.test") })).status).toBe(404);
-    expect((await SELF.fetch(`https://pimwell.test/playground`, { headers: cookieHeaders(w.pat.token, "pimwell.test") })).status).toBe(404);
+    expect((await SELF.fetch(`https://blue.pimwell.test/assistant/tools`, { headers: cookieHeaders(w.pat.token, "blue.pimwell.test") })).status).toBe(404);
+    expect((await SELF.fetch(`https://pimwell.test/assistant/tools`, { headers: cookieHeaders(w.pat.token, "pimwell.test") })).status).toBe(404);
   });
 });
