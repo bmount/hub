@@ -6,6 +6,7 @@ import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { listCredentials, purposeStatus, revealSecret } from "../models/store";
 import { PROVIDERS, provider as providerById } from "../models/providers";
+import { newerModels } from "../models/purposes";
 
 const when = (ms: number | null) => (ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") : "never");
 const BACK = `<input type="hidden" name="_back" value="/admin/models">`;
@@ -39,11 +40,12 @@ export async function adminModelsPage(request: Request, env: Env): Promise<Respo
 
   const inUse = purposes.map((p) => {
     const list = models.get(p.route.provider) ?? [];
-    const options = list.map((m) => `<option value="${esc(m)}">`).join("");
+    const newer = newerModels(p.route.model, list);
+    const options = [...newer, ...list.filter((m) => !newer.includes(m))].map((m) => `<option value="${esc(m)}">`).join("");
     return `<tr><td><strong>${esc(p.title)}</strong><br><small>${esc(p.why)}</small></td>
 <td>${esc(providerById(p.route.provider)?.name ?? p.route.provider)}<br><code>${esc(p.route.model)}</code><br><small>${p.route.source === "default" ? "default" : "set by admin"}</small></td>
 <td>${p.key ? `<code>${esc(p.key.fingerprint)}</code><br><small>${esc(p.key.label)}</small>` : "<em>none</em>"}</td>
-<td>${p.calls_24h} calls, ${p.errors_24h} errors</td>
+<td>${p.calls_24h} calls, ${p.errors_24h} errors${newer.length ? `<br><small><strong>Newer available:</strong> ${newer.slice(0, 4).map((m) => `<code>${esc(m)}</code>`).join(", ")}</small>` : ""}</td>
 <td><form method="post" action="/api/model.route_set"><input type="hidden" name="purpose" value="${esc(p.purpose)}"><input type="hidden" name="provider" value="${esc(p.route.provider)}">
 <input name="model" value="${esc(p.route.model)}" list="models-${esc(p.purpose)}" size="18" required><datalist id="models-${esc(p.purpose)}">${options}</datalist>${BACK}<button type="submit">Change</button></form>
 ${form("model.test", { purpose: p.purpose }, "Test")}</td></tr>`;

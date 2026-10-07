@@ -131,7 +131,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
     if (ctx.identity.is_root === 1) {
       const tenants = await listTenants(env.HUB_DB, "active");
       body += listSection("All organizations", tenants.map((t) => `<a href="https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/">${esc(t.display_name)}</a>`));
-      body += `<h2>Hub administration</h2><p><a href="/admin/models">Models and keys</a></p>`;
+      body += `<h2>Hub administration</h2><p><a href="/admin/orgs">Organizations</a> · <a href="/admin/models">Models and keys</a></p>`;
     }
     return htmlResponse(page("Pimwell", body), 200, extra);
   }

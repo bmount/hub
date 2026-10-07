@@ -278,15 +278,15 @@ need different access.
 Pimwell uses language models for diagnosis, estimates, triage, summaries, and helpers. It needs
 provider credentials and a mapping from purposes to models.
 
-| Purpose | Default model (OpenAI, 2026-10) | Notes |
+| Purpose | Default model (OpenAI, checked 2026-10-07) | Notes |
 | --- | --- | --- |
-| `deep`: diagnosis, cost estimates, the situation workflow | `gpt-5.5-pro` | slow, most capable |
-| `reasoning`: summaries, plans, assignment proposals | `gpt-5.5` | |
-| `fast`: titles, classification fallback | `gpt-5.4-mini` | |
-| `code`: helper coding through Pi | `gpt-5.3-codex` | Pi runs the tool loop; section 10.5 |
+| `deep`: diagnosis, cost estimates, the situation workflow | `gpt-6-astra` | highest intelligence |
+| `reasoning`: summaries, plans, assignment proposals | `gpt-6.1-sol` | balanced |
+| `fast`: titles, classification fallback | `gpt-6-luna` | fastest, cheapest |
+| `code`: helper coding through Pi | `gpt-6.1-sol` | tool calling through the Responses API; Pi runs the loop (10.5) |
 | `decision`: typed decisions | TypeSafe Jev, later Cloudflare Clef | `docs/direction.md` |
 
-The mapping is data, edited in admin. It isn't code.
+The mapping is data, edited in admin. It isn't code. The admin page flags when a provider offers a newer model family than a purpose uses.
 
 ### 10.2 Storage
 

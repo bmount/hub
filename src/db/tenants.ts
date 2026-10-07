@@ -2,10 +2,12 @@ import { ulid } from "../ids";
 import { badRequest, conflict } from "../errors";
 import { isValidTenantSlug } from "../tenant";
 import type { State, Tenant } from "./types";
+import { slugReserved } from "./tenantDelete";
 
 export async function createTenant(db: D1Database, input: { slug: string; display_name: string }, now: number): Promise<Tenant> {
   if (!isValidTenantSlug(input.slug)) throw badRequest("invalid tenant slug");
   if (!input.display_name.trim()) throw badRequest("display_name required");
+  if (await slugReserved(db, input.slug)) throw conflict("that name belonged to a deleted organization and stays reserved until its git data is purged");
   const row: Tenant = { id: ulid(now), slug: input.slug, display_name: input.display_name.trim(), state: "active", created_at: now };
   try {
     await db.prepare("INSERT INTO tenant (id, slug, display_name, state, created_at) VALUES (?, ?, ?, ?, ?)")

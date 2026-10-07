@@ -1,6 +1,7 @@
 import { defineVerb } from "./table";
 import { applyStandingGrants } from "../auth/googleAdmit";
-import { reqString, stateParam } from "./params";
+import { optString, reqString, stateParam } from "./params";
+import { confirmMatches, deleteTenant } from "../db/tenantDelete";
 import { conflict, notFound } from "../errors";
 import { createTenant, getTenantBySlug, listTenants, setTenantState } from "../db/tenants";
 import { recordEvent } from "../db/events";
@@ -54,4 +55,20 @@ export const tenantList = defineVerb({
   name: "tenant.list", kind: "query", scope: "hub", minRole: "root", freshProofMinutes: null, summary: "List tenants.",
   parse: (i) => ({ state: stateParam(i) }),
   run: async (ctx, p) => ({ tenants: await listTenants(ctx.db, p.state) }),
+});
+
+export const tenantDelete = defineVerb({
+  name: "tenant.delete", kind: "command", scope: "hub", minRole: "root", freshProofMinutes: 10, humanOnly: true,
+  summary: "Permanently delete an archived organization and everything the hub holds for it. Type its name in confirm. The name stays reserved until its git data is purged.",
+  parse: (i) => ({ slug: reqString(i, "slug", { max: 63 }), confirm: optString(i, "confirm", { max: 63 }) }),
+  run: async (ctx, p) => {
+    confirmMatches(p.slug, p.confirm);
+    const r = await deleteTenant(ctx.db, p.slug, ctx.identity!.id, ctx.now);
+    const total = Object.values(r.counts).reduce((a, b) => a + b, 0);
+    await recordEvent(ctx.db, {
+      tenant_id: null, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "tenant.delete", target_kind: "tenant", target_id: r.tenant_id,
+      summary: `Deleted organization ${r.slug}: ${total} rows, ${r.agents_deleted} helper accounts. Git data kept until Ardi can purge it; the name stays reserved.`,
+    }, ctx.now);
+    return r;
+  },
 });

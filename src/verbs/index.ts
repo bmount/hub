@@ -1,7 +1,7 @@
 import { registerVerbs } from "./table";
 import { bootstrap } from "./bootstrap";
 import { whoami } from "./whoami";
-import { tenantArchive, tenantCreate, tenantList, tenantUnarchive } from "./tenant";
+import { tenantArchive, tenantCreate, tenantDelete, tenantList, tenantUnarchive } from "./tenant";
 import { modelRouteSet, modelTest, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, providerStatus } from "./models";
 import { namespaceArchive, namespaceCreate, namespaceUnarchive } from "./namespace";
 import { projectArchive, projectCreate, projectList, projectUnarchive } from "./project";
@@ -24,7 +24,7 @@ import { chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable, ch
 export function registerAllVerbs(): void {
   registerVerbs([
     bootstrap, whoami,
-    tenantCreate, tenantArchive, tenantUnarchive, tenantList,
+    tenantCreate, tenantArchive, tenantUnarchive, tenantList, tenantDelete,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,
     projectCreate, projectArchive, projectUnarchive, projectList,

@@ -6,6 +6,7 @@ import { authLinkPage, consumeLinkPage, loginPage, loginPostPage } from "./http/
 import { googleCallbackPage, googleStartPage } from "./http/googleLogin";
 import { privacyPage, termsPage } from "./http/privacy";
 import { adminModelsPage } from "./http/adminModels";
+import { adminOrgsPage } from "./http/adminOrgs";
 import { mePage } from "./http/me";
 import { adminAgentsPage } from "./http/adminAgents";
 import { handleEmail } from "./mail/inbound";
@@ -54,6 +55,7 @@ app.post("/auth/:token", (c) => consumeLinkPage(c.req.raw, c.env));
 app.get("/me", (c) => mePage(c.req.raw, c.env));
 app.get("/admin/agents", (c) => adminAgentsPage(c.req.raw, c.env));
 app.get("/admin/models", (c) => adminModelsPage(c.req.raw, c.env));
+app.get("/admin/orgs", (c) => adminOrgsPage(c.req.raw, c.env));
 app.get("/me/sessions", (c) => sessionsPage(c.req.raw, c.env));
 app.get("/c", (c) => channelsPage(c.req.raw, c.env));
 app.get("/c/:slug", (c) => channelPage(c.req.raw, c.env, c.req.param("slug")));

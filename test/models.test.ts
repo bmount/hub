@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { open, seal, fingerprint } from "../src/models/secretbox";
 import { setModelFetchForTest } from "../src/models/providers";
 import { addCredential, listCredentials, promoteCredential, resolveRoute, retireCredential, setRoute } from "../src/models/store";
+import { newerModels } from "../src/models/purposes";
 import { ask } from "../src/models/ask";
 import { apiPost, cookieHeaders, seedHuman } from "./helpers";
 
@@ -73,7 +74,7 @@ describe("provider keys", () => {
 
 describe("routes and asking", () => {
   it("uses the default model until admin sets another", async () => {
-    expect((await resolveRoute(env.HUB_DB, "reasoning", null)).model).toBe("gpt-5.5");
+    expect((await resolveRoute(env.HUB_DB, "reasoning", null)).model).toBe("gpt-6.1-sol");
     await setRoute(env.HUB_DB, { purpose: "reasoning", provider: "openai", model: "gpt-5.5-pro", tenant_id: null, updated_by: null }, Date.now());
     await setRoute(env.HUB_DB, { purpose: "reasoning", provider: "openai", model: "gpt-5.4-mini", tenant_id: null, updated_by: null }, Date.now());
     expect(await resolveRoute(env.HUB_DB, "reasoning", null)).toMatchObject({ model: "gpt-5.4-mini", source: "hub" });
@@ -83,7 +84,7 @@ describe("routes and asking", () => {
     const seen = fakeOpenAI();
     await add(KEY_A);
     const r = await ask(env, "fast", "say ok");
-    expect(r).toMatchObject({ text: "ok from gpt-5.4-mini", provider: "openai", model: "gpt-5.4-mini" });
+    expect(r).toMatchObject({ text: "ok from gpt-6-luna", provider: "openai", model: "gpt-6-luna" });
     expect(seen.at(-1)!.auth).toBe(`Bearer ${KEY_A}`);
     const call = await env.HUB_DB.prepare("SELECT ok, input_tokens, output_tokens FROM model_call WHERE purpose = 'fast'").first();
     expect(call).toEqual({ ok: 1, input_tokens: 7, output_tokens: 3 });
@@ -91,6 +92,15 @@ describe("routes and asking", () => {
 
   it("explains what is missing when there is no key", async () => {
     await expect(ask(env, "deep", "hello")).rejects.toThrow(/add one under Models and keys/);
+  });
+});
+
+describe("newer models", () => {
+  it("lists newer GPT families, newest first, without dated snapshots", () => {
+    const live = ["gpt-5.5", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-sol-2026-09-30", "o3", "gpt-7-nova"];
+    expect(newerModels("gpt-5.5", live)).toEqual(["gpt-7-nova", "gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"]);
+    expect(newerModels("gpt-7-nova", live)).toEqual([]);
+    expect(newerModels("o3", live)).toEqual([]);
   });
 });
 
