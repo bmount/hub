@@ -14,6 +14,7 @@ import { sameOrigin } from "./login";
 import { shellFor } from "./shell";
 import { callTool, toolDefinition, toolsFor } from "../mcp/tools";
 import { takeRateDetail } from "../rate";
+import { note } from "../log";
 
 export const PLAYGROUND_HEADER = "x-pimwell-playground";
 const SCOPE_SETS: Record<string, string[]> = { read: ["read"], write: ["read", "write"] };
@@ -88,6 +89,7 @@ export async function playgroundCall(request: Request, env: Env): Promise<Respon
   const scopes = typeof b.scopes === "string" ? SCOPE_SETS[b.scopes] : undefined;
   if (!scopes) return json({ error: "bad_request", reason: "scopes must be read or write" }, 400);
   const started = Date.now();
+  note(request, { verb: `tool:${String(b.tool).slice(0, 64)}`, via: "playground" });
   const result = await callTool({ ...ctx, playground: { scopes } }, b.tool, args as Record<string, unknown>);
   const call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: b.tool, arguments: args } };
   return json({ request: call, response: { jsonrpc: "2.0", id: 1, result }, ms: Date.now() - started });

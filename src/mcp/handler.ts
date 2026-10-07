@@ -1,3 +1,4 @@
+import { note, noteCtx } from "../log";
 import { Server, createMcpHandler, type McpHttpHandler } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import type { Env } from "../env";
@@ -44,7 +45,7 @@ function mcpHandler(): McpHttpHandler {
     const ctx = rc.authInfo?.extra?.hub as Ctx | undefined;
     if (!ctx) throw new Error("MCP request without hub authentication");
     return serverFor(ctx);
-  }, { legacy: "stateless", onerror: (e) => console.log("mcp error", e.name) });
+  }, { legacy: "stateless", onerror: (e) => console.error(JSON.stringify({ msg: "mcp error", error: `${e.name}: ${e.message}`, stack: e.stack ?? null })) });
   return mcp;
 }
 
@@ -63,7 +64,14 @@ export async function handleMcp(request: Request, env: Env, waitUntil?: (p: Prom
   const origin = request.headers.get("origin");
   if (origin !== null && !ALLOWED_ORIGINS.has(origin)) return oauthJson({ error: "forbidden_origin" }, 403);
   const auth = await mcpAuth(request, env, host.slug, now, waitUntil);
-  if (auth.kind === "deny") return auth.response;
+  if (auth.kind === "deny") { note(request, { tenant: host.slug, via: "mcp" }); return auth.response; }
+  noteCtx(request, auth.ctx, "mcp");
+  if (request.method === "POST") {
+    try {
+      const m = JSON.parse(await request.clone().text()) as { method?: unknown; params?: { name?: unknown } };
+      if (m && typeof m.method === "string") note(request, { verb: m.method === "tools/call" && typeof m.params?.name === "string" ? `tool:${m.params.name.slice(0, 64)}` : m.method.slice(0, 64) });
+    } catch { /* not JSON: the SDK answers it */ }
+  }
   // A batch array would run many calls under one rate-limit charge; the 2025-06-18 spec dropped batching anyway.
   if (request.method === "POST" && (await isBatch(request))) {
     return oauthJson({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "JSON-RPC batch requests are not supported" } }, 400);

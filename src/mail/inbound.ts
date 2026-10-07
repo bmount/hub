@@ -14,11 +14,16 @@ export const REJECT_REASON = "This address does not accept mail from you.";
 // Spec 6.4. Cloudflare's MX already rejected SPF/DKIM failures; reply() adds
 // the DMARC gate. Authentication-Results is deliberately not read.
 export async function handleEmail(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
+  const started = Date.now();
+  let error: string | null = null;
   try {
     await handle(message, env, ctx);
   } catch (e) {
-    console.log("inbound failed", e instanceof Error ? e.name : "error");
+    error = e instanceof Error ? `${e.name}: ${e.message}` : "error";
+    console.error(JSON.stringify({ msg: "inbound failed", stack: e instanceof Error ? e.stack ?? null : null }));
   }
+  // Who wrote to which address, and how long it took; what happened to it is in inbound_mail and the event log.
+  console.log(JSON.stringify({ msg: "mail", to: message.to.trim().toLowerCase(), from: message.from.trim().toLowerCase(), size: message.rawSize, ms: Date.now() - started, error }));
 }
 
 async function handle(message: ForwardableEmailMessage, env: Env, _ctx: ExecutionContext): Promise<void> {

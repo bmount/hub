@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "./env";
 import { meteredD1, serverTiming, type Meter } from "./perf";
+import { emit, note, requestLine } from "./log";
 import { handleApi } from "./http/api";
 import { registerAllVerbs } from "./verbs/index";
 import { authLinkPage, consumeLinkPage, loginPage, loginPostPage } from "./http/login";
@@ -43,9 +44,16 @@ app.use("*", async (c, next) => {
   // This request's own copy of the bindings, with D1 metered; other requests are unaffected.
   c.env = { ...c.env, HUB_DB: meteredD1(c.env.HUB_DB, meter) };
   await next();
+  if (c.error) {
+    const e = c.error;
+    note(c.req.raw, { error: { reason: "exception", detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e) } });
+    console.error(JSON.stringify({ msg: "exception", path: new URL(c.req.url).pathname, ray: c.req.header("cf-ray") ?? null, stack: e instanceof Error ? e.stack ?? null : null }));
+  }
   if (c.res && !c.res.headers.has("server-timing")) {
     try { c.res.headers.set("server-timing", serverTiming(Date.now() - started, meter)); } catch { /* immutable response: leave it */ }
   }
+  // Logging must never break a response.
+  try { emit(requestLine(c.req.raw, c.res?.status ?? 500, Date.now() - started, meter)); } catch { /* ignore */ }
 });
 
 app.use("*", async (c, next) => {

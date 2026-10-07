@@ -6,6 +6,7 @@ import { getMembership } from "../db/memberships";
 import { getSessionByToken, touchSession } from "../db/sessions";
 import { readSessionToken } from "./cookie";
 import { sha256Hex } from "../ids";
+import { noteCtx } from "../log";
 import { API_TOKEN_PREFIX, getApiTokenByToken } from "../db/apiTokens";
 import { agentCredentialOk } from "./agent";
 import type { LiveGrant } from "../db/oauthGrants";
@@ -138,7 +139,9 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
     role = "root";
   }
 
-  return { env, db, now, ip, waitUntil, host, tenant, identity, session, apiToken, role, authKind, staleCookie };
+  const ctx: Ctx = { env, db, now, ip, waitUntil, host, tenant, identity, session, apiToken, role, authKind, staleCookie };
+  noteCtx(request, ctx);
+  return ctx;
 }
 
 type Prefetched = { tenant: Tenant | null; session: Session | null; identity: Identity | null; membership: Membership | null };
