@@ -75,6 +75,8 @@ export function messageBlock(m: MsgView, tag: NameTag, o: { c: string; channel?:
 export type RenderInput = {
   title: string; c: string; messages: MsgView[]; tagOf: TagOf; refs: Map<number, ViewRef[]>; budget: number;
   keep: "oldest" | "newest"; has_more: boolean; full?: number | null;
+  /** message number -> the cursor to continue from after showing it (reads after a cursor). */
+  cursors?: Record<number, number>;
 };
 export type Rendered = { text: string; shown: number[]; next_after: number | null; next_before: number | null };
 
@@ -99,7 +101,8 @@ export function renderMessages(o: RenderInput): Rendered {
   const idx = [...kept].sort((a, b) => a - b);
   const shown = idx.map((i) => o.messages[i]!.seq);
   const more = idx.length < o.messages.length || o.has_more;
-  const next_after = o.keep === "oldest" && more && shown.length > 0 ? shown[shown.length - 1]! : null;
+  const lastShown = shown[shown.length - 1];
+  const next_after = o.keep === "oldest" && more && lastShown !== undefined ? o.cursors?.[lastShown] ?? lastShown : null;
   const next_before = o.keep === "newest" && more && shown.length > 0 ? shown[0]! : null;
   const lines = [DATA_NOTE, CHAT_NOTE, "", `${o.title} (${shown.length} of ${o.messages.length}${o.has_more ? "+" : ""} shown)`, ...idx.map((i) => blocks[i]!)];
   if (o.messages.length === 0) lines.push("No messages.");

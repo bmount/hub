@@ -17,13 +17,61 @@ const TICKET = new RegExp(`${LEAD}(?:ticket:)?(${NAME})#([a-z0-9]{4,16})(?![0-9A
 const SESSION = new RegExp(`${LEAD}session:(${ULID})(?![0-9A-Za-z])`, "g");
 const MSG = new RegExp(`${LEAD}msg:(?:(${NAME})/(\\d{1,9})|(${ULID}))(?![0-9A-Za-z])`, "g");
 const MENTION = /(?<![A-Za-z0-9_@./-])@([a-z][a-z0-9-]{1,23})(?![a-z0-9-]|\.[A-Za-z0-9]|@)/g;
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+// A backtick fence takes no backtick in its info string (CommonMark); "```a`` x" is a code span, not a fence.
+const FENCE = /^ {0,3}(`{3,}(?![^\n]*`)|~{3,})/;
 
-/** Code blocks and code spans replaced by spaces (newlines kept), so nothing in them is read as a ref or mention. */
+/** Code spans (CommonMark): a run of n backticks opens, the next run of exactly n closes. A run with no partner is literal text. */
+function blankSpans(text: string, blank: (m: string) => string): string {
+  const runs: Array<{ at: number; len: number }> = [];
+  for (let i = 0; i < text.length; ) {
+    if (text[i] !== "`") { i++; continue; }
+    let j = i;
+    while (text[j] === "`") j++;
+    runs.push({ at: i, len: j - i });
+    i = j;
+  }
+  // Runs by length, in order; each opener takes the first later run of its length. Linear overall.
+  const byLen = new Map<number, number[]>();
+  runs.forEach((r, idx) => byLen.set(r.len, [...(byLen.get(r.len) ?? []), idx]));
+  const cursor = new Map<number, number>();
+  let out = "";
+  let pos = 0;
+  for (let idx = 0; idx < runs.length; idx++) {
+    const open = runs[idx]!;
+    if (open.at < pos) continue;
+    const list = byLen.get(open.len)!;
+    let k = cursor.get(open.len) ?? 0;
+    while (k < list.length && list[k]! <= idx) k++;
+    cursor.set(open.len, k);
+    const close = k < list.length ? runs[list[k]!]! : null;
+    if (!close) continue;
+    out += text.slice(pos, open.at) + blank(text.slice(open.at, close.at + close.len));
+    pos = close.at + close.len;
+  }
+  return out + text.slice(pos);
+}
+
+/** Code blocks (fenced, and indented by four spaces or a tab) and code spans replaced by spaces (newlines kept), so nothing in them is read as a ref or mention. */
 export function stripCode(body: string): string {
   const blank = (m: string) => m.replace(/[^\n]/g, " ");
   let fence: string | null = null;
+  // An indented line is code only where a paragraph is not running: at the start, after a blank line, or inside an indented block.
+  let prevBlank = true;
+  let inIndented = false;
   const lines = body.replace(/\r\n?/g, "\n").split("\n").map((line) => {
+    if (fence !== null) {
+      prevBlank = true;
+      inIndented = false;
+    } else {
+      const blankLine = line.trim() === "";
+      if (!blankLine && /^( {4}|\t)/.test(line) && (prevBlank || inIndented)) {
+        inIndented = true;
+        prevBlank = false;
+        return blank(line);
+      }
+      if (!blankLine) inIndented = false;
+      prevBlank = blankLine ? true : false;
+    }
     const m = FENCE.exec(line);
     if (fence === null) {
       if (!m) return line;
@@ -34,7 +82,7 @@ export function stripCode(body: string): string {
     if (m && m[1]![0] === fence[0] && m[1]!.length >= fence.length && /^ {0,3}[`~]+[ \t]*$/.test(line)) fence = null;
     return blank(line);
   });
-  return lines.join("\n").replace(/(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, blank);
+  return blankSpans(lines.join("\n"), blank);
 }
 
 export function parseBody(body: string): ParsedBody {

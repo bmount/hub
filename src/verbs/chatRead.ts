@@ -42,7 +42,7 @@ export const chatRead = defineVerb({
       tenant_id: ch.tenant_id, conversation_id: ch.project_id, after: p.after, before: p.before, thread: null, limit: p.limit,
     })) as ReadPage;
     const title = `#${ch.slug} head=${page.head}${p.after !== null ? ` since=${p.after}` : ""}`;
-    return readResult(ctx, ch, page.messages, { title, head: page.head, budget: p.budget, keep: p.after === null ? "newest" : "oldest", has_more: page.has_more });
+    return readResult(ctx, ch, page.messages, { title, head: page.head, budget: p.budget, keep: p.after === null ? "newest" : "oldest", has_more: page.has_more, cursors: page.cursors });
   },
 });
 
@@ -62,7 +62,7 @@ export const chatThread = defineVerb({
     if (!page.found || !page.root) throw notFound("no such message");
     const msgs: MsgView[] = [page.root, ...page.messages];
     const full = /^\d+$/.test(p.msg) ? Number(p.msg) : msgs.find((m) => m.msg_id === p.msg)?.seq ?? null;
-    return readResult(ctx, ch, msgs, { title: `#${ch.slug} thread #${page.root.seq} head=${page.head}`, head: page.head, budget: p.budget, keep: "oldest", has_more: page.has_more, full });
+    return readResult(ctx, ch, msgs, { title: `#${ch.slug} thread #${page.root.seq} head=${page.head}`, head: page.head, budget: p.budget, keep: "oldest", has_more: page.has_more, full, cursors: page.cursors });
   },
 });
 

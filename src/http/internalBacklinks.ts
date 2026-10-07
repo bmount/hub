@@ -35,6 +35,11 @@ export async function internalBacklinks(request: Request, env: Env): Promise<Res
   const identity = await getIdentityById(env.HUB_DB, principal);
   const role = identity ? roleFor(identity, await getMembership(env.HUB_DB, identity.id, tenant.id)) : null;
   if (!identity || !role) return json({ ok: false });
+  // An agent reads on behalf of its operator and stops when the operator is no longer an active member (spec 6.5).
+  if (identity.kind === "agent") {
+    const op = identity.operator_id ? await getIdentityById(env.HUB_DB, identity.operator_id) : null;
+    if (!op || !roleFor(op, await getMembership(env.HUB_DB, op.id, tenant.id))) return json({ ok: false });
+  }
   const items = await backlinks(env.HUB_DB, { tenant, identity, role, session: null }, target, limit);
   return json({
     ok: true, count: items.length,

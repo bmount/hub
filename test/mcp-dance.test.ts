@@ -66,5 +66,6 @@ describe("the full dance", () => {
     // The audit trail answers "what did my assistant do".
     const trail = await env.HUB_DB.prepare("SELECT kind FROM event WHERE session_id = ? ORDER BY id").bind(grant.session_id).all<{ kind: string }>();
     expect(trail.results.map((e) => e.kind)).toEqual(["mcp.call"]);
-  });
+    // Many steps over the real Worker: a long timeout, as the heavy chat tests have, so a busy full run does not starve it.
+  }, 30_000);
 });

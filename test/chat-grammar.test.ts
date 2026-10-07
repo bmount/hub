@@ -23,6 +23,24 @@ describe("ref and mention grammar", () => {
     }
   });
 
+  it("ignores indented code blocks, but not an indented line that continues a paragraph", () => {
+    expect(parseBody("    site#k7q2 @ghost\n\n@scout").handles).toEqual(["scout"]);
+    expect(parseBody("text\n\n    @ghost one\n\n    @ghost two\n@scout").handles).toEqual(["scout"]);
+    expect(parseBody("text\n    @scout continues the paragraph").handles).toEqual(["scout"]);
+    expect(parseBody("\tweb#ab12 in a tab block\n").refs).toEqual([]);
+    expect(parseBody("```\ncode\n```\n    web#ab12").refs).toEqual([]);
+  });
+
+  it("reads a code span by backtick runs: an unmatched run is literal, a run closes only a run of its length, and scanning is linear", () => {
+    expect(parseBody("``a` @scout").handles).toEqual(["scout"]);
+    expect(parseBody("```a`` @scout").handles).toEqual(["scout"]);
+    expect(parseBody("``a`b`` @scout `@ghost`").handles).toEqual(["scout"]);
+    expect(parseBody("`` `@ghost` `` @scout").handles).toEqual(["scout"]);
+    const t0 = Date.now();
+    parseBody("` ".repeat(20_000) + "``".repeat(10_000) + " @scout");
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+
   it("ignores code spans, fenced blocks (closed or not), addresses, short prefixes, and bare numbers", () => {
     for (const body of [
       "`site#k7q2` and ``site@3f9a2c1``", "```\nsite@3f9a2c1 @scout\nweb#ab12\n```", "~~~ts\nweb#ab12\n~~~", "mail dev@example.com",
