@@ -38,6 +38,7 @@ The hub is meant to become self-modifying. When it does, the running hub should 
 | D1 `pimwell-hub`, KV `RATE`, KV `pimwell-oauth` | `wrangler d1 create`, `wrangler kv namespace create`; ids in `wrangler.jsonc` |
 | Secrets `HUB_BOOTSTRAP_TOKEN`, `HUB_INTERNAL_SECRET` | `wrangler secret put` |
 | Email Routing on, rules `login@` and `signup@` to `pimwell-hub` | `wrangler email routing enable`, `wrangler email routing rules create` (2026-10-06) |
+| Catch-all on pimwell.com goes to `pimwell-hub` (was: drop). The hub accepts `<org>@` and `<org>.<project>@` from proven members and refuses everything else at delivery | Email Routing API as pimwell-001 (2026-10-07) |
 | Rules `privacy@` and `legal@` forward to the owner's verified address (the contacts on /privacy and /terms) | Email Routing API as pimwell-001; destination verified by the owner (2026-10-06) |
 | Email Sending on pimwell.com, SPF, DKIM, DMARC `p=reject` | Email Sending onboarding |
 | Worker `ardi-pimwell`, R2 `ardi-pimwell-large` | Ardi repo, branch `hub-identity`, `worker/wrangler.cloudflare.jsonc` |

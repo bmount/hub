@@ -53,7 +53,8 @@ before they configure anything.
 | Item | Status | Notes |
 | --- | --- | --- |
 | Decided (2026-10-07): no wizard. Connect repos, then send anything through one general MCP endpoint and one general email address; Pimwell learns as it goes | now | `docs/direction.md`, Start anywhere |
-| First real use: the owner forwards PriceBench user emails; Pimwell reconstructs what users hit, what was promised, what is open, linked to code | now | needs the general email address and thread-to-structure |
+| General email address: `<org>@` and `<org>.<project>@pimwell.com`, members only, DMARC-proven, quarantine for the rest | done | 2026-10-07; mailboxes spec amendment |
+| First real use: the owner forwards PriceBench user emails; Pimwell reconstructs what users hit, what was promised, what is open, linked to code | now | mail arrives at `mcc.pricebench@`; thread-to-structure is next |
 | A guided first project: import a repo, or forward one email thread, in one step | next | |
 | The answer appears with its sources, and the person can ask a follow-up in plain words | next | uses the `deep` and `reasoning` purposes |
 | First-run measured: time from sign-in to the first useful answer | later | target: under five minutes |

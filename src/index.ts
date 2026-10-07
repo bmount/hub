@@ -7,6 +7,7 @@ import { googleCallbackPage, googleStartPage } from "./http/googleLogin";
 import { privacyPage, termsPage } from "./http/privacy";
 import { adminModelsPage } from "./http/adminModels";
 import { adminOrgsPage } from "./http/adminOrgs";
+import { mailListPage, mailReadPage } from "./http/mailPages";
 import { mePage } from "./http/me";
 import { adminAgentsPage } from "./http/adminAgents";
 import { handleEmail } from "./mail/inbound";
@@ -64,6 +65,8 @@ app.get("/c/:slug/t/:seq", (c) => threadPage(c.req.raw, c.env, c.req.param("slug
 app.post("/c/:slug/t/:seq", (c) => channelPost(c.req.raw, c.env, c.req.param("slug"), c.req.param("seq")));
 app.get("/m/:msg", (c) => permalinkPage(c.req.raw, c.env, c.req.param("msg")));
 app.get("/inbox", (c) => inboxPage(c.req.raw, c.env));
+app.get("/mail", (c) => mailListPage(c.req.raw, c.env));
+app.get("/mail/:id", (c) => mailReadPage(c.req.raw, c.env, c.req.param("id")));
 app.post("/internal/introspect", (c) => introspect(c.req.raw, c.env));
 app.post("/internal/backlinks", (c) => internalBacklinks(c.req.raw, c.env));
 app.get("/.well-known/oauth-authorization-server", (c) => asMetadataPage(c.req.raw, c.env));

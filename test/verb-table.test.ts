@@ -17,6 +17,8 @@ const TABLE: Record<string, Decl> = {
   whoami: T("public", "public", null, { longLived: true, mcp: "read" }),
   "tenant.create": T("hub", "root", 60), "tenant.archive": T("hub", "root", 60), "tenant.unarchive": T("hub", "root", 60), "tenant.list": T("hub", "root", null),
   "tenant.delete": T("hub", "root", 10, { humanOnly: true }),
+  "mail.list": T("tenant", "reader", null, { mcp: "read" }), "mail.read": T("tenant", "reader", null, { mcp: "read" }),
+  "mail.release": T("tenant", "admin", 60, { humanOnly: true }),
   "provider.status": T("hub", "root", null), "provider.key_verify": T("hub", "root", null), "model.test": T("hub", "root", null),
   "provider.key_add": T("hub", "root", 60, { humanOnly: true }), "provider.key_promote": T("hub", "root", 60, { humanOnly: true }),
   "provider.key_retire": T("hub", "root", 60, { humanOnly: true }), "model.route_set": T("hub", "root", 60, { humanOnly: true }),

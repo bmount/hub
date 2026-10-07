@@ -6,6 +6,7 @@ import { takeRateDetail } from "../rate";
 import { issueLink, linkMail } from "../auth/login";
 import { sendMail } from "./send";
 import { safeMessageId } from "./mime";
+import { handleProjectMail } from "./projectMail";
 
 export const INBOUND_LOCALS = ["login", "signup"] as const;
 export const REJECT_REASON = "This address does not accept mail from you.";
@@ -25,7 +26,8 @@ async function handle(message: ForwardableEmailMessage, env: Env, _ctx: Executio
   const to = message.to.trim().toLowerCase();
   const local = INBOUND_LOCALS.find((l) => to === `${l}@${env.HUB_DOMAIN}`);
   if (!local) {
-    message.setReject("Unknown recipient");
+    // <org>@ and <org>.<project>@: mail for an organization or a project, vetted there.
+    await handleProjectMail(message, env, now);
     return;
   }
   const from = normalizeEmail(message.from);
