@@ -132,7 +132,7 @@ describe("Sign in with Google", () => {
   });
 
   it("gives an every-tenant admin grant on all tenants, and on tenants created later", async () => {
-    const a = await seedTenant("alpha"), b = await seedTenant("beta");
+    const a = await seedTenant("north"), b = await seedTenant("south");
     await addRule("email", "deputy@example.com", [{ tenant_id: null, role: "admin" }]);
     const { res } = await signIn({ email: "deputy@example.com" });
     expect(res.status).toBe(303);

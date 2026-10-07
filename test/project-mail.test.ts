@@ -44,9 +44,10 @@ const stored = async () => (await env.HUB_DB.prepare("SELECT verdict, subject, t
 describe("mailbox names", () => {
   it("are never available as organization names, so no inbox can collide with the hub's own", async () => {
     const root = await seedHuman("root@example.com", { is_root: true });
-    for (const slug of ["privacy", "legal", "postmaster", "abuse", "security", "support", "no-reply", "login", "signup"]) {
+    for (const slug of ["privacy", "legal", "postmaster", "abuse", "security", "support", "no-reply", "login", "signup", "ceo", "billing", "openai", "helpdesk", "sandbox"]) {
       const res = await apiPost(HUB, "tenant.create", { slug, display_name: slug }, cookieHeaders(root.token, HUB));
       expect(res.status, slug).toBe(400);
+      expect(await res.text(), slug).toContain("reserved");
     }
   });
 });

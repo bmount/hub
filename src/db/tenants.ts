@@ -1,10 +1,13 @@
 import { ulid } from "../ids";
 import { badRequest, conflict } from "../errors";
 import { isValidTenantSlug } from "../tenant";
+import { reservedBecause } from "../reserved";
 import type { State, Tenant } from "./types";
 import { slugReserved } from "./tenantDelete";
 
 export async function createTenant(db: D1Database, input: { slug: string; display_name: string }, now: number): Promise<Tenant> {
+  const why = reservedBecause(input.slug);
+  if (why) throw badRequest(`"${input.slug}" is reserved (${why}), so it can never be used to impersonate or collide; choose another name`);
   if (!isValidTenantSlug(input.slug)) throw badRequest("invalid tenant slug");
   if (!input.display_name.trim()) throw badRequest("display_name required");
   if (await slugReserved(db, input.slug)) throw conflict("that name belonged to a deleted organization and stays reserved until its git data is purged");

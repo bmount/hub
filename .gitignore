@@ -5,3 +5,5 @@ dist
 
 # Never commit credentials
 *.token
+
+__pycache__/

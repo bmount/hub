@@ -1,11 +1,10 @@
 import { ulid } from "../ids";
 import { badRequest, conflict } from "../errors";
-import { isValidSlug, RESERVED_LABELS } from "../tenant";
+import { isValidSlug } from "../tenant";
+import { RESERVED_AGENT_NAMES } from "../reserved";
 import type { Agent, Identity, Membership, Role, State, Tenant } from "./types";
 
-export const RESERVED_AGENT_SLUGS: Set<string> = new Set([
-  ...RESERVED_LABELS, "postmaster", "abuse", "hostmaster", "webmaster", "noreply", "no-reply",
-]);
+export const RESERVED_AGENT_SLUGS: ReadonlySet<string> = RESERVED_AGENT_NAMES;
 
 export function normalizeAgentSlug(s: string): string {
   const slug = s.trim().toLowerCase();
