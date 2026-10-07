@@ -3,6 +3,7 @@ import { bootstrap } from "./bootstrap";
 import { whoami } from "./whoami";
 import { tenantArchive, tenantCreate, tenantDelete, tenantList, tenantUnarchive } from "./tenant";
 import { mailList, mailRead, mailRelease } from "./mail";
+import { workClaim, workCreate, workLink, workList, workRead, workUpdate } from "./work";
 import { modelRouteSet, modelTest, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, providerStatus } from "./models";
 import { namespaceArchive, namespaceCreate, namespaceUnarchive } from "./namespace";
 import { projectArchive, projectCreate, projectList, projectUnarchive } from "./project";
@@ -27,6 +28,7 @@ export function registerAllVerbs(): void {
     bootstrap, whoami,
     tenantCreate, tenantArchive, tenantUnarchive, tenantList, tenantDelete,
     mailList, mailRead, mailRelease,
+    workCreate, workList, workRead, workUpdate, workClaim, workLink,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,
     projectCreate, projectArchive, projectUnarchive, projectList,

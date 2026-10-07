@@ -17,8 +17,8 @@ const noop = { parse: () => ({}), run: async () => ({}) };
 const input = { type: "object" as const, properties: {}, additionalProperties: false as const };
 
 describe("MCP exposure rules", () => {
-  it("exposes exactly the read tools", () => {
-    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami"]);
+  it("exposes exactly these tools", () => {
+    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami", "work.claim", "work.create", "work.link", "work.list", "work.read", "work.update"]);
     expect(toolName("project.list")).toBe("project_list");
   });
 
@@ -35,9 +35,9 @@ describe("MCP exposure rules", () => {
   });
 
   it("caps tools by scope and by the human's current role", () => {
-    expect(names(exposedVerbs("reader", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami"]);
-    expect(names(exposedVerbs("member", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami"]);
-    expect(names(exposedVerbs("admin", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami"]);
+    expect(names(exposedVerbs("reader", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami", "work.list", "work.read"]);
+    expect(names(exposedVerbs("member", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami", "work.list", "work.read"]);
+    expect(names(exposedVerbs("admin", ["read"]))).toEqual(["chat.catchup", "chat.inbox", "chat.read", "chat.thread", "event.list", "mail.list", "mail.read", "project.list", "ref.backlinks", "whoami", "work.list", "work.read"]);
     expect(names(exposedVerbs("member", []))).toEqual([]);
     expect(names(exposedVerbs(null, ["read"]))).toEqual(["whoami"]);
   });
