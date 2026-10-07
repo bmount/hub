@@ -82,7 +82,7 @@ describe("Docket filters", () => {
     await w.create({ kind: "snag", title: "Pat snag", owner: "me", parent: quest.number });
     await w.create({ kind: "wish", title: "Sam wish", owner: "sam@example.com" });
     await w.create({ kind: "errand", title: "Nobody errand" });
-    const titles = async (path: string) => [...(await (await w.get(path)).text()).matchAll(/class="k-\w+">[^<]*<\/td><td><a href="[^"]+">([^<]*)<\/a>/g)].map((m) => m[1]).sort();
+    const titles = async (path: string) => [...(await (await w.get(path)).text()).matchAll(/class="k-\w+"><span class="kd"><\/span>[^<]*<\/td><td><a href="[^"]+">([^<]*)<\/a>/g)].map((m) => m[1]).sort();
 
     expect(await titles("/site/docket?owner=me")).toEqual(["Pat snag"]);
     expect(await titles("/docket?owner=sam%40example.com")).toEqual(["Sam wish"]);
@@ -90,8 +90,8 @@ describe("Docket filters", () => {
     expect(await titles("/site/docket?owner=me&kind=wish")).toEqual([]);
 
     const mine = await (await w.get("/site/docket?owner=me")).text();
-    expect(mine).toContain('href="?kind=snag&amp;owner=me"');
-    expect(mine).toContain('<a class="chip" href="?owner=me" aria-current="true">Mine</a>');
+    expect(mine).toContain('href="/site/docket?kind=snag&amp;owner=me"');
+    expect(mine).toContain('<a class="chip" href="/site/docket?owner=me" aria-current="true">Mine</a>');
     expect(await (await w.get("/site/docket?owner=me&kind=wish")).text()).toContain("Nothing matches these filters.");
     expect(await (await w.get("/docket?owner=me", w.rae.token)).text()).toContain("Nothing is yours right now.");
   });

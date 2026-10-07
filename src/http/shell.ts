@@ -4,7 +4,7 @@ import type { Ctx } from "../auth/context";
 import { rank } from "../auth/context";
 import type { Shell } from "../html";
 
-export type Section = "home" | "docket" | "mail" | "chat" | "people" | "admin" | "account" | "hub" | "project" | "playground";
+export type Section = "home" | "docket" | "mine" | "mail" | "chat" | "people" | "admin" | "account" | "hub" | "project" | "playground" | "planned" | "new";
 
 // Short reminders that the old way is not required any more. One per page, chosen by page, so it rotates.
 export const TIPS = [
@@ -29,18 +29,29 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
   const hub = `https://${env.HUB_DOMAIN}/`;
   const me = { name: ctx.identity.display_name, href: `${hub}me` };
   if (ctx.host.kind === "tenant" && ctx.tenant && ctx.role) {
+    const r = ctx.rail;
+    const link = (href: string, label: string, section: Section | null, count?: number) => ({ href, label, active: section === active, ...(count !== undefined ? { count } : {}) });
     const nav = [
-      { href: "/", label: "Home", section: "home" },
-      { href: "/docket", label: "Docket", section: "docket" },
-      { href: "/mail", label: "Mail", section: "mail" },
-      { href: "/c", label: "Conversations", section: "chat" },
-      { href: "/people", label: "People and helpers", section: "people" },
-      { href: "/playground", label: "Playground", section: "playground" },
-      ...(rank(ctx.role) >= rank("admin") ? [{ href: "/admin/agents", label: "Admin", section: "admin" }] : []),
+      link("/", "Home", "home"),
+      link("/docket", "Docket", "docket", r?.open),
+      link("/docket?owner=me", "Mine", "mine", r?.mine),
+      link("/mail", "Mail", "mail", r?.held),
+      link("/c", "Conversations", "chat"),
+      link("/people", "People and helpers", "people"),
+      link("/playground", "Playground", "playground"),
+      ...(rank(ctx.role) >= rank("admin") ? [link("/admin/agents", "Admin", "admin")] : []),
+    ];
+    const projects = (r?.projects ?? []).map((p) => ({ href: `/${p.slug}/docket`, label: p.display_name, active: active !== "home" && key === p.slug, count: p.open }));
+    const planned = PLANNED_LINKS.map((l) => ({ href: l.href, label: l.label, active: active === "planned" && key === l.key, planned: true }));
+    const tabs = [
+      { href: "/docket", label: "Docket", active: active === "docket" || active === "project", count: r?.open },
+      { href: "/docket?owner=me", label: "Mine", active: active === "mine", count: r?.mine },
+      { href: "/mail", label: "Mail", active: active === "mail", count: r?.held },
+      { href: "/c", label: "Chat", active: active === "chat" },
     ];
     return {
-      brandHref: hub, org: { name: ctx.tenant.display_name, href: "/" }, me, tip: tipFor(key),
-      nav: nav.map((n) => ({ href: n.href, label: n.label, active: n.section === active })),
+      brandHref: hub, org: { name: ctx.tenant.display_name, href: "/" }, me, tip: tipFor(key), nav, projects, planned, tabs,
+      canFile: rank(ctx.role) >= rank("member"),
     };
   }
   const nav = [
@@ -51,3 +62,11 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
   ];
   return { brandHref: hub, org: null, me, tip: tipFor(key), nav: nav.map((n) => ({ href: n.href, label: n.label, active: n.section === active })) };
 }
+
+/** Areas still being built, kept in plain view (src/verbs/planned.ts). */
+export const PLANNED_LINKS = [
+  { href: "/planned/review", label: "Reviews", key: "review" },
+  { href: "/planned/code", label: "Code", key: "code" },
+  { href: "/planned/traces", label: "Traces and deploys", key: "traces" },
+  { href: "/planned", label: "Everything coming", key: "all" },
+];

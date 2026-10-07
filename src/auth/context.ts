@@ -33,6 +33,13 @@ export type Ctx = {
    * rules as an assistant connection holding exactly these scopes; it can only narrow the person's own authority.
    */
   playground?: { scopes: string[] };
+  /** The workbench rail's numbers, read in the same batch as the sign-in lookup (no extra round trip). Page views only. */
+  rail?: RailData;
+};
+
+export type RailData = {
+  projects: Array<{ slug: string; display_name: string; open: number }>;
+  open: number; mine: number; held: number;
 };
 
 export type OAuthCtx = { grant_id: string; client_id: string; client_name: string; scopes: string[] };
@@ -89,7 +96,9 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
   // One round trip for the common case (performance budget, overnight plan 2 N4): with a session token in hand, the
   // tenant, session, identity and membership rows come back in a single batch. Every check below still runs on them.
   const sessionToken = bearer && bearer.startsWith("pms_") ? bearer : !bearer && cookieToken ? cookieToken : null;
-  const pre = sessionToken ? await prefetch(db, host.kind === "tenant" ? host.slug : null, await sha256Hex(sessionToken), now) : null;
+  // Page views on an organization's host also read the rail's numbers in that batch.
+  const wantRail = host.kind === "tenant" && request.method === "GET" && cookieToken !== null && !bearer;
+  const pre = sessionToken ? await prefetch(db, host.kind === "tenant" ? host.slug : null, await sha256Hex(sessionToken), now, wantRail) : null;
 
   let tenant: Tenant | null = null;
   if (host.kind === "tenant") {
@@ -140,23 +149,39 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
   }
 
   const ctx: Ctx = { env, db, now, ip, waitUntil, host, tenant, identity, session, apiToken, role, authKind, staleCookie };
+  if (pre?.rail && role && tenant) ctx.rail = pre.rail;
   noteCtx(request, ctx);
   return ctx;
 }
 
-type Prefetched = { tenant: Tenant | null; session: Session | null; identity: Identity | null; membership: Membership | null };
+type Prefetched = { tenant: Tenant | null; session: Session | null; identity: Identity | null; membership: Membership | null; rail: RailData | null };
 
 /** The rows buildContext needs for a session token, in one batch. Same predicates as the single-row getters. */
-async function prefetch(db: D1Database, slug: string | null, tokenHash: string, now: number): Promise<Prefetched> {
+async function prefetch(db: D1Database, slug: string | null, tokenHash: string, now: number, wantRail = false): Promise<Prefetched> {
   const live = "SELECT identity_id FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?";
-  const [t, s, i, m] = await db.batch([
+  const [t, s, i, m, rp, rc] = await db.batch([
     db.prepare("SELECT * FROM tenant WHERE slug = ?").bind(slug),
     db.prepare("SELECT * FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?").bind(tokenHash, now),
     db.prepare(`SELECT * FROM identity WHERE id = (${live})`).bind(tokenHash, now),
     db.prepare(`SELECT * FROM membership WHERE identity_id = (${live}) AND tenant_id = (SELECT id FROM tenant WHERE slug = ?)`).bind(tokenHash, now, slug),
+    ...(wantRail ? railStatements(db, slug, live, tokenHash, now) : []),
   ]);
   const one = <T>(r: D1Result<unknown> | undefined): T | null => ((r?.results[0] as T | undefined) ?? null);
-  return { tenant: one<Tenant>(t), session: one<Session>(s), identity: one<Identity>(i), membership: one<Membership>(m) };
+  const counts = one<{ open: number; mine: number; held: number }>(rc);
+  const rail = wantRail && counts ? { projects: (rp?.results ?? []) as RailData["projects"], ...counts } : null;
+  return { tenant: one<Tenant>(t), session: one<Session>(s), identity: one<Identity>(i), membership: one<Membership>(m), rail };
+}
+
+/** The rail: projects with open work, and the organization's open, mine and held-mail counts. */
+function railStatements(db: D1Database, slug: string | null, live: string, tokenHash: string, now: number): D1PreparedStatement[] {
+  const tid = "(SELECT id FROM tenant WHERE slug = ?)";
+  return [
+    db.prepare(`SELECT p.slug, p.display_name, (SELECT COUNT(*) FROM work_item w WHERE w.project_id = p.id AND w.state IN ('open', 'doing')) AS open
+      FROM project p WHERE p.tenant_id = ${tid} AND p.kind <> 'channel' AND p.state = 'active' ORDER BY p.display_name LIMIT 60`).bind(slug),
+    db.prepare(`SELECT (SELECT COUNT(*) FROM work_item WHERE tenant_id = ${tid} AND state IN ('open', 'doing')) AS open,
+      (SELECT COUNT(*) FROM work_item WHERE tenant_id = ${tid} AND state IN ('open', 'doing') AND owner_id = (${live})) AS mine,
+      (SELECT COUNT(*) FROM inbound_mail WHERE tenant_id = ${tid} AND verdict = 'quarantined' AND released_at IS NULL) AS held`).bind(slug, slug, tokenHash, now, slug),
+  ];
 }
 
 /** The context for one /mcp request, built from a grant that passed the per-request check (MCP spec 5.3, 8.5). */

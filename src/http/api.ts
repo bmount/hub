@@ -102,7 +102,10 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
       const self = `${url.protocol}//${url.host}`;
       let back = "/";
       const asked = body.input._back;
-      if (typeof asked === "string" && /^\/[A-Za-z0-9/_.?=&-]*$/.test(asked) && !asked.startsWith("//")) {
+      const fromResult = asked === "@result" && verb.formBack ? verb.formBack(result) : null;
+      if (fromResult && /^\/[A-Za-z0-9/_.?=&%-]*$/.test(fromResult) && !fromResult.startsWith("//")) {
+        back = fromResult;
+      } else if (typeof asked === "string" && /^\/[A-Za-z0-9/_.?=&%-]*$/.test(asked) && !asked.startsWith("//")) {
         back = asked;
       } else {
         try {

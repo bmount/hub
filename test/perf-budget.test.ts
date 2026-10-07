@@ -23,7 +23,7 @@ describe("performance budget", () => {
     const h = cookieHeaders(pat.token, HOST);
     for (let i = 0; i < 5; i++) await apiPost(HOST, "work.create", { project: "site", kind: "bug", title: `Snag ${i}` }, h);
     const report: string[] = [];
-    for (const path of ["/", "/docket", "/site", "/site/docket", "/site/w/1", "/people", "/mail", "/c", "/playground", "/archive", "/skills"]) {
+    for (const path of ["/", "/docket", "/site", "/site/docket", "/site/w/1", "/people", "/mail", "/c", "/playground", "/archive", "/skills", "/new", "/jump?q=snag", "/planned", "/planned/review?v=review.request", "/site/w/1?kind=bug&owner=me", "/docket?owner=me"]) {
       const res = await SELF.fetch(`https://${HOST}${path}`, { headers: h });
       expect(res.status, path).toBe(200);
       const t2 = trips(res.headers.get("server-timing"));

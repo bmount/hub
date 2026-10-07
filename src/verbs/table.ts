@@ -31,6 +31,8 @@ export type VerbDef<P, R> = {
   humanOnly?: boolean;
   /** For form posts: render this HTML body instead of redirecting (used to show a new token once). */
   renderForm?: (result: R) => string;
+  /** For form posts with `_back=@result`: where the result lives (a new work item opens in the workbench). */
+  formBack?: (result: R) => string;
   /** Exposed as an MCP tool to assistant connections holding this scope. */
   mcp?: McpDecl;
   parse: (input: Record<string, unknown>) => P;

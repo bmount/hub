@@ -16,7 +16,7 @@ export const AREAS: Record<Area, { label: string; blurb: string }> = {
   search: { label: "Search", blurb: "One box over work, mail, conversations, code and people." },
 };
 
-type Plan = {
+export type Plan = {
   name: string; area: Area; kind: "query" | "command"; minRole: "reader" | "member";
   title: string; summary: string; spec: string; input: McpInputSchema["properties"]; required?: string[];
 };

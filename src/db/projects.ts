@@ -8,7 +8,7 @@ const KINDS = new Set(["repo", "tracker"]);
 /** Built-in pages on an organization's host. A project page lives at /<project>, so a project may not take these names. */
 export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
   "admin", "api", "archive", "auth", "c", "docket", "healthz", "inbox", "internal", "invite", "login", "logout", "m", "mail",
-  "mcp", "me", "oauth", "people", "playground", "privacy", "projects", "search", "settings", "skills", "static", "terms", "well-known",
+  "mcp", "me", "jump", "new", "oauth", "people", "planned", "playground", "privacy", "projects", "search", "settings", "skills", "static", "terms", "well-known",
 ]);
 
 /** A helper in the tenant (?1) whose name (?2) is the local part of its address; archived helpers keep their names. */

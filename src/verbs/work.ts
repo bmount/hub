@@ -81,6 +81,7 @@ const ITEM_SCHEMA = {
 
 export const workCreate = defineVerb({
   name: "work.create", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
+  formBack: (r) => { const x = r as { ref: string; item: { number: number } }; return `/${x.ref.slice(0, x.ref.indexOf("#"))}/w/${x.item.number}`; },
   summary: `File a work item in a project's ${DOCKET.name} (${DOCKET.plain}): a wish, snag, errand, quest, call, or spark.`,
   mcp: {
     scope: "write", destructive: false, title: "File work",
