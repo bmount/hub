@@ -1,3 +1,4 @@
+import { modelPriceSet, usageReport, usageSummary } from "./usage";
 import { attentionDone, attentionList, workComment, workSubscribe } from "./collab";
 import { memberRemove, memberSetRole } from "./member";
 import { registerVerbs } from "./table";
@@ -36,6 +37,7 @@ export function registerAllVerbs(): void {
     ...plannedVerbs,
     memberSetRole, memberRemove,
     workComment, workSubscribe, attentionList, attentionDone,
+    usageReport, usageSummary, modelPriceSet,
     skillList, skillRead, capabilities, projectHistory,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,

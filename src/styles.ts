@@ -36,6 +36,7 @@ blockquote{margin:6px 0;padding:4px 10px;border-left:3px solid var(--accent);col
 details.edit{margin:8px 0;max-width:46rem}details.edit summary{cursor:pointer;font-weight:650;color:var(--accent)}details.edit label{display:block;margin:6px 0}
 details.edit label>input,details.edit label>textarea{display:block;width:100%;margin-top:2px}details.edit label>select{display:block;margin-top:2px}details.edit .row{display:flex;flex-wrap:wrap;gap:0 12px}
 .tip:before{content:"Old constraints, gone: ";font-weight:650;color:var(--accent)}
+.bars{display:flex;align-items:flex-end;gap:2px;height:64px;margin:4px 0 12px}.bars div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:0}.bars span{display:block;width:100%;background:var(--accent);border-radius:var(--r-xs) var(--r-xs) 0 0}.bars small{font-size:9px;color:var(--faint)}
 .pill{display:inline-block;font-size:10.5px;font-weight:650;padding:0 5px;border-radius:var(--r-xs);background:var(--sunk);color:var(--muted);border:1px solid var(--line);vertical-align:1px;margin-left:4px}
 .planned{border:1px dashed var(--line);border-radius:var(--r);padding:6px 10px;margin:8px 0;color:var(--muted);font-size:var(--fs-md)}.planned b{color:var(--ink)}
 .meta{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;font-size:var(--fs-md);margin:6px 0}.meta dt{color:var(--muted)}.meta dd{margin:0}

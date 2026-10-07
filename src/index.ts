@@ -1,3 +1,4 @@
+import { usagePage } from "./http/usagePages";
 import { assetResponse } from "./assets";
 import { page } from "./html";
 import { Hono } from "hono";
@@ -101,6 +102,7 @@ app.get("/mail/:id", (c) => mailReadPage(c.req.raw, c.env, c.req.param("id")));
 app.get("/docket", (c) => orgDocketPage(c.req.raw, c.env));
 app.get("/new", (c) => newWorkPage(c.req.raw, c.env));
 app.get("/attention", (c) => attentionPage(c.req.raw, c.env));
+app.get("/usage", (c) => usagePage(c.req.raw, c.env));
 app.get("/jump", (c) => jumpPage(c.req.raw, c.env));
 app.get("/planned", (c) => plannedPage(c.req.raw, c.env, null));
 app.get("/planned/:area", (c) => plannedPage(c.req.raw, c.env, c.req.param("area")));

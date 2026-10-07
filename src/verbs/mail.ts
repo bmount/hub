@@ -114,7 +114,7 @@ export const mailProposeWork = defineVerb({
     const rate = await takeRateDetail(ctx.env.RATE, "propose_identity", ctx.identity!.id, ctx.now);
     if (!rate.ok) throw new HubError(429, "too_many_requests", "try again within the hour");
     const answer = await ask(ctx.env, PROPOSE_PURPOSE, proposeInput({ project: m.project_name ?? ctx.tenant!.display_name, subject: m.subject, from: m.from_email, text: m.text }), {
-      tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, instructions: PROPOSE_INSTRUCTIONS, maxOutputTokens: 6000,
+      tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, instructions: PROPOSE_INSTRUCTIONS, maxOutputTokens: 6000,
     });
     const { proposals, dropped } = parseProposals(answer.text, m.text);
     const projects = (await ctx.db.prepare("SELECT slug FROM project WHERE tenant_id = ? AND state = 'active' AND kind <> 'channel' ORDER BY slug").bind(ctx.tenant!.id).all<{ slug: string }>()).results.map((r) => r.slug);

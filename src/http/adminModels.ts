@@ -19,7 +19,12 @@ export async function adminModelsPage(request: Request, env: Env): Promise<Respo
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "apex" || !ctx.identity || ctx.identity.kind !== "human" || ctx.identity.is_root !== 1) return notFoundPage(extra);
 
-  const [purposes, keys] = await Promise.all([purposeStatus(ctx.db, null, ctx.now), listCredentials(ctx.db, null)]);
+  const [purposes, keys, prices] = await Promise.all([purposeStatus(ctx.db, null, ctx.now), listCredentials(ctx.db, null),
+    ctx.db.prepare(`SELECT p.provider, p.model, p.input_per_mtok, p.output_per_mtok, p.cached_input_per_mtok, p.effective_from FROM model_price p
+      WHERE p.effective_from = (SELECT MAX(q.effective_from) FROM model_price q WHERE q.provider = p.provider AND q.model = p.model) ORDER BY p.provider, p.model`)
+      .all<{ provider: string; model: string; input_per_mtok: number; output_per_mtok: number; cached_input_per_mtok: number | null; effective_from: number }>().then((r) => r.results)]);
+  const unpriced = (await ctx.db.prepare(`SELECT m.provider, m.model, COUNT(*) AS n FROM model_call m WHERE m.cost_micros IS NULL AND m.created_at > ? GROUP BY m.provider, m.model ORDER BY n DESC LIMIT 20`)
+    .bind(ctx.now - 30 * 86_400_000).all<{ provider: string; model: string; n: number }>()).results;
   // The live model list, from the active key of each provider in use; failures just leave the list empty.
   const models = new Map<string, string[]>();
   for (const pid of new Set(purposes.map((p) => p.route.provider))) {
@@ -78,6 +83,17 @@ ${keys.length ? `<table><thead><tr><th>Provider</th><th>Key</th><th>Status</th><
 <label>Key <input name="key" type="password" autocomplete="off" required maxlength="400"></label>${BACK}
 <button type="submit">Check and save</button></form>
 <ul>${hints}</ul>
-<p><small>Keys are encrypted at rest with the hub's own secret. They are never shown again, never sent to an assistant, and never written to logs.</small></p>`;
+<p><small>Keys are encrypted at rest with the hub's own secret. They are never shown again, never sent to an assistant, and never written to logs.</small></p>
+<h2>Prices</h2>
+<p class="lede">Dollars per million tokens. Each recorded AI call keeps the cost it had when it happened; a new price applies from now on. Calls with no price show as "price unknown", never a guess.</p>
+${prices.length ? `<table><thead><tr><th>Model</th><th>Input</th><th>Cached input</th><th>Output</th><th>Since</th></tr></thead><tbody>${prices.map((p) => `<tr><td><code>${esc(p.provider)}/${esc(p.model)}</code></td><td>$${p.input_per_mtok / 1e6}</td><td>${p.cached_input_per_mtok === null ? "same as input" : `$${p.cached_input_per_mtok / 1e6}`}</td><td>$${p.output_per_mtok / 1e6}</td><td>${new Date(p.effective_from).toISOString().slice(0, 10)}</td></tr>`).join("")}</tbody></table>` : "<p>No prices yet.</p>"}
+${unpriced.length ? `<p>Used without a price in the last 30 days: ${unpriced.map((u) => `<code>${esc(u.provider)}/${esc(u.model)}</code> (${u.n})`).join(", ")}</p>` : ""}
+<form method="post" action="/api/model.price_set">
+<label>Provider <input name="provider" required maxlength="40" size="10" placeholder="openai"></label>
+<label>Model <input name="model" required maxlength="80" size="18"></label>
+<label>Input $ <input name="input_usd" required inputmode="decimal" size="6"></label>
+<label>Cached input $ <input name="cached_input_usd" inputmode="decimal" size="6"></label>
+<label>Output $ <input name="output_usd" required inputmode="decimal" size="6"></label>${BACK}
+<button type="submit">Set price</button></form>`;
   return htmlResponse(page("Models and keys", body, shellFor(ctx, env, "admin", "models")), 200, extra);
 }

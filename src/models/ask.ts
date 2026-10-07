@@ -6,12 +6,13 @@ import { HubError } from "../errors";
 import { provider as providerById } from "./providers";
 import { open } from "./secretbox";
 import { activeCredentialRow, resolveRoute } from "./store";
+import { usageStatement } from "./usage";
 
 export type Answer = { text: string; purpose: string; provider: string; model: string; key_fingerprint: string; ms: number };
 
 export async function ask(
   env: Env, purposeId: string, input: string,
-  opts: { tenant_id?: string | null; identity_id?: string | null; instructions?: string; maxOutputTokens?: number; now?: number } = {},
+  opts: { tenant_id?: string | null; identity_id?: string | null; session_id?: string | null; project_id?: string | null; work_item_id?: string | null; instructions?: string; maxOutputTokens?: number; now?: number } = {},
 ): Promise<Answer> {
   const db = env.HUB_DB;
   const tenant_id = opts.tenant_id ?? null;
@@ -24,8 +25,11 @@ export async function ask(
   const now = opts.now ?? started;
   const record = (ok: boolean, inT: number | null, outT: number | null, error: string | null) =>
     db.batch([
-      db.prepare("INSERT INTO model_call (id, purpose, provider, model, credential_id, tenant_id, identity_id, ok, ms, input_tokens, output_tokens, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(ulid(now), purposeId, route.provider, route.model, cred.id, tenant_id, opts.identity_id ?? null, ok ? 1 : 0, Date.now() - started, inT, outT, error, now),
+      usageStatement(db, {
+        id: ulid(now), source: "hub", purpose: purposeId, provider: route.provider, model: route.model, credential_id: cred.id, tenant_id,
+        identity_id: opts.identity_id ?? null, session_id: opts.session_id ?? null, project_id: opts.project_id ?? null, work_item_id: opts.work_item_id ?? null,
+        client: "pimwell", ok, ms: Date.now() - started, input_tokens: inT, output_tokens: outT, error, created_at: now,
+      }),
       ok
         ? db.prepare("UPDATE provider_credential SET last_used_at = ? WHERE id = ?").bind(now, cred.id)
         : db.prepare("UPDATE provider_credential SET last_used_at = ?, last_error = ?, last_error_at = ? WHERE id = ?").bind(now, error, now, cred.id),
