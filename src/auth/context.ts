@@ -39,7 +39,7 @@ export type Ctx = {
 
 export type RailData = {
   projects: Array<{ slug: string; display_name: string; open: number }>;
-  open: number; mine: number; held: number;
+  open: number; mine: number; held: number; needs: number;
 };
 
 export type OAuthCtx = { grant_id: string; client_id: string; client_name: string; scopes: string[] };
@@ -167,7 +167,7 @@ async function prefetch(db: D1Database, slug: string | null, tokenHash: string, 
     ...(wantRail ? railStatements(db, slug, live, tokenHash, now) : []),
   ]);
   const one = <T>(r: D1Result<unknown> | undefined): T | null => ((r?.results[0] as T | undefined) ?? null);
-  const counts = one<{ open: number; mine: number; held: number }>(rc);
+  const counts = one<{ open: number; mine: number; held: number; needs: number }>(rc);
   const rail = wantRail && counts ? { projects: (rp?.results ?? []) as RailData["projects"], ...counts } : null;
   return { tenant: one<Tenant>(t), session: one<Session>(s), identity: one<Identity>(i), membership: one<Membership>(m), rail };
 }
@@ -180,7 +180,8 @@ function railStatements(db: D1Database, slug: string | null, live: string, token
       FROM project p WHERE p.tenant_id = ${tid} AND p.kind <> 'channel' AND p.state = 'active' ORDER BY p.display_name LIMIT 60`).bind(slug),
     db.prepare(`SELECT (SELECT COUNT(*) FROM work_item WHERE tenant_id = ${tid} AND state IN ('open', 'doing')) AS open,
       (SELECT COUNT(*) FROM work_item WHERE tenant_id = ${tid} AND state IN ('open', 'doing') AND owner_id = (${live})) AS mine,
-      (SELECT COUNT(*) FROM inbound_mail WHERE tenant_id = ${tid} AND verdict = 'quarantined' AND released_at IS NULL) AS held`).bind(slug, slug, tokenHash, now, slug),
+      (SELECT COUNT(*) FROM inbound_mail WHERE tenant_id = ${tid} AND verdict = 'quarantined' AND released_at IS NULL) AS held,
+      (SELECT COUNT(*) FROM attention WHERE tenant_id = ${tid} AND identity_id = (${live}) AND done_at IS NULL) AS needs`).bind(slug, slug, tokenHash, now, slug, slug, tokenHash, now),
   ];
 }
 

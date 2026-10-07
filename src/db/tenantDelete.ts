@@ -4,9 +4,11 @@ import { badRequest, conflict, notFound } from "../errors";
 
 /** Tables holding rows that belong to one tenant, children before parents. */
 const TENANT_TABLES = [
+  "attention", "follow", "work_comment",
   "msg_ref", "msg_index", "conversation_member", "agent_chat_state", "chat_control", "channel",
   "model_call", "model_route", "provider_credential", "signin_grant",
   "event", "oauth_grant", "api_token", "invite", "consent",
+  "work_item", "inbound_mail",
   "session", "membership", "project", "namespace",
 ] as const;
 
@@ -29,12 +31,16 @@ export async function deleteTenant(db: D1Database, slug: string, deleted_by: str
      WHERE i.kind = 'agent' AND NOT EXISTS (SELECT 1 FROM membership o WHERE o.identity_id = i.id AND o.tenant_id != ?)`,
   ).bind(t.id, t.id).all<{ id: string }>()).results.map((r) => r.id);
   if (agents.length) counts.identity = agents.length;
+  const links = await db.prepare("SELECT COUNT(*) AS n FROM work_link WHERE item_id IN (SELECT id FROM work_item WHERE tenant_id = ?)").bind(t.id).first<{ n: number }>();
+  if (links?.n) counts.work_link = links.n;
 
   const stmts: D1PreparedStatement[] = [db.prepare("PRAGMA defer_foreign_keys = true")];
   const sessions = "SELECT id FROM session WHERE tenant_id = ?";
   // Records elsewhere that point at this organization's sessions keep their meaning without the link.
   stmts.push(db.prepare(`UPDATE event SET session_id = NULL WHERE session_id IN (${sessions}) AND IFNULL(tenant_id, '') != ?`).bind(t.id, t.id));
   stmts.push(db.prepare(`UPDATE oauth_grant SET approved_by_session_id = NULL WHERE approved_by_session_id IN (${sessions}) AND tenant_id != ?`).bind(t.id, t.id));
+  // Work links carry no tenant column; they go with their items, before the items.
+  stmts.push(db.prepare("DELETE FROM work_link WHERE item_id IN (SELECT id FROM work_item WHERE tenant_id = ?)").bind(t.id));
   for (const table of TENANT_TABLES) stmts.push(db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).bind(t.id));
   for (const id of agents) {
     stmts.push(db.prepare("UPDATE event SET identity_id = NULL WHERE identity_id = ?").bind(id));

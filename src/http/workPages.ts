@@ -1,6 +1,7 @@
 // The workbench's work views (2026-10-07): the Docket as the list pane, and the selected item, a new item, or an
 // overview as the inspector. Item links carry the list's filters, so opening an item rebuilds the same list beside it
 // and the script keeps the list where it was. Every page reads in one D1 batch after the project lookup.
+import { attentionQuery } from "../verbs/collab";
 import type { Env } from "../env";
 import { esc, htmlResponse, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
@@ -22,6 +23,7 @@ type Member = { id: string; display_name: string; email: string; kind: string };
 type Quest = { id: string; number: number; title: string };
 type Project = { id: string; slug: string; display_name: string; state: string };
 type Activity = { kind: string; summary: string; created_at: number; who: string | null };
+type Comment = { id: string; body: string; created_at: number; reply_to: string | null; author: string; handle: string | null };
 
 const membersStatement = (ctx: Ctx) => ctx.db.prepare(
   `SELECT i.id, i.display_name, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id
@@ -134,12 +136,17 @@ function plannedBlock(name: string, label: string): string {
   return `<div class="planned"><b>${esc(label)}</b> <span class="pill">planned</span> ${esc(p.summary)} <a href="/planned/${p.area}?v=${esc(name)}">What it will do</a></div>`;
 }
 
-function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[] }, back: string): string {
+function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string): string {
   const canWrite = rank(ctx.role) >= rank("member");
   const self = `/${esc(project.slug)}/w/${w.number}`;
   const keep = esc(back.includes("?") ? `${self}${back.slice(back.indexOf("?"))}` : self);
   const action = (state: string, label: string, quiet = true) => `<form class="inline" method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="state" value="${state}"><input type="hidden" name="_back" value="${keep}"><button type="submit"${quiet ? ' class="quiet"' : ""}>${esc(label)}</button></form>`;
-  const controls = canWrite ? `<p>${w.state !== "doing" ? `<form class="inline" method="post" action="/api/work.claim"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}"><button type="submit">I'm on it</button></form> ` : ""}${w.state !== "done" ? action("done", "Done") : ""} ${w.state !== "dropped" ? action("dropped", "Let it go") : ""} ${(w.state === "done" || w.state === "dropped") ? action("open", "Reopen") : ""} <button type="button" class="quiet" disabled title="Planned: work.subscribe">Follow</button></p>` : "";
+  const follow = `<form class="inline" method="post" action="/api/work.subscribe"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="follow" value="${d.following ? "0" : "1"}"><input type="hidden" name="_back" value="${keep}"><button type="submit" class="quiet" title="${d.following ? "Stop hearing about changes" : "Hear about every change in What needs me"}">${d.following ? "Following ✓" : "Follow"}</button></form>`;
+  const controls = canWrite ? `<p>${w.state !== "doing" ? `<form class="inline" method="post" action="/api/work.claim"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}"><button type="submit">I'm on it</button></form> ` : ""}${w.state !== "done" ? action("done", "Done") : ""} ${w.state !== "dropped" ? action("dropped", "Let it go") : ""} ${(w.state === "done" || w.state === "dropped") ? action("open", "Reopen") : ""} ${follow}</p>` : `<p>${follow}</p>`;
+  const comments = `<h2>Comments${d.comments.length ? ` <span class="pill">${d.comments.length}</span>` : ""}</h2>
+${d.comments.length ? `<ul class="timeline">${d.comments.map((c) => `<li id="c-${esc(c.id)}"><time title="${when(c.created_at)}">${ago(c.created_at, ctx.now)}</time><span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ""}<div class="prose" style="margin-top:2px">${esc(c.body)}</div></span></li>`).join("")}</ul>` : `<p class="lede">No comments yet.</p>`}
+${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
+<label style="display:block"><textarea name="body" rows="3" required maxlength="10000" style="display:block;width:100%" placeholder="Comment. @handle mentions someone."></textarea></label><button type="submit">Comment</button></form>` : ""}`;
   const ownerChoices = d.owner && !d.members.some((m) => m.id === d.owner!.id) ? [d.owner, ...d.members] : d.members;
   const questChoices = d.parent && !d.quests.some((q) => q.id === d.parent!.id) ? [d.parent, ...d.quests] : d.quests;
   const edit = canWrite ? `<details class="edit"><summary>Edit</summary>
@@ -165,7 +172,7 @@ ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
 ${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Add them under Edit (e): what, why, and how you will know it is done." : ""}</p>`}
 ${edit}
 ${under}
-${plannedBlock("work.comment", "Comments")}
+${comments}
 ${plannedBlock("review.request", "Review")}
 ${links}
 ${activity}`;
@@ -208,6 +215,11 @@ async function listAndInspect(request: Request, env: Env, slug: string | null, n
       ctx.db.prepare("SELECT id, number, title FROM work_item WHERE id = ?").bind(w.parent_id),
       ctx.db.prepare(`SELECT e.kind, e.summary, e.created_at, i.display_name AS who FROM event e LEFT JOIN identity i ON i.id = e.identity_id
         WHERE e.tenant_id = ? AND e.target_id = ? ORDER BY e.created_at DESC LIMIT 30`).bind(ctx.tenant!.id, w.id),
+      ctx.db.prepare(`SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author, m.handle FROM work_comment c JOIN identity i ON i.id = c.author_id
+        LEFT JOIN membership m ON m.identity_id = c.author_id AND m.tenant_id = c.tenant_id WHERE c.item_id = ? ORDER BY c.created_at LIMIT 200`).bind(w.id),
+      ctx.db.prepare("SELECT 1 AS f FROM follow WHERE identity_id = ? AND target_kind = 'item' AND target_id = ?").bind(ctx.identity!.id, w.id),
+      // Seeing the item is what "done" means for its entries in What needs me; same batch, no extra round trip.
+      ctx.db.prepare("UPDATE attention SET done_at = ? WHERE identity_id = ? AND item_id = ? AND done_at IS NULL").bind(ctx.now, ctx.identity!.id, w.id),
     );
   }
   const r = await ctx.db.batch(stmts);
@@ -226,8 +238,9 @@ async function listAndInspect(request: Request, env: Env, slug: string | null, n
       links: r[o]!.results as WorkLink[], children: r[o + 1]!.results as WorkItem[],
       owner: (r[o + 2]!.results[0] as Member | undefined) ?? null, parent: (r[o + 3]!.results[0] as Quest | undefined) ?? null,
       members, quests: quests.filter((x) => x.id !== w.id), activity: r[o + 4]!.results as Activity[],
+      comments: r[o + 5]!.results as Comment[], following: r[o + 6]!.results.length > 0,
     }, `${back}`);
-    key = `w:${w.id}:${w.updated_at}`;
+    key = `w:${w.id}:${w.updated_at}:${(r[(questFor ? 4 : 3) + 5]!.results as Comment[]).length}`;
   } else {
     inspector = overviewInspector(ctx, env, f.org ? null : project, items);
     key = "";
@@ -331,4 +344,23 @@ function planInspector(p: Plan): string {
 <h2>What it will do</h2><div class="prose">${esc(p.spec)}</div>
 ${params ? `<h2>Inputs</h2><table><tbody>${params}</tbody></table>` : ""}
 <h2>Today</h2><p>Calls answer <code>501 not_implemented</code> with this spec. Try it in the <a href="/playground">Playground</a>, or <a href="/new?kind=errand&amp;title=${encodeURIComponent(`Build ${p.name}`)}">file it as an errand</a> so a person or helper picks it up.</p>`;
+}
+
+/** What needs me: the attention list, newest first; opening an entry opens its item, which marks it done. */
+export async function attentionPage(request: Request, env: Env): Promise<Response> {
+  const { ctx, extra, ok } = await tenantCtx(request, env);
+  if (!ok) return notFoundPage(extra);
+  const showDone = new URL(request.url).searchParams.get("done") === "1";
+  const entries = (await attentionQuery(ctx, showDone, 200).all<{ id: string; reason: string; summary: string; created_at: number; done_at: number | null; slug: string | null; number: number | null; title: string | null; actor: string | null }>()).results;
+  const label: Record<string, string> = { mention: "Mentioned you", comment: "Comment", assigned: "Yours now", changed: "Changed", filed: "Filed for you" };
+  const rows = entries.map((e) => {
+    const href = e.slug ? `/${e.slug}/w/${e.number}` : "/attention";
+    return `<tr data-href="${esc(href)}"${e.done_at ? ' style="opacity:.6"' : ""}><td class="when">${esc(label[e.reason] ?? e.reason)}</td><td class="ref">${e.slug ? esc(`${e.slug}#${e.number}`) : ""}</td><td><a href="${esc(href)}">${esc(e.summary)}</a></td><td class="when">${ago(e.created_at, ctx.now)}</td></tr>`;
+  }).join("");
+  const list = `<div class="head"><h1>Needs me</h1><span>${entries.length} ${showDone ? "recent" : "waiting"}</span>
+${!showDone && entries.length ? `<form class="inline" method="post" action="/api/attention.done"><input type="hidden" name="all" value="1"><input type="hidden" name="_back" value="/attention"><button type="submit" class="quiet">Mark all done</button></form>` : ""}
+<a href="${showDone ? "/attention" : "/attention?done=1"}">${showDone ? "Only what's waiting" : "Include done"}</a></div>
+<p class="lede">Mentions, comments and changes on what you follow, and work given to you. Opening an item marks its entries done.</p>
+${entries.length ? `<table><tbody>${rows}</tbody></table>` : `<p class="empty">Nothing needs you right now.</p>`}`;
+  return htmlResponse(workbench("Needs me", { list, listKey: `attention:${entries.length}:${entries[0]?.id ?? ""}`, inspector: null }, shellFor(ctx, env, "attention", "attention")!), 200, extra);
 }

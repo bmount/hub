@@ -1,4 +1,5 @@
 // Work items over every surface (overnight plan task 2): pages, /api, and MCP tools.
+import { afterChange } from "../work/collab";
 import { defineVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
 import { badRequest, notFound } from "../errors";
@@ -22,7 +23,7 @@ async function projectBySlug(ctx: Ctx, slug: string) {
 }
 
 /** An item by id, or by project and number ("pricebench#12" or project + number). */
-async function itemRef(ctx: Ctx, i: Record<string, unknown>): Promise<WorkItem> {
+export async function itemRef(ctx: Ctx, i: Record<string, unknown>): Promise<WorkItem> {
   const id = optString(i, "id", { max: 80 });
   if (id) {
     const m = id.match(/^([a-z0-9-]+)#(\d+)$/);
@@ -67,8 +68,8 @@ const audit = (ctx: Ctx, w: WorkItem, kind: string, summary: string) => recordEv
   tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind, target_kind: "work_item", target_id: w.id, summary: summary.slice(0, 300),
 }, ctx.now);
 
-const ref = (slug: string, w: WorkItem) => `${slug}#${w.number}`;
-async function slugOf(ctx: Ctx, project_id: string): Promise<string> {
+export const ref = (slug: string, w: WorkItem) => `${slug}#${w.number}`;
+export async function slugOf(ctx: Ctx, project_id: string): Promise<string> {
   return (await ctx.db.prepare("SELECT slug FROM project WHERE id = ?").bind(project_id).first<{ slug: string }>())?.slug ?? "?";
 }
 const line = (slug: string, w: WorkItem) => `- **${ref(slug, w)}** ${KINDS[w.kind].name} (${KINDS[w.kind].plain}), ${STATES[w.state].toLowerCase()}: ${cleanText(w.title)}`;
@@ -126,6 +127,7 @@ export const workCreate = defineVerb({
       source_kind: p.source_kind ?? (p.source_quote ? "words" : null), source_ref: p.source_ref, source_quote: p.source_quote, source_at: sourceAt,
     }, ctx.now);
     await audit(ctx, item, "work.create", `Filed ${ref(pr.slug, item)} (${KINDS[item.kind].name}): ${item.title}`);
+    await afterChange(ctx, item, `${ctx.identity!.display_name} filed ${ref(pr.slug, item)} for you: ${item.title}`, { newOwner: item.owner_id !== ctx.identity!.id ? item.owner_id : null, reason: "filed" });
     return { item, ref: ref(pr.slug, item) };
   },
 });
@@ -176,13 +178,14 @@ export const workRead = defineVerb({
     scope: "read", destructive: false, title: "Read work",
     input: { type: "object", properties: ITEM_SCHEMA, additionalProperties: false },
     render: (r) => {
-      const x = r as { item: WorkItem; ref: string; project: string; links: Array<{ target_kind: string; target_ref: string; note: string | null }>; children: WorkItem[]; parent: string | null };
+      const x = r as { item: WorkItem; ref: string; project: string; links: Array<{ target_kind: string; target_ref: string; note: string | null }>; children: WorkItem[]; parent: string | null; comments: Array<{ id: string; body: string; created_at: number; author: string }> };
       const body = cutText(x.item.body, 12_000);
       return [DATA_NOTE, WORK_NOTE, "", `**${x.ref}** ${labelled(x.item.kind)}, ${STATES[x.item.state].toLowerCase()}: ${cleanText(x.item.title)}`,
         x.parent ? `Part of ${x.parent}.` : "", x.item.source_quote ? `From: "${cleanText(x.item.source_quote).slice(0, 400)}"` : "",
         "", "```text", body.text.replace(/```/g, "'''"), "```",
         x.links.length ? `Links: ${x.links.map((l) => `${l.target_kind} ${cleanText(l.target_ref)}${l.note ? ` (${cleanText(l.note)})` : ""}`).join("; ")}` : "No links yet.",
-        x.children.length ? ["Under it:", ...x.children.map((c) => line(x.project, c))].join("\n") : ""].filter((s) => s !== "").join("\n");
+        x.children.length ? ["Under it:", ...x.children.map((c) => line(x.project, c))].join("\n") : "",
+        x.comments.length ? ["Comments:", ...x.comments.slice(-50).map((c) => `- ${cleanText(c.author)} (${new Date(c.created_at).toISOString().slice(0, 16)}, id ${c.id}): ${cleanText(c.body).slice(0, 1500)}`)].join("\n") : ""].filter((s) => s !== "").join("\n");
     },
   },
   parse: (i) => i,
@@ -191,7 +194,9 @@ export const workRead = defineVerb({
     const project = await slugOf(ctx, item.project_id);
     const parent = item.parent_id ? await getWork(ctx.db, ctx.tenant!.id, item.parent_id) : null;
     const children = await listWork(ctx.db, ctx.tenant!.id, { parent_id: item.id, limit: 200, states: [] });
-    return { item, ref: ref(project, item), project, parent: parent ? ref(project, parent) : null, links: await listLinks(ctx.db, item.id), children };
+    const comments = (await ctx.db.prepare(`SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author FROM work_comment c JOIN identity i ON i.id = c.author_id
+      WHERE c.item_id = ? ORDER BY c.created_at LIMIT 200`).bind(item.id).all<{ id: string; body: string; created_at: number; reply_to: string | null; author: string }>()).results;
+    return { item, ref: ref(project, item), project, parent: parent ? ref(project, parent) : null, links: await listLinks(ctx.db, item.id), children, comments };
   },
 });
 
@@ -239,6 +244,8 @@ export const workUpdate = defineVerb({
     }, ctx.now);
     const what = updated.state !== item.state ? `${STATES[item.state]} to ${STATES[updated.state]}` : "details";
     await audit(ctx, updated, "work.update", `Updated ${ref(project, updated)} (${what}): ${updated.title}`);
+    const newOwner = updated.owner_id && updated.owner_id !== item.owner_id && updated.owner_id !== ctx.identity!.id ? updated.owner_id : null;
+    await afterChange(ctx, updated, `${ctx.identity!.display_name} ${newOwner ? "gave you" : `updated (${what})`} ${ref(project, updated)}: ${updated.title}`, { newOwner });
     return { item: updated, ref: ref(project, updated) };
   },
 });
@@ -257,6 +264,7 @@ export const workClaim = defineVerb({
     const project = await slugOf(ctx, item.project_id);
     const claimed = await claimWork(ctx.db, item, ctx.identity!.id, ctx.now);
     await audit(ctx, claimed, "work.claim", `Claimed ${ref(project, claimed)}: ${claimed.title}`);
+    await afterChange(ctx, claimed, `${ctx.identity!.display_name} is on ${ref(project, claimed)}: ${claimed.title}`);
     return { item: claimed, ref: ref(project, claimed) };
   },
 });

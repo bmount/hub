@@ -45,7 +45,7 @@ describe("the workbench", () => {
     expect(item).toContain("<h1>Checkout fails</h1>");
     expect(item).toContain('<a class="back" href="/site/docket?kind=snag">');
     expect(item).toContain('name="_back" value="/site/w/1?kind=snag"');
-    expect(item).toContain("Comments</b> <span class=\"pill\">planned</span>");
+    expect(item).toContain("<h2>Comments</h2>");
     const org = await (await w.get("/docket?owner=me")).text();
     expect(org).toContain('data-href="/site/w/1?in=org&amp;owner=me"');
     const orgItem = await (await w.get("/site/w/1?in=org&owner=me")).text();

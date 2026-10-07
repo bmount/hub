@@ -26,14 +26,6 @@ const I = (description: string) => ({ type: "integer", minimum: 1, description }
 
 const PLANS: Plan[] = [
   // Project work
-  { name: "work.comment", area: "work", kind: "command", minRole: "member", title: "Comment on work",
-    summary: "Add a comment to a work item; mentions notify the people and helpers named.",
-    spec: "Comments thread under an item, quote-reply, @mentions put the item in the mentioned person's attention list, edits keep history.",
-    input: { id: S("pimwell#62 or an item id"), body: S("The comment, plain text with links"), reply_to: S("Comment id this answers") }, required: ["id", "body"] },
-  { name: "work.subscribe", area: "work", kind: "command", minRole: "reader", title: "Follow work",
-    summary: "Follow or unfollow a work item, a quest, or a whole project.",
-    spec: "Followers see changes in their attention list; optional daily mail digest (only to people who asked).",
-    input: { id: S("Item, quest, or project"), follow: { type: "boolean" } }, required: ["id"] },
   { name: "work.board", area: "work", kind: "query", minRole: "reader", title: "Work board",
     summary: "Quests with their progress, and items grouped by state, for one project or the organization.",
     spec: "Columns open, doing, done; quest progress bars; who is on what; stalled items (no activity in 7 days) flagged.",
@@ -97,10 +89,6 @@ const PLANS: Plan[] = [
     summary: "Reply to mail received at a project address, from that address.",
     spec: "Golden rule: only to an address that wrote to us first, within limits and kill switches; the reply joins the thread and the work it produced.",
     input: { id: S("Mail id"), body: S("The reply") }, required: ["id", "body"] },
-  { name: "attention.list", area: "messaging", kind: "query", minRole: "reader", title: "What needs me",
-    summary: "Everything waiting on you: reviews, mentions, items you own that moved, mail to release.",
-    spec: "One list across work, reviews, conversations and mail; mark done or snooze; the same list helpers poll.",
-    input: {} },
   { name: "message.search", area: "messaging", kind: "query", minRole: "reader", title: "Search conversations",
     summary: "Search messages in the conversations you can read.",
     spec: "Ranked results with the thread around each hit; filters for channel, person and date.",

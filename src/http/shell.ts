@@ -4,7 +4,7 @@ import type { Ctx } from "../auth/context";
 import { rank } from "../auth/context";
 import type { Shell } from "../html";
 
-export type Section = "home" | "docket" | "mine" | "mail" | "chat" | "people" | "admin" | "account" | "hub" | "project" | "playground" | "planned" | "new";
+export type Section = "home" | "attention" | "docket" | "mine" | "mail" | "chat" | "people" | "admin" | "account" | "hub" | "project" | "playground" | "planned" | "new";
 
 // Short reminders that the old way is not required any more. One per page, chosen by page, so it rotates.
 export const TIPS = [
@@ -33,6 +33,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
     const link = (href: string, label: string, section: Section | null, count?: number) => ({ href, label, active: section === active, ...(count !== undefined ? { count } : {}) });
     const nav = [
       link("/", "Home", "home"),
+      link("/attention", "Needs me", "attention", r?.needs),
       link("/docket", "Docket", "docket", r?.open),
       link("/docket?owner=me", "Mine", "mine", r?.mine),
       link("/mail", "Mail", "mail", r?.held),
@@ -45,7 +46,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
     const planned = PLANNED_LINKS.map((l) => ({ href: l.href, label: l.label, active: active === "planned" && key === l.key, planned: true }));
     const tabs = [
       { href: "/docket", label: "Docket", active: active === "docket" || active === "project", count: r?.open },
-      { href: "/docket?owner=me", label: "Mine", active: active === "mine", count: r?.mine },
+      { href: "/attention", label: "Needs me", active: active === "attention", count: r?.needs },
       { href: "/mail", label: "Mail", active: active === "mail", count: r?.held },
       { href: "/c", label: "Chat", active: active === "chat" },
     ];
