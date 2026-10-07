@@ -123,7 +123,7 @@ export const mailProposeWork = defineVerb({
   renderForm: (x: ProposeResult) => {
     const projectField = x.project ? `<input type="hidden" name="project" value="${esc(x.project)}">`
       : `<label>Project <select name="project">${x.projects.map((s) => `<option>${esc(s)}</option>`).join("")}</select></label>`;
-    const cards = x.proposals.map((p) => `<div class="card"><form method="post" action="/api/work.create">${projectField}
+    const cards = x.proposals.map((p) => `<div class="card"><form method="post" action="/api/work.create" data-inline>${projectField}
 <input type="hidden" name="source_kind" value="mail"><input type="hidden" name="source_ref" value="${esc(x.mail_id)}"><input type="hidden" name="source_quote" value="${esc(p.quote)}"><input type="hidden" name="_back" value="/mail/${esc(x.mail_id)}">
 <label>Kind <select name="kind">${Object.entries(KINDS).map(([k, v]) => `<option value="${k}"${k === p.kind ? " selected" : ""}>${esc(v.name)} (${esc(v.plain)})</option>`).join("")}</select></label><br>
 <label>Title <input name="title" value="${esc(p.title)}" size="60" maxlength="200" required></label><br>

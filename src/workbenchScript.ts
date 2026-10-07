@@ -81,8 +81,26 @@ export const WORKBENCH_JS = String.raw`
     if (!a) { var row = e.target.closest("[data-href]"); if (row && !e.target.closest("input,select,textarea,button,form")) { e.preventDefault(); go(row.getAttribute("data-href")); } return; }
     if (local(a)) { e.preventDefault(); go(a.href); }
   });
+  // Forms marked data-inline submit in place (JSON to the API) and leave everything around them alone: filing one
+  // proposal keeps the others on screen. Without the script they post normally.
+  function inline(f) {
+    var body = {}; new FormData(f).forEach(function (v, k) { if (k.charAt(0) !== "_") body[k] = v; });
+    var btn = f.querySelector("button[type=submit]"); if (btn) btn.disabled = true;
+    fetch(f.getAttribute("action"), { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var note = document.createElement("p"); note.className = "lede";
+        if (j.ok) {
+          var ref = j.result && j.result.ref, m = ref && /^([a-z0-9-]+)#(\d+)$/.exec(ref);
+          note.textContent = "Done. ";
+          if (m) { var a = document.createElement("a"); a.href = "/" + m[1] + "/w/" + m[2]; a.textContent = "Filed " + ref; note.textContent = ""; note.appendChild(a); }
+          f.replaceWith(note);
+        } else { note.textContent = "Not done: " + (j.detail || j.error); f.appendChild(note); if (btn) btn.disabled = false; }
+      }).catch(function () { if (btn) btn.disabled = false; f.submit(); });
+  }
   document.addEventListener("submit", function (e) {
     var f = e.target; if (e.defaultPrevented || f.getAttribute("data-reload") !== null) return;
+    if (f.hasAttribute("data-inline")) { e.preventDefault(); inline(f); return; }
     var u = new URL(f.getAttribute("action") || location.href, location.href);
     if (u.origin !== location.origin || /^\/(login|logout|oauth|auth|invite)\b/.test(u.pathname)) return;
     e.preventDefault();
