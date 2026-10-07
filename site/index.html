@@ -115,7 +115,7 @@ p{margin:0}
   background:#fff8e8;border:1px solid #e3c39c;border-radius:3px;padding:2px 8px;white-space:nowrap}
 .mural svg.mm{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 .mm .invite{transition:opacity .4s,transform .6s}
-.spark{position:absolute;left:49.4%;top:54.5%;width:0;height:0}
+.spark{position:absolute;left:50%;top:58%;width:0;height:0}
 .spark i{position:absolute;width:3px;height:3px;border-radius:50%;background:var(--coral);opacity:0}
 .spark.go i{animation:burst 1s ease-out forwards}
 @keyframes burst{0%{opacity:1;transform:translate(0,0)}100%{opacity:0;transform:translate(var(--dx),var(--dy))}}
@@ -499,71 +499,89 @@ p{margin:0}
   const SVGNS = 'http://www.w3.org/2000/svg';
   const mm = $('mm'), spark = $('spark');
   function el(tag, attrs, parent) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); (parent || mm).appendChild(e); return e; }
-  // a cartoon limb is a set of round-capped strokes: draw all outlines, then all fills, so they merge
-  function limb(parent, parts, fill, outline = '#1f2a44') {
-    const g = el('g', {}, parent);
-    const d = pts => 'M' + pts.map(p => p.join(' ')).join(' L');
-    parts.forEach(([pts, w]) => el('path', { d: d(pts), stroke: outline, 'stroke-width': w + 5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', fill: 'none' }, g));
-    parts.forEach(([pts, w]) => el('path', { d: d(pts), stroke: fill, 'stroke-width': w, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', fill: 'none' }, g));
-    return g;
+  // A finger, forearm or sleeve: a tapered quadratic curve with rounded ends, filled and outlined.
+  function taper(parent, p0, c, p1, w0, w1, fill, extra = {}) {
+    const N = 16, L = [], R = [];
+    let dx = 0, dy = 0;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N, u = 1 - t;
+      const x = u * u * p0[0] + 2 * u * t * c[0] + t * t * p1[0], y = u * u * p0[1] + 2 * u * t * c[1] + t * t * p1[1];
+      dx = 2 * u * (c[0] - p0[0]) + 2 * t * (p1[0] - c[0]); dy = 2 * u * (c[1] - p0[1]) + 2 * t * (p1[1] - c[1]);
+      const len = Math.hypot(dx, dy) || 1, w = (w0 + (w1 - w0) * t) / 2;
+      dx /= len; dy /= len;
+      L.push([x - dy * w, y + dx * w]); R.push([x + dy * w, y - dx * w]);
+      if (i === 0) { p0dx = dx; p0dy = dy; }
+    }
+    const f = v => v.map(n => n.toFixed(1)).join(' ');
+    const k1 = w1 * .7, k0 = w0 * .7, l = L[N], r = R[N];
+    const d = `M${f(L[0])} ` + L.slice(1).map(q => `L${f(q)}`).join(' ') +
+      ` C${f([l[0] + dx * k1, l[1] + dy * k1])} ${f([r[0] + dx * k1, r[1] + dy * k1])} ${f(r)} ` +
+      R.slice(0, N).reverse().map(q => `L${f(q)}`).join(' ') +
+      ` C${f([R[0][0] - p0dx * k0, R[0][1] - p0dy * k0])} ${f([L[0][0] - p0dx * k0, L[0][1] - p0dy * k0])} ${f(L[0])} Z`;
+    return el('path', { d, fill, stroke: '#1f2a44', 'stroke-width': 2.6, 'stroke-linejoin': 'round', ...extra }, parent);
   }
+  let p0dx = 0, p0dy = 0;
+  function blob(parent, d, fill) { return el('path', { d, fill, stroke: '#1f2a44', 'stroke-width': 2.6, 'stroke-linejoin': 'round' }, parent); }
   // soft heavenly clouds behind the manager, office-plant behind the employee
   el('ellipse', { cx: 560, cy: 40, rx: 120, ry: 34, fill: '#fff', opacity: .7 });
   el('ellipse', { cx: 600, cy: 70, rx: 90, ry: 26, fill: '#fff', opacity: .55 });
   el('path', { d: 'M40 176 C 46 140, 30 120, 52 96 M52 96 c -20 -2, -30 -16, -26 -30 c 14 6, 24 16, 26 30 c 4 -18, 18 -28, 32 -26 c -4 16, -18 24, -32 26', stroke: '#5aa889', 'stroke-width': 4, fill: '#bfe8c8', 'stroke-linecap': 'round', opacity: .9 });
 
-  // employee: hoodie sleeve, lanyard badge, relaxed hand, finger drooping (reaches right)
+  // The employee as Adam: arm rising from the lower left, wrist gone limp, index finger drooping,
+  // the other fingers hanging lower and shorter. Hoodie pushed up the forearm, lanyard badge.
+  const SKIN_E = '#f3c3a2', SKIN_M = '#e9b48f';
   const emp = el('g', {});
-  limb(emp, [[[[-40, 128], [128, 112]], 46]], '#8fd3c0');
-  limb(emp, [[[[120, 113], [130, 112]], 48]], '#6fbfa9');
-  el('path', { d: 'M70 122 L74 146', stroke: '#ff6b5e', 'stroke-width': 3 }, emp);
-  el('rect', { x: 58, y: 145, width: 34, height: 22, rx: 3, fill: '#fff', stroke: '#1f2a44', 'stroke-width': 2 }, emp);
-  el('text', { x: 75, y: 159, 'text-anchor': 'middle', 'font-size': 8, 'font-weight': 700, 'font-family': 'Figtree,sans-serif', fill: '#1f2a44' }, emp).textContent = 'NEW HIRE';
-  limb(emp, [
-    [[[128, 112], [176, 102]], 30], [[[176, 102], [206, 96]], 34],
-    [[[186, 88], [206, 78], [222, 78]], 11],
-    [[[210, 104], [236, 114], [230, 124]], 11], [[[206, 110], [226, 122]], 10], [[[198, 114], [214, 124]], 9],
-  ], '#f3c3a2');
+  taper(emp, [-30, 156], [80, 128], [182, 106], 34, 26, SKIN_E);
+  taper(emp, [-60, 168], [40, 146], [128, 120], 52, 46, '#8fd3c0');
+  taper(emp, [112, 126], [120, 123], [130, 120], 50, 48, '#6fbfa9');
+  el('path', { d: 'M74 138 L80 150', stroke: '#ff6b5e', 'stroke-width': 3 }, emp);
+  el('rect', { x: 62, y: 148, width: 36, height: 20, rx: 3, fill: '#fff', stroke: '#1f2a44', 'stroke-width': 2 }, emp);
+  el('text', { x: 80, y: 161, 'text-anchor': 'middle', 'font-size': 8, 'font-weight': 700, 'font-family': 'Figtree,sans-serif', fill: '#1f2a44' }, emp).textContent = 'NEW HIRE';
+  taper(emp, [214, 115], [228, 124], [234, 132], 9, 6.5, SKIN_E);   // little finger
+  taper(emp, [218, 111], [236, 119], [244, 129], 10, 7, SKIN_E);    // ring finger
+  taper(emp, [221, 106], [244, 112], [256, 122], 11, 7.5, SKIN_E);  // middle finger, hanging
+  blob(emp, 'M176 97 C 192 92, 210 94, 226 100 C 231 106, 230 113, 224 118 C 208 121, 191 120, 180 115 Z', SKIN_E);
   const empIndex = el('g', {}, emp);
-  limb(empIndex, [[[[208, 94], [240, 94], [272, 100]], 11]], '#f3c3a2');
+  taper(empIndex, [220, 101], [254, 100], [280, 111], 11, 8, SKIN_E); // index: long, gently drooping
+  taper(emp, [190, 114], [206, 125], [224, 124], 12, 8, SKIN_E);      // thumb, relaxed beneath
 
-  // manager: suit sleeve, shirt cuff, cufflink, gold watch, finger straight (reaches left; mirrored)
+  // The manager as God: arm sweeping in from the upper right, index finger straight and purposeful,
+  // the other fingers loosely curled. Suit sleeve, white cuff, cufflink, a gold watch.
   const mgrWrap = el('g', {});
-  const mgr = el('g', { transform: 'translate(648 0) scale(-1 1)' }, mgrWrap);
-  limb(mgr, [[[[-40, 70], [132, 82]], 48]], '#2f3e6e');
-  limb(mgr, [[[[126, 81], [140, 83]], 40]], '#ffffff');
-  el('circle', { cx: 134, cy: 64, r: 4, fill: '#e7b84a', stroke: '#1f2a44', 'stroke-width': 1.5 }, mgr);
-  limb(mgr, [
-    [[[140, 83], [172, 86]], 30],
-    [[[172, 86], [204, 88]], 32],
-    [[[184, 74], [204, 66], [218, 68]], 11],
-    [[[206, 96], [232, 102], [226, 110]], 11], [[[202, 102], [222, 110]], 10], [[[196, 106], [210, 114]], 9],
-    [[[204, 86], [280, 92]], 11],
-  ], '#e9b48f');
-  limb(mgr, [[[[152, 70], [151, 101]], 7]], '#e7b84a');
-  el('circle', { cx: 154, cy: 70, r: 8, fill: '#fff', stroke: '#e7b84a', 'stroke-width': 3 }, mgr);
-  const watchHand = el('line', { x1: 154, y1: 70, x2: 154, y2: 65, stroke: '#1f2a44', 'stroke-width': 1.5, 'stroke-linecap': 'round' }, mgr);
+  taper(mgrWrap, [700, 52], [580, 70], [470, 86], 36, 28, SKIN_M);
+  taper(mgrWrap, [720, 44], [620, 56], [520, 72], 58, 50, '#2f3e6e');
+  taper(mgrWrap, [512, 74], [504, 75], [496, 77], 44, 42, '#ffffff');
+  el('circle', { cx: 503, cy: 58, r: 3.5, fill: '#e7b84a', stroke: '#1f2a44', 'stroke-width': 1.5 }, mgrWrap);
+  taper(mgrWrap, [480, 72], [479, 86], [478, 100], 7, 7, '#e7b84a');
+  el('circle', { cx: 480, cy: 75, r: 7.5, fill: '#fff', stroke: '#e7b84a', 'stroke-width': 3 }, mgrWrap);
+  const watchHand = el('line', { x1: 480, y1: 75, x2: 480, y2: 70, stroke: '#1f2a44', 'stroke-width': 1.5, 'stroke-linecap': 'round' }, mgrWrap);
+  taper(mgrWrap, [428, 101], [416, 107], [414, 114], 9, 6.5, SKIN_M);  // little finger
+  taper(mgrWrap, [426, 97], [410, 103], [407, 111], 10, 7, SKIN_M);    // ring finger
+  taper(mgrWrap, [425, 92], [404, 96], [398, 106], 11, 7.5, SKIN_M);   // middle finger, curled
+  blob(mgrWrap, 'M472 76 C 454 74, 436 76, 422 81 C 417 88, 417 96, 422 101 C 438 104, 455 103, 468 99 Z', SKIN_M);
+  taper(mgrWrap, [424, 85], [398, 86], [370, 90], 11, 8, SKIN_M);      // index: straight
+  taper(mgrWrap, [460, 98], [440, 108], [418, 105], 12, 8, SKIN_M);    // thumb
 
   // the calendar invite that pops out at the moment of contact
   const invite = el('g', { class: 'invite', opacity: 0 });
-  el('rect', { x: 290, y: 18, width: 74, height: 38, rx: 5, fill: '#fff', stroke: '#1f2a44', 'stroke-width': 2 }, invite);
-  el('rect', { x: 290, y: 18, width: 74, height: 11, rx: 5, fill: '#ff6b5e' }, invite);
-  el('text', { x: 327, y: 27, 'text-anchor': 'middle', 'font-size': 8, 'font-weight': 700, 'font-family': 'Figtree,sans-serif', fill: '#fff' }, invite).textContent = 'INVITE';
-  el('text', { x: 327, y: 44, 'text-anchor': 'middle', 'font-size': 10, 'font-weight': 700, 'font-family': 'Figtree,sans-serif', fill: '#1f2a44' }, invite).textContent = '1:1, 15 min';
-  el('text', { x: 327, y: 53, 'text-anchor': 'middle', 'font-size': 7, 'font-family': 'Figtree,sans-serif', fill: '#5b6782' }, invite).textContent = 'quick sync';
+  el('rect', { x: 288, y: 14, width: 74, height: 38, rx: 5, fill: '#fff', stroke: '#1f2a44', 'stroke-width': 2 }, invite);
+  el('rect', { x: 288, y: 14, width: 74, height: 11, rx: 5, fill: '#ff6b5e' }, invite);
+  el('text', { x: 325, y: 23, 'text-anchor': 'middle', 'font-size': 8, 'font-weight': 700, 'font-family': 'Figtree,sans-serif', fill: '#fff' }, invite).textContent = 'INVITE';
+  el('text', { x: 325, y: 40, 'text-anchor': 'middle', 'font-size': 10, 'font-weight': 700, 'font-family': 'Figtree,sans-serif', fill: '#1f2a44' }, invite).textContent = '1:1, 15 min';
+  el('text', { x: 325, y: 49, 'text-anchor': 'middle', 'font-size': 7, 'font-family': 'Figtree,sans-serif', fill: '#5b6782' }, invite).textContent = 'quick sync';
 
   for (let i = 0; i < 20; i++) { const d = document.createElement('i'); const a = i / 20 * Math.PI * 2, r = 22 + Math.random() * 24;
     d.style.setProperty('--dx', Math.cos(a) * r + 'px'); d.style.setProperty('--dy', Math.sin(a) * r + 'px'); spark.appendChild(d); }
 
-  const HP = 9000, REACH = 46; let sparked = false;
+  const HP = 9000, REACH = 41; let sparked = false;
   function pose(e, perk, inviteOn, now) {
-    emp.setAttribute('transform', `translate(${REACH * e} 0)`);
-    mgrWrap.setAttribute('transform', `translate(${-REACH * e} 0)`);
-    empIndex.setAttribute('transform', `rotate(${-9 * perk} 208 94)`);
+    emp.setAttribute('transform', `translate(${(REACH * e).toFixed(1)} ${(-3 * e).toFixed(1)})`);
+    mgrWrap.setAttribute('transform', `translate(${(-REACH * e).toFixed(1)} ${(4 * e).toFixed(1)})`);
+    empIndex.setAttribute('transform', `rotate(${(-6 * perk).toFixed(2)} 220 101)`);
     invite.setAttribute('opacity', inviteOn ? 1 : 0);
-    invite.style.transform = inviteOn ? 'translateY(-6px)' : 'translateY(6px)';
-    const a = (now / 1000 * 360 / 4) % 360, r = a * Math.PI / 180;
-    watchHand.setAttribute('x2', 154 + Math.sin(r) * 5); watchHand.setAttribute('y2', 70 - Math.cos(r) * 5);
+    invite.style.transform = inviteOn ? 'translateY(-4px)' : 'translateY(6px)';
+    const r = (now / 1000 * 90 % 360) * Math.PI / 180;
+    watchHand.setAttribute('x2', 480 + Math.sin(r) * 5); watchHand.setAttribute('y2', 75 - Math.cos(r) * 5);
   }
   function hands(now) {
     const p = (now % HP) / HP;
