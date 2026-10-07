@@ -12,9 +12,17 @@ export function isApex(request: Request, env: Env): boolean {
   return classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN).kind === "apex";
 }
 
+/**
+ * True when a state-changing request came from one of our own pages on this host. The one origin check for every
+ * form and fetch. Browsers send `Origin: null` under some referrer policies (and the 2026-10-07 policy,
+ * no-referrer, did exactly that, refusing every form). When the Origin header is null or absent, the browser's
+ * own Fetch Metadata says where the request came from, and no page can forge it.
+ */
 export function sameOrigin(request: Request): boolean {
   const url = new URL(request.url);
-  return request.headers.get("origin") === `${url.protocol}//${url.host}`;
+  const origin = request.headers.get("origin");
+  if (origin === `${url.protocol}//${url.host}`) return true;
+  return (origin === null || origin === "null") && request.headers.get("sec-fetch-site") === "same-origin";
 }
 
 function authToken(request: Request): string | null {

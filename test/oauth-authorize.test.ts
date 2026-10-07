@@ -111,7 +111,7 @@ describe("consent page", () => {
     expect(csp).toContain("form-action 'self' http://localhost:33418");
     expect(res.headers.get("x-frame-options")).toBe("DENY");
     expect(res.headers.get("cache-control")).toBe("no-store");
-    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("referrer-policy")).toBe("same-origin");
     const html = await res.text();
     expect(html).toContain("<strong>ACME</strong> (<code>acme.pimwell.test</code>)");
     expect(html).toContain("localhost:33418");

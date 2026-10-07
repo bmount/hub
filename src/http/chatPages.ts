@@ -1,3 +1,4 @@
+import { sameOrigin } from "./login";
 import type { Env } from "../env";
 import { shellFor } from "./shell";
 import { buildContext, type Ctx } from "../auth/context";
@@ -123,8 +124,7 @@ export async function channelPost(request: Request, env: Env, slug: string, thre
   if (!SLUG.test(slug) || (threadSeq !== null && !/^\d{1,12}$/.test(threadSeq))) return notFoundPage();
   const pc = await pageCtx(request, env);
   if (pc instanceof Response) return pc;
-  const url = new URL(request.url);
-  if (request.headers.get("origin") !== `${url.protocol}//${url.host}`) return htmlResponse(page("Forbidden", "<h1>Forbidden</h1>"), 403, pc.extra);
+  if (!sameOrigin(request)) return htmlResponse(page("Forbidden", "<h1>Forbidden</h1>"), 403, pc.extra);
   const form = await request.formData().catch(() => null);
   if (!form) return htmlResponse(page("Bad request", "<h1>Bad request</h1>"), 400, pc.extra);
   const body = String(form.get("body") ?? "");

@@ -1,3 +1,4 @@
+import { sameOrigin } from "./login";
 import type { Env } from "../env";
 import { buildContext, type Ctx } from "../auth/context";
 import { checkAccess, checkScope } from "../verbs/dispatch";
@@ -89,9 +90,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     checkScope(ctx, verb);
 
     if (ctx.authKind === "cookie") {
-      const origin = request.headers.get("origin");
-      const expected = `${url.protocol}//${url.host}`;
-      if (origin !== expected) throw new HubError(403, "bad_origin");
+      if (!sameOrigin(request)) throw new HubError(403, "bad_origin");
     }
 
     checkAccess(ctx, verb);

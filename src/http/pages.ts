@@ -1,3 +1,4 @@
+import { sameOrigin } from "./login";
 import type { Env } from "../env";
 import { shellFor } from "./shell";
 import { orgHomePage } from "./orgPages";
@@ -46,8 +47,7 @@ export async function invitePage(request: Request, env: Env): Promise<Response> 
 
 export async function acceptInvitePage(request: Request, env: Env): Promise<Response> {
   if (classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN).kind !== "apex") return notFoundPage();
-  const url = new URL(request.url);
-  if (request.headers.get("origin") !== `${url.protocol}//${url.host}`) return htmlResponse(page("Forbidden", `<h1>Forbidden</h1>`), 403);
+  if (!sameOrigin(request)) return htmlResponse(page("Forbidden", `<h1>Forbidden</h1>`), 403);
   const token = tokenFromPath(request);
   const now = Date.now();
   const invite = token ? await findInviteByToken(env.HUB_DB, token) : null;

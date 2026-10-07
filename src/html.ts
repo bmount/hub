@@ -94,7 +94,7 @@ export function htmlResponse(body: string, status = 200, headers: HeadersInit = 
   const h = new Headers(headers);
   h.set("content-type", "text/html; charset=utf-8");
   h.set("cache-control", "no-store");
-  h.set("referrer-policy", "no-referrer");
+  h.set("referrer-policy", "same-origin");
   h.set("x-content-type-options", "nosniff");
   h.set("content-security-policy", "frame-ancestors 'none'");
   h.set("x-frame-options", "DENY");
