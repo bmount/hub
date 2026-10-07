@@ -68,13 +68,56 @@ jobs are bug fixes and simple feature requests.
 - It works as a named helper with its own identity and a sponsoring person, like any other helper.
 - It starts from a linked context: an error with its resolved line and commit, or a task. It does
   not start from a free-form prompt with no provenance.
-- Its output is a commit on a branch with its session attached. A person reviews it. It does not
-  deploy to production on its own.
+- Its output is a commit on a branch with its session attached. By default a person reviews it.
+  It may also deploy on its own, but only when triage (below) judges the fix small and low-risk,
+  and only within a deploy policy its sponsoring person set. Every such deploy is recorded and
+  revertible like any other.
 - Pi's small toolset (read, write, edit, bash, grep, find, ls) and its multi-provider model layer
   keep this cheap to host and easy to sandbox.
+- Our Pi instance supports model subscriptions as well as API keys. A team can run it on the
+  plans it already pays for. The credentials belong to the sponsoring person or the team, are
+  stored as secrets, and every session records which plan and model did the work.
 
 This is the loop the north star promises: something goes wrong, you can see exactly why, and a
 helper proposes the change.
+
+## Situations in, the truth out: the core value proposition
+
+A senior person, often an executive, describes a situation in plain words. It may be a bug report, a
+worry, or a feature idea. A state-of-the-art model, working over everything Pimwell knows (code,
+history, deploys, logs, tasks, conversations, people, and helpers), answers the questions that
+today take a meeting, a week, or a brave engineer:
+
+1. **Can a helper just fix it?** Triage decides whether our Pi instance can fix and deploy this
+   itself, under the deploy policy, or whether it needs review or a person.
+2. **What went wrong, and who should fix it?** The model reads the logs and the linked code,
+   derives a cause with its evidence, and assigns the work to the right mix of helpers and people.
+   Each assignment links back to that evidence.
+3. **What is the real status?** A request for an update does not go to a person, who may answer
+   "sure, boss, everything is fine". It goes to source control, deploys, tasks, and logs. It
+   reports what actually happened since the last update, with links.
+4. **What does this really cost?** For a requested feature, the model gives an unbiased,
+   first-principles estimate of its true cost and complexity: data, infrastructure, legal and
+   privacy exposure, people, time, and running cost. If the request is unreasonable, the estimate
+   says so plainly and shows why. For example, "find every person in America who likes fishing"
+   is a data-acquisition and privacy problem long before it is an engineering one. The engineer
+   no longer has to choose between looking slow and promising the impossible.
+
+The principle is to do the right thing in a world where extra-human reasoning is available for
+many problems at once. That means honest answers, grounded in records, delivered to whoever
+asked, without the social cost that has always distorted them.
+
+Requirements this places on the architecture:
+
+- Everything the model reasons over is in Pimwell and linked by shared ids. That is the
+  integration tax, removed. A model cannot answer "what happened" from records that were never
+  joined.
+- Every answer cites its evidence: commits, deploys, log lines, tasks, sessions. An answer
+  without evidence is labeled as an estimate.
+- Triage and assignment are decisions, and use the decision seam where they can. Diagnosis and
+  estimation use the strongest available model, and the model used is recorded with the answer.
+- Status reports and estimates are records themselves, linked to what they describe, so later
+  you can check what was said against what happened.
 
 ### The self-modifying hub
 
@@ -103,5 +146,5 @@ typed answers with probabilities and cannot answer outside the schema.
   Every decision is logged with its inputs, answers, and probabilities, and linked to whatever it
   caused, so decisions are as explainable as code. That keeps decisions inside the north star.
 
-Not built yet: the decision seam, the Pi helper, deploy records, and error ingestion. This page is
+Not built yet: the decision seam, the Pi helper and its subscriptions, deploy records, error ingestion, and the situation workflow. This page is
 the commitment; specs for each will reference it.
