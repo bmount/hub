@@ -20,7 +20,7 @@ describe("/mcp with a token", () => {
     const init = await rpcBody(await mcpPost("acme", access, "initialize", INIT));
     expect(init.result.serverInfo.name).toBe("pimwell");
     expect(init.result.capabilities.tools).toBeDefined();
-    expect(await toolNames(access)).toEqual(["capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "event_list", "mail_list", "mail_read", "project_history", "project_list", "ref_backlinks", "skill_list", "skill_read", "whoami", "work_list", "work_read"]);
+    expect(await toolNames(access)).toEqual(["capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "event_list", "mail_list", "mail_propose_work", "mail_read", "project_history", "project_list", "ref_backlinks", "skill_list", "skill_read", "whoami", "work_list", "work_read"]);
     await apiPost("acme.pimwell.test", "project.create", { slug: "site", kind: "repo", display_name: "Site" }, bearer(h.token));
     const call = await rpcBody(await mcpPost("acme", access, "tools/call", { name: "project_list", arguments: {} }));
     expect(call.result.isError).toBeUndefined();

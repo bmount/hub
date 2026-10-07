@@ -2,7 +2,7 @@ import { registerVerbs } from "./table";
 import { bootstrap } from "./bootstrap";
 import { whoami } from "./whoami";
 import { tenantArchive, tenantCreate, tenantDelete, tenantList, tenantUnarchive } from "./tenant";
-import { mailList, mailRead, mailRelease } from "./mail";
+import { mailList, mailProposeWork, mailRead, mailRelease } from "./mail";
 import { workClaim, workCreate, workLink, workList, workRead, workUpdate } from "./work";
 import { capabilities, projectHistory, skillList, skillRead } from "./discover";
 import { modelRouteSet, modelTest, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, providerStatus } from "./models";
@@ -28,7 +28,7 @@ export function registerAllVerbs(): void {
   registerVerbs([
     bootstrap, whoami,
     tenantCreate, tenantArchive, tenantUnarchive, tenantList, tenantDelete,
-    mailList, mailRead, mailRelease,
+    mailList, mailRead, mailRelease, mailProposeWork,
     workCreate, workList, workRead, workUpdate, workClaim, workLink,
     skillList, skillRead, capabilities, projectHistory,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,

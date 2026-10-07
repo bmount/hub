@@ -44,6 +44,7 @@ export async function mailReadPage(request: Request, env: Env, id: string): Prom
 <p>From <strong>${esc(m.from_email)}</strong> to <code>${esc(m.to_address)}</code>, ${when(m.received_at)}${m.forwarded ? ", carries forwarded mail" : ""}.</p>
 ${release}
 <p>Attachments: ${atts.length ? atts.map((a) => `${esc(a.filename ?? "unnamed")} (${esc(a.mime_type)}, ${a.size} bytes)`).join(", ") : "none"}. Attachment contents are not kept yet.</p>
+${m.verdict === "admitted" && rank(ctx.role) >= rank("member") ? `<form method="post" action="/api/mail.propose_work"><input type="hidden" name="id" value="${esc(m.id)}"><button type="submit">Propose work from this</button> <small>A model reads it as evidence and suggests wishes, snags, errands and calls, each quoting the message. You choose what to file.</small></form>` : ""}
 <pre style="white-space:pre-wrap">${esc(m.text)}</pre>`;
   return htmlResponse(page(m.subject || "Mail", body, shellFor(ctx, env, "mail", m.id)), 200, extra);
 }

@@ -18,6 +18,8 @@ export const RATE_RULES = {
   mcp_grant_hour: { limit: 2000, windowMs: RATE_WINDOW_MS },
   // The in-context Playground: per browser session, like one assistant connection.
   playground_session: { limit: 120, windowMs: MINUTE_MS },
+  // Each proposal is a model call: per person, per hour.
+  propose_identity: { limit: 20, windowMs: RATE_WINDOW_MS },
 } as const;
 export type RateBucket = keyof typeof RATE_RULES;
 
