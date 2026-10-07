@@ -8,7 +8,8 @@ export async function addMembership(
 ): Promise<Membership> {
   const row: Membership = { id: ulid(now), identity_id: input.identity_id, tenant_id: input.tenant_id, role: input.role, state: "active", created_at: now };
   await db.prepare(
-    "INSERT OR IGNORE INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    `INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (identity_id, tenant_id) DO UPDATE SET state = 'active', role = excluded.role WHERE membership.state <> 'active'`,
   ).bind(row.id, row.identity_id, row.tenant_id, row.role, row.state, row.created_at).run();
   return (await getMembership(db, input.identity_id, input.tenant_id))!;
 }

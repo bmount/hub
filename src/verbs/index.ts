@@ -1,3 +1,4 @@
+import { memberRemove, memberSetRole } from "./member";
 import { registerVerbs } from "./table";
 import { plannedVerbs } from "./planned";
 import { bootstrap } from "./bootstrap";
@@ -32,6 +33,7 @@ export function registerAllVerbs(): void {
     mailList, mailRead, mailRelease, mailProposeWork,
     workCreate, workList, workRead, workUpdate, workClaim, workLink,
     ...plannedVerbs,
+    memberSetRole, memberRemove,
     skillList, skillRead, capabilities, projectHistory,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,

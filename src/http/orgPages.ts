@@ -92,24 +92,3 @@ ${clone}
   return htmlResponse(page(p.display_name, body, shellFor(ctx, env, "project", `${t.slug}/${p.slug}`)), 200, extra);
 }
 
-export async function peoplePage(request: Request, env: Env): Promise<Response> {
-  const oc = await orgCtx(request, env);
-  if (oc instanceof Response) return oc;
-  const { ctx, extra } = oc;
-  const rows = (await ctx.db.prepare(
-    `SELECT i.display_name, i.email, i.kind, m.role, op.display_name AS sponsor,
-       (SELECT MAX(e.created_at) FROM event e WHERE e.identity_id = i.id AND e.tenant_id = m.tenant_id) AS last_seen
-     FROM membership m JOIN identity i ON i.id = m.identity_id LEFT JOIN identity op ON op.id = i.operator_id
-     WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' ORDER BY i.kind DESC, i.display_name`,
-  ).bind(ctx.tenant!.id).all<{ display_name: string; email: string; kind: string; role: string; sponsor: string | null; last_seen: number | null }>()).results;
-  const table = (kind: string) => {
-    const r = rows.filter((x) => x.kind === kind);
-    if (!r.length) return `<p class="lede">${kind === "agent" ? "No helpers yet." : "Nobody yet."}</p>`;
-    return `<table><thead><tr><th>Name</th><th>Address</th><th>Role</th>${kind === "agent" ? "<th>Answers to</th>" : ""}<th>Last active</th></tr></thead><tbody>${r.map((x) =>
-      `<tr><td>${esc(x.display_name)}</td><td><code>${esc(x.email)}</code></td><td>${esc(x.role)}</td>${kind === "agent" ? `<td>${esc(x.sponsor ?? "nobody")}</td>` : ""}<td>${x.last_seen ? esc(ago(ctx.now, x.last_seen)) : "not yet"}</td></tr>`).join("")}</tbody></table>`;
-  };
-  const admin = rank(ctx.role) >= rank("admin") ? `<p><a href="/admin/agents">Manage helpers</a></p>` : "";
-  const body = `<h1>People and helpers</h1><p class="lede">Every helper answers to a named person, and everything anyone does here is on the record.</p>
-<h2>People</h2>${table("human")}<h2>Helpers</h2>${table("agent")}${admin}`;
-  return htmlResponse(page("People and helpers", body, shellFor(ctx, env, "people")), 200, extra);
-}

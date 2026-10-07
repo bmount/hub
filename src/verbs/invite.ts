@@ -1,3 +1,4 @@
+import { esc } from "../html";
 import { defineVerb } from "./table";
 import { optString, reqEnum, reqString } from "./params";
 import { badRequest, conflict, forbidden, notFound } from "../errors";
@@ -17,6 +18,13 @@ function status(i: Invite, now: number): "open" | "accepted" | "revoked" | "expi
 
 export const inviteCreate = defineVerb({
   name: "invite.create", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60,
+  renderForm: (r) => {
+    const x = r as { invite_url: string; expires_at: number; email?: string };
+    return `<h1>Invite ready</h1><p class="lede">Send this link yourself. It works once, until ${new Date(x.expires_at).toISOString().slice(0, 10)}, and is not shown again.</p>
+<p><input readonly value="${esc(x.invite_url)}" style="width:100%" onfocus="this.select()" aria-label="Invite link"></p>
+<p>Or they can simply sign in with Google at pimwell.com using the invited address; the invite is accepted on the way in.</p>
+<p><a href="/people">Back to people</a></p>`;
+  },
   summary: "Create a single-use invite link for an email. The link is returned once and never emailed.",
   parse: (i) => ({
     email: reqString(i, "email", { max: 254 }),
