@@ -33,6 +33,16 @@ registerAllVerbs();
 const app = new Hono<{ Bindings: Env }>();
 
 // Git smart HTTP on tenant hosts belongs to Ardi (integration spec 3); everything else stays here.
+// Performance is first-class (overnight plan task 7): every hub response says how long the Worker spent on it.
+// Workers' clock only advances across I/O, so this is wall time spent waiting on D1, KV and other services.
+app.use("*", async (c, next) => {
+  const started = Date.now();
+  await next();
+  if (c.res && !c.res.headers.has("server-timing")) {
+    try { c.res.headers.set("server-timing", `app;dur=${Date.now() - started}`); } catch { /* immutable response: leave it */ }
+  }
+});
+
 app.use("*", async (c, next) => {
   const forwarded = await forwardGit(c.req.raw, c.env);
   if (forwarded) return forwarded;

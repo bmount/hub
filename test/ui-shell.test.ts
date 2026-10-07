@@ -31,6 +31,11 @@ describe("the signed-in shell", () => {
     }
   });
 
+  it("reports server time on every page", async () => {
+    const w = await world();
+    for (const path of ["/", "/docket", "/site"]) expect((await w.get(path)).headers.get("server-timing"), path).toMatch(/^app;dur=\d+$/);
+  });
+
   it("shows Admin only to admins", async () => {
     const w = await world();
     expect(await (await w.get("/")).text()).not.toContain('href="/admin/agents">Admin');
