@@ -76,6 +76,22 @@ Architectural consequences, to honor from the first version of each subsystem:
 - Errors and logs from deployed code are ingested into the hub with their deploy id. That id makes
   the jump from an error to its commit a lookup.
 
+## From any trace back to its cause, and history filled in from what people already wrote
+
+- **Traces lead to code.** Given a trace from a web app, including apps running inside this same
+  Pimwell world, Pimwell finds exactly which code ran, at which commit and deploy, and which earlier
+  trace or request led to it. Trace context carries the deploy id, and spans resolve to source
+  lines the way errors do. Causal links between traces are kept, so "what led to this" is a walk,
+  not a search.
+- **Structure from conversations.** A long forwarded email thread, a chat export, or meeting notes
+  becomes project structure: decisions, tasks, owners, dates, and open questions, each linked to the
+  sentence it came from. State-of-the-art models do the reading. People confirm before anything
+  becomes a record.
+- **Filling in history.** Projects that existed before Pimwell get their past back. Emails, old
+  trackers, chat logs, and repositories are read, and the timeline of what was decided, by whom, and
+  why is backfilled with sources. An inferred item is marked as inferred, with its evidence, until
+  someone confirms it.
+
 ## Helpers that change the software
 
 ### The Pi coding agent, early

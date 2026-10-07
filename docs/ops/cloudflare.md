@@ -7,6 +7,7 @@ Everything pimwell needs from Cloudflare, who can change it, and how it was set 
 | Credential | Lives in | Can do | Used by |
 | --- | --- | --- | --- |
 | `pimwell-001` (Cloudflare user API token, id `52f2e643…`) | macOS Keychain `pimwell-cloudflare-dev`; CI secret `CLOUDFLARE_API_TOKEN` when CI exists | Workers, routes, custom domains, D1, KV, R2, Email Routing and Sending, DNS on pimwell.com | every deploy and migration (`npm run deploy`, `npm run migrate:remote`, `npm run cf -- <wrangler args>`), deploy agents, `scripts/cf/cf.py` |
+| `HUB_SECRETS_KEY` (32 random bytes, base64) | Worker secret on `pimwell-hub`; recovery copy in macOS Keychain `pimwell-hub-secrets-key` | decrypts provider keys stored in D1 (admin spec 10.2) | the hub at runtime; seeding scripts |
 | personal wrangler login | `~/Library/Preferences/.wrangler` | everything the owner can do, no DNS write | nothing in pimwell since 2026-10-06 |
 
 `pimwell-001` is the developer + deploy credential. The owner created it in the dashboard on 2026-10-06; it expires 2035-10-02. It is user-owned, so it acts as the owner within its permissions. The plaintext copy the owner handed over was moved into the Keychain and deleted.

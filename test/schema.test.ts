@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const EXPECTED = [
   "agent_chat_state", "api_token", "auth_link", "channel", "chat_control", "consent", "conversation_member", "event", "google_account", "identity", "invite",
-  "membership", "meta", "msg_index", "msg_ref", "namespace", "oauth_grant", "oauth_redirect_allow", "project", "proof", "rate_counter", "session", "signin_grant", "signin_rule", "tenant",
+  "membership", "meta", "model_call", "model_route", "msg_index", "msg_ref", "namespace", "oauth_grant", "oauth_redirect_allow", "project", "proof", "provider_credential", "rate_counter", "session", "signin_grant", "signin_rule", "tenant",
 ];
 
 describe("schema", () => {

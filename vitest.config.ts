@@ -18,6 +18,7 @@ export default defineWorkersConfig(async () => {
               HUB_INTERNAL_SECRET: "test-internal-secret",
               GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
               GOOGLE_CLIENT_SECRET: "test-google-secret",
+              HUB_SECRETS_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
             },
             // Stands in for the Ardi Worker: echoes what reached it, so tests can check the forward.
             serviceBindings: {

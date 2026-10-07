@@ -76,7 +76,7 @@ commits, sees that main matches GitHub, and finds who changed a given file and w
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Model providers and keys: encrypted storage, verify, rotation, purpose routes, "Models and keys" admin | now | phase P1; OpenAI first |
+| Model providers and keys: encrypted storage, verify, rotation, purpose routes, "Models and keys" admin | done | P1, 2026-10-07: OpenAI key active; /admin/models |
 | MCP for everything: hub endpoint, admin, hub and secrets scopes, resource sets, closed-list test | next | P2 |
 | Plans and approval classes, approval pages | next | P3 |
 | Organizations and project-level access over every surface | next | P4 |
@@ -131,6 +131,22 @@ Goal: from a logged error to the line of code, the commit, and the reason it was
 
 Exit test: an error in a deployed imported project opens to the exact line at the deployed commit, with
 who wrote it, why, and how many users hit it.
+
+## Milestone 4b: traces, threads, and backfilled history
+
+Goal: from any trace to its cause, and history recovered from what people already wrote (`docs/direction.md`).
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| Trace ingestion (OpenTelemetry) with deploy id; spans resolved to source lines at the deployed commit | next | builds on milestone 4's error ingestion |
+| Causal links between traces and the requests or jobs that started them; "what led to this" view | later | |
+| Apps hosted in Pimwell's own world emit traces with ids Pimwell already knows | next | the first apps are the organization's own |
+| Thread to structure: paste or forward an email thread; models propose decisions, tasks, owners, dates, each cited to its sentence; a person confirms | next | uses the `deep` purpose; mailboxes spec for forwarding |
+| History backfill from email, old trackers, chat exports, and repos; inferred items marked until confirmed | later | |
+
+Exit test: a slow request in an imported project's app opens to the span, the line, the commit that
+introduced it, and the earlier request that triggered it. A forwarded thread about that project
+becomes three confirmed tasks with owners and their source sentences.
 
 ## Milestone 5: what it earns and costs
 
