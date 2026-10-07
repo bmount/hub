@@ -54,3 +54,23 @@ Plan: docs/superpowers/plans/2026-10-07-overnight.md. One entry per task: what s
 ## T7: performance watch (started)
 - Server-Timing (app;dur) is on every hub response; live public pages report 0 ms of Worker time.
 - Not yet: D1 query counts in Server-Timing, and a production perf smoke script for signed-in pages.
+
+# Round 2 (docs/superpowers/plans/2026-10-08-overnight-2.md)
+
+## N1: in-context Playground (done)
+- e21dc10: /playground runs MCP calls inside the signed-in organization, with no OAuth. A call needs: tenant host, active org, a human browser session by cookie, same origin, the x-pimwell-playground header and JSON. Scopes are read, or read and write. Every call is audited as playground.call or playground.denied, and has its own rate bucket.
+- Supersedes the T6 stop: the owner chose the in-context design.
+
+## N2: auth stress suite, write scope (done)
+- 4d39e65: the stress suite crosses every credential kind with every host and verb exposure. Write is now offered at consent, as MCP spec 8.1 allows; choosing write grants read and write.
+
+## N3: mail to structure (done)
+- 12690c2: mail.propose_work turns a message into up to 8 proposed work items, each quoting the message exactly (checked after normalization). The live model check returned three correct proposals and ignored an injected instruction.
+- Lesson: adding a verb means updating the pinned tool lists. Always run the full suite.
+
+## N4: performance watch, part 2 (done)
+- 8ecaf27: Server-Timing now reports D1 round trips, statements and time. buildContext reads tenant, session, identity and membership in one batch: three fewer round trips on every signed-in page.
+- Budget: test/perf-budget holds every signed-in page to 5 round trips or fewer. Measured: / 2, /docket 3, /<project> 3, work item 5, /people 2, /mail 3, /c 2, /playground 1, /archive 4, /skills 1.
+- Ruling: the plan's "6 statements, a batch counts as one" is enforced on round trips (statements vary with batching), and set at 5, today's worst page. Cost if wrong: one number to change.
+- 05ede91: the anonymous /mcp 401, the first hop of every assistant connecting, waited on a KV write: 347 ms median. The anonymous bucket already failed open on write, so the write now runs in waitUntil: 37 ms median. The email buckets still wait (they fail closed).
+- Production smoke (node scripts/perf-smoke.mjs <org>), 9 runs each, median: apex / 33 ms, /privacy 24, /login 24, OAuth metadata 24, org home 69 (anonymous 404, one D1 trip of 37 ms), /mcp 401 37. p90 spikes of 250 to 500 ms are cold first hits.
