@@ -72,6 +72,19 @@ Goal: open the organization and understand each project's code and history witho
 Exit test: the owner opens the organization, picks the larger imported project, reads its last 20
 commits, sees that main matches GitHub, and finds who changed a given file and when.
 
+## Administration and providers (spec: `docs/superpowers/specs/2026-10-07-admin-design.md`)
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| Model providers and keys: encrypted storage, verify, rotation, purpose routes, "Models and keys" admin | now | phase P1; OpenAI first |
+| MCP for everything: hub endpoint, admin, hub and secrets scopes, resource sets, closed-list test | next | P2 |
+| Plans and approval classes, approval pages | next | P3 |
+| Organizations and project-level access over every surface | next | P4 |
+| Project move and copy between organizations | next | P5; needs an Ardi transfer verb |
+| Sandbox organizations | next | P6 |
+
+Exit test: in ordinary chat, the owner creates an organization and moves a project into it (spec section 13).
+
 ## Milestone 2: work, assigned and accounted for
 
 Goal: every piece of work has an owner, a reason, and a trail.
