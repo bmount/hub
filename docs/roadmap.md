@@ -66,7 +66,9 @@ Goal: open the organization and understand each project's code and history witho
 | Create a repo project from the hub; the hub creates the Ardi repo | next | removes the manual `repo.create` step |
 | Git credentials and clone instructions on the project page | next | `session.git` exists; this is the UX |
 | Upstream sync: keep imported repos current with their GitHub upstreams, mirroring in or out | now | the imports are snapshots until this exists |
-| Large pushes: one push of any reasonable size | now | owned by the Ardi session; chunked pushes work meanwhile |
+| Large pushes: one push of any reasonable size | now | Ardi; the deployed git host still crashes on a 13.5 MB push (2026-10-07). No workarounds: the imported repos are re-imported by one push once fixed |
+| Repository and organization purge in the git host | now | Ardi; needed to re-import cleanly and to release deleted organizations' names |
+| Super-admin delete of organizations | done | 2026-10-07: /admin/orgs; the name stays reserved until the git host can purge |
 | Landing copy matches the model: an organization's own address, projects inside it | done | 2026-10-06 |
 
 Exit test: the owner opens the organization, picks the larger imported project, reads its last 20
