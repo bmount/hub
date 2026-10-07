@@ -44,7 +44,7 @@ export type Version = {
   session_kind: ChatSessionKind; created_at: number;
 };
 
-export type WakeKind = "mention" | "reply" | "loop_tripped" | "tripwire";
+export type WakeKind = "mention" | "reply" | "loop_tripped" | "tripwire" | "mail";
 export type WakeItem = {
   key: string; kind: WakeKind; conversation_id: string; seq: number; msg_id: string; thread_root: string | null;
   hop: number; author_id: string; wake: boolean; created_at: number;

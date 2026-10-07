@@ -28,7 +28,7 @@ describe("/me", () => {
     const html = await res.text();
     expect(html).toContain(op.session.id);
     expect(html).toContain('action="/api/session.end"');
-    expect(html).toContain("bot@acme.pimwell.test");
+    expect(html).toContain("acme.bot@pimwell.test");
     expect(html).toContain('action="/api/token.create"');
     expect(html).toContain(`name="agent_id" value="${s.agent.identity.id}"`);
     expect(html).toContain('action="/api/agent.archive"');

@@ -112,7 +112,7 @@ export async function googleCallbackPage(request: Request, env: Env): Promise<Re
   }
 
   const now = Date.now();
-  const admitted = await admitGoogle(env.HUB_DB, claims, now);
+  const admitted = await admitGoogle(env.HUB_DB, claims, now, env.HUB_DOMAIN);
   if (!admitted.ok) {
     await recordEvent(env.HUB_DB, {
       tenant_id: null, identity_id: null, session_id: null, kind: "login.google.refused", target_kind: "google_account",

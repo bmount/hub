@@ -67,7 +67,7 @@ describe("internal introspection", () => {
     const { human, s } = await setup();
     const ok = JSON.parse((await call({ token: s.token, tenant: "acme" })).text);
     expect(ok).toMatchObject({
-      ok: true, identity: { id: s.agent.identity.id, kind: "agent", email: "bot@acme.pimwell.test", operator_id: human.identity.id },
+      ok: true, identity: { id: s.agent.identity.id, kind: "agent", email: "acme.bot@pimwell.test", operator_id: human.identity.id },
       session: { id: s.session.id, kind: "agent_run", label: "run-1" }, tenant: { slug: "acme" }, role: "member",
     });
     expect(JSON.parse((await call({ token: s.token, tenant: "blue" })).text)).toEqual({ ok: false });

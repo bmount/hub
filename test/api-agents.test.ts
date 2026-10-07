@@ -37,7 +37,7 @@ describe("long-lived tokens in the dispatcher", () => {
   it("may call whoami and nothing else", async () => {
     const { op, s } = await setup();
     const who = (await (await apiPost("acme.pimwell.test", "whoami", {}, bearer(s.longLived))).json()) as any;
-    expect(who.result.identity).toMatchObject({ id: s.agent.identity.id, kind: "agent", email: "bot@acme.pimwell.test", operator_id: op.identity.id, is_root: false });
+    expect(who.result.identity).toMatchObject({ id: s.agent.identity.id, kind: "agent", email: "acme.bot@pimwell.test", operator_id: op.identity.id, is_root: false });
     expect(who.result.session).toBeNull();
     expect(JSON.stringify(who)).not.toContain("token_hash");
     expect(who.result.token).toEqual({ id: s.apiToken.id, name: "ci" });

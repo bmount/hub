@@ -28,10 +28,10 @@ async function mailPage(request: Request, env: Env, id: string | null): Promise<
   const admin = rank(ctx.role) >= rank("admin");
   const tid = ctx.tenant.id;
   const [rowsR, projR, msgR, filedR] = await ctx.db.batch([
-    ctx.db.prepare(`SELECT m.id, pr.slug AS project, m.from_email, m.subject, m.received_at, m.verdict, m.forwarded FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id
+    ctx.db.prepare(`SELECT m.id, COALESCE(pr.slug, r.display_name) AS project, m.from_email, m.subject, m.received_at, m.verdict, m.forwarded FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id
       WHERE m.tenant_id = ? AND (m.verdict = 'admitted' OR ?) ORDER BY m.received_at DESC LIMIT 200`).bind(tid, admin ? 1 : 0),
     ctx.db.prepare("SELECT slug, display_name FROM project WHERE tenant_id = ? AND state = 'active' AND kind <> 'channel' ORDER BY display_name").bind(tid),
-    ctx.db.prepare("SELECT m.*, pr.slug AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id WHERE m.id = ? AND m.tenant_id = ?").bind(id ?? "", tid),
+    ctx.db.prepare("SELECT m.*, COALESCE(pr.slug, 'agent ' || r.display_name) AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id WHERE m.id = ? AND m.tenant_id = ?").bind(id ?? "", tid),
     ctx.db.prepare(`SELECT p.slug, w.number, w.kind, w.state, w.title FROM work_item w JOIN project p ON p.id = w.project_id
       WHERE w.tenant_id = ? AND w.source_kind = 'mail' AND w.source_ref = ? ORDER BY w.number`).bind(tid, id ?? ""),
   ]);

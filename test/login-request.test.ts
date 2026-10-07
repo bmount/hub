@@ -57,9 +57,9 @@ describe("requestLink", () => {
     const gone = await seedHuman("gone@example.com");
     await consent("gone@example.com");
     await env.HUB_DB.prepare("UPDATE identity SET state = 'archived' WHERE id = ?").bind(gone.identity.id).run();
-    await createIdentity(env.HUB_DB, { kind: "agent", email: "bot@acme.pimwell.test", display_name: "Bot", is_root: 0, operator_id: gone.identity.id }, Date.now());
-    await consent("bot@acme.pimwell.test");
-    for (const email of ["nobody@example.com", "quiet@example.com", "gone@example.com", "bot@acme.pimwell.test", "not-an-email", ""]) await ask(email);
+    await createIdentity(env.HUB_DB, { kind: "agent", email: "acme.bot@pimwell.test", display_name: "Bot", is_root: 0, operator_id: gone.identity.id }, Date.now());
+    await consent("acme.bot@pimwell.test");
+    for (const email of ["nobody@example.com", "quiet@example.com", "gone@example.com", "acme.bot@pimwell.test", "not-an-email", ""]) await ask(email);
     expect(sent).toHaveLength(0);
     expect(await linkCount()).toBe(0);
   });

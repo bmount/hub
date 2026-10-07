@@ -13,7 +13,7 @@ export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
 
 /** An agent in the tenant (?1) whose name (?2) is the local part of its address; archived agents keep their names. */
 export const HELPER_NAMED = `SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id
-  WHERE m.tenant_id = ? AND i.kind = 'agent' AND substr(i.email, 1, instr(i.email, '@') - 1) = ?`;
+  WHERE m.tenant_id = ? AND i.kind = 'agent' AND substr(i.email, instr(i.email, '.') + 1, instr(i.email, '@') - instr(i.email, '.') - 1) = ?`;
 
 export async function createProject(
   db: D1Database,

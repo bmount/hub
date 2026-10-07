@@ -22,7 +22,7 @@ describe("token.create", () => {
     expect(res.status).toBe(200);
     const r = ((await res.json()) as any).result;
     expect(r.token).toMatch(/^pmw_[A-Za-z0-9_-]{43}$/);
-    expect(r).toMatchObject({ name: "deploy", agent_id: s.agent.identity.id, agent: "bot@acme.pimwell.test", tenant: "acme" });
+    expect(r).toMatchObject({ name: "deploy", agent_id: s.agent.identity.id, agent: "acme.bot@pimwell.test", tenant: "acme" });
     expect(r.start_url).toBe("https://acme.pimwell.test/api/session.start");
     expect(r.expires_at).toBeGreaterThanOrEqual(before + 30 * 86_400_000);
     expect(r.expires_at).toBeLessThanOrEqual(Date.now() + 30 * 86_400_000);

@@ -23,10 +23,10 @@ describe("agent.create", () => {
     const res = await apiPost("acme.pimwell.test", "agent.create", { slug: "Bot", display_name: "Build bot" }, bearer(member.token));
     expect(res.status).toBe(200);
     const a = ((await res.json()) as any).result.agent;
-    expect(a).toMatchObject({ slug: "bot", address: "bot@acme.pimwell.test", display_name: "Build bot", tenant: "acme", role: "member", operator_id: member.identity.id, state: "active" });
+    expect(a).toMatchObject({ slug: "bot", address: "acme.bot@pimwell.test", display_name: "Build bot", tenant: "acme", role: "member", operator_id: member.identity.id, state: "active" });
     expect(await ev("agent.create")).toMatchObject({ tenant_id: acme.id, identity_id: member.identity.id, session_id: member.session.id, target_id: a.id });
     const apex = await apiPost("pimwell.test", "agent.create", { tenant: "acme", slug: "two", display_name: "Two", role: "reader" }, bearer(member.token));
-    expect(((await apex.json()) as any).result.agent).toMatchObject({ address: "two@acme.pimwell.test", role: "reader" });
+    expect(((await apex.json()) as any).result.agent).toMatchObject({ address: "acme.two@pimwell.test", role: "reader" });
     expect((await apiPost("pimwell.test", "agent.create", { slug: "three", display_name: "Three" }, bearer(member.token))).status).toBe(400);
     expect((await apiPost("acme.pimwell.test", "agent.create", { slug: "bot", display_name: "Again" }, bearer(member.token))).status).toBe(409);
     expect((await apiPost("acme.pimwell.test", "agent.create", { slug: "x", display_name: "X", role: "admin" }, bearer(member.token))).status).toBe(400);
@@ -55,7 +55,7 @@ describe("agent.create", () => {
     expect(((await ok.json()) as any).result.agent.operator_id).toBe(member.identity.id);
     expect((await apiPost("acme.pimwell.test", "agent.create", { slug: "b", display_name: "B", operator: "r@example.com" }, bearer(admin.token))).status).toBe(400);
     expect((await apiPost("acme.pimwell.test", "agent.create", { slug: "c", display_name: "C", operator: "nobody@example.com" }, bearer(admin.token))).status).toBe(400);
-    expect((await apiPost("acme.pimwell.test", "agent.create", { slug: "d", display_name: "D", operator: "a@acme.pimwell.test" }, bearer(admin.token))).status).toBe(400);
+    expect((await apiPost("acme.pimwell.test", "agent.create", { slug: "d", display_name: "D", operator: "acme.a@pimwell.test" }, bearer(admin.token))).status).toBe(400);
     expect((await apiPost("acme.pimwell.test", "agent.create", { slug: "e", display_name: "E", operator: reader.identity.email }, bearer(admin.token))).status).toBe(400);
   });
 
@@ -96,7 +96,7 @@ describe("agent.archive", () => {
 describe("agent addresses are not invitable", () => {
   it("rejects invites to tenant-domain addresses and never accepts for an agent identity", async () => {
     const { acme, blue, admin, member } = await setup();
-    const res = await apiPost("acme.pimwell.test", "invite.create", { email: "x@acme.pimwell.test", role: "member" }, bearer(admin.token));
+    const res = await apiPost("acme.pimwell.test", "invite.create", { email: "acme.x@pimwell.test", role: "member" }, bearer(admin.token));
     expect(res.status).toBe(400);
     const s = await seedAgent(acme, member.identity);
     const { invite } = await createInvite(env.HUB_DB, { tenant_id: blue.id, email: s.agent.identity.email, role: "member", display_name: null, created_by: null }, Date.now());

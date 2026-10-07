@@ -31,23 +31,24 @@ export const mailList = defineVerb({
         project: { type: "string", description: "Only mail to this project's address." },
         limit: { type: "integer", minimum: 1, maximum: 100, description: "Default 25." },
         quarantined: { type: "boolean", description: "Admins only: list quarantined mail instead." },
+        mine: { type: "boolean", description: "Only mail sent to your own address (for agents: <org>.<agent>@)." },
       },
       additionalProperties: false,
     },
     render: (r) => {
       const rows = (r as { mail: MailRow[] }).mail;
       return [DATA_NOTE, MAIL_NOTE, "", `**Mail** (${rows.length})`,
-        ...rows.map((m) => `- \`${m.id}\` ${new Date(m.received_at).toISOString().slice(0, 16)} from ${cleanText(m.from_email)} to ${m.project ?? "inbox"}: ${cleanText(m.subject || "(no subject)")}${m.forwarded ? " [forwarded]" : ""}${m.verdict === "quarantined" ? " [quarantined]" : ""}`)].join("\n");
+        ...rows.map((m) => `- \`${m.id}\` ${new Date(m.received_at).toISOString().slice(0, 16)} from ${cleanText(m.from_email)} to ${m.project ?? m.to_address}: ${cleanText(m.subject || "(no subject)")}${m.forwarded ? " [forwarded]" : ""}${m.verdict === "quarantined" ? " [quarantined]" : ""}`)].join("\n");
     },
   },
-  parse: (i) => ({ project: optString(i, "project", { max: 63 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 25, quarantined: optBool(i, "quarantined") ?? false }),
+  parse: (i) => ({ project: optString(i, "project", { max: 63 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 25, quarantined: optBool(i, "quarantined") ?? false, mine: optBool(i, "mine") ?? false }),
   run: async (ctx, p) => {
     if (p.quarantined && rank(ctx.role) < rank("admin")) throw notFound();
     const r = await ctx.db.prepare(
       `SELECT m.id, m.project_id, pr.slug AS project, m.from_email, m.to_address, m.subject, m.sent_at, m.received_at, m.size, m.verdict, m.reason, m.forwarded, m.attachments
        FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id
-       WHERE m.tenant_id = ? AND m.verdict = ? AND (? IS NULL OR pr.slug = ?) ORDER BY m.received_at DESC LIMIT ?`,
-    ).bind(ctx.tenant!.id, p.quarantined ? "quarantined" : "admitted", p.project, p.project, p.limit).all<MailRow>();
+       WHERE m.tenant_id = ? AND m.verdict = ? AND (? IS NULL OR pr.slug = ?) AND (? = 0 OR m.recipient_id = ?) ORDER BY m.received_at DESC LIMIT ?`,
+    ).bind(ctx.tenant!.id, p.quarantined ? "quarantined" : "admitted", p.project, p.project, p.mine ? 1 : 0, ctx.identity!.id, p.limit).all<MailRow>();
     return { mail: r.results };
   },
 });

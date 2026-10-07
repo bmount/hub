@@ -18,7 +18,7 @@ describe("/admin/agents", () => {
     const res = await page("acme.pimwell.test", admin.token);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("bot@acme.pimwell.test");
+    expect(html).toContain("acme.bot@pimwell.test");
     expect(html).toContain("op@example.com");
     expect(html).toMatch(/<td>1<\/td><td>1<\/td>/);
     expect(html).toContain('action="/api/agent.archive"');
@@ -48,8 +48,8 @@ describe("/admin/agents", () => {
     expect(res.headers.get("location")).toBe("/admin/agents");
     const html = await (await page("acme.pimwell.test", admin.token)).text();
     const archived = html.slice(html.indexOf("<h2>Archived</h2>"));
-    expect(archived).toContain("bot@acme.pimwell.test");
-    expect(html.slice(0, html.indexOf("<h2>Archived</h2>"))).not.toContain("bot@acme.pimwell.test");
+    expect(archived).toContain("acme.bot@pimwell.test");
+    expect(html.slice(0, html.indexOf("<h2>Archived</h2>"))).not.toContain("acme.bot@pimwell.test");
   });
 
   it("links from the tenant home for admins only", async () => {

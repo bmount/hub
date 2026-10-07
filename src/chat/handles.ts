@@ -21,7 +21,7 @@ export function skeleton(h: string): string {
   return h.toLowerCase().replace(/0/g, "o").replace(/[1i]/g, "l").replace(/-/g, "").replace(/m/g, "rn").replace(/d/g, "cl").replace(/w/g, "vv");
 }
 
-/** The handle an address suggests. Agents get their slug: their address is `<slug>@<tenant>.<domain>`. */
+/** The handle an address suggests (for agents, ensureHandles passes their name). */
 export function candidateHandle(email: string): string {
   let h = (email.split("@")[0] ?? "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!/^[a-z]/.test(h)) h = `u${h}`;
@@ -39,10 +39,12 @@ function withSuffix(base: string, n: number): string {
 /** Give every membership in the tenant without a handle one, oldest first; the unique skeleton index settles races. */
 export async function ensureHandles(db: D1Database, tenant_id: string): Promise<void> {
   const r = await db.prepare(
-    "SELECT m.id, i.email FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.handle IS NULL ORDER BY m.created_at, m.id",
-  ).bind(tenant_id).all<{ id: string; email: string }>();
+    "SELECT m.id, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.handle IS NULL ORDER BY m.created_at, m.id",
+  ).bind(tenant_id).all<{ id: string; email: string; kind: string }>();
   for (const row of r.results) {
-    const base = candidateHandle(row.email);
+    // An agent's address is <org>.<agent>@<hub>; its handle is its name.
+    const local = row.email.slice(0, row.email.indexOf("@"));
+    const base = candidateHandle(row.kind === "agent" && local.includes(".") ? `${local.slice(local.indexOf(".") + 1)}@x` : row.email);
     for (let n = 1; n <= 99; n++) {
       const h = withSuffix(base, n);
       if (!isValidHandle(h)) continue;

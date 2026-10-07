@@ -1,9 +1,6 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import {
-  archiveAgent, createAgent, getAgentById, getAgentBySlug, isAgentDomainAddress, listAgentsForOperator,
-  listAgentsForTenant, normalizeAgentSlug, tenantAgentActivity,
-} from "../src/db/agents";
+import { archiveAgent, createAgent, getAgentById, getAgentBySlug, isHubAddress, listAgentsForOperator, listAgentsForTenant, normalizeAgentSlug, tenantAgentActivity, agentAddress, agentSlugOf } from "../src/db/agents";
 import {
   createApiToken, getApiTokenById, getApiTokenByToken, listApiTokensForIdentity, listApiTokensForOperator,
   listApiTokensForTenant, markApiTokenUsed, revokeApiToken,
@@ -21,12 +18,12 @@ describe("agent repository", () => {
     const op = await seedHuman("op@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
     const a = await createAgent(db(), { tenant: t, slug: " Bot ", display_name: "Build bot", operator_id: op.identity.id, role: "member", hubDomain: "pimwell.test" }, Date.now());
     expect(a.slug).toBe("bot");
-    expect(a.identity).toMatchObject({ kind: "agent", email: "bot@acme.pimwell.test", operator_id: op.identity.id, is_root: 0, state: "active" });
+    expect(a.identity).toMatchObject({ kind: "agent", email: "acme.bot@pimwell.test", operator_id: op.identity.id, is_root: 0, state: "active" });
     expect(a.membership).toMatchObject({ tenant_id: t.id, role: "member", state: "active" });
     expect((await getAgentById(db(), a.identity.id))!.tenant.slug).toBe("acme");
     expect((await getAgentBySlug(db(), t, "bot", "pimwell.test"))!.identity.id).toBe(a.identity.id);
     expect((await listAgentsForTenant(db(), t.id, "active")).map((x) => x.slug)).toEqual(["bot"]);
-    expect((await listAgentsForOperator(db(), op.identity.id)).map((x) => x.identity.email)).toEqual(["bot@acme.pimwell.test"]);
+    expect((await listAgentsForOperator(db(), op.identity.id)).map((x) => x.identity.email)).toEqual(["acme.bot@pimwell.test"]);
     expect(await getAgentById(db(), op.identity.id)).toBeNull();
   });
 
@@ -39,18 +36,20 @@ describe("agent repository", () => {
     await createAgent(db(), { ...input, tenant: acme }, Date.now());
     await expect(createAgent(db(), { ...input, tenant: acme }, Date.now())).rejects.toMatchObject({ status: 409 });
     const other = await createAgent(db(), { ...input, tenant: blue }, Date.now());
-    expect(other.identity.email).toBe("bot@blue.pimwell.test");
+    expect(other.identity.email).toBe("blue.bot@pimwell.test");
     await expect(createAgent(db(), { ...input, slug: "x", display_name: "  ", tenant: acme }, Date.now())).rejects.toMatchObject({ status: 400 });
   });
 
-  it("recognises addresses under tenant subdomains of the hub", () => {
-    expect(isAgentDomainAddress("bot@acme.pimwell.test", "pimwell.test")).toBe(true);
-    expect(isAgentDomainAddress(" X@Acme.Pimwell.Test ", "pimwell.test")).toBe(true);
-    expect(isAgentDomainAddress("login@pimwell.test", "pimwell.test")).toBe(false);
-    expect(isAgentDomainAddress("a@example.com", "pimwell.test")).toBe(false);
-    expect(isAgentDomainAddress("x@acme.pimwell.test.", "pimwell.test")).toBe(true);
-    expect(isAgentDomainAddress("a@b@acme.pimwell.test", "pimwell.test")).toBe(true);
-    expect(isAgentDomainAddress("a@notpimwell.test", "pimwell.test")).toBe(false);
+  it("treats every address at or under the hub's domain as the hub's, never a person's", () => {
+    for (const a of ["acme.bot@pimwell.test", " X@Acme.Pimwell.Test ", "login@pimwell.test", "acme.x@pimwell.test.", "a@acme.b@pimwell.test", "bot@acme.pimwell.test"]) {
+      expect(isHubAddress(a, "pimwell.test"), a).toBe(true);
+    }
+    for (const a of ["a@example.com", "a@notpimwell.test", "a@pimwell.test.example.com"]) expect(isHubAddress(a, "pimwell.test"), a).toBe(false);
+  });
+
+  it("builds and reads agent addresses as <org>.<agent>@<hub>", () => {
+    expect(agentAddress("scout", "acme", "Pimwell.Test")).toBe("acme.scout@pimwell.test");
+    expect(agentSlugOf("acme.scout@pimwell.test")).toBe("scout");
   });
 });
 
@@ -98,7 +97,7 @@ describe("api tokens", () => {
     expect((await listApiTokensForIdentity(db(), mine.agent.identity.id, Date.now())).map((x) => x.id)).toEqual([mine.apiToken.id]);
     expect((await listApiTokensForTenant(db(), t.id, Date.now())).length).toBe(2);
     const byOp = await listApiTokensForOperator(db(), op.identity.id, Date.now());
-    expect(byOp.map((x) => [x.token.id, x.agent_email, x.tenant_slug])).toEqual([[mine.apiToken.id, "mine@acme.pimwell.test", "acme"]]);
+    expect(byOp.map((x) => [x.token.id, x.agent_email, x.tenant_slug])).toEqual([[mine.apiToken.id, "acme.mine@pimwell.test", "acme"]]);
     await revokeApiToken(db(), theirs.apiToken.id, Date.now());
     expect((await listApiTokensForTenant(db(), t.id, Date.now())).map((x) => x.id)).toEqual([mine.apiToken.id]);
   });
@@ -150,7 +149,7 @@ describe("agent run sessions", () => {
     const activity = await tenantAgentActivity(db(), t.id, Date.now());
     expect(activity.get(s.agent.identity.id)).toEqual({ tokens: 1, runs: 1 });
     const runs = await listAgentRunsForOperator(db(), op.identity.id, Date.now());
-    expect(runs.map((r) => [r.session.id, r.session.label, r.agent_email, r.tenant_slug])).toEqual([[s.session.id, "run-1", "bot@acme.pimwell.test", "acme"]]);
+    expect(runs.map((r) => [r.session.id, r.session.label, r.agent_email, r.tenant_slug])).toEqual([[s.session.id, "run-1", "acme.bot@pimwell.test", "acme"]]);
     expect(JSON.stringify(runs)).not.toContain(s.token);
   });
 });

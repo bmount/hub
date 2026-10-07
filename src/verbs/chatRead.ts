@@ -92,8 +92,8 @@ async function inboxView(ctx: Ctx, items: InboxItem[], head: number) {
   const chans = [...(await readableChannels(ctx.db, v, "active")), ...(await readableChannels(ctx.db, v, "archived"))];
   const slug = new Map(chans.map((c) => [c.project_id, c.slug]));
   const dir = await people(ctx.db, v.tenant.id);
-  const views: ItemView[] = items.filter((i) => slug.has(i.conversation_id)).map((i) => ({
-    item: i.item_seq, kind: i.kind, channel: slug.get(i.conversation_id)!, seq: i.seq, msg_id: i.msg_id,
+  const views: ItemView[] = items.filter((i) => i.kind === "mail" || slug.has(i.conversation_id)).map((i) => ({
+    item: i.item_seq, kind: i.kind, channel: i.kind === "mail" ? "mail" : slug.get(i.conversation_id)!, seq: i.seq, msg_id: i.msg_id,
     author: i.author_id === "hub" ? "hub" : dir.get(i.author_id)?.handle ?? "unknown", hop: i.hop, wake: i.wake, created_at: i.created_at,
   }));
   return { head, items: views, text: plainText(`inbox head=${head} (${views.length} open)`, views.map(itemLine)) };

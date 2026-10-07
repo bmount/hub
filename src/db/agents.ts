@@ -12,16 +12,30 @@ export function normalizeAgentSlug(s: string): string {
   return slug;
 }
 
+/** An agent's address: `<org>.<agent>@<hub>` (owner, 2026-10-07; no per-organization mail subdomains). */
 export function agentAddress(slug: string, tenantSlug: string, hubDomain: string): string {
-  return `${slug}@${tenantSlug}.${hubDomain.toLowerCase()}`;
+  return `${tenantSlug}.${slug}@${hubDomain.toLowerCase()}`;
 }
 
-/** True for any address under a tenant subdomain of the hub: those are reserved for agents (spec 6.5). */
-export function isAgentDomainAddress(email: string, hubDomain: string): boolean {
+/** The agent's name from its address: the part after the organization. */
+export function agentSlugOf(email: string): string {
+  const local = email.slice(0, email.indexOf("@"));
+  return local.slice(local.indexOf(".") + 1);
+}
+
+/**
+ * True for any address at the hub's domain or under it. Those belong to organizations, projects and agents, never to
+ * a person: no invite, sign-in link or Google sign-in may create or reach a person there (owner, 2026-10-07).
+ */
+export function isHubAddress(email: string, hubDomain: string): boolean {
   const e = email.trim().toLowerCase();
   const domain = e.slice(e.lastIndexOf("@") + 1).replace(/\.$/, "");
-  return domain.endsWith("." + hubDomain.toLowerCase());
+  const hub = hubDomain.toLowerCase();
+  return domain === hub || domain.endsWith("." + hub);
 }
+
+/** Old name, same rule. */
+export const isAgentDomainAddress = isHubAddress;
 
 const AGENT_SELECT = `SELECT i.id AS i_id, i.display_name AS i_display_name, i.is_root, i.email, i.operator_id, i.state AS i_state, i.created_at AS i_created_at,
        m.id AS m_id, m.role, m.state AS m_state, m.created_at AS m_created_at,
@@ -42,7 +56,7 @@ function toAgent(x: Row): Agent {
   const tenant: Tenant = {
     id: x.t_id as string, slug: x.t_slug as string, display_name: x.t_display_name as string, state: x.t_state as State, created_at: x.t_created_at as number,
   };
-  return { identity, membership, tenant, slug: identity.email.split("@")[0]! };
+  return { identity, membership, tenant, slug: agentSlugOf(identity.email) };
 }
 
 export async function createAgent(

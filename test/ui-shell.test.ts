@@ -69,7 +69,7 @@ describe("the signed-in shell", () => {
     expect(docket).toContain("site#2");
     const people = await (await w.get("/people")).text();
     expect(people).toContain("lead@example.com");
-    expect(people).toContain("scout@acme.pimwell.test");
+    expect(people).toContain("acme.scout@pimwell.test");
   });
 
   it("keeps public pages plain, and the apex home lists your organizations", async () => {

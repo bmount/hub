@@ -8,6 +8,7 @@
 //   5. Proof the mail really came from that address: a receipt sent through message.reply(), which Cloudflare
 //      permits only for DMARC-passing mail. Sent: admitted. Not sent: quarantined for an admin, unread by agents.
 // Content is stored as evidence. Nothing in it is ever an instruction to anyone.
+import { inboxStub } from "../chat/stubs";
 import PostalMime from "postal-mime";
 import type { Env } from "../env";
 import { ulid } from "../ids";
@@ -25,9 +26,13 @@ export const MAX_MAIL_BYTES = 10 * 1024 * 1024;
 export const MAX_TEXT_CHARS = 400_000;
 export const STRANGER_REASON = "This address only accepts mail from members of its organization.";
 
-export type MailTarget = { tenant_id: string; tenant_slug: string; tenant_name: string; project_id: string | null; project_slug: string | null; project_name: string | null };
+export type MailTarget = {
+  tenant_id: string; tenant_slug: string; tenant_name: string; project_id: string | null; project_slug: string | null; project_name: string | null;
+  /** Mail to an agent's address, <org>.<agent>@<hub>: the agent it is for. */
+  recipient_id?: string | null; recipient_name?: string | null;
+};
 
-/** `org` or `org.project` at the hub's own domain. Null when the address names nothing that exists. */
+/** `org`, `org.project` or `org.agent` at the hub's own domain (one name space per organization). Null when nothing by that name exists. */
 export async function resolveMailAddress(db: D1Database, hubDomain: string, to: string): Promise<MailTarget | null> {
   const addr = to.trim().toLowerCase();
   const at = addr.lastIndexOf("@");
@@ -42,8 +47,11 @@ export async function resolveMailAddress(db: D1Database, hubDomain: string, to: 
   if (projSlug === null) return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: null, project_slug: null, project_name: null };
   const p = await db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND slug = ? AND state = 'active' AND kind <> 'channel'").bind(t.id, projSlug)
     .first<{ id: string; slug: string; display_name: string }>();
-  if (!p) return null;
-  return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: p.id, project_slug: p.slug, project_name: p.display_name };
+  if (p) return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: p.id, project_slug: p.slug, project_name: p.display_name };
+  const a = await db.prepare(`SELECT i.id, i.display_name FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ? AND m.state = 'active'
+    WHERE i.kind = 'agent' AND i.state = 'active' AND i.email = ?`).bind(t.id, addr).first<{ id: string; display_name: string }>();
+  if (!a) return null;
+  return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: null, project_slug: null, project_name: null, recipient_id: a.id, recipient_name: a.display_name };
 }
 
 type Parsed = { subject: string; text: string; attachments: Array<{ filename: string | null; mime_type: string; size: number }>; forwarded: boolean; date: string | null };
@@ -75,7 +83,7 @@ export async function parseMail(raw: ReadableStream<Uint8Array> | ArrayBuffer | 
 }
 
 function receipt(target: MailTarget, subject: string): { subject: string; text: string } {
-  const where = target.project_name ? `${target.tenant_name} / ${target.project_name}` : `${target.tenant_name} (to be filed by project)`;
+  const where = target.recipient_name ? `${target.tenant_name}, for the agent ${target.recipient_name}` : target.project_name ? `${target.tenant_name} / ${target.project_name}` : `${target.tenant_name} (to be filed by project)`;
   const ascii = (s: string) => s.replace(/[^\x20-\x7e]/g, "?");
   return {
     subject: ascii(`Received: ${subject || "(no subject)"}`).slice(0, 200),
@@ -119,14 +127,20 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
   const verdict = proven ? "admitted" : "quarantined";
   const id = ulid(now);
   await env.HUB_DB.prepare(
-    `INSERT INTO inbound_mail (id, tenant_id, project_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(id, target.tenant_id, target.project_id, identity.id, from, message.to.trim().toLowerCase(), parsed.subject, safeMessageId(message.headers.get("message-id")),
+    `INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(id, target.tenant_id, target.project_id, target.recipient_id ?? null, identity.id, from, message.to.trim().toLowerCase(), parsed.subject, safeMessageId(message.headers.get("message-id")),
     parsed.date, now, message.rawSize, verdict, proven ? null : "sender not proven: the receipt could not be sent, so the mail may be forged",
     parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0).run();
   await recordEvent(env.HUB_DB, {
     tenant_id: target.tenant_id, identity_id: identity.id, session_id: null, kind: proven ? "mail.received" : "mail.quarantined", target_kind: "inbound_mail", target_id: id,
-    summary: `${proven ? "Mail received" : "Mail quarantined"} for ${target.project_slug ?? "the organization inbox"}: ${parsed.subject || "(no subject)"}`.slice(0, 300),
+    summary: `${proven ? "Mail received" : "Mail quarantined"} for ${target.recipient_name ? `the agent ${target.recipient_name}` : target.project_slug ?? "the organization inbox"}: ${parsed.subject || "(no subject)"}`.slice(0, 300),
   }, now);
+  // Admitted mail for an agent wakes it, through the inbox it already waits on (inbox_wait); held mail never does.
+  if (verdict === "admitted" && target.recipient_id) {
+    await inboxStub(env, target.tenant_id, target.recipient_id).deliver(target.tenant_id, target.recipient_id, [{
+      key: `mail:${id}`, kind: "mail", conversation_id: "mail", seq: 0, msg_id: id, thread_root: null, hop: 0, author_id: identity.id, wake: true, created_at: now,
+    }]);
+  }
   return verdict;
 }

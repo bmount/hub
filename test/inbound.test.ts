@@ -78,8 +78,8 @@ describe("handleEmail", () => {
     const gone = await seedHuman("gone@example.com");
     await env.HUB_DB.prepare("UPDATE identity SET state = 'archived' WHERE id = ?").bind(gone.identity.id).run();
     const op = await seedHuman("op@example.com");
-    await createIdentity(env.HUB_DB, { kind: "agent", email: "bot@acme.pimwell.test", display_name: "Bot", is_root: 0, operator_id: op.identity.id }, Date.now());
-    for (const from of ["nobody@example.com", "gone@example.com", "bot@acme.pimwell.test"]) {
+    await createIdentity(env.HUB_DB, { kind: "agent", email: "acme.bot@pimwell.test", display_name: "Bot", is_root: 0, operator_id: op.identity.id }, Date.now());
+    for (const from of ["nobody@example.com", "gone@example.com", "acme.bot@pimwell.test"]) {
       const { message, calls } = fakeMessage(from, "login@pimwell.test");
       await handleEmail(message, env, ctx);
       expect(calls.rejects).toHaveLength(1);

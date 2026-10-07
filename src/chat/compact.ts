@@ -115,6 +115,7 @@ export function renderMessages(o: RenderInput): Rendered {
 export type ItemView = { item: number; kind: string; channel: string; seq: number; msg_id: string; author: string; hop: number; wake: boolean; created_at: number };
 
 export function itemLine(i: ItemView): string {
+  if (i.kind === "mail") return `[mail ${hhmm(i.created_at)} from @${i.author} id=${i.msg_id} item=${i.item}; read it with mail_read]`;
   return `[#${i.channel} #${i.seq} ${hhmm(i.created_at)} ${i.kind} by @${i.author} hop${i.hop}${i.wake ? " wake" : ""} item=${i.item}]`;
 }
 

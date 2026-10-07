@@ -55,7 +55,7 @@ describe("people management", () => {
     expect(await status(w.as(w.ada)("member.set_role", { email: "sam@example.com", role: "admin" }))).toBe(403);
     expect(await status(w.as(w.ada)("member.set_role", { email: "lee@example.com", role: "member" }))).toBe(403);
     expect(await status(w.as(w.ada)("member.set_role", { email: "ada@example.com", role: "member" }))).toBe(400);
-    expect(await status(w.as(w.ada)("member.set_role", { email: "scout@acme.pimwell.test", role: "reader" }))).toBe(400);
+    expect(await status(w.as(w.ada)("member.set_role", { email: "acme.scout@pimwell.test", role: "reader" }))).toBe(400);
     expect(await status(w.as(w.sam)("member.set_role", { email: "lee@example.com", role: "reader" }))).toBe(403);
     expect(await status(w.as(w.root)("member.set_role", { email: "lee@example.com", role: "member" }))).toBe(200);
     const ev = await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'member.set_role'").first<{ n: number }>();

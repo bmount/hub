@@ -6,6 +6,7 @@
 //   - an active sign-in rule matches the email, or matches the Workspace domain in the token's `hd` claim.
 // Rules then apply their grants. Everyone else is turned away and nothing is written.
 
+import { isHubAddress } from "../db/agents";
 import { acceptInvite, inviteIsOpen } from "../db/invites";
 import { createIdentity, getIdentityByEmail } from "../db/identities";
 import { addMembership, getMembership } from "../db/memberships";
@@ -74,7 +75,9 @@ export async function applyStandingGrants(db: D1Database, tenant_id: string, now
   return n;
 }
 
-export async function admitGoogle(db: D1Database, c: GoogleClaims, now: number): Promise<Admission> {
+export async function admitGoogle(db: D1Database, c: GoogleClaims, now: number, hubDomain: string): Promise<Admission> {
+  // Hub addresses belong to organizations, projects and agents, never to a person (owner, 2026-10-07).
+  if (isHubAddress(c.email, hubDomain)) return { ok: false, reason: "unavailable" };
   if (!c.email_verified) return { ok: false, reason: "unverified" };
 
   const bound = await db.prepare("SELECT identity_id FROM google_account WHERE sub = ?").bind(c.sub).first<{ identity_id: string }>();
