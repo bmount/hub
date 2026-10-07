@@ -71,6 +71,16 @@ describe("work items", () => {
     expect(e.parent).toBe("site#1");
   });
 
+  it("records where an item came from and when, and can file a decision as already made", async () => {
+    const w = await world();
+    const c = await result<{ item: Item & { source_at: number; source_quote: string; source_kind: string } }>(await w.pat("work.create", {
+      project: "site", kind: "decision", title: "Use dot-style addresses", state: "done", source_quote: "let's do the dot style", source_at: "2026-10-07T08:14:24Z",
+    }));
+    expect(c.item).toMatchObject({ kind: "call", state: "done", source_kind: "words", source_quote: "let's do the dot style", source_at: Date.parse("2026-10-07T08:14:24Z") });
+    expect(c.item.closed_at).not.toBeNull();
+    expect((await w.pat("work.create", { project: "site", kind: "spark", title: "x", source_at: "2999-01-01T00:00:00Z" })).status).toBe(400);
+  });
+
   it("lets readers read but not file", async () => {
     const w = await world();
     expect((await w.rae("work.create", { project: "site", kind: "snag", title: "x" })).status).toBe(403);

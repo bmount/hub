@@ -94,6 +94,10 @@ export const workCreate = defineVerb({
         parent: { type: "integer", minimum: 1, description: "Number of the quest this belongs to." },
         owner: { type: "string", description: "me, an email, or none." },
         source_quote: { type: "string", description: "The words this came from, briefly, if it came from someone." },
+        source_kind: { type: "string", enum: ["words", "mail", "message", "event", "url"], description: "Where it came from." },
+        source_ref: { type: "string", description: "A mail, message or event id, or a URL." },
+        source_at: { type: "string", description: "When the source was written (ISO 8601)." },
+        state: { type: "string", enum: ["open", "doing", "done", "dropped"], description: "Default open; a call (decision) can be filed as done." },
       },
       required: ["project", "kind", "title"], additionalProperties: false,
     },
@@ -102,6 +106,8 @@ export const workCreate = defineVerb({
   parse: (i) => ({
     project: reqString(i, "project", { max: 63 }), kind: kindParam(i), title: reqString(i, "title", { max: 200 }), body: optString(i, "body", { max: 20_000 }) ?? "",
     parent: optInt(i, "parent", { min: 1, max: 10_000_000 }), owner: optString(i, "owner", { max: 254 }), source_quote: optString(i, "source_quote", { max: 2000 }),
+    source_kind: optString(i, "source_kind", { max: 20 }), source_ref: optString(i, "source_ref", { max: 500 }), source_at: optString(i, "source_at", { max: 40 }),
+    state: optString(i, "state", { max: 20 }),
   }),
   run: async (ctx, p) => {
     const pr = await projectBySlug(ctx, p.project);
@@ -109,9 +115,14 @@ export const workCreate = defineVerb({
     const parent = p.parent ? await getWorkByNumber(ctx.db, pr.id, p.parent) : null;
     if (p.parent && !parent) throw badRequest("no such parent item");
     const owner = await ownerId(ctx, p.owner);
+    if (p.state && !(STATE_LIST as readonly string[]).includes(p.state)) throw badRequest("state must be open, doing, done, or dropped");
+    if (p.source_kind && !["words", "mail", "message", "event", "url"].includes(p.source_kind)) throw badRequest("unknown source kind");
+    const sourceAt = p.source_at ? Date.parse(p.source_at) : null;
+    if (p.source_at && (!Number.isFinite(sourceAt) || sourceAt! > ctx.now + 60_000)) throw badRequest("source_at must be a past ISO 8601 time");
     const item = await createWork(ctx.db, {
       tenant_id: ctx.tenant!.id, project_id: pr.id, kind: p.kind, title: p.title, body: p.body, created_by: ctx.identity!.id,
-      owner_id: owner ?? null, parent_id: parent?.id ?? null, source_kind: p.source_quote ? "words" : null, source_quote: p.source_quote,
+      owner_id: owner ?? null, parent_id: parent?.id ?? null, state: (p.state as WorkState | null) ?? undefined,
+      source_kind: p.source_kind ?? (p.source_quote ? "words" : null), source_ref: p.source_ref, source_quote: p.source_quote, source_at: sourceAt,
     }, ctx.now);
     await audit(ctx, item, "work.create", `Filed ${ref(pr.slug, item)} (${KINDS[item.kind].name}): ${item.title}`);
     return { item, ref: ref(pr.slug, item) };
