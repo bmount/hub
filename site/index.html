@@ -160,6 +160,7 @@ p{margin:0}
 .closing h2{font-size:clamp(1.6rem,4vw,2.3rem);font-weight:800}
 .closing p{margin-top:.7rem;color:var(--muted);max-width:34em}
 .closing .sig{margin-top:2rem;font:500 .85rem var(--mono);color:var(--muted)}
+.closing .sig a{color:inherit}
 @media (max-width:520px){.item{grid-template-columns:44px minmax(0,1fr);gap:.8rem}.item svg{width:44px;height:44px}}
 
 
@@ -435,7 +436,7 @@ p{margin:0}
       <h2>Pimwell is private, for now.</h2>
       <p>It's invite-only while we build it. If someone sent you an invite link, open it to move in.</p>
       <p><a href="/login">Sign in</a></p>
-      <p class="sig">pimwell.com</p>
+      <p class="sig">pimwell.com <span aria-hidden="true">&middot;</span> <a href="/privacy">Privacy</a> <span aria-hidden="true">&middot;</span> <a href="/terms">Terms</a></p>
     </div>
   </div>
 </section>
