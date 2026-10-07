@@ -15,6 +15,25 @@ change: once you understand, acting on it is a short step, often one a helper ca
 This is also the core of the product's messaging. Public copy says it in plain words, for example
 "You can always see what happened and why, and change what happens next to fit the people you serve."
 
+## Messaging
+
+Claims are outcomes a user would pay for, never the mechanisms that produce them. Implementation
+details never headline: reply-only mail, magic links, name tags, sleeping when idle, and the like
+exist to protect deliverability, security, or cost. They may appear as supporting facts, never as
+the pitch.
+
+The lead claim and its ladder (the landing page's cloud builds this list as you walk):
+
+1. Source control that also knows exactly what your code ended up doing in production.
+2. And how long it takes to run.
+3. And how many users noticed.
+4. And exactly why it was created.
+5. And what those users spend, and generate for you.
+6. And how to change it from your own ChatGPT or Claude session.
+
+Several of these are direction, not yet built. They are fine to state as what Pimwell is for, but
+never back them with invented numbers or customers.
+
 ## The integration tax
 
 Monitoring, source control, and project management have always lived in separate tools. Joining

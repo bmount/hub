@@ -174,8 +174,13 @@ p{margin:0}
 .tour.show{opacity:1}
 .tour .in{transition:opacity .35s ease}
 .tour .in.swap{opacity:0}
-.tour h2{font-size:clamp(1.25rem,2.4vw,1.6rem);font-weight:800;line-height:1.12;position:relative}
-.tour p{margin-top:.45rem;font-size:clamp(.95rem,1.4vw,1.02rem);line-height:1.55;position:relative}
+.tour h2{font-size:clamp(1.12rem,2vw,1.38rem);font-weight:800;line-height:1.18;position:relative}
+.tour .ladder{list-style:none;margin:.55rem 0 0;padding:0;position:relative}
+.tour .ladder li{font-weight:700;font-size:clamp(.95rem,1.35vw,1.04rem);line-height:1.35;color:#8a93ad;margin-top:.18rem;transition:color .4s}
+.tour .ladder li.new{color:var(--ink)}
+.tour p{margin-top:.5rem;font-size:clamp(.9rem,1.25vw,.97rem);line-height:1.5;color:var(--muted);position:relative}
+.tour p:empty{display:none}
+@media (max-width:520px){.tour .ladder li:not(.new){display:none}}
 .recap{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:1.6rem 2rem;margin-top:2.6rem}
 .recap .r{display:grid;grid-template-columns:44px minmax(0,1fr);gap:.8rem;align-items:start}
 .recap svg{width:44px;height:44px}
@@ -227,11 +232,11 @@ p{margin:0}
           <text class="sign" x="140" y="231" text-anchor="middle">Repo &amp; Co.</text>
           <g fill="#f3c2ad"><rect x="22" y="246" width="16" height="114"/><rect x="72" y="246" width="16" height="114"/><rect x="192" y="246" width="16" height="114"/><rect x="242" y="246" width="16" height="114"/></g>
           <rect x="110" y="282" width="60" height="78" rx="30" fill="#8a6a4a"/>
-          <text class="signsm" x="140" y="276" text-anchor="middle">every version, kept</text>
+          <text class="signsm" x="140" y="276" text-anchor="middle">and what it did</text>
         </svg>
       </div>
 
-      <!-- clock tower: lists, kept for you -->
+      <!-- clock tower: how long it runs -->
       <div class="b" style="left:640px;width:150px">
         <svg viewBox="0 0 150 300">
           <rect x="0" y="0" width="150" height="300" rx="4" fill="#ffe3b8"/>
@@ -248,7 +253,7 @@ p{margin:0}
             <rect class="note" style="animation-delay:-5s" x="60" y="162" width="30" height="26" rx="2" fill="#ffe27a"/>
             <rect class="note" style="animation-delay:-6.2s" x="96" y="162" width="30" height="26" rx="2" fill="#ffe27a"/>
           </g>
-          <text class="signsm" x="75" y="212" text-anchor="middle" style="fill:#fff">lists, kept for you</text>
+          <text class="signsm" x="75" y="212" text-anchor="middle" style="fill:#fff">timed, every run</text>
           <rect x="52" y="240" width="46" height="60" rx="4" fill="#b98756"/>
         </svg>
       </div>
@@ -273,7 +278,7 @@ p{margin:0}
           <g fill="#fff"><rect x="24" y="72" width="54" height="54" rx="4"/><rect x="222" y="72" width="54" height="54" rx="4"/></g>
           <rect x="118" y="96" width="64" height="94" rx="4" fill="#5d7fb8"/>
           <rect x="134" y="110" width="32" height="5" rx="2" fill="#1f2a44"/>
-          <text class="signsm" x="150" y="148" text-anchor="middle" style="fill:#fff">we write back</text>
+          <text class="signsm" x="150" y="148" text-anchor="middle" style="fill:#fff">users write in</text>
           <rect x="262" y="132" width="26" height="58" rx="10" fill="#ff6b5e"/><rect x="266" y="146" width="18" height="4" rx="2" fill="#1f2a44"/>
           <rect x="230" y="-30" width="4" height="32" fill="#7d86a3"/>
         </svg>
@@ -297,11 +302,11 @@ p{margin:0}
           <rect x="0" y="40" width="260" height="130" fill="#ffe8a3"/>
           <g><path d="M-6 40 h272 v26 h-272z" fill="#fff"/><path d="M-6 40 h34 v26 h-34z M62 40 h34 v26 h-34z M130 40 h34 v26 h-34z M198 40 h34 v26 h-34z" fill="#ff6b5e"/></g>
           <rect x="40" y="6" width="180" height="28" rx="4" fill="#fff"/>
-          <text class="sign" x="130" y="26" text-anchor="middle">Chatter</text>
+          <text class="sign" x="130" y="26" text-anchor="middle">Shop</text>
           <g fill="#fff8de"><rect x="16" y="80" width="90" height="62" rx="4"/><rect x="154" y="80" width="90" height="62" rx="4"/></g>
           <g fill="#9aa3bf"><circle cx="42" cy="112" r="10"/><rect x="30" y="122" width="24" height="20" rx="8"/><circle cx="80" cy="114" r="9"/><rect x="69" y="123" width="22" height="19" rx="8"/><circle cx="196" cy="112" r="10"/><rect x="184" y="122" width="24" height="20" rx="8"/></g>
           <rect x="112" y="92" width="36" height="78" rx="3" fill="#c79a43"/>
-          <text class="signsm" x="130" y="160" text-anchor="middle">opening soon</text>
+          <text class="signsm" x="130" y="160" text-anchor="middle">what users spend</text>
         </svg>
       </div>
       <div class="bubble say pop" style="left:2310px;top:180px"><div class="gl" data-gl="9x2" style="color:var(--coral)"></div></div>
@@ -346,7 +351,7 @@ p{margin:0}
           <text class="sign" x="150" y="49" text-anchor="middle">Helpers</text>
           <rect x="40" y="70" width="220" height="110" rx="4" fill="#6c5ce7" opacity=".85"/>
           <g fill="#8e81f0"><rect x="40" y="70" width="220" height="10"/><rect x="40" y="84" width="220" height="10"/></g>
-          <text class="signsm" x="150" y="172" text-anchor="middle" style="fill:#fff">every one has a name tag</text>
+          <text class="signsm" x="150" y="172" text-anchor="middle" style="fill:#fff">ask from Claude</text>
         </svg>
       </div>
       <svg class="bot a" style="left:3370px" viewBox="0 0 34 48"><line x1="17" y1="0" x2="17" y2="8" stroke="#1f2a44" stroke-width="2"/><circle cx="17" cy="2" r="2.5" fill="#ff6b5e"/><rect x="3" y="8" width="28" height="22" rx="6" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="12" cy="18" r="2.5" fill="#0f9e8c"/><circle cx="22" cy="18" r="2.5" fill="#0f9e8c"/><rect x="7" y="30" width="20" height="12" rx="3" fill="#c8bcff" stroke="#1f2a44" stroke-width="2"/><rect x="9" y="33" width="16" height="6" fill="#fff"/><text x="17" y="38" text-anchor="middle" font-size="4.5" font-family="JetBrains Mono,monospace" font-weight="600" fill="#1f2a44">scout</text><g fill="#1f2a44"><rect x="9" y="42" width="5" height="6" rx="1"/><rect x="20" y="42" width="5" height="6" rx="1"/></g></svg>
@@ -406,7 +411,7 @@ p{margin:0}
       <p>Your team and its AI helpers, working in one place.</p>
     </div>
     <div class="chip" id="chip" aria-hidden="true">Pimwell</div>
-    <div class="tour" id="tour" aria-live="polite"><div class="in" id="tIn"><h2 id="tTitle"></h2><p id="tBody"></p></div></div>
+    <div class="tour" id="tour" aria-live="polite"><div class="in" id="tIn"><h2 id="tTitle"></h2><ul class="ladder" id="tLadder"></ul><p id="tBody"></p></div></div>
     <div class="cue" id="cue">Scroll to take a walk</div>
   </div>
 </section>
@@ -417,14 +422,14 @@ p{margin:0}
     <h2>Pimwell at a glance.</h2>
     <p class="intro">Pimwell is a shared workplace for a small team and the AI helpers that work alongside it. You can always see what happened and why, and change what happens next to fit the people you serve.</p>
     <div class="recap">
-      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="24" r="20" fill="#bfe8c8"/><path d="M32 60V14" stroke="#8a6a4a" stroke-width="5" stroke-linecap="round"/><path d="M32 40c0-8 14-6 14-16" stroke="#8a6a4a" stroke-width="4" fill="none" stroke-linecap="round"/><circle cx="32" cy="48" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="32" cy="30" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="46" cy="24" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="32" cy="14" r="5" fill="#ffc845" stroke="#1f2a44" stroke-width="2"/></svg><div><h3>Leveled-up source control</h3><p>Every version kept, every change signed by the person or helper who made it.</p></div></div>
-      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="8" width="44" height="50" rx="5" fill="#ffe3b8"/><circle cx="32" cy="24" r="11" fill="#fff" stroke="#1f2a44" stroke-width="2"/><path d="M32 24V17M32 24l5 3" stroke="#ff6b5e" stroke-width="2.5" stroke-linecap="round"/><rect x="16" y="40" width="10" height="9" rx="1" fill="#9fe3b5"/><rect x="28" y="40" width="10" height="9" rx="1" fill="#9fe3b5"/><rect x="40" y="40" width="10" height="9" rx="1" fill="#ffe27a"/></svg><div><h3>Project management, where absolutely necessary</h3><p>The list keeps itself. Drop by when you're curious.</p></div></div>
-      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><g fill="#fff" stroke="#c9cff0" stroke-width="2"><circle cx="22" cy="36" r="13"/><circle cx="36" cy="28" r="16"/><circle cx="48" cy="38" r="11"/></g><rect x="16" y="36" width="40" height="13" rx="6" fill="#fff"/><circle cx="31" cy="35" r="2" fill="#1f2a44"/><circle cx="41" cy="35" r="2" fill="#1f2a44"/><path d="M33 41q3 3 6 0" stroke="#1f2a44" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M52 8l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#ffc845"/></svg><div><h3>Let your AI do it for you</h3><p>Connect Claude, ChatGPT, or any MCP assistant, approve once, then just ask.</p></div></div>
-      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="16" width="48" height="34" rx="4" fill="#cfe3ff"/><path d="M8 18l24 18 24-18" stroke="#5d7fb8" stroke-width="3" fill="none"/><path d="M40 6l14 4-6 4z" fill="#ff6b5e"/></svg><div><h3>Mail with manners</h3><p>Pimwell and its helpers only ever write back.</p></div></div>
-      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="12" y="8" width="40" height="30" rx="8" fill="#fff" stroke="#1f2a44" stroke-width="2.5"/><circle cx="25" cy="23" r="3" fill="#0f9e8c"/><circle cx="39" cy="23" r="3" fill="#0f9e8c"/><rect x="14" y="40" width="36" height="18" rx="4" fill="#c8bcff" stroke="#1f2a44" stroke-width="2.5"/><rect x="18" y="44" width="28" height="9" fill="#fff"/><text x="32" y="51" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" font-weight="600" fill="#1f2a44">scout</text></svg><div><h3>Hand to hand</h3><p>People and helpers work the same things, and every touch carries a name.</p></div></div>
-      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="8" width="44" height="50" rx="3" fill="#d7f0e6"/><g fill="#fff"><rect x="16" y="14" width="10" height="9" rx="1"/><rect x="28" y="14" width="10" height="9" rx="1"/><rect x="40" y="14" width="10" height="9" rx="1"/><rect x="16" y="27" width="10" height="9" rx="1"/><rect x="40" y="27" width="10" height="9" rx="1"/></g><rect x="28" y="27" width="10" height="9" rx="1" fill="#ffc845"/><rect x="26" y="42" width="12" height="16" rx="2" fill="#5aa889"/></svg><div><h3>A room for every team</h3><p>Your own address, people, and projects, with a cooler for finished work.</p></div></div>
-      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="22" width="48" height="34" rx="3" fill="#fff0c2"/><path d="M6 22h52v8H6z" fill="#ffc845"/><ellipse cx="32" cy="48" rx="12" ry="5" fill="#9aa3bf"/><circle cx="43" cy="44" r="5" fill="#9aa3bf"/><text x="48" y="16" font-size="11" font-family="Bricolage Grotesque,sans-serif" font-weight="700" fill="#6c5ce7">z</text></svg><div><h3>Small, cheap, and yours</h3><p>Naps when idle, and any project packs into one file you can keep.</p></div></div>
-      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="20" width="52" height="38" rx="3" fill="#ffe8a3"/><path d="M4 20h56v9H4z" fill="#ff6b5e"/><rect x="10" y="4" width="26" height="13" rx="6" fill="#fff" stroke="#d9def0" stroke-width="2"/><rect x="30" y="8" width="26" height="13" rx="6" fill="#fff" stroke="#d9def0" stroke-width="2"/></svg><div><h3>Conversations, opening soon</h3><p>Chat that points straight at the work it changed.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="24" r="20" fill="#bfe8c8"/><path d="M32 60V14" stroke="#8a6a4a" stroke-width="5" stroke-linecap="round"/><path d="M32 40c0-8 14-6 14-16" stroke="#8a6a4a" stroke-width="4" fill="none" stroke-linecap="round"/><circle cx="32" cy="48" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="32" cy="30" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="46" cy="24" r="4" fill="#fff" stroke="#1f2a44" stroke-width="2"/><circle cx="32" cy="14" r="5" fill="#ffc845" stroke="#1f2a44" stroke-width="2"/></svg><div><h3>Knows what your code did</h3><p>Every change, followed into production: what it broke, what it fixed, and what came after.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="8" width="44" height="50" rx="5" fill="#ffe3b8"/><circle cx="32" cy="24" r="11" fill="#fff" stroke="#1f2a44" stroke-width="2"/><path d="M32 24V17M32 24l5 3" stroke="#ff6b5e" stroke-width="2.5" stroke-linecap="round"/><rect x="16" y="40" width="10" height="9" rx="1" fill="#9fe3b5"/><rect x="28" y="40" width="10" height="9" rx="1" fill="#9fe3b5"/><rect x="40" y="40" width="10" height="9" rx="1" fill="#ffe27a"/></svg><div><h3>Knows how long it takes</h3><p>How long each change takes to run, so a slowdown points straight at the change behind it.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="16" width="48" height="34" rx="4" fill="#cfe3ff"/><path d="M8 18l24 18 24-18" stroke="#5d7fb8" stroke-width="3" fill="none"/><path d="M40 6l14 4-6 4z" fill="#ff6b5e"/></svg><div><h3>Knows who noticed</h3><p>The users a change reached, and what they wrote to you about it.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="12" y="8" width="40" height="30" rx="8" fill="#fff" stroke="#1f2a44" stroke-width="2.5"/><circle cx="25" cy="23" r="3" fill="#0f9e8c"/><circle cx="39" cy="23" r="3" fill="#0f9e8c"/><rect x="14" y="40" width="36" height="18" rx="4" fill="#c8bcff" stroke="#1f2a44" stroke-width="2.5"/><rect x="18" y="44" width="28" height="9" fill="#fff"/><text x="32" y="51" text-anchor="middle" font-size="7" font-family="JetBrains Mono,monospace" font-weight="600" fill="#1f2a44">scout</text></svg><div><h3>Knows why it exists</h3><p>Each change links to the request behind it, and to the person or AI helper who made it.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="6" y="20" width="52" height="38" rx="3" fill="#ffe8a3"/><path d="M4 20h56v9H4z" fill="#ff6b5e"/><rect x="10" y="4" width="26" height="13" rx="6" fill="#fff" stroke="#d9def0" stroke-width="2"/><rect x="30" y="8" width="26" height="13" rx="6" fill="#fff" stroke="#d9def0" stroke-width="2"/></svg><div><h3>Knows what it earns</h3><p>What the people using each feature spend, and what they generate for you.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><g fill="#fff" stroke="#c9cff0" stroke-width="2"><circle cx="22" cy="36" r="13"/><circle cx="36" cy="28" r="16"/><circle cx="48" cy="38" r="11"/></g><rect x="16" y="36" width="40" height="13" rx="6" fill="#fff"/><circle cx="31" cy="35" r="2" fill="#1f2a44"/><circle cx="41" cy="35" r="2" fill="#1f2a44"/><path d="M33 41q3 3 6 0" stroke="#1f2a44" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M52 8l2 5 5 2-5 2-2 5-2-5-5-2 5-2z" fill="#ffc845"/></svg><div><h3>Changes from your own Claude or ChatGPT</h3><p>Ask for a fix in the assistant you already use. A helper makes it, and you can see every step.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="8" width="44" height="50" rx="3" fill="#d7f0e6"/><g fill="#fff"><rect x="16" y="14" width="10" height="9" rx="1"/><rect x="28" y="14" width="10" height="9" rx="1"/><rect x="40" y="14" width="10" height="9" rx="1"/><rect x="16" y="27" width="10" height="9" rx="1"/><rect x="40" y="27" width="10" height="9" rx="1"/></g><rect x="28" y="27" width="10" height="9" rx="1" fill="#ffc845"/><rect x="26" y="42" width="12" height="16" rx="2" fill="#5aa889"/></svg><div><h3>A room for every team</h3><p>Each team gets its own address, people and projects. Nothing finished is thrown away.</p></div></div>
+      <div class="r"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="8" y="22" width="48" height="34" rx="3" fill="#fff0c2"/><path d="M6 22h52v8H6z" fill="#ffc845"/><ellipse cx="32" cy="48" rx="12" ry="5" fill="#9aa3bf"/><circle cx="43" cy="44" r="5" fill="#9aa3bf"/><text x="48" y="16" font-size="11" font-family="Bricolage Grotesque,sans-serif" font-weight="700" fill="#6c5ce7">z</text></svg><div><h3>Small, cheap, and yours</h3><p>It costs little to run, and any project packs into one file you can keep.</p></div></div>
     </div>
     <div class="closing">
       <h2>Pimwell is private, for now.</h2>
@@ -637,42 +642,57 @@ p{margin:0}
 
   /* ---------- explainer cards that ride along with the walk ---------- */
   const INTRO = { pipe: ['your team', 'AI helpers', 'one workplace'] };
+  // The claim ladder. The cloud always leads with the first claim; each stop's `step` says how many
+  // "And ..." lines have been earned so far. `body` is one plain sentence about the stop.
+  const CLAIMS = [
+    'Source control that also knows exactly what your code ended up doing in production.',
+    'And how long it takes to run.',
+    'And how many users noticed.',
+    'And exactly why it was created.',
+    'And what those users spend, and generate for you.',
+    'And how to change it from your own ChatGPT or Claude session.',
+  ];
   const STOPS = [
-    { from: 270, to: 600, tint: '#ffd9c7', title: 'Leveled-up source control',
-      body: 'Every version of your work is kept, so nothing is ever really lost. Pimwell also remembers who made each change, a person or an AI helper, and when two edits collide it keeps both instead of quietly picking a winner. It speaks ordinary git, so the tools you already use just work.',
-      pipe: ['every version kept', 'what came after', 'who changed it'], says: ['I know what came before this commit. What came after?', 'deployed Tuesday, one error, fixed'] },
-    { from: 600, to: 860, tint: '#ffe3b8', title: 'Project management, where absolutely necessary',
-      body: 'Somebody has to keep the list. Ideally not you. Tasks open, get picked up, and close as the work happens, and a helper that grabs one holds onto it so nobody doubles up. Drop by when you’re curious, or when something genuinely needs a person.',
-      pipe: ['the list keeps itself', 'claimed', 'done'], says: ['why are we doing this again?', 'this task, from this request'] },
-    { from: 860, to: 1170, tint: '#e3dcff', title: 'Let your AI do it for you',
-      body: 'Point Claude, ChatGPT, or any assistant that speaks MCP at Pimwell and approve it once. After that, just ask: open a task, see what changed overnight, tidy up a project. Whatever it does is signed with its name.',
-      pipe: ['approve once', 'just ask', 'signed by your AI'], says: ['what did my AI actually do?', 'every step, signed'] },
-    { from: 1170, to: 1540, tint: '#cfe3ff', title: 'Mail with manners',
-      body: 'Most software will email anyone, any time, which is how inboxes fill with noise. Pimwell never writes first. Send it a note and it answers, and every AI helper with its own inbox plays by the same rule.',
-      pipe: ['never writes first', 'replies only', 'no spam'], says: ['did we ever email them first?', 'never. replies only'] },
-    { from: 1540, to: 2290, tint: '#f3cdb9', title: 'Hand to hand',
-      body: 'People and AI helpers work on the same things. Everyone signs in with a link, every helper wears a name tag and answers to a named person, and each stretch of a helper’s work is written down from start to finish. You can always see who touched what.',
-      pipe: ['name tags', 'who touched what', 'written down'], says: ['who wrote this line, and why?', 'a helper, for that error report'] },
-    { from: 2290, to: 2620, tint: '#ffe8a3', title: 'Conversations, opening soon',
-      body: 'Chat is coming to Pimwell with the same name tags, so a decision made in conversation can point straight at the work it changed.',
-      pipe: ['decisions link to work', 'same name tags'], says: ['where did we decide that?', 'linked to the commit'] },
-    { from: 2620, to: 3010, tint: '#d7f0e6', title: 'A room for every team',
-      body: 'Each team gets its own address, like design.pimwell.com, with its own people and projects, grouped however you like. One person can belong to more than one.',
+    { from: 270, to: 600, tint: '#ffd9c7', step: 0,
+      body: 'Every change is followed past the merge: where it shipped, what it broke, what it fixed, and what came after.',
+      pipe: ['what it did in production', 'what came after'], says: ['I know what came before this commit. What came after?', 'shipped Tuesday, one error, fixed'] },
+    { from: 600, to: 860, tint: '#ffe3b8', step: 1,
+      body: 'When something gets slow, the slowdown points at the change that caused it.',
+      pipe: ['how long it runs', 'which change slowed it'], says: ['why did checkout get slow?', 'this change, on Thursday'] },
+    { from: 860, to: 1170, tint: '#e3dcff', step: 2,
+      body: 'See which people a change reached, and which of them ran into its errors.',
+      pipe: ['who noticed', 'errors to lines'], says: ['did anyone even notice?', 'everyone who hit it, listed'] },
+    { from: 1170, to: 1540, tint: '#cfe3ff', step: 2,
+      body: 'What users write to you lands next to the code it is about.',
+      pipe: ['users write in', 'next to the code'], says: ['what are customers saying about it?', 'their notes, next to the code'] },
+    { from: 1540, to: 2290, tint: '#f3cdb9', step: 3,
+      body: 'Every change links to the request that asked for it, and to the person or AI helper who made it.',
+      pipe: ['why it exists', 'the request behind it'], says: ['who asked for this, and why?', 'that request, from that meeting'] },
+    { from: 2290, to: 2620, tint: '#ffe8a3', step: 4,
+      body: 'Follow a feature all the way to the money: what the people using it spend, and what they bring in.',
+      pipe: ['what users spend', 'what it earns'], says: ['is this feature paying for itself?', 'its users’ spending, traced'] },
+    { from: 2620, to: 3010, tint: '#d7f0e6', step: 4,
+      body: 'Each team gets a room of its own, like design.pimwell.com, with its own people and projects.',
       pipe: ['a room per team', 'design.pimwell.com'], says: ['who can see this?', 'your team’s room only'] },
-    { from: 3010, to: 3300, tint: '#ffd6e7', title: 'Finished, never thrown out',
-      body: 'Work that’s done moves to the cooler: out of the way, still readable whenever you need it, and one step from coming back.',
-      pipe: ['finished, not gone', 'still readable'], says: ['what did the old version do?', 'still here, still readable'] },
-    { from: 3300, to: 3680, tint: '#e3dcff', title: 'Helpers that clock in',
-      body: 'Set up as many AI helpers as the work needs. They pick up tasks while you’re away, and every shift they work leaves a tidy record behind.',
-      pipe: ['helpers clock in', 'error to line to commit'], says: ['what broke overnight, and who fixed it?', 'one error, one fix, both logged'] },
-    { from: 3680, to: 3960, tint: '#fff0c2', title: 'Small, cheap, and yours',
-      body: 'Pimwell naps when nobody’s around and wakes the moment you arrive, so it costs next to nothing. Any project packs into a single file you can open with ordinary tools, so your work never depends on us.',
-      pipe: ['naps when idle', 'one file, yours'], says: ['what is this costing us?', 'next to nothing'] },
-    { from: 3960, to: 4400, tint: '#ffc845', title: 'All of it, on one page',
+    { from: 3010, to: 3300, tint: '#ffd6e7', step: 4,
+      body: 'Nothing finished is thrown away. Old versions still answer when you ask what they did.',
+      pipe: ['old versions answer', 'nothing thrown out'], says: ['what did the old version do?', 'still here, still answering'] },
+    { from: 3300, to: 3680, tint: '#e3dcff', step: 5,
+      body: 'Ask for a fix from the assistant you already use. An AI helper picks it up, and you can see every step it takes.',
+      pipe: ['ask from Claude', 'fixed overnight'], says: ['can someone fix it tonight?', 'asked from Claude. a helper’s on it'] },
+    { from: 3680, to: 3960, tint: '#fff0c2', step: 5,
+      body: 'It costs little to run, and any project packs into one file you can keep.',
+      pipe: ['costs little', 'one file, yours'], says: ['what is this costing us?', 'next to nothing'] },
+    { from: 3960, to: 4400, tint: '#ffc845', step: 5,
       body: 'Keep scrolling for the short version, and for how to get in.',
       pipe: ['invite only', 'open your link'], says: ['can I come in?', 'bring your invite link'] },
   ];
-  const tour = $('tour'), tIn = $('tIn'), tTitle = $('tTitle'), tBody = $('tBody');
+  const tour = $('tour'), tIn = $('tIn'), tTitle = $('tTitle'), tBody = $('tBody'), tLadder = $('tLadder');
+  function ladder(step) {
+    tLadder.replaceChildren(...CLAIMS.slice(1, step + 1).map((c, i) => {
+      const li = document.createElement('li'); li.textContent = c; if (i === step - 1) li.className = 'new'; return li;
+    }));
+  }
   const bP = $('bP'), bR = $('bR'), bPt = $('bPt'), bRt = $('bRt');
   let stopIdx = -2, shownIdx = -1, swapTimer = 0, shownAt = 0, stopT0 = 0, pipeMsg = null, pipeTurn = 0, nextPipeAt = 0;
   let walkerV = 0, anchorV = 0, cloudX = 0, cloudW = 0;
@@ -698,7 +718,7 @@ p{margin:0}
       if (stopIdx < 0 || stopIdx === shownIdx) return;
       const st = STOPS[stopIdx];
       const put = () => {
-        tTitle.textContent = st.title; tBody.textContent = st.body;
+        tTitle.textContent = CLAIMS[0]; ladder(st.step); tBody.textContent = st.body;
         tour.style.setProperty('--tint', st.tint);
         anchorV = walkerV; shownIdx = stopIdx; shownAt = performance.now();
         tIn.classList.remove('swap'); tour.classList.add('show');
