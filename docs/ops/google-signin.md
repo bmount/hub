@@ -2,23 +2,45 @@
 
 Design: the Google amendment at the end of `docs/superpowers/specs/2026-10-06-identity-design.md`.
 
-## The OAuth client (once, by the account owner)
+## Google setup (once, by the account owner)
 
-In the Google Cloud console for the project that should own the client:
+Everything is at https://console.cloud.google.com/auth (Google Auth Platform). It works from a phone.
 
-1. **OAuth consent screen.** User type External (or Internal, if only one Workspace should
-   ever sign in). App name Pimwell. Scopes `openid`, `email` and `profile`. These are not
-   sensitive, so no Google review is needed. Publish the app so it is out of "Testing";
-   otherwise only listed test users can sign in.
-2. **Credentials.** Create an OAuth client ID of type Web application.
-   - Authorized redirect URI: `https://pimwell.com/login/google/callback`
-   - Authorized JavaScript origins: none needed.
-3. **Store the values as Worker secrets** (`npm run cf` runs wrangler as pimwell-001):
+1. **Project.** Pick or create a project at the top, for example "Pimwell". If asked to "Get started":
+   - App name **Pimwell**, support email yours.
+   - Audience **External**. Gmail addresses are on the list, so Internal would lock them out.
+   - Contact email yours. Agree and press **Create**.
+2. **Branding** (left menu):
+   - Authorized domains: `pimwell.com`.
+   - Privacy policy: `https://pimwell.com/privacy`. Terms of service: `https://pimwell.com/terms`.
+   - Upload no logo. A logo triggers a slow brand verification.
+   - **Save**.
+3. **Data Access** (left menu): this is where the scopes go.
+   - Press **Add or remove scopes**.
+   - Tick `openid`, `.../auth/userinfo.email` and `.../auth/userinfo.profile`.
+   - Press **Update**, then **Save**.
+4. **Audience** (left menu): press **Publish app** and confirm. In "Testing" mode only listed test users can sign in.
+5. **Clients** (left menu): press **Create client**, then fill in:
+   - Application type **Web application**, name `pimwell-hub`.
+   - Authorized JavaScript origins: `https://pimwell.com`.
+   - Authorized redirect URIs: `https://pimwell.com/login/google/callback`. Exact, with no trailing slash.
+   - Press **Create**.
+6. **Copy the ID and secret.** The dialog that opens shows:
+   - **Client ID**, ending in `.apps.googleusercontent.com`
+   - **Client secret**, starting with `GOCSPX-`
 
-       npm run cf -- secret put GOOGLE_CLIENT_ID
-       npm run cf -- secret put GOOGLE_CLIENT_SECRET
+   Copy both, or press **Download JSON**. The full secret is shown only now. The client ID stays visible under **Clients**. If you lose the secret, open the client and choose **Add secret**.
+7. **Give them to Pimwell.** Either way, future deploys keep them.
+   - **Web:** in https://dash.cloudflare.com go to **Workers & Pages**, then **pimwell-hub**, **Settings**, **Variables and Secrets**, **Add**. Choose type **Secret** and add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+   - **Terminal:** run these and paste each value when asked.
 
-Until both secrets exist, the sign-in page hides the Google button and `/login/google` answers 503.
+         npm run cf -- secret put GOOGLE_CLIENT_ID
+         npm run cf -- secret put GOOGLE_CLIENT_SECRET
+8. **Test.** Open https://pimwell.com/login and press **Sign in with Google**.
+   - The owner's company account becomes root by accepting the pending root invite.
+   - An address that isn't on the list gets a polite refusal.
+
+Until both secrets exist, the Google button is hidden and `/login/google` answers 503.
 
 ## Sign-in rules
 
