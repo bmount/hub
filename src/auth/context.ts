@@ -5,6 +5,7 @@ import { getIdentityById } from "../db/identities";
 import { getMembership } from "../db/memberships";
 import { getSessionByToken, touchSession } from "../db/sessions";
 import { readSessionToken } from "./cookie";
+import { sha256Hex } from "../ids";
 import { API_TOKEN_PREFIX, getApiTokenByToken } from "../db/apiTokens";
 import { agentCredentialOk } from "./agent";
 import type { LiveGrant } from "../db/oauthGrants";
@@ -80,29 +81,34 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
   const db = env.HUB_DB;
   const host = classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN);
 
-  let tenant: Tenant | null = null;
-  if (host.kind === "tenant") {
-    const t = await getTenantBySlug(db, host.slug);
-    tenant = t && t.state === "active" ? t : null;
-  }
-
   const auth = request.headers.get("authorization");
   const bearer = auth?.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : null;
   const cookieToken = readSessionToken(request);
+
+  // One round trip for the common case (performance budget, overnight plan 2 N4): with a session token in hand, the
+  // tenant, session, identity and membership rows come back in a single batch. Every check below still runs on them.
+  const sessionToken = bearer && bearer.startsWith("pms_") ? bearer : !bearer && cookieToken ? cookieToken : null;
+  const pre = sessionToken ? await prefetch(db, host.kind === "tenant" ? host.slug : null, await sha256Hex(sessionToken), now) : null;
+
+  let tenant: Tenant | null = null;
+  if (host.kind === "tenant") {
+    const t = pre ? pre.tenant : await getTenantBySlug(db, host.slug);
+    tenant = t && t.state === "active" ? t : null;
+  }
 
   let session: Session | null = null;
   let apiToken: ApiToken | null = null;
   let authKind: Ctx["authKind"] = null;
   let staleCookie = false;
   if (bearer && bearer.startsWith("pms_")) {
-    session = await getSessionByToken(db, bearer, now);
+    session = pre ? pre.session : await getSessionByToken(db, bearer, now);
     if (session) authKind = "bearer";
   } else if (bearer && bearer.startsWith(API_TOKEN_PREFIX)) {
     // pmw_ tokens authenticate on the API only (spec 6.5); every other caller sees anonymous.
     if (opts.longLivedToken === true) apiToken = await getApiTokenByToken(db, bearer, now);
     if (apiToken) authKind = "token";
   } else if (cookieToken) {
-    session = await getSessionByToken(db, cookieToken, now);
+    session = pre ? pre.session : await getSessionByToken(db, cookieToken, now);
     // Agents authenticate by bearer only (spec 6.5); a run token in a cookie is stale.
     if (session && session.kind !== "browser") session = null;
     if (session) authKind = "cookie";
@@ -110,7 +116,7 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
   }
 
   let identity: Identity | null = null;
-  if (session) identity = await getIdentityById(db, session.identity_id);
+  if (session) identity = pre && pre.identity?.id === session.identity_id ? pre.identity : await getIdentityById(db, session.identity_id);
   else if (apiToken) identity = await getIdentityById(db, apiToken.identity_id);
   if (identity && !(await credentialUsable(db, identity, session, apiToken, tenant))) identity = null;
   if (!identity && authKind !== null) {
@@ -125,13 +131,29 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
 
   let role: Role | null = null;
   if (identity && tenant) {
-    const membership = await getMembership(db, identity.id, tenant.id);
+    const membership = pre && pre.tenant?.id === tenant.id && (pre.membership === null || pre.membership.identity_id === identity.id)
+      ? pre.membership : await getMembership(db, identity.id, tenant.id);
     role = roleFor(identity, membership);
   } else if (identity && identity.is_root === 1 && host.kind === "apex") {
     role = "root";
   }
 
   return { env, db, now, ip, waitUntil, host, tenant, identity, session, apiToken, role, authKind, staleCookie };
+}
+
+type Prefetched = { tenant: Tenant | null; session: Session | null; identity: Identity | null; membership: Membership | null };
+
+/** The rows buildContext needs for a session token, in one batch. Same predicates as the single-row getters. */
+async function prefetch(db: D1Database, slug: string | null, tokenHash: string, now: number): Promise<Prefetched> {
+  const live = "SELECT identity_id FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?";
+  const [t, s, i, m] = await db.batch([
+    db.prepare("SELECT * FROM tenant WHERE slug = ?").bind(slug),
+    db.prepare("SELECT * FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?").bind(tokenHash, now),
+    db.prepare(`SELECT * FROM identity WHERE id = (${live})`).bind(tokenHash, now),
+    db.prepare(`SELECT * FROM membership WHERE identity_id = (${live}) AND tenant_id = (SELECT id FROM tenant WHERE slug = ?)`).bind(tokenHash, now, slug),
+  ]);
+  const one = <T>(r: D1Result<unknown> | undefined): T | null => ((r?.results[0] as T | undefined) ?? null);
+  return { tenant: one<Tenant>(t), session: one<Session>(s), identity: one<Identity>(i), membership: one<Membership>(m) };
 }
 
 /** The context for one /mcp request, built from a grant that passed the per-request check (MCP spec 5.3, 8.5). */

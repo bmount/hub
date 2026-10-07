@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "./env";
+import { meteredD1, serverTiming, type Meter } from "./perf";
 import { handleApi } from "./http/api";
 import { registerAllVerbs } from "./verbs/index";
 import { authLinkPage, consumeLinkPage, loginPage, loginPostPage } from "./http/login";
@@ -38,9 +39,12 @@ const app = new Hono<{ Bindings: Env }>();
 // Workers' clock only advances across I/O, so this is wall time spent waiting on D1, KV and other services.
 app.use("*", async (c, next) => {
   const started = Date.now();
+  const meter: Meter = { trips: 0, statements: 0, ms: 0 };
+  // This request's own copy of the bindings, with D1 metered; other requests are unaffected.
+  c.env = { ...c.env, HUB_DB: meteredD1(c.env.HUB_DB, meter) };
   await next();
   if (c.res && !c.res.headers.has("server-timing")) {
-    try { c.res.headers.set("server-timing", `app;dur=${Date.now() - started}`); } catch { /* immutable response: leave it */ }
+    try { c.res.headers.set("server-timing", serverTiming(Date.now() - started, meter)); } catch { /* immutable response: leave it */ }
   }
 });
 
