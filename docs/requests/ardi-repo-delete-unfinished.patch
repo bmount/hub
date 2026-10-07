@@ -1,0 +1,1183 @@
+diff --git a/crates/ardi-core/src/verbs.rs b/crates/ardi-core/src/verbs.rs
+index 55c8b5f..8751019 100644
+--- a/crates/ardi-core/src/verbs.rs
++++ b/crates/ardi-core/src/verbs.rs
+@@ -140,6 +140,40 @@ pub static VERBS: &[Verb] = &[
+         versus_git: "no git equivalent",
+         output_hint: "row counts",
+     },
++    Verb {
++        name: "repo.delete",
++        kind: Kind::Command,
++        scope: Scope::Admin,
++        params: &[
++            p("name", Ty::Str, true, true, "repository to delete"),
++            p(
++                "confirm",
++                Ty::Str,
++                true,
++                false,
++                "the repository name again, exactly as given in name",
++            ),
++        ],
++        result: "RepoName",
++        idempotent: true,
++        summary: "delete a repository and all its data, irreversibly",
++        versus_git: "rm -rf repo.git, on the server",
++        output_hint: "one line",
++    },
++    Verb {
++        name: "tenant.purge",
++        kind: Kind::Command,
++        scope: Scope::Admin,
++        params: &[
++            p("tenant", Ty::Str, true, true, "this tenant's name"),
++            p("confirm", Ty::Str, true, false, "the tenant name again"),
++        ],
++        result: "PurgedTenant",
++        idempotent: true,
++        summary: "delete every repository and all tenant state, irreversibly",
++        versus_git: "no git equivalent",
++        output_hint: "one line per deleted repo",
++    },
+     Verb {
+         name: "refs.list",
+         kind: Kind::Query,
+@@ -577,6 +611,8 @@ mod tests {
+             "repo.create",
+             "repo.info",
+             "repo.rebuild",
++            "repo.delete",
++            "tenant.purge",
+             "refs.list",
+             "commit.show",
+             "tree.list",
+@@ -597,7 +633,7 @@ mod tests {
+         ] {
+             assert!(names.contains(&n), "missing verb {n}");
+         }
+-        assert_eq!(names.len(), 21);
++        assert_eq!(names.len(), 23);
+         let mut sorted = names.clone();
+         sorted.sort();
+         sorted.dedup();
+diff --git a/crates/ardi-serve/src/http/api.rs b/crates/ardi-serve/src/http/api.rs
+index 8da3e0b..b1a52cf 100644
+--- a/crates/ardi-serve/src/http/api.rs
++++ b/crates/ardi-serve/src/http/api.rs
+@@ -97,19 +97,36 @@ fn run_native(
+             .create_repo_dir(tenant_name, name)
+             .map_err(|c| handlers::status_error(c.as_u16(), &format!("repository {name}")))
+     };
+-    // The tenant lock is held across the handler (accepted for phase 3).
+-    let mut tenant_guard = lock_recover(&tenant);
+-    let mut repo_guard = repo.as_ref().map(|r| lock_recover(r));
+-    let mut ctx: Ctx<'_> = Ctx {
+-        identity,
+-        tenant_name,
+-        tenant: Some(&mut tenant_guard.0),
+-        repo: repo_guard.as_mut().map(|g| &mut g.0),
+-        repo_name,
+-        idempotency_key,
+-        create_repo: Some(&create_repo),
++    let delete_repo = |name: &str| -> Result<(), ApiError> {
++        state
++            .delete_repo_dir(tenant_name, name)
++            .map_err(|c| handlers::status_error(c.as_u16(), &format!("repository {name}")))
++    };
++    let env = {
++        // The tenant lock is held across the handler (accepted for phase 3).
++        let mut tenant_guard = lock_recover(&tenant);
++        let mut repo_guard = repo.as_ref().map(|r| lock_recover(r));
++        let mut ctx: Ctx<'_> = Ctx {
++            identity,
++            tenant_name,
++            tenant: Some(&mut tenant_guard.0),
++            repo: repo_guard.as_mut().map(|g| &mut g.0),
++            repo_name,
++            idempotency_key,
++            create_repo: Some(&create_repo),
++            delete_repo: Some(&delete_repo),
++        };
++        dispatch::run(verb.name, &input, idempotency_key, &mut ctx)
+     };
+-    dispatch::run(verb.name, &input, idempotency_key, &mut ctx)
++    if verb.name == "tenant.purge" && env.ok {
++        // The handler deleted every repository; the tenant's own store
++        // goes last, once no lock on it is held here.
++        drop(tenant);
++        if let Err(c) = state.purge_tenant_dir(tenant_name) {
++            return Envelope::error(&tenant_error(tenant_name, c));
++        }
++    }
++    env
+ }
+ 
+ #[cfg(test)]
+diff --git a/crates/ardi-serve/src/server.rs b/crates/ardi-serve/src/server.rs
+index 1dc240c..d954db5 100644
+--- a/crates/ardi-serve/src/server.rs
++++ b/crates/ardi-serve/src/server.rs
+@@ -149,6 +149,37 @@ impl AppState {
+         Ok(())
+     }
+ 
++    /// Wipes a repository's directory (not its registration: `repo.delete`
++    /// unregisters it through the tenant store it holds locked). Forgets
++    /// the open store first, waiting for the request holding it. A missing
++    /// directory is success, so an interrupted delete can be retried.
++    /// Blocking: file I/O.
++    pub fn delete_repo_dir(&self, tenant: &str, name: &str) -> Result<(), StatusCode> {
++        let name = name.strip_suffix(".git").unwrap_or(name);
++        let dir = self.repo_dir(tenant, name)?;
++        let open = lock_recover(&self.repos).remove(&format!("{tenant}/{name}"));
++        if let Some(r) = open {
++            drop(lock_recover(&r));
++        }
++        remove_dir_if_present(&dir)
++    }
++
++    /// Removes a tenant's directory (its store and anything left in it) and
++    /// forgets its open stores, so the name is as if never used. The
++    /// caller must hold no lock on the tenant's store. Blocking: file I/O.
++    pub fn purge_tenant_dir(&self, tenant: &str) -> Result<(), StatusCode> {
++        if !valid_name(tenant) {
++            return Err(StatusCode::BAD_REQUEST);
++        }
++        let mut tenants = lock_recover(&self.tenants);
++        if let Some(t) = tenants.remove(tenant) {
++            drop(lock_recover(&t));
++        }
++        let prefix = format!("{tenant}/");
++        lock_recover(&self.repos).retain(|k, _| !k.starts_with(&prefix));
++        remove_dir_if_present(&self.root.join(tenant))
++    }
++
+     /// Creates and registers a repository. Must not be called while the
+     /// tenant's store is locked.
+     pub fn create_repo(&self, tenant: &str, name: &str) -> Result<(), StatusCode> {
+@@ -171,6 +202,14 @@ impl AppState {
+     }
+ }
+ 
++fn remove_dir_if_present(dir: &std::path::Path) -> Result<(), StatusCode> {
++    match std::fs::remove_dir_all(dir) {
++        Ok(()) => Ok(()),
++        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
++        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
++    }
++}
++
+ pub async fn bind(
+     root: PathBuf,
+     listen: SocketAddr,
+diff --git a/crates/ardi-serve/tests/api_verbs.rs b/crates/ardi-serve/tests/api_verbs.rs
+index 73a96f2..c689c3c 100644
+--- a/crates/ardi-serve/tests/api_verbs.rs
++++ b/crates/ardi-serve/tests/api_verbs.rs
+@@ -49,7 +49,7 @@ fn envelope_scope_and_unknown_verb() {
+     let (st, v) = call(&s, "help", json!({}));
+     assert_eq!(st, 200);
+     assert!(v["result"]["text"].as_str().unwrap().contains("timeline"));
+-    assert_eq!(v["result"]["verbs"]["verbs"].as_array().unwrap().len(), 21);
++    assert_eq!(v["result"]["verbs"]["verbs"].as_array().unwrap().len(), 23);
+ }
+ 
+ #[test]
+diff --git a/crates/ardi-serve/tests/delete_purge.rs b/crates/ardi-serve/tests/delete_purge.rs
+new file mode 100644
+index 0000000..60bb3dd
+--- /dev/null
++++ b/crates/ardi-serve/tests/delete_purge.rs
+@@ -0,0 +1,227 @@
++//! `repo.delete` and `tenant.purge` over HTTP (natively, or against an
++//! external server with ARDI_TEST_URL).
++#[macro_use]
++mod common;
++
++use common::*;
++use serde_json::{json, Value};
++use std::path::Path;
++
++fn post(url: &str, auth: &str, body: Value) -> (u16, Value) {
++    let mut r = ureq::post(url)
++        .header("Authorization", auth)
++        .config()
++        .http_status_as_error(false)
++        .build()
++        .send_json(&body)
++        .unwrap();
++    let status = r.status().as_u16();
++    (status, r.body_mut().read_json().unwrap_or(json!(null)))
++}
++
++fn call(s: &Server, verb: &str, body: Value) -> (u16, Value) {
++    post(&s.api(&format!("/api/{verb}")), &basic(&s.token), body)
++}
++
++fn call_in(s: &Server, tenant: &str, verb: &str, body: Value) -> (u16, Value) {
++    post(
++        &s.at_root(&format!("/t/{tenant}/api/{verb}")),
++        &basic(&s.token),
++        body,
++    )
++}
++
++fn git_fails(dir: &Path, args: &[&str]) -> String {
++    let out = std::process::Command::new("git")
++        .args(["-c", "protocol.version=2"])
++        .args(args)
++        .current_dir(dir)
++        .env("GIT_CONFIG_NOSYSTEM", "1")
++        .env("HOME", dir)
++        .env("GIT_TERMINAL_PROMPT", "0")
++        .output()
++        .unwrap();
++    assert!(!out.status.success(), "expected git {args:?} to fail");
++    String::from_utf8_lossy(&out.stderr).into_owned()
++}
++
++fn class(v: &Value) -> &str {
++    v["error"]["class"].as_str().unwrap_or("")
++}
++
++#[test]
++fn delete_refuses_wrong_confirm_and_non_admins() {
++    let s = Server::start();
++    s.create("keep");
++    for body in [
++        json!({"name": "keep", "confirm": "kep"}),
++        json!({"name": "keep", "confirm": "keep.git"}),
++        json!({"name": "keep", "confirm": "KEEP"}),
++    ] {
++        let (st, v) = call(&s, "repo.delete", body.clone());
++        assert_eq!((st, class(&v)), (400, "usage"), "{body} {v}");
++    }
++    let (st, v) = call(&s, "repo.delete", json!({"name": "keep"}));
++    assert_eq!((st, class(&v)), (400, "usage"), "missing confirm: {v}");
++
++    let (st, v) = call(
++        &s,
++        "principal.create",
++        json!({"id": "member", "kind": "agent", "role": "member"}),
++    );
++    assert_eq!(st, 200, "{v}");
++    let (st, v) = call(&s, "token.create", json!({"principal": "member"}));
++    assert_eq!(st, 200, "{v}");
++    let secret = v["result"]["secret"].as_str().unwrap().to_string();
++    let (st, v) = post(
++        &s.api("/api/repo.delete"),
++        &basic_as("member", &secret),
++        json!({"name": "keep", "confirm": "keep"}),
++    );
++    assert_eq!((st, class(&v)), (403, "auth"), "{v}");
++    let (st, v) = post(
++        &s.api("/api/tenant.purge"),
++        &basic_as("member", &secret),
++        json!({"tenant": s.tenant, "confirm": s.tenant}),
++    );
++    assert_eq!((st, class(&v)), (403, "auth"), "{v}");
++
++    let (_, v) = call(&s, "repo.list", json!({}));
++    assert_eq!(v["result"]["repos"], json!(["keep"]), "nothing deleted");
++    let (st, v) = call(&s, "repo.info", json!({"repo": "keep"}));
++    assert_eq!(st, 200, "{v}");
++}
++
++#[test]
++fn delete_wipes_the_repo_and_a_recreate_starts_empty() {
++    let s = Server::start();
++    s.create("gone");
++    s.create("other");
++    let src = fixture_repo();
++    git(src.path(), &["push", "-q", &s.url("gone"), "main"]);
++    git(src.path(), &["push", "-q", &s.url("other"), "main"]);
++    let (_, v) = call(&s, "repo.info", json!({"repo": "gone"}));
++    assert!(v["result"]["commits"].as_u64().unwrap() > 0, "{v}");
++
++    let (st, v) = call(
++        &s,
++        "repo.delete",
++        json!({"name": "gone", "confirm": "gone"}),
++    );
++    assert_eq!(st, 200, "{v}");
++    assert_eq!(
++        v,
++        json!({"ok": true, "result": {"name": "gone", "deleted": true}})
++    );
++    if let Some(root) = s.root() {
++        assert!(!root.join(&s.tenant).join("gone.git").exists());
++    }
++
++    let (_, v) = call(&s, "repo.list", json!({}));
++    assert_eq!(v["result"]["repos"], json!(["other"]));
++    let (st, v) = call(&s, "repo.info", json!({"repo": "gone"}));
++    assert_eq!((st, class(&v)), (404, "not_found"), "{v}");
++    let err = git_fails(src.path(), &["ls-remote", &s.url("gone")]);
++    assert!(
++        err.contains("404") || err.contains("not found"),
++        "stderr: {err}"
++    );
++    // A second delete finds nothing.
++    let (st, v) = call(
++        &s,
++        "repo.delete",
++        json!({"name": "gone", "confirm": "gone"}),
++    );
++    assert_eq!((st, class(&v)), (404, "not_found"), "{v}");
++
++    // The name is free; the new repository has nothing of the old one.
++    s.create("gone");
++    let (_, v) = call(&s, "repo.info", json!({"repo": "gone"}));
++    assert_eq!(v["result"]["commits"], json!(0), "{v}");
++    assert_eq!(v["result"]["refs"], json!(0), "{v}");
++    assert_eq!(v["result"]["objects"], json!(0), "{v}");
++    let ls = git_str(src.path(), &["ls-remote", &s.url("gone")]);
++    assert!(ls.trim().is_empty(), "ls-remote: {ls}");
++    // The other repository is untouched.
++    let (_, v) = call(&s, "repo.info", json!({"repo": "other"}));
++    assert!(v["result"]["commits"].as_u64().unwrap() > 0, "{v}");
++    // `.git` names work when confirmed as given.
++    let (st, v) = call(
++        &s,
++        "repo.delete",
++        json!({"name": "gone.git", "confirm": "gone.git"}),
++    );
++    assert_eq!(st, 200, "{v}");
++    assert_eq!(v["result"]["name"], json!("gone"));
++}
++
++#[test]
++fn purge_deletes_every_repo_and_the_tenant() {
++    let s = Server::start();
++    let t = s.fresh_tenant("purged");
++    for name in ["a", "b"] {
++        let (st, v) = call_in(&s, &t, "repo.create", json!({ "name": name }));
++        assert_eq!(st, 200, "{v}");
++    }
++    let src = fixture_repo();
++    git(
++        src.path(),
++        &["push", "-q", &s.url_in(&t, "ardi", &s.token, "a"), "main"],
++    );
++    let (st, v) = call_in(
++        &s,
++        &t,
++        "principal.create",
++        json!({"id": "bot", "kind": "agent", "role": "member"}),
++    );
++    assert_eq!(st, 200, "{v}");
++
++    for body in [
++        json!({"tenant": t, "confirm": "nope"}),
++        json!({"tenant": "elsewhere", "confirm": "elsewhere"}),
++        json!({"tenant": t}),
++    ] {
++        let (st, v) = call_in(&s, &t, "tenant.purge", body.clone());
++        assert_eq!((st, class(&v)), (400, "usage"), "{body} {v}");
++    }
++    let (_, v) = call_in(&s, &t, "repo.list", json!({}));
++    assert_eq!(v["result"]["repos"], json!(["a", "b"]), "nothing purged");
++
++    let (st, v) = call_in(&s, &t, "tenant.purge", json!({"tenant": t, "confirm": t}));
++    assert_eq!(st, 200, "{v}");
++    assert_eq!(
++        v,
++        json!({"ok": true, "result": {"tenant": t, "purged": true, "repos": ["a", "b"]}})
++    );
++    if let Some(root) = s.root() {
++        assert!(!root.join(&t).exists(), "tenant directory removed");
++    }
++    // The bootstrap token makes the tenant afresh: no repositories, no
++    // principals but admin.
++    let (_, v) = call_in(&s, &t, "repo.list", json!({}));
++    assert_eq!(v["result"]["repos"], json!([]), "{v}");
++    let (_, v) = call_in(&s, &t, "principal.list", json!({}));
++    let ids: Vec<&str> = v["result"]["principals"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .map(|p| p["id"].as_str().unwrap())
++        .collect();
++    assert!(!ids.contains(&"bot"), "principals: {ids:?}");
++    let err = git_fails(
++        src.path(),
++        &["ls-remote", &s.url_in(&t, "ardi", &s.token, "a")],
++    );
++    assert!(
++        err.contains("404") || err.contains("not found"),
++        "stderr: {err}"
++    );
++    // A purged repository name starts empty.
++    let (st, _) = call_in(&s, &t, "repo.create", json!({"name": "a"}));
++    assert_eq!(st, 200);
++    let (_, v) = call_in(&s, &t, "repo.info", json!({"repo": "a"}));
++    assert_eq!(v["result"]["commits"], json!(0), "{v}");
++    // The default tenant is untouched.
++    let (st, _) = call(&s, "repo.list", json!({}));
++    assert_eq!(st, 200);
++}
+diff --git a/crates/ardi-store/src/dispatch.rs b/crates/ardi-store/src/dispatch.rs
+index 3b9fe5b..e95b53c 100644
+--- a/crates/ardi-store/src/dispatch.rs
++++ b/crates/ardi-store/src/dispatch.rs
+@@ -234,6 +234,7 @@ mod tests {
+             repo_name: None,
+             idempotency_key: key,
+             create_repo: None,
++            delete_repo: None,
+         };
+         run(verb, &input, key, &mut ctx)
+     }
+@@ -378,6 +379,7 @@ mod tests {
+             repo_name: None,
+             idempotency_key: None,
+             create_repo: Some(&create),
++            delete_repo: None,
+         };
+         let e = run("repo.create", &json!({"name": "proj.git"}), None, &mut ctx);
+         assert_eq!(e.body, json!({"ok": true, "result": {"name": "proj"}}));
+@@ -407,6 +409,7 @@ mod tests {
+             repo_name: Some("proj"),
+             idempotency_key: None,
+             create_repo: None,
++            delete_repo: None,
+         };
+         let e = run("repo.info", &json!({"repo": "proj"}), None, &mut ctx);
+         assert_eq!(e.status, 200, "{}", e.body);
+@@ -431,6 +434,7 @@ mod tests {
+             repo_name: Some("proj"),
+             idempotency_key: Some("k"),
+             create_repo: None,
++            delete_repo: None,
+         };
+         let e = run("whoami", &json!({}), None, &mut ctx);
+         assert_eq!(e.status, 200);
+@@ -469,6 +473,129 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn repo_delete_and_tenant_purge_wipe_then_unregister() {
++        let tdb = SqliteSql::memory().unwrap();
++        let mut t = tenant(&tdb);
++        for n in ["a", "b", "c"] {
++            t.register_repo(n).unwrap();
++        }
++        let a = ident(Scopes::all());
++        let wiped = std::cell::RefCell::new(Vec::<String>::new());
++        let delete = |n: &str| -> Result<(), ApiError> {
++            wiped.borrow_mut().push(n.to_string());
++            Ok(())
++        };
++        let mut ctx: Ctx<'_, &SqliteSql, Blobs<'_>> = Ctx {
++            identity: &a,
++            tenant_name: "acme",
++            tenant: Some(&mut t),
++            repo: None,
++            repo_name: None,
++            idempotency_key: None,
++            create_repo: None,
++            delete_repo: Some(&delete),
++        };
++        for (input, status) in [
++            (json!({"name": "a", "confirm": "b"}), 400),
++            (json!({"name": "a", "confirm": "a.git"}), 400),
++            (json!({"name": "a"}), 400),
++            (json!({"name": "api", "confirm": "api"}), 400),
++            (json!({"name": "zz", "confirm": "zz"}), 404),
++        ] {
++            let e = run("repo.delete", &input, None, &mut ctx);
++            assert_eq!(e.status, status, "{input} {}", e.body);
++        }
++        assert!(wiped.borrow().is_empty(), "refusals wipe nothing");
++        let e = run(
++            "repo.delete",
++            &json!({"name": "a.git", "confirm": "a.git"}),
++            None,
++            &mut ctx,
++        );
++        assert_eq!(
++            e.body,
++            json!({"ok": true, "result": {"name": "a", "deleted": true}})
++        );
++        assert_eq!(*wiped.borrow(), vec!["a".to_string()]);
++        let e = run("repo.list", &json!({}), None, &mut ctx);
++        assert_eq!(e.body["result"]["repos"], json!(["b", "c"]));
++
++        for input in [
++            json!({"tenant": "acme", "confirm": "acm"}),
++            json!({"tenant": "other", "confirm": "other"}),
++        ] {
++            let e = run("tenant.purge", &input, None, &mut ctx);
++            assert_eq!((e.status, class(&e)), (400, "usage"), "{input}");
++        }
++        let e = run(
++            "tenant.purge",
++            &json!({"tenant": "acme", "confirm": "acme"}),
++            None,
++            &mut ctx,
++        );
++        assert_eq!(
++            e.body,
++            json!({"ok": true, "result": {"tenant": "acme", "purged": true, "repos": ["b", "c"]}})
++        );
++        assert_eq!(*wiped.borrow(), vec!["a", "b", "c"]);
++        let e = run("repo.list", &json!({}), None, &mut ctx);
++        assert_eq!(e.body["result"]["repos"], json!([]));
++
++        // A non-admin is refused before anything runs.
++        let r = ident(Scopes {
++            read: true,
++            write: true,
++            admin: false,
++        });
++        let mut ctx: Ctx<'_, &SqliteSql, Blobs<'_>> = Ctx {
++            identity: &r,
++            tenant_name: "acme",
++            tenant: Some(&mut t),
++            repo: None,
++            repo_name: None,
++            idempotency_key: None,
++            create_repo: None,
++            delete_repo: Some(&delete),
++        };
++        for (verb, input) in [
++            ("repo.delete", json!({"name": "b", "confirm": "b"})),
++            ("tenant.purge", json!({"tenant": "acme", "confirm": "acme"})),
++        ] {
++            let e = run(verb, &input, None, &mut ctx);
++            assert_eq!((e.status, class(&e)), (403, "auth"), "{verb}");
++        }
++    }
++
++    /// A failed wipe leaves the name registered, so a retry finishes it.
++    #[test]
++    fn a_failed_wipe_keeps_the_registration() {
++        let tdb = SqliteSql::memory().unwrap();
++        let mut t = tenant(&tdb);
++        t.register_repo("a").unwrap();
++        let a = ident(Scopes::all());
++        let fail = |_: &str| -> Result<(), ApiError> { Err(crate::handlers::server("disk")) };
++        let mut ctx: Ctx<'_, &SqliteSql, Blobs<'_>> = Ctx {
++            identity: &a,
++            tenant_name: "acme",
++            tenant: Some(&mut t),
++            repo: None,
++            repo_name: None,
++            idempotency_key: None,
++            create_repo: None,
++            delete_repo: Some(&fail),
++        };
++        let e = run(
++            "repo.delete",
++            &json!({"name": "a", "confirm": "a"}),
++            None,
++            &mut ctx,
++        );
++        assert_eq!(e.status, 500);
++        let e = run("repo.list", &json!({}), None, &mut ctx);
++        assert_eq!(e.body["result"]["repos"], json!(["a"]));
++    }
++
+     fn verb_needs_repo_ok() -> bool {
+         use crate::handlers::verb_needs_repo;
+         verb_needs_repo("repo.info")
+diff --git a/crates/ardi-store/src/handlers/mod.rs b/crates/ardi-store/src/handlers/mod.rs
+index 6c37e1c..399f1a4 100644
+--- a/crates/ardi-store/src/handlers/mod.rs
++++ b/crates/ardi-store/src/handlers/mod.rs
+@@ -27,10 +27,17 @@ pub const MAX_LIMIT: usize = 500;
+ /// The shell's callback that creates a repository's storage.
+ pub type CreateRepo<'a> = dyn Fn(&str) -> Result<(), ApiError> + 'a;
+ 
++/// The shell's callback that wipes a repository's storage (natively, its
++/// directory; on the Worker, its object and large objects). Must succeed
++/// on storage that is already gone, so an interrupted delete can be
++/// retried to completion.
++pub type DeleteRepo<'a> = dyn Fn(&str) -> Result<(), ApiError> + 'a;
++
+ /// What a handler may touch. The shell resolves the repository named by
+ /// `args["repo"]` before dispatch (see `verb_needs_repo`) and supplies it
+-/// locked; `repo.list`/`repo.create` use only the tenant registry and the
+-/// shell's `create_repo` callback.
++/// locked; `repo.list`/`repo.create`/`repo.delete`/`tenant.purge` use only
++/// the tenant registry and the shell's `create_repo`/`delete_repo`
++/// callbacks.
+ ///
+ /// `tenant` is `None` where the tenant store lives elsewhere (the Worker's
+ /// repository object): identity and registry verbs then fail with a server
+@@ -45,6 +52,9 @@ pub struct Ctx<'a, S: Sql, B: Blobs> {
+     /// Creates the repository's storage (natively, its directory). The
+     /// handler registers it in the tenant afterwards.
+     pub create_repo: Option<&'a CreateRepo<'a>>,
++    /// Wipes the repository's storage; `repo.delete` and `tenant.purge`
++    /// unregister the name afterwards.
++    pub delete_repo: Option<&'a DeleteRepo<'a>>,
+ }
+ 
+ impl<S: Sql, B: Blobs> Ctx<'_, S, B> {
+@@ -177,11 +187,13 @@ pub fn verb_needs_repo(name: &str) -> bool {
+ 
+ /// Every verb in the table, by name.
+ pub fn registry<S: Sql, B: Blobs>() -> HashMap<&'static str, Handler<S, B>> {
+-    let entries: [(&'static str, Handler<S, B>); 21] = [
++    let entries: [(&'static str, Handler<S, B>); 23] = [
+         ("repo.list", repo::repo_list),
+         ("repo.create", repo::repo_create),
+         ("repo.info", repo::repo_info),
+         ("repo.rebuild", repo::repo_rebuild),
++        ("repo.delete", repo::repo_delete),
++        ("tenant.purge", repo::tenant_purge),
+         ("refs.list", repo::refs_list),
+         ("commit.show", history::commit_show),
+         ("tree.list", objects::tree_list),
+diff --git a/crates/ardi-store/src/handlers/objects.rs b/crates/ardi-store/src/handlers/objects.rs
+index 03208f6..caeb22a 100644
+--- a/crates/ardi-store/src/handlers/objects.rs
++++ b/crates/ardi-store/src/handlers/objects.rs
+@@ -278,6 +278,7 @@ mod tests {
+             repo_name: Some("r"),
+             idempotency_key: None,
+             create_repo: None,
++            delete_repo: None,
+         };
+         let args = args.as_object().unwrap().clone();
+         handler(&mut ctx, &args)
+diff --git a/crates/ardi-store/src/handlers/repo.rs b/crates/ardi-store/src/handlers/repo.rs
+index d0d2035..f3895ba 100644
+--- a/crates/ardi-store/src/handlers/repo.rs
++++ b/crates/ardi-store/src/handlers/repo.rs
+@@ -1,6 +1,8 @@
+-//! Repository verbs: list, create, info, rebuild, refs.
++//! Repository verbs: list, create, delete, info, rebuild, refs; and
++//! `tenant.purge`, which deletes every repository.
+ use super::{
+-    arg_str, conflict, opt_str, server, tenant_store, usage, ApiError, Args, Ctx, Outcome,
++    arg_str, conflict, not_found, opt_str, server, tenant_store, usage, ApiError, Args, Ctx,
++    Outcome,
+ };
+ use crate::blobs::Blobs;
+ use crate::names::{reserved_repo_name, valid_name};
+@@ -43,6 +45,70 @@ pub fn repo_create<S: Sql, B: Blobs>(
+     Ok(Outcome::new(json!({ "name": base })))
+ }
+ 
++/// Deletes a registered repository: `confirm` must equal `name` exactly.
++/// The shell wipes the storage first (`delete_repo`), then the name is
++/// unregistered, so a delete interrupted between the two leaves the name
++/// registered and a retry finishes it; once unregistered, the name is free
++/// and a later `repo.create` starts empty. An unregistered name is 404.
++pub fn repo_delete<S: Sql, B: Blobs>(
++    ctx: &mut Ctx<'_, S, B>,
++    args: &Args,
++) -> Result<Outcome, ApiError> {
++    let name = arg_str(args, "name")?;
++    let base = base_name(name);
++    if !valid_name(base) || reserved_repo_name(base) {
++        return Err(usage(format!("invalid name for repository {name}")));
++    }
++    if arg_str(args, "confirm")? != name {
++        return Err(usage(format!(
++            "confirm must equal the repository name ({name}) exactly"
++        )));
++    }
++    if !tenant_store(&mut ctx.tenant)?.repo_exists(base)? {
++        return Err(not_found(format!("repository {name} not found")));
++    }
++    let delete = ctx
++        .delete_repo
++        .ok_or_else(|| server("repo.delete is not available here"))?;
++    delete(base)?;
++    tenant_store(&mut ctx.tenant)?.unregister_repo(base)?;
++    Ok(Outcome::new(json!({ "name": base, "deleted": true })))
++}
++
++/// Deletes every registered repository (each as `repo.delete`: wiped, then
++/// unregistered), for `tenant`, which must be this tenant, with `confirm`
++/// equal to it. The shell then wipes the tenant's own store, after the
++/// handler returns (natively the tenant directory, on the Worker the
++/// tenant object), so the name is as if never used.
++pub fn tenant_purge<S: Sql, B: Blobs>(
++    ctx: &mut Ctx<'_, S, B>,
++    args: &Args,
++) -> Result<Outcome, ApiError> {
++    let tenant = arg_str(args, "tenant")?;
++    if tenant != ctx.tenant_name {
++        return Err(usage(format!(
++            "tenant must name this tenant ({})",
++            ctx.tenant_name
++        )));
++    }
++    if arg_str(args, "confirm")? != tenant {
++        return Err(usage(format!(
++            "confirm must equal the tenant name ({tenant}) exactly"
++        )));
++    }
++    let delete = ctx
++        .delete_repo
++        .ok_or_else(|| server("tenant.purge is not available here"))?;
++    let repos = tenant_store(&mut ctx.tenant)?.repos()?;
++    for name in &repos {
++        delete(name)?;
++        tenant_store(&mut ctx.tenant)?.unregister_repo(name)?;
++    }
++    Ok(Outcome::new(
++        json!({ "tenant": tenant, "purged": true, "repos": repos }),
++    ))
++}
++
+ pub fn repo_info<S: Sql, B: Blobs>(
+     ctx: &mut Ctx<'_, S, B>,
+     args: &Args,
+diff --git a/crates/ardi-store/src/tenant.rs b/crates/ardi-store/src/tenant.rs
+index 5f1570e..ce0d63b 100644
+--- a/crates/ardi-store/src/tenant.rs
++++ b/crates/ardi-store/src/tenant.rs
+@@ -731,6 +731,13 @@ impl<S: Sql> TenantStore<S> {
+         Ok(self.sql.changes()? > 0)
+     }
+ 
++    /// Unregister `name`. Returns `false` if it was not registered.
++    pub fn unregister_repo(&self, name: &str) -> Result<bool, StoreError> {
++        self.sql
++            .exec("DELETE FROM repos WHERE name=?1", &[name.into()])?;
++        Ok(self.sql.changes()? > 0)
++    }
++
+     /// Register every name not already registered, in one transaction.
+     pub fn seed_repos(&self, names: &[String]) -> Result<(), StoreError> {
+         let t = clock::now();
+@@ -771,6 +778,10 @@ mod tests {
+         );
+         assert!(t.repo_exists("beta").unwrap());
+         assert!(!t.repo_exists("gamma").unwrap());
++        assert!(t.unregister_repo("beta").unwrap());
++        assert!(!t.unregister_repo("beta").unwrap(), "already gone");
++        assert!(!t.repo_exists("beta").unwrap());
++        assert_eq!(t.repos().unwrap(), vec!["alpha".to_string()]);
+     }
+ 
+     #[test]
+diff --git a/crates/ardi-wasm/src/convert.rs b/crates/ardi-wasm/src/convert.rs
+index 7d890cd..e48cc00 100644
+--- a/crates/ardi-wasm/src/convert.rs
++++ b/crates/ardi-wasm/src/convert.rs
+@@ -83,29 +83,47 @@ pub fn check(verb: &str, input_json: &str, identity: &Identity) -> String {
+     }
+ }
+ 
+-/// Runs a tenant-level verb (identity, `repo.list`, `repo.create`) with
+-/// idempotent replay. `repo.create` only registers the name: a Worker's
+-/// repository storage comes into being when it is first opened.
++/// Runs a tenant-level verb (identity, `repo.list`, `repo.create`,
++/// `repo.delete`, `tenant.purge`) with idempotent replay, in tenant
++/// `tenant_name`. `repo.create` only registers the name: a Worker's
++/// repository storage comes into being when it is first opened (the router
++/// creates the object first). `repo.delete` and `tenant.purge` only
++/// unregister: the router wipes each repository's object and large objects
++/// first and names them in `wiped`; a name it did not wipe (one created
++/// since the router listed them) is a 500, so nothing is unregistered
++/// with its data still in place, and a retry finishes the job.
+ pub fn dispatch_tenant<S: Sql>(
+     tenant: &mut TenantStore<S>,
++    tenant_name: &str,
+     verb: &str,
+     input_json: &str,
+     identity: &Identity,
+     idem: Option<&str>,
++    wiped: &[String],
+ ) -> String {
+     let input = match dispatch::parse_body(input_json.as_bytes()) {
+         Ok(v) => v,
+         Err(e) => return error_envelope(&e),
+     };
+     let create = |_: &str| -> Result<(), ApiError> { Ok(()) };
++    let delete = |name: &str| -> Result<(), ApiError> {
++        if wiped.iter().any(|w| w == name) {
++            Ok(())
++        } else {
++            Err(handlers::server(format!(
++                "repository {name} was not wiped before unregistering; retry"
++            )))
++        }
++    };
+     let mut ctx: Ctx<'_, S, SqlBlobs<'_, S>> = Ctx {
+         identity,
+-        tenant_name: "",
++        tenant_name,
+         tenant: Some(tenant),
+         repo: None,
+         repo_name: None,
+         idempotency_key: idem,
+         create_repo: Some(&create),
++        delete_repo: Some(&delete),
+     };
+     envelope_json(&dispatch::run(verb, &input, idem, &mut ctx))
+ }
+@@ -131,6 +149,7 @@ pub fn dispatch_repo<S: Sql>(
+         repo_name: Some(repo_name),
+         idempotency_key: None,
+         create_repo: None,
++        delete_repo: None,
+     };
+     envelope_json(&dispatch::run(verb, &input, None, &mut ctx))
+ }
+@@ -255,27 +274,115 @@ mod tests {
+         let mut t = TenantStore::new(port).unwrap();
+         t.ensure_admin_principal().unwrap();
+         let input = r#"{"id":"bot","kind":"agent","role":"member","operator":"admin"}"#;
+-        let first = dispatch_tenant(&mut t, "principal.create", input, &admin(), Some("k"));
+-        let again = dispatch_tenant(&mut t, "principal.create", input, &admin(), Some("k"));
++        let first = dispatch_tenant(
++            &mut t,
++            "acme",
++            "principal.create",
++            input,
++            &admin(),
++            Some("k"),
++            &[],
++        );
++        let again = dispatch_tenant(
++            &mut t,
++            "acme",
++            "principal.create",
++            input,
++            &admin(),
++            Some("k"),
++            &[],
++        );
+         assert_eq!(first, again);
+         let v: Value = serde_json::from_str(&first).unwrap();
+         assert_eq!(v["status"], json!(200));
+         assert_eq!(v["body"]["result"]["id"], json!("bot"));
+         let v: Value = serde_json::from_str(&dispatch_tenant(
+             &mut t,
++            "acme",
+             "repo.create",
+             r#"{"name":"proj"}"#,
+             &admin(),
+             None,
++            &[],
+         ))
+         .unwrap();
+         assert_eq!(v["body"]["result"], json!({"name": "proj"}));
+         assert_eq!(t.repos().unwrap(), vec!["proj".to_string()]);
+-        let v: Value =
+-            serde_json::from_str(&dispatch_tenant(&mut t, "whoami", "{x", &admin(), None)).unwrap();
++        let v: Value = serde_json::from_str(&dispatch_tenant(
++            &mut t,
++            "acme",
++            "whoami",
++            "{x",
++            &admin(),
++            None,
++            &[],
++        ))
++        .unwrap();
+         assert_eq!(v["status"], json!(400));
+     }
+ 
++    #[test]
++    fn tenant_dispatch_unregisters_only_wiped_repos() {
++        let port = JsSqlPort::new(FakeHost::new());
++        let mut t = TenantStore::new(port).unwrap();
++        t.ensure_admin_principal().unwrap();
++        for n in ["a", "b", "c"] {
++            t.register_repo(n).unwrap();
++        }
++        let run = |t: &mut TenantStore<_>, verb: &str, input: &str, wiped: &[&str]| -> Value {
++            let wiped: Vec<String> = wiped.iter().map(|s| s.to_string()).collect();
++            serde_json::from_str(&dispatch_tenant(
++                t,
++                "acme",
++                verb,
++                input,
++                &admin(),
++                None,
++                &wiped,
++            ))
++            .unwrap()
++        };
++        // Not wiped by the router: refused, still registered.
++        let v = run(&mut t, "repo.delete", r#"{"name":"a","confirm":"a"}"#, &[]);
++        assert_eq!(v["status"], json!(500));
++        assert!(t.repo_exists("a").unwrap());
++        let v = run(
++            &mut t,
++            "repo.delete",
++            r#"{"name":"a","confirm":"a"}"#,
++            &["a"],
++        );
++        assert_eq!(v["status"], json!(200), "{v}");
++        assert!(!t.repo_exists("a").unwrap());
++        // The tenant name is the one the shell passes.
++        let v = run(
++            &mut t,
++            "tenant.purge",
++            r#"{"tenant":"other","confirm":"other"}"#,
++            &["b", "c"],
++        );
++        assert_eq!(v["status"], json!(400));
++        // A repository the router did not wipe stops the purge (500), and
++        // stays registered for the retry.
++        let v = run(
++            &mut t,
++            "tenant.purge",
++            r#"{"tenant":"acme","confirm":"acme"}"#,
++            &["b"],
++        );
++        assert_eq!(v["status"], json!(500));
++        assert_eq!(t.repos().unwrap(), vec!["c".to_string()]);
++        let v = run(
++            &mut t,
++            "tenant.purge",
++            r#"{"tenant":"acme","confirm":"acme"}"#,
++            &["c"],
++        );
++        assert_eq!(v["status"], json!(200), "{v}");
++        assert_eq!(v["body"]["result"]["repos"], json!(["c"]));
++        assert!(t.repos().unwrap().is_empty());
++    }
++
+     #[test]
+     fn router_replay_matches_dispatch_replay() {
+         let port = JsSqlPort::new(FakeHost::new());
+diff --git a/crates/ardi-wasm/src/lib.rs b/crates/ardi-wasm/src/lib.rs
+index f9be4b8..80d2a29 100644
+--- a/crates/ardi-wasm/src/lib.rs
++++ b/crates/ardi-wasm/src/lib.rs
+@@ -377,21 +377,28 @@ mod exports {
+ 
+     /// A tenant-level verb with replay: `{"status", "body"}`.
+     #[wasm_bindgen]
++    /// `wiped_json` is a JSON array of the repository names whose storage
++    /// the router already wiped (`repo.delete`, `tenant.purge`).
+     pub fn dispatch_tenant(
+         th: u32,
++        tenant: &str,
+         verb: &str,
+         input_json: &str,
+         identity_json: &str,
+         idem: Option<String>,
++        wiped_json: &str,
+     ) -> Result<String, JsValue> {
+         let id = identity(identity_json)?;
++        let wiped: Vec<String> = serde_json::from_str(wiped_json).map_err(err)?;
+         with_tenant(th, |t| {
+             Ok(convert::dispatch_tenant(
+                 t,
++                tenant,
+                 verb,
+                 input_json,
+                 &id,
+                 idem.as_deref(),
++                &wiped,
+             ))
+         })
+     }
+diff --git a/worker/src/api.ts b/worker/src/api.ts
+index 3ca2cfc..9e357dc 100644
+--- a/worker/src/api.ts
++++ b/worker/src/api.ts
+@@ -12,11 +12,17 @@
+ //     a recorded deviation: one object cannot read another's SQLite.
+ // `repo.create` creates the repository object before the tenant registers
+ // the name, as native creates the directory before registering it.
++// `repo.delete` and `tenant.purge` run the other way round: the router
++// wipes each repository's object and R2 prefix first, then the tenant
++// unregisters the names (only those wiped), so an interrupted delete
++// leaves the name registered and a retry finishes it. A purge then wipes
++// the tenant object itself.
+ import type { Authed } from "./auth";
+ import type { Env } from "./env";
+ import { TooLarge, envelope } from "./errors";
+ import { readBody } from "./git_http";
+ import { type VerbResult, completeFileShow, isLargeFileShow, largeKey } from "./large";
++import { clearHubCache } from "./hub";
+ import { repoName, validRepo } from "./routing";
+ import { ensureWasm, isPanic, resetWasm } from "./wasm_init";
+ 
+@@ -73,6 +79,69 @@ function check(verb: string, input: string, identityJson: string): { route?: Rou
+   }
+ }
+ 
++interface TenantStub {
++  replayGet(p: string, k: string, v: string): Promise<string | null>;
++  repos(): Promise<string[]>;
++  repoExists(name: string): Promise<boolean>;
++  dispatch(
++    verb: string,
++    input: string,
++    identity: string,
++    idem: string | null,
++    tenant: string,
++    wiped: string[],
++  ): Promise<VerbResult>;
++  purge(): Promise<void>;
++}
++
++/** Wipes one repository's object and large objects. */
++async function wipeRepo(env: Env, tenant: string, name: string): Promise<void> {
++  await env.REPO.get(env.REPO.idFromName(`${tenant}/${name}`)).wipe(tenant, name);
++}
++
++/**
++ * `repo.delete` / `tenant.purge`. The handler in the tenant object decides
++ * (scope was checked already; confirm, names, existence): the router only
++ * wipes storage when the handler is going to accept, so a refused request
++ * touches nothing. A replayed key answers before anything is wiped.
++ */
++async function deleteOrPurge(
++  env: Env,
++  stub: TenantStub,
++  tenant: string,
++  verb: string,
++  input: string,
++  auth: Authed,
++  idem: string | null,
++): Promise<VerbResult> {
++  if (idem !== null) {
++    const hit = await replayGet(stub, replayPrincipal(auth), idem, verb);
++    if (hit !== null) return hit;
++  }
++  const args = JSON.parse(input) as { name?: unknown; tenant?: unknown; confirm?: unknown };
++  const wiped: string[] = [];
++  if (verb === "repo.delete") {
++    const name = typeof args.name === "string" ? args.name : "";
++    const base = name.endsWith(".git") ? name.slice(0, -4) : name;
++    if (validRepo(base) && args.confirm === name && (await stub.repoExists(base))) {
++      await wipeRepo(env, tenant, base);
++      wiped.push(base);
++    }
++  } else if (args.tenant === tenant && args.confirm === tenant) {
++    for (const name of await stub.repos()) {
++      await wipeRepo(env, tenant, name);
++      wiped.push(name);
++    }
++  }
++  const r = await stub.dispatch(verb, input, auth.json, idem, tenant, wiped);
++  if (verb === "tenant.purge" && r.status === 200) {
++    await stub.purge();
++    // Cached hub answers would skip re-creating this tenant's principals.
++    clearHubCache();
++  }
++  return r;
++}
++
+ export async function handleApi(req: Request, env: Env, tenant: string, verb: string, auth: Authed): Promise<Response> {
+   try {
+     return await routeApi(req, env, tenant, verb, auth);
+@@ -123,7 +192,10 @@ async function routeApi(req: Request, env: Env, tenant: string, verb: string, au
+         await env.REPO.get(env.REPO.idFromName(`${tenant}/${base}`)).init(tenant, base);
+       }
+     }
+-    return json(await tenantStub.dispatch(verb, input, auth.json, idem));
++    if (verb === "repo.delete" || verb === "tenant.purge") {
++      return json(await deleteOrPurge(env, tenantStub, tenant, verb, input, auth, idem));
++    }
++    return json(await tenantStub.dispatch(verb, input, auth.json, idem, tenant));
+   }
+ 
+   const given = route.repo ?? "";
+diff --git a/worker/src/repo_do.ts b/worker/src/repo_do.ts
+index f7a29a7..aed98b1 100644
+--- a/worker/src/repo_do.ts
++++ b/worker/src/repo_do.ts
+@@ -87,6 +87,20 @@ interface IndexStep {
+   marked: boolean;
+ }
+ 
++/** Deletes every R2 object under `prefix`, a page (up to 1000 keys) at a
++ * time. Listing from the start after each batch (rather than paging with
++ * a cursor over keys being deleted) ends when nothing is left; R2 lists
++ * are strongly consistent. */
++export async function deletePrefix(bucket: R2Bucket, prefix: string): Promise<number> {
++  let deleted = 0;
++  for (;;) {
++    const page = await bucket.list({ prefix, limit: 1000 });
++    if (page.objects.length === 0) return deleted;
++    await bucket.delete(page.objects.map((o) => o.key));
++    deleted += page.objects.length;
++  }
++}
++
+ export class RepoObject extends StoreObject {
+   private names: { tenant: string; repo: string } | null = null;
+   /** Commits indexed right after a push; 0 is the store's default. A test
+@@ -140,6 +154,35 @@ export class RepoObject extends StoreObject {
+     return this.names;
+   }
+ 
++  /**
++   * Wipes the repository (`repo.delete`, `tenant.purge`): its large
++   * objects in R2 under "<tenant>/<repo>/", then its alarm and all its
++   * storage, so `exists()` is false and a later `init` starts empty. The
++   * names come from the caller (meta may already be gone after an
++   * interrupted wipe); a wipe of a missing repository succeeds, so a
++   * retry finishes an interrupted one. Runs with other events held
++   * (no push or fetch interleaves); its failures cross
++   * blockConcurrencyWhile as values, as receivePack's do.
++   */
++  async wipe(tenant: string, name: string): Promise<void> {
++    const r = await this.ctx.blockConcurrencyWhile(() =>
++      this.wipeHeld(tenant, name).then(
++        () => ({ ok: true as const }),
++        (err: unknown) => ({ err }),
++      ),
++    );
++    if ("err" in r) throw r.err;
++  }
++
++  private async wipeHeld(tenant: string, name: string): Promise<void> {
++    await deletePrefix(this.env.LARGE, largeKey(tenant, name, ""));
++    this.drop();
++    await this.ctx.storage.deleteAlarm();
++    await this.ctx.storage.deleteAll();
++    this.names = null;
++    this.alarmFailures = 0;
++  }
++
+   /** Creates the repository (schema and names); false when it existed. */
+   init(tenant: string, name: string): boolean {
+     return this.request(() => {
+diff --git a/worker/src/tenant_do.ts b/worker/src/tenant_do.ts
+index 4b9046e..704e224 100644
+--- a/worker/src/tenant_do.ts
++++ b/worker/src/tenant_do.ts
+@@ -92,11 +92,33 @@ export class TenantObject extends StoreObject {
+     );
+   }
+ 
+-  dispatch(verb: string, inputJson: string, identityJson: string, idem: string | null): VerbResult {
++  /** A tenant-level verb in tenant `tenant`. `wiped` names the
++   * repositories whose storage the router already wiped (`repo.delete`,
++   * `tenant.purge` unregister only those). */
++  dispatch(
++    verb: string,
++    inputJson: string,
++    identityJson: string,
++    idem: string | null,
++    tenant: string,
++    wiped: string[] = [],
++  ): VerbResult {
+     return JSON.parse(
+       this.request(() =>
+-        this.write((w, h) => w.dispatch_tenant(h, verb, inputJson, identityJson, idem ?? undefined)),
++        this.write((w, h) =>
++          w.dispatch_tenant(h, tenant, verb, inputJson, identityJson, idem ?? undefined, JSON.stringify(wiped)),
++        ),
+       ),
+     );
+   }
++
++  /** Wipes the tenant's whole store (`tenant.purge`, after every
++   * repository is gone): the next request finds a tenant never used. */
++  async purge(): Promise<void> {
++    await this.ctx.blockConcurrencyWhile(async () => {
++      this.drop();
++      await this.ctx.storage.deleteAlarm();
++      await this.ctx.storage.deleteAll();
++    });
++  }
+ }
