@@ -41,6 +41,16 @@ async function world() {
 }
 const stored = async () => (await env.HUB_DB.prepare("SELECT verdict, subject, text, forwarded, project_id FROM inbound_mail ORDER BY received_at").all<{ verdict: string; subject: string; text: string; forwarded: number; project_id: string | null }>()).results;
 
+describe("mailbox names", () => {
+  it("are never available as organization names, so no inbox can collide with the hub's own", async () => {
+    const root = await seedHuman("root@example.com", { is_root: true });
+    for (const slug of ["privacy", "legal", "postmaster", "abuse", "security", "support", "no-reply", "login", "signup"]) {
+      const res = await apiPost(HUB, "tenant.create", { slug, display_name: slug }, cookieHeaders(root.token, HUB));
+      expect(res.status, slug).toBe(400);
+    }
+  });
+});
+
 describe("mail to organizations and projects", () => {
   it("refuses addresses that name nothing", async () => {
     await world();

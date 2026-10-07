@@ -1,5 +1,9 @@
 export const RESERVED_LABELS: Set<string> = new Set([
   "www", "mail", "mx", "api", "mcp", "login", "signup", "admin", "root", "static", "cdn", "git", "ardi",
+  // Mailbox names: an organization's inbox is <org>@HUB_DOMAIN, so no organization may take a name the hub or
+  // the wider internet already uses for mail (RFC 2142 role addresses and the hub's own).
+  "privacy", "legal", "postmaster", "abuse", "hostmaster", "webmaster", "security", "noreply", "no-reply",
+  "bounce", "bounces", "dmarc", "notify", "support", "help", "info", "hello",
 ]);
 
 export const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
