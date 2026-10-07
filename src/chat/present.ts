@@ -29,7 +29,7 @@ export function msgJson(m: MsgView, t: NameTag, refs: ViewRef[]): MsgJson {
 /** Name tags and per-viewer refs for a set of messages (spec 4.6, 5.2). */
 export async function present(ctx: Ctx, msgs: MsgView[]): Promise<{ tagOf: TagOf; refs: Map<number, ViewRef[]> }> {
   const v = viewerOf(ctx);
-  const tagOf = await nameTags(ctx.db, v.tenant.id, msgs.map((m) => ({ author_id: m.author_id, session_id: m.session_id })));
+  const tagOf = await nameTags(ctx.db, v.tenant.id, msgs.map((m) => ({ author_id: m.author_id, session_id: m.session_id, session_kind: m.session_kind })));
   const refs = new Map<number, ViewRef[]>();
   for (const m of msgs) if (m.refs.length > 0) refs.set(m.seq, await refsForViewer(ctx.db, v, m.refs));
   return { tagOf, refs };

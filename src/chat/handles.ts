@@ -93,24 +93,33 @@ export function safeLabel(label: string | null): string | null {
   return s || null;
 }
 
-export async function nameTags(db: D1Database, tenant_id: string, pairs: Array<{ author_id: string; session_id: string | null }>): Promise<TagOf> {
+/**
+ * `session_kind` is the kind stored with the message when it was written; it wins over the session row's current
+ * kind for `via assistant`. The session row is looked up only within the tenant (or a tenantless session).
+ */
+export async function nameTags(
+  db: D1Database, tenant_id: string, pairs: Array<{ author_id: string; session_id: string | null; session_kind?: string | null }>,
+): Promise<TagOf> {
   const dir = await people(db, tenant_id);
   const ids = [...new Set(pairs.map((p) => p.session_id).filter((x): x is string => typeof x === "string" && x.length > 0))];
   const sessions = new Map<string, { kind: string; label: string | null }>();
   for (let i = 0; i < ids.length; i += 90) {
     const chunk = ids.slice(i, i + 90);
-    const r = await db.prepare(`SELECT id, kind, label FROM session WHERE id IN (${chunk.map(() => "?").join(", ")})`).bind(...chunk)
-      .all<{ id: string; kind: string; label: string | null }>();
+    const r = await db.prepare(`SELECT id, kind, label FROM session WHERE id IN (${chunk.map(() => "?").join(", ")}) AND (tenant_id IS NULL OR tenant_id = ?)`)
+      .bind(...chunk, tenant_id).all<{ id: string; kind: string; label: string | null }>();
     for (const s of r.results) sessions.set(s.id, s);
   }
+  const stored = new Map<string, string>();
+  for (const p of pairs) if (p.session_id && p.session_kind && !stored.has(p.session_id)) stored.set(p.session_id, p.session_kind);
   return (author_id, session_id) => {
     if (author_id === "hub") return HUB_TAG;
     const p = dir.get(author_id);
     const s = session_id ? sessions.get(session_id) : undefined;
+    const kind = (session_id ? stored.get(session_id) : undefined) ?? s?.kind;
     return {
       identity_id: author_id, handle: p?.handle ?? "unknown", display_name: p?.display_name ?? "unknown", kind: p?.kind ?? "human",
       operator_handle: p?.operator_id ? dir.get(p.operator_id)?.handle ?? null : null, session_id,
-      session_label: s?.kind === "agent_run" ? safeLabel(s.label) : null, via_assistant: s?.kind === "oauth",
+      session_label: s && kind === "agent_run" ? safeLabel(s.label) : null, via_assistant: kind === "oauth",
     };
   };
 }

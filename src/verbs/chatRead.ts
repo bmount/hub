@@ -74,7 +74,7 @@ export const chatHistory = defineVerb({
     const ch = await readableChannel(ctx, p.c);
     const h = (await conversationStub(ctx.env, ch.tenant_id, ch.project_id).history(ch.tenant_id, ch.project_id, p.msg)) as { msg: MsgView; versions: Version[] } | null;
     if (!h) throw notFound("no such message");
-    const tagOf = await nameTags(ctx.db, ch.tenant_id, h.versions.map((x) => ({ author_id: x.author_id, session_id: x.session_id })));
+    const tagOf = await nameTags(ctx.db, ch.tenant_id, h.versions.map((x) => ({ author_id: x.author_id, session_id: x.session_id, session_kind: x.session_kind })));
     const lines: string[] = [];
     const versions = h.versions.map((x) => {
       const tag = tagOf(x.author_id, x.session_id);

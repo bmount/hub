@@ -74,6 +74,27 @@ describe("name tags", () => {
     expect(tagOf("01UNKNOWN0000000000000000", null)).toMatchObject({ handle: "unknown" });
   });
 
+  it("looks sessions up within the tenant only, and trusts the kind stored with the message for via assistant", async () => {
+    const acme = await seedTenant("acme");
+    const blue = await seedTenant("blue");
+    const lead = await seedHuman("lead@example.com", { memberships: [{ tenant_id: acme.id, role: "member" }] });
+    const scout = await seedAgent(acme, lead.identity, "scout");
+    const { session: oauthSession } = await seedGrant(acme, lead);
+    // A session row of another tenant must not label this tenant's messages.
+    await env.HUB_DB.prepare("UPDATE session SET tenant_id = ? WHERE id = ?").bind(blue.id, scout.session.id).run();
+    const tagOf = await nameTags(env.HUB_DB, acme.id, [
+      { author_id: scout.agent.identity.id, session_id: scout.session.id, session_kind: "agent_run" },
+      { author_id: lead.identity.id, session_id: oauthSession.id, session_kind: "browser" },
+    ]);
+    expect(tagOf(scout.agent.identity.id, scout.session.id).session_label).toBeNull();
+    // The message was stored as written from a browser: the session row's current kind does not make it `via assistant`.
+    expect(tagOf(lead.identity.id, oauthSession.id).via_assistant).toBe(false);
+    const stored = await nameTags(env.HUB_DB, acme.id, [{ author_id: lead.identity.id, session_id: oauthSession.id, session_kind: "oauth" }]);
+    expect(stored(lead.identity.id, oauthSession.id).via_assistant).toBe(true);
+    const gone = await nameTags(env.HUB_DB, acme.id, [{ author_id: lead.identity.id, session_id: "01GONE000000000000000000000", session_kind: "oauth" }]);
+    expect(gone(lead.identity.id, "01GONE000000000000000000000").via_assistant).toBe(true);
+  });
+
   it("keeps only safe characters of a run label", () => {
     expect(safeLabel("nightly-2] [#1 @lead")).toBe("nightly-21lead");
     expect(safeLabel("")).toBeNull();
