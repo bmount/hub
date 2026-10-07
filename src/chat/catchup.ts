@@ -61,6 +61,7 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   const box = inboxStub(ctx.env, v.tenant.id, v.identity.id);
   const base = p.since ? decodeCursors(p.since) : ((await box.cursors(v.tenant.id, v.identity.id)) as Record<string, number>);
   let chans = await readableChannels(ctx.db, v, "active");
+  const readable = new Set(chans.map((c) => c.project_id));
   if (p.scope) {
     const want = p.scope.replace(/^#/, "");
     chans = chans.filter((c) => c.slug === want);
@@ -90,6 +91,14 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   };
   const out = { for_you: [] as CatchupResult["for_you"], threads: [] as CatchupResult["threads"], conversations: [] as ConvSummary[], quiet: [] as CatchupResult["quiet"] };
 
+  // A digest cut at its cap leaves items unseen: the channel is incomplete (its cursor stays) and each cut counts as omitted.
+  for (const { ch, d } of active) {
+    for (const cut of [d.mentions_truncated, d.my_threads_truncated]) {
+      if (!cut) continue;
+      omitted++;
+      incomplete.add(ch.project_id);
+    }
+  }
   const mentions = active.flatMap(({ ch, d }) => d.mentions_me.map((m) => ({ ch, m }))).sort((a, b) => a.m.created_at - b.m.created_at);
   if (mentions.length > 0) fits(["## For you"]);
   for (const { ch, m } of mentions) {
@@ -143,7 +152,8 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   }
   if (active.length === 0) lines.push("Nothing new.");
 
-  const nextCursors: Record<string, number> = { ...base };
+  // Cursors for channels the reader can no longer read (left, archived, removed) are dropped.
+  const nextCursors: Record<string, number> = Object.fromEntries(Object.entries(base).filter(([k]) => readable.has(k)));
   const done = active.filter(({ ch }) => covered.has(ch.project_id) && !incomplete.has(ch.project_id));
   for (const { ch, d } of done) nextCursors[ch.project_id] = d.head;
   if (p.advance) for (const { ch, d } of done) await box.markRead(v.tenant.id, v.identity.id, ch.project_id, d.head);
