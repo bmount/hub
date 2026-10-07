@@ -1,4 +1,4 @@
-// /skills and /skills/<name>: the same skills helpers read over MCP, for people too.
+// /skills and /skills/<name>: the same skills agents read over MCP, for people too.
 import type { Env } from "../env";
 import { esc, htmlResponse, page } from "../html";
 import { buildContext } from "../auth/context";
@@ -32,10 +32,10 @@ export async function skillsPage(request: Request, env: Env, name?: string): Pro
     const s = skill(name);
     if (!s) return notFoundPage();
     const body = `<p class="crumbs"><a href="/skills">Skills</a> /</p><h1>${esc(s.title)}</h1><p class="lede">${esc(s.summary)}</p>${miniMarkdown(s.body)}
-<p><small>Helpers read this over MCP as <code>pimwell://skills/${esc(s.name)}</code>, or with the <code>skill_read</code> tool.</small></p>`;
+<p><small>Agents read this over MCP as <code>pimwell://skills/${esc(s.name)}</code>, or with the <code>skill_read</code> tool.</small></p>`;
     return htmlResponse(page(s.title, body, shell));
   }
-  const body = `<h1>Skills</h1><p class="lede">Short guides that help people and helpers use Pimwell well. Helpers get the same text over MCP.</p>
+  const body = `<h1>Skills</h1><p class="lede">Short guides that help people and agents use Pimwell well. Agents get the same text over MCP.</p>
 <div class="grid">${SKILLS.map((s) => `<div class="card"><h3><a href="/skills/${esc(s.name)}">${esc(s.title)}</a></h3><p>${esc(s.summary)}</p></div>`).join("")}</div>`;
   return htmlResponse(page("Skills", body, shell));
 }

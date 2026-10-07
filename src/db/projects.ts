@@ -11,7 +11,7 @@ export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
   "mcp", "me", "jump", "new", "oauth", "people", "planned", "playground", "privacy", "projects", "search", "settings", "signed-out", "skills", "static", "terms", "well-known",
 ]);
 
-/** A helper in the tenant (?1) whose name (?2) is the local part of its address; archived helpers keep their names. */
+/** An agent in the tenant (?1) whose name (?2) is the local part of its address; archived agents keep their names. */
 export const HELPER_NAMED = `SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id
   WHERE m.tenant_id = ? AND i.kind = 'agent' AND substr(i.email, 1, instr(i.email, '@') - 1) = ?`;
 
@@ -36,13 +36,13 @@ export async function createProject(
     display_name: input.display_name.trim(), state: "active", created_at: now,
   };
   try {
-    // Projects and helpers share one name space per organization, first come, first served (mailboxes spec,
+    // Projects and agents share one name space per organization, first come, first served (mailboxes spec,
     // amendment 2026-10-07 b). The check is inside the insert, so two creators can never both win.
     const r = await db.prepare(
       `INSERT INTO project (id, tenant_id, namespace_id, slug, kind, display_name, state, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (${HELPER_NAMED})`,
     ).bind(row.id, row.tenant_id, row.namespace_id, row.slug, row.kind, row.display_name, row.state, row.created_at, row.tenant_id, row.slug).run();
-    if (r.meta.changes !== 1) throw conflict(`"${row.slug}" is the name of a helper in this organization; choose another project name`);
+    if (r.meta.changes !== 1) throw conflict(`"${row.slug}" is the name of an agent in this organization; choose another project name`);
   } catch (e) {
     if (String(e).includes("UNIQUE")) throw conflict("project slug exists");
     throw e;

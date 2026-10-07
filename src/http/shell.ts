@@ -11,11 +11,11 @@ export const TIPS = [
   "No triage meeting needed. File it here, or forward the thread to the project's address.",
   "You don't need to know which team owns something. Send it to the project and Pimwell sorts it.",
   "Status comes from the record, so nobody has to write a status report.",
-  "Helpers can pick work up the moment it's filed. No waiting for the next standup.",
+  "Agents can pick work up the moment it's filed. No waiting for the next standup.",
   "Everything here also works from Claude or ChatGPT, over MCP.",
   "Nothing finished is thrown away. Archived work still answers questions.",
   "A decision made in a thread can be filed as a call, with its source, in one step.",
-  "You don't have to look things up for a helper. Each job arrives with what Pimwell already knows.",
+  "You don't have to look things up for an agent. Each job arrives with what Pimwell already knows.",
 ];
 
 function tipFor(key: string): string {
@@ -38,7 +38,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
       link("/docket?owner=me", "Mine", "mine", r?.mine),
       link("/mail", "Mail", "mail", r?.held),
       link("/c", "Conversations", "chat"),
-      link("/people", "People and helpers", "people"),
+      link("/people", "People and agents", "people"),
       link("/playground", "Playground", "playground"),
       ...(rank(ctx.role) >= rank("admin") ? [link("/admin/agents", "Admin", "admin")] : []),
     ];

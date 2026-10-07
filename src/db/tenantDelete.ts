@@ -25,7 +25,7 @@ export async function deleteTenant(db: D1Database, slug: string, deleted_by: str
     const r = await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ?`).bind(t.id).first<{ n: number }>();
     if (r && r.n) counts[table] = r.n;
   }
-  // Helpers (agents) that belong only to this organization go with it.
+  // Agents that belong only to this organization go with it.
   const agents = (await db.prepare(
     `SELECT i.id FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ?
      WHERE i.kind = 'agent' AND NOT EXISTS (SELECT 1 FROM membership o WHERE o.identity_id = i.id AND o.tenant_id != ?)`,

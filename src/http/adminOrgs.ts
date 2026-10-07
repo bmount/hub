@@ -19,10 +19,10 @@ export async function adminOrgsPage(request: Request, env: Env): Promise<Respons
   const orgs = (await ctx.db.prepare(
     `SELECT t.slug, t.display_name, t.state, t.created_at,
        (SELECT COUNT(*) FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = t.id AND m.state = 'active' AND i.kind = 'human') AS people,
-       (SELECT COUNT(*) FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = t.id AND m.state = 'active' AND i.kind = 'agent') AS helpers,
+       (SELECT COUNT(*) FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = t.id AND m.state = 'active' AND i.kind = 'agent') AS agents,
        (SELECT COUNT(*) FROM project p WHERE p.tenant_id = t.id) AS projects
      FROM tenant t ORDER BY t.state, t.slug`,
-  ).all<{ slug: string; display_name: string; state: string; created_at: number; people: number; helpers: number; projects: number }>()).results;
+  ).all<{ slug: string; display_name: string; state: string; created_at: number; people: number; agents: number; projects: number }>()).results;
   const deleted = await listDeletedTenants(ctx.db);
 
   const row = (o: (typeof orgs)[number]) => {
@@ -32,7 +32,7 @@ export async function adminOrgsPage(request: Request, env: Env): Promise<Respons
       : `<form class="inline" method="post" action="/api/tenant.unarchive"><input type="hidden" name="slug" value="${esc(o.slug)}">${BACK}<button type="submit">Unarchive</button></form>
 <form class="inline" method="post" action="/api/tenant.delete"><input type="hidden" name="slug" value="${esc(o.slug)}">
 <input name="confirm" placeholder="type ${esc(o.slug)} to delete" size="22" autocomplete="off" required>${BACK}<button type="submit">Delete permanently</button></form>`;
-    return `<tr><td>${link}</td><td>${esc(o.state)}</td><td>${o.people}</td><td>${o.helpers}</td><td>${o.projects}</td><td>${when(o.created_at)}</td><td>${action}</td></tr>`;
+    return `<tr><td>${link}</td><td>${esc(o.state)}</td><td>${o.people}</td><td>${o.agents}</td><td>${o.projects}</td><td>${when(o.created_at)}</td><td>${action}</td></tr>`;
   };
   const deletedRows = deleted.map((d) => {
     const counts = Object.entries(JSON.parse(d.counts) as Record<string, number>).map(([k, v]) => `${v} ${k}`).join(", ") || "no rows";
@@ -40,8 +40,8 @@ export async function adminOrgsPage(request: Request, env: Env): Promise<Respons
   }).join("");
 
   const body = `<h1>Organizations</h1><p><a href="/">back</a></p>
-<table><thead><tr><th>Organization</th><th>State</th><th>People</th><th>Helpers</th><th>Projects</th><th>Created</th><th></th></tr></thead><tbody>${orgs.map(row).join("")}</tbody></table>
-<p><small>Deleting removes everything the hub holds for an archived organization: members, projects, conversations, events, keys, and its helper accounts. It cannot be undone. Git data stays with the git host until it can purge it, and until then the name stays reserved.</small></p>
+<table><thead><tr><th>Organization</th><th>State</th><th>People</th><th>Agents</th><th>Projects</th><th>Created</th><th></th></tr></thead><tbody>${orgs.map(row).join("")}</tbody></table>
+<p><small>Deleting removes everything the hub holds for an archived organization: members, projects, conversations, events, keys, and its agent accounts. It cannot be undone. Git data stays with the git host until it can purge it, and until then the name stays reserved.</small></p>
 <h2>Deleted</h2>
 ${deleted.length ? `<table><thead><tr><th>Organization</th><th>Deleted</th><th>Removed</th><th>Git data</th></tr></thead><tbody>${deletedRows}</tbody></table>` : "<p>None.</p>"}`;
   return htmlResponse(page("Organizations", body, shellFor(ctx, env, "admin", "orgs")), 200, extra);

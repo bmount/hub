@@ -102,7 +102,7 @@ function docketList(ctx: Ctx, project: Project | null, items: WorkItem[], member
     `<span class="gap" aria-hidden="true"></span>`, chip("Open", to({ closed: false }), !f.closed), chip("Finished", to({ closed: true }), f.closed)].join("");
   const ownerKnown = f.owner === null || f.owner === "me" || members.some((m) => m.email === f.owner);
   const filterForm = `<form class="filters" method="get" action="${base}">${f.kind ? `<input type="hidden" name="kind" value="${f.kind}">` : ""}${f.closed ? `<input type="hidden" name="closed" value="1">` : ""}
-<label>Owner <select name="owner">${option("", "Anyone", f.owner === null)}${option("me", "Me", f.owner === "me")}${ownerKnown ? "" : option(f.owner!, f.owner!, true)}${members.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (helper)" : ""}`, f.owner === m.email)).join("")}</select></label>
+<label>Owner <select name="owner">${option("", "Anyone", f.owner === null)}${option("me", "Me", f.owner === "me")}${ownerKnown ? "" : option(f.owner!, f.owner!, true)}${members.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (agent)" : ""}`, f.owner === m.email)).join("")}</select></label>
 ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.quest === null)}${quests.map((q) => option(String(q.number), `#${q.number} ${q.title}`, f.quest === q.number)).join("")}</select></label>` : ""}
 <button type="submit" class="quiet">Show</button><input data-filter placeholder="Filter these (/)" aria-label="Filter the list" size="16"></form>`;
   const itemQs = qs(f, {}, true);
@@ -153,14 +153,14 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
 <form method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
 <label>Title <input name="title" required maxlength="200" value="${esc(w.title)}"></label>
 <div class="row"><label>Kind <select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, `${v.name} (${v.plain})`, w.kind === k)).join("")}</select></label>
-<label>Owner <select name="owner">${option("none", "Nobody", !d.owner)}${ownerChoices.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (helper)" : ""}`, d.owner?.id === m.id)).join("")}</select></label>
+<label>Owner <select name="owner">${option("none", "Nobody", !d.owner)}${ownerChoices.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (agent)" : ""}`, d.owner?.id === m.id)).join("")}</select></label>
 <label>Quest <select name="parent">${option("0", "None", !d.parent)}${questChoices.map((q) => option(String(q.number), `#${q.number} ${q.title}`, d.parent?.id === q.id)).join("")}</select></label></div>
 <label>Details <textarea name="body" rows="8" maxlength="20000">${esc(w.body)}</textarea></label>
 <button type="submit">Save changes</button></form></details>` : "";
   const under = d.children.length
     ? `<h2>Under it</h2><table><tbody>${d.children.map((c) => `<tr data-href="/${esc(project.slug)}/w/${c.number}"><td class="ref">#${c.number}</td><td class="k-${c.kind}"><span class="kd"></span>${esc(KINDS[c.kind].name)}</td><td><a href="/${esc(project.slug)}/w/${c.number}">${esc(c.title)}</a></td><td>${esc(STATES[c.state])}</td></tr>`).join("")}</tbody></table>`
     : w.kind === "quest" ? `<h2>Under it</h2><p class="lede">Nothing yet. To put an item under this quest, choose it as the item's quest when you edit it.</p>` : "";
-  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map((l) => `<li>${esc(l.target_kind)}: ${l.target_kind === "url" ? `<a href="${esc(l.target_ref)}" rel="noopener noreferrer" data-reload>${esc(l.target_ref)}</a>` : `<code>${esc(l.target_ref)}</code>`}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`).join("")}</ul>` : "<p class=\"lede\">None yet. Helpers link commits, threads and pages here with work_link.</p>"}`;
+  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map((l) => `<li>${esc(l.target_kind)}: ${l.target_kind === "url" ? `<a href="${esc(l.target_ref)}" rel="noopener noreferrer" data-reload>${esc(l.target_ref)}</a>` : `<code>${esc(l.target_ref)}</code>`}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`).join("")}</ul>` : "<p class=\"lede\">None yet. Agents link commits, threads and pages here with work_link.</p>"}`;
   const activity = d.activity.length ? `<h2>Activity</h2><ul class="timeline">${d.activity.map((a) => `<li><time title="${when(a.created_at)}">${ago(a.created_at, ctx.now)}</time><span>${esc(a.who ?? "Pimwell")}: ${esc(a.summary)}</span></li>`).join("")}</ul>` : "";
   return `<a class="back" href="${esc(back)}">‹ ${esc(DOCKET.name)}</a>
 <div class="head"><span class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)} (${esc(KINDS[w.kind].plain)})</span><strong>${esc(project.slug)}#${w.number}</strong><span>${esc(STATES[w.state])}</span></div>
@@ -274,7 +274,7 @@ export async function newWorkPage(request: Request, env: Env): Promise<Response>
 <label style="display:block">Details <textarea name="body" rows="8" placeholder="What, why, and how you will know it is done." style="display:block;width:100%"></textarea></label>
 <label>Owner <select name="owner">${option("", "Nobody yet", true)}${option("me", "Me", false)}</select></label>
 <p><button type="submit">File it</button></p></form>` : `<p class="lede">Create a project first.</p>`;
-  const inspector = `<a class="back" href="/docket">‹ ${esc(DOCKET.name)}</a><h1>File something</h1><p class="lede">No triage meeting needed. It opens here once filed, and helpers can pick it up right away.</p>${form}`;
+  const inspector = `<a class="back" href="/docket">‹ ${esc(DOCKET.name)}</a><h1>File something</h1><p class="lede">No triage meeting needed. It opens here once filed, and agents can pick it up right away.</p>${form}`;
   const list = docketList(ctx, null, items!.results as WorkItem[], members!.results as Member[], [], slugs, f);
   return htmlResponse(workbench("File something", { list, listKey: listKey(f, null), inspector, inspectorKey: "new", focus: "inspector" }, shellFor(ctx, env, "new", "new")!), 200, extra);
 }
@@ -301,8 +301,8 @@ export async function jumpPage(request: Request, env: Env): Promise<Response> {
     for (const x of refR!.results as Array<{ slug: string; number: number; title: string }>) results.push({ label: `${x.slug}#${x.number} ${x.title}`, hint: "item", href: `/${x.slug}/w/${x.number}` });
     for (const x of projR!.results as Array<{ slug: string; display_name: string }>) results.push({ label: x.display_name, hint: "project", href: `/${x.slug}/docket` });
     for (const x of workR!.results as Array<{ slug: string; number: number; title: string; kind: WorkKind }>) results.push({ label: x.title, hint: `${x.slug}#${x.number} ${KINDS[x.kind].name}`, href: `/${x.slug}/w/${x.number}` });
-    for (const x of peopleR!.results as Array<{ display_name: string; email: string; kind: string }>) results.push({ label: x.display_name, hint: x.kind === "agent" ? "helper's work" : "their work", href: `/docket?owner=${encodeURIComponent(x.email)}` });
-    const sections: Array<[string, string]> = [["Docket", "/docket"], ["Mine", "/docket?owner=me"], ["Mail", "/mail"], ["Conversations", "/c"], ["People and helpers", "/people"], ["Playground", "/playground"], ["Everything coming", "/planned"],
+    for (const x of peopleR!.results as Array<{ display_name: string; email: string; kind: string }>) results.push({ label: x.display_name, hint: x.kind === "agent" ? "agent's work" : "their work", href: `/docket?owner=${encodeURIComponent(x.email)}` });
+    const sections: Array<[string, string]> = [["Docket", "/docket"], ["Mine", "/docket?owner=me"], ["Mail", "/mail"], ["Conversations", "/c"], ["People and agents", "/people"], ["Playground", "/playground"], ["Everything coming", "/planned"],
       ...Object.entries(AREAS).map(([k, a]) => [a.label, `/planned/${k}`] as [string, string])];
     for (const [label, href] of sections) if (label.toLowerCase().includes(q.toLowerCase())) results.push({ label, hint: "section", href });
   }
@@ -343,7 +343,7 @@ function planInspector(p: Plan): string {
 <dl class="meta"><dt>API</dt><dd><code>POST /api/${esc(p.name)}</code></dd><dt>MCP tool</dt><dd><code>${esc(toolName(p.name))}</code></dd><dt>Role</dt><dd>${esc(p.minRole)}, ${p.kind === "query" ? "read" : "write"} scope</dd></dl>
 <h2>What it will do</h2><div class="prose">${esc(p.spec)}</div>
 ${params ? `<h2>Inputs</h2><table><tbody>${params}</tbody></table>` : ""}
-<h2>Today</h2><p>Calls answer <code>501 not_implemented</code> with this spec. Try it in the <a href="/playground">Playground</a>, or <a href="/new?kind=errand&amp;title=${encodeURIComponent(`Build ${p.name}`)}">file it as an errand</a> so a person or helper picks it up.</p>`;
+<h2>Today</h2><p>Calls answer <code>501 not_implemented</code> with this spec. Try it in the <a href="/playground">Playground</a>, or <a href="/new?kind=errand&amp;title=${encodeURIComponent(`Build ${p.name}`)}">file it as an errand</a> so a person or agent picks it up.</p>`;
 }
 
 /** What needs me: the attention list, newest first; opening an entry opens its item, which marks it done. */

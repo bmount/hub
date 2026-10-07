@@ -46,5 +46,5 @@ export async function adminAgentsPage(request: Request, env: Env): Promise<Respo
     + (archived.length
       ? `<table><thead><tr><th>Address</th><th>Name</th><th>Operator</th><th>Created</th></tr></thead><tbody>${archivedRows}</tbody></table>`
       : "<p>None.</p>");
-  return htmlResponse(page("Helpers", body, shellFor(ctx, env, "admin")), 200, extra);
+  return htmlResponse(page("Agents", body, shellFor(ctx, env, "admin")), 200, extra);
 }

@@ -1,6 +1,6 @@
 // Planned capabilities: real verbs with a real shape that answer "not implemented yet" (owner, 2026-10-07: stub
 // everything key over MCP, then churn through). Each one is listed on the workbench, in `capabilities`, and as an
-// MCP tool, with the spec of what it will do, so whoever builds it (a person or a helper) knows the target, and
+// MCP tool, with the spec of what it will do, so whoever builds it (a person or an agent) knows the target, and
 // every call to one is a logged vote for building it next. Building one: replace its entry here with the real verb.
 import { defineVerb, type McpInputSchema, type VerbDef } from "./table";
 import { HubError } from "../errors";
@@ -9,7 +9,7 @@ export type Area = "work" | "review" | "code" | "messaging" | "traces" | "search
 
 export const AREAS: Record<Area, { label: string; blurb: string }> = {
   work: { label: "Project work", blurb: "Comments, subscriptions, boards, search and bulk changes on the Docket." },
-  review: { label: "Reviews", blurb: "Ask people or helpers to review a branch; comments on lines; verdicts; integrate." },
+  review: { label: "Reviews", blurb: "Ask people or agents to review a branch; comments on lines; verdicts; integrate." },
   code: { label: "Code", blurb: "Every branch, its commits, files and diffs, from the git host, tied to work." },
   messaging: { label: "Messaging", blurb: "Replies from project addresses under the golden rule; one list of what needs you." },
   traces: { label: "Traces and deploys", blurb: "Errors and traces mapped to the code and commit that caused them; deploy records." },
@@ -61,9 +61,9 @@ const PLANS: Plan[] = [
     input: { project: S("Repository"), q: S("What to find"), ref: S("Default main") }, required: ["project", "q"] },
   // Reviews
   { name: "review.request", area: "review", kind: "command", minRole: "member", title: "Ask for review",
-    summary: "Ask people or helpers to review a branch or a range of commits.",
-    spec: "A review has a head and base, reviewers (people or helpers), linked work items, and a status; reviewer helpers say what should change, not just whether.",
-    input: { project: S("Repository"), branch: S("Branch to review"), reviewers: { type: "array", items: { type: "string" }, description: "Emails of people or helpers" }, summary: S("What changed and why") }, required: ["project", "branch"] },
+    summary: "Ask people or agents to review a branch or a range of commits.",
+    spec: "A review has a head and base, reviewers (people or agents), linked work items, and a status; reviewer agents say what should change, not just whether.",
+    input: { project: S("Repository"), branch: S("Branch to review"), reviewers: { type: "array", items: { type: "string" }, description: "Emails of people or agents" }, summary: S("What changed and why") }, required: ["project", "branch"] },
   { name: "review.list", area: "review", kind: "query", minRole: "reader", title: "Reviews",
     summary: "Open reviews, with the ones waiting on you first.",
     spec: "Filters: mine to do, mine waiting, project, status; each row shows size, age, and verdicts so far.",
@@ -74,7 +74,7 @@ const PLANS: Plan[] = [
     input: { id: S("Review id or project!number") }, required: ["id"] },
   { name: "review.comment", area: "review", kind: "command", minRole: "member", title: "Comment on a review",
     summary: "Comment on a review overall, or on a file and line.",
-    spec: "Suggested changes can be applied with one click; threads resolve; helpers' comments are marked as such.",
+    spec: "Suggested changes can be applied with one click; threads resolve; agents' comments are marked as such.",
     input: { id: S("Review"), body: S("The comment"), path: S("File"), line: I("Line in the new version") }, required: ["id", "body"] },
   { name: "review.verdict", area: "review", kind: "command", minRole: "member", title: "Give a verdict",
     summary: "Approve a review, or ask for changes, with your reasons.",

@@ -59,7 +59,7 @@ export async function createAgent(
   let made: D1Result[];
   try {
     made = await db.batch([
-      // Projects and helpers share one name space per organization (mailboxes spec, amendment 2026-10-07 b); the check
+      // Projects and agents share one name space per organization (mailboxes spec, amendment 2026-10-07 b); the check
       // is inside the insert, so a project created at the same moment cannot also win the name.
       db.prepare(`INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) SELECT ?, 'agent', ?, 0, ?, ?, 'active', ?
         WHERE NOT EXISTS (SELECT 1 FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel')`)
@@ -71,7 +71,7 @@ export async function createAgent(
     if (String(e).includes("UNIQUE")) throw conflict("agent slug taken in this tenant");
     throw e;
   }
-  if (made[0]!.meta.changes !== 1) throw conflict(`"${slug}" is the name of a project in this organization; choose another helper name`);
+  if (made[0]!.meta.changes !== 1) throw conflict(`"${slug}" is the name of a project in this organization; choose another agent name`);
   return { identity, membership, tenant: input.tenant, slug };
 }
 

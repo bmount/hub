@@ -1,4 +1,4 @@
-// Skills: short guides that help helpers (agents) use Pimwell well. Served as MCP resources (pimwell://skills/<name>),
+// Skills: short guides that help agents use Pimwell well. Served as MCP resources (pimwell://skills/<name>),
 // through the skill tools for clients without resource support, and as pages at /skills. Keep each one short: an
 // agent should learn it in a few hundred tokens.
 
@@ -9,7 +9,7 @@ export const SKILLS: Skill[] = [
     name: "start-here",
     title: "Working in Pimwell",
     summary: "What Pimwell is, how it is organized, and which tools to reach for first.",
-    body: `Pimwell is a shared workplace for a small team and the AI helpers that work alongside it. Everything you can do on a page, you can do over MCP.
+    body: `Pimwell is a shared workplace for a small team and the AI agents that work alongside it. Everything you can do on a page, you can do over MCP.
 
 **Shape**
 - An organization (its address is <org>.pimwell.com) holds projects. A project is a repository, a tracker, or both.
@@ -21,7 +21,7 @@ export const SKILLS: Skill[] = [
   - call: decision
   - spark: idea
 - Items are referenced as project#number, for example pricebench#12.
-- Every change anyone makes, person or helper, is an event on the record.
+- Every change anyone makes, person or agent, is an event on the record.
 
 **First calls**
 1. \`whoami\` and \`capabilities\`: who you are, what this connection may do, and why not.

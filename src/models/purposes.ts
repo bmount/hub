@@ -23,7 +23,7 @@ export const PURPOSES: Purpose[] = [
   { id: "deep", title: "Deep reasoning", why: "Diagnosis from logs and code, first-principles cost estimates, the situation workflow.", provider: "openai", model: "gpt-6-astra" },
   { id: "reasoning", title: "Reasoning", why: "Summaries, plans, status reports, assignment proposals.", provider: "openai", model: "gpt-6.1-sol" },
   { id: "fast", title: "Fast", why: "Titles, short classifications, quick checks.", provider: "openai", model: "gpt-6-luna" },
-  { id: "code", title: "Code", why: "Helpers that read and change code, run through the Pi coding agent.", provider: "openai", model: "gpt-6.1-sol" },
+  { id: "code", title: "Code", why: "Agents that read and change code, run through the Pi coding agent.", provider: "openai", model: "gpt-6.1-sol" },
 ];
 
 export function purpose(id: string): Purpose | null {

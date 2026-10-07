@@ -67,7 +67,7 @@ export const tenantDelete = defineVerb({
     const total = Object.values(r.counts).reduce((a, b) => a + b, 0);
     await recordEvent(ctx.db, {
       tenant_id: null, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "tenant.delete", target_kind: "tenant", target_id: r.tenant_id,
-      summary: `Deleted organization ${r.slug}: ${total} rows, ${r.agents_deleted} helper accounts. Git data kept until Ardi can purge it; the name stays reserved.`,
+      summary: `Deleted organization ${r.slug}: ${total} rows, ${r.agents_deleted} agent accounts. Git data kept until Ardi can purge it; the name stays reserved.`,
     }, ctx.now);
     return r;
   },

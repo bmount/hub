@@ -15,7 +15,7 @@ async function world() {
   const bot = await seedAgent(old, person.identity, "bot");
   await createProject(env.HUB_DB, { tenant_id: old.id, namespace_id: null, slug: "repo", kind: "repo", display_name: "Repo" }, Date.now());
   await recordEvent(env.HUB_DB, { tenant_id: old.id, identity_id: person.identity.id, session_id: person.session.id, kind: "x", target_kind: "x", target_id: "x", summary: "old" }, Date.now());
-  // An event elsewhere that points at the helper and at its session: it must survive with the links cleared.
+  // An event elsewhere that points at the agent and at its session: it must survive with the links cleared.
   await recordEvent(env.HUB_DB, { tenant_id: keep.id, identity_id: bot.agent.identity.id, session_id: bot.session.id, kind: "x", target_kind: "x", target_id: "x", summary: "keep" }, Date.now());
   return { old, keep, root, person, bot, h: cookieHeaders(root.token, HOST) };
 }

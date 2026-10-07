@@ -1,4 +1,4 @@
-// Helping helpers find their way (overnight plan task 5): skills, what this connection can do, and project history.
+// Helping agents find their way (overnight plan task 5): skills, what this connection can do, and project history.
 import { PLANNED } from "./planned";
 import { defineVerb, listVerbs } from "./table";
 import { optInt, reqString } from "./params";
@@ -98,7 +98,7 @@ export const projectHistory = defineVerb({
     render: (r) => {
       const x = r as { project: string; events: Ev[]; next_before: number | null };
       return [DATA_NOTE, "", `**${x.project}: what happened** (${x.events.length})`,
-        ...x.events.map((e) => `- ${new Date(e.created_at).toISOString().slice(0, 16)} ${e.who ? `${cleanText(e.who)}${e.who_kind === "agent" ? " (helper)" : ""}: ` : ""}${cleanText(e.summary)}`),
+        ...x.events.map((e) => `- ${new Date(e.created_at).toISOString().slice(0, 16)} ${e.who ? `${cleanText(e.who)}${e.who_kind === "agent" ? " (agent)" : ""}: ` : ""}${cleanText(e.summary)}`),
         x.next_before ? `\nnext page: before=${x.next_before}` : ""].join("\n");
     },
   },

@@ -1,4 +1,4 @@
-// An organization's home, its people and helpers, and each project's own page (overnight plan task 4).
+// An organization's home, its people and agents, and each project's own page (overnight plan task 4).
 // Every page reads in one D1 batch: one round trip, whatever it shows.
 import type { Env } from "../env";
 import { esc, htmlResponse, page } from "../html";
@@ -18,7 +18,7 @@ const ago = (now: number, t: number) => {
 type Ev = { kind: string; summary: string; created_at: number; who: string | null; who_kind: string | null };
 function timeline(now: number, rows: Ev[]): string {
   if (!rows.length) return `<p class="lede">Nothing yet. The first thing that happens here will show up in this list.</p>`;
-  return `<ol class="timeline">${rows.map((e) => `<li><time>${esc(ago(now, e.created_at))}</time><span>${e.who ? `<strong>${esc(e.who)}</strong>${e.who_kind === "agent" ? " <small>(helper)</small>" : ""}: ` : ""}${esc(e.summary)}</span></li>`).join("")}</ol>`;
+  return `<ol class="timeline">${rows.map((e) => `<li><time>${esc(ago(now, e.created_at))}</time><span>${e.who ? `<strong>${esc(e.who)}</strong>${e.who_kind === "agent" ? " <small>(agent)</small>" : ""}: ` : ""}${esc(e.summary)}</span></li>`).join("")}</ol>`;
 }
 
 async function orgCtx(request: Request, env: Env): Promise<{ ctx: Ctx; extra: Record<string, string> } | Response> {
@@ -55,7 +55,7 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   const kindChips = (Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("");
   const mailRows = (mail!.results as Array<{ id: string; subject: string; from_email: string; received_at: number; project: string | null }>);
   const body = `<h1>${esc(t.display_name)}</h1>
-<p class="lede">You are ${esc(ctx.role!)} · ${counts.get("human") ?? 0} people and ${counts.get("agent") ?? 0} helpers · ${totalOpen} things open · send anything to <code>${esc(t.slug)}@${esc(env.HUB_DOMAIN)}</code></p>
+<p class="lede">You are ${esc(ctx.role!)} · ${counts.get("human") ?? 0} people and ${counts.get("agent") ?? 0} agents · ${totalOpen} things open · send anything to <code>${esc(t.slug)}@${esc(env.HUB_DOMAIN)}</code></p>
 <h2>Projects</h2>${projectCards}
 <h2>Open work</h2><div class="chips">${kindChips}</div>
 <h2>Lately</h2>${timeline(ctx.now, events!.results as Ev[])}

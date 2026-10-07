@@ -15,7 +15,7 @@ async function connected() {
 const call = async (access: string, name: string, args: Record<string, unknown> = {}) => (await rpcBody(await mcpPost("acme", access, "tools/call", { name, arguments: args }))).result;
 
 describe("finding your way over MCP", () => {
-  it("announces resources and points new helpers at the start-here skill", async () => {
+  it("announces resources and points new agents at the start-here skill", async () => {
     const { access } = await connected();
     const init = (await rpcBody(await mcpPost("acme", access, "initialize", INIT))).result;
     expect(init.capabilities.resources).toBeDefined();

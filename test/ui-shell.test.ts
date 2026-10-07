@@ -21,7 +21,7 @@ const hasTip = (html: string) => TIPS.some((t) => html.includes(t.replace(/'/g, 
 describe("the signed-in shell", () => {
   it("frames every organization page with the same navigation, the current section marked, and a reminder", async () => {
     const w = await world();
-    for (const [path, label] of [["/", "Home"], ["/docket", "Docket"], ["/mail", "Mail"], ["/c", "Conversations"], ["/people", "People and helpers"]] as const) {
+    for (const [path, label] of [["/", "Home"], ["/docket", "Docket"], ["/mail", "Mail"], ["/c", "Conversations"], ["/people", "People and agents"]] as const) {
       const res = await w.get(path);
       expect(res.status, path).toBe(200);
       const html = await res.text();
@@ -62,7 +62,7 @@ describe("the signed-in shell", () => {
     expect((await w.get("/nosuch")).status).toBe(404);
   });
 
-  it("lists the whole organization's Docket and its people and helpers", async () => {
+  it("lists the whole organization's Docket and its people and agents", async () => {
     const w = await world();
     const docket = await (await w.get("/docket")).text();
     expect(docket).toContain("site#1");

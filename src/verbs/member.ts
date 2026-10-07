@@ -1,7 +1,7 @@
 // People management for admins (owner, 2026-10-07): change a person's role, or remove them from the organization.
 // Same rules as invites: admins manage members and readers; only a root grants or takes away admin. Removal archives
 // the membership, which ends their role here and every assistant connection they made to this organization at once
-// (roleFor and liveGrant both require an active membership). Helpers are managed on their own page.
+// (roleFor and liveGrant both require an active membership). Agents are managed on their own page.
 import { defineVerb } from "./table";
 import { reqEnum, reqString } from "./params";
 import { badRequest, forbidden, notFound } from "../errors";
@@ -16,7 +16,7 @@ async function target(ctx: Ctx, email: string): Promise<Target> {
      WHERE m.tenant_id = ? AND i.email = ?`,
   ).bind(ctx.tenant!.id, email.trim().toLowerCase()).first<Target>();
   if (!t || t.state !== "active") throw notFound("no such member here");
-  if (t.kind !== "human") throw badRequest("helpers are managed on the Helpers page");
+  if (t.kind !== "human") throw badRequest("agents are managed on the Agents page");
   if (t.identity_id === ctx.identity!.id) throw badRequest("ask another admin to change your own membership");
   return t;
 }

@@ -96,7 +96,7 @@ describe("requestLink", () => {
   });
 });
 
-describe("helpers", () => {
+describe("agents", () => {
   it("cleanNext accepts only tenant slugs", () => {
     expect(cleanNext("acme")).toBe("acme");
     expect(cleanNext(" ACME ")).toBe("acme");
