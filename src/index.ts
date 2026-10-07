@@ -4,6 +4,7 @@ import { handleApi } from "./http/api";
 import { registerAllVerbs } from "./verbs/index";
 import { authLinkPage, consumeLinkPage, loginPage, loginPostPage } from "./http/login";
 import { googleCallbackPage, googleStartPage } from "./http/googleLogin";
+import { privacyPage, termsPage } from "./http/privacy";
 import { mePage } from "./http/me";
 import { adminAgentsPage } from "./http/adminAgents";
 import { handleEmail } from "./mail/inbound";
@@ -36,6 +37,8 @@ app.use("*", async (c, next) => {
 const workerCtx = (c: unknown): ExecutionContext => c as ExecutionContext;
 
 app.get("/healthz", (c) => c.text("ok"));
+app.get("/privacy", () => privacyPage());
+app.get("/terms", () => termsPage());
 app.post("/api/*", (c) => handleApi(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.get("/", (c) => homePage(c.req.raw, c.env));
 app.get("/archive", (c) => archivePage(c.req.raw, c.env));
