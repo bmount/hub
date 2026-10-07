@@ -1,3 +1,4 @@
+import { ensureProjectChannels } from "../chat/defaults";
 import { defineVerb } from "./table";
 import { optString, reqString, stateParam } from "./params";
 import { conflict, notFound } from "../errors";
@@ -43,7 +44,8 @@ export const projectCreate = defineVerb({
     const project = await createProject(ctx.db, { tenant_id: ctx.tenant!.id, namespace_id: ns?.id ?? null, slug: p.slug, kind: p.kind, display_name: p.display_name }, ctx.now);
     const path = ns ? `${ns.slug}/${project.slug}` : project.slug;
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "project.create", target_kind: "project", target_id: project.id, summary: `Created project ${path}` }, ctx.now);
-    return { project: { ...project, path } };
+    const channels = project.namespace_id === null ? await ensureProjectChannels(ctx.db, project, ctx.identity!.id, ctx.now) : [];
+    return { project: { ...project, path }, channels };
   },
 });
 
