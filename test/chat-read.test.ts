@@ -1,5 +1,7 @@
+import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { call, channelWith, chatWorld, ok } from "./chat-helpers";
+import { inboxStub } from "../src/chat/stubs";
+import { call, channelWith, chatWorld, ok, until } from "./chat-helpers";
 
 const OID = "3f9a2c1" + "0".repeat(33);
 
@@ -64,6 +66,9 @@ describe("the inbox", () => {
     expect((await ok(w.scout.token, "inbox.wait", { after: box.head, wait_s: 1 })).items).toEqual([]);
     expect(Date.now() - t0).toBeGreaterThanOrEqual(900);
     const waiting = call(w.scout.token, "inbox.wait", { after: box.head, wait_s: 10 });
+    // Post only once the poll is parked, so the wake (not an immediate read) is what answers it.
+    const sid = w.scout.agent.identity.id;
+    await until(async () => (await inboxStub(env, w.acme.id, sid).waiting(w.acme.id, sid)) === 1, "the long poll to park");
     await ok(w.lead.token, "chat.post", { c: "general", body: "@scout again" });
     const got = await waiting;
     expect(got.body.result.items.map((i: { seq: number }) => i.seq)).toEqual([2]);

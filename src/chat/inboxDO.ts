@@ -20,7 +20,11 @@ type ItemRow = {
   hop: number; author_id: string; wake: number; created_at: number; acked_at: number | null;
 };
 
-export type ReserveResult = { ok: true; wake_hop: number | null } | { ok: false; retry_after_s: number };
+const clampLimit = (n: number): number => Math.min(LIMITS.INBOX_LIMIT_MAX, Math.max(1, Math.floor(Number.isFinite(n) ? n : 50)));
+
+export type ReserveResult =
+  | { ok: true; wake_hop: number | null; thread_wake_hops: Record<string, number> }
+  | { ok: false; retry_after_s: number };
 
 /**
  * Messaging spec 9.2: one per (tenant, identity). Wakes and notifications until acked, read cursors, the
@@ -28,6 +32,11 @@ export type ReserveResult = { ok: true; wake_hop: number | null } | { ok: false;
  */
 export class Inbox extends DurableObject<Env> {
   #waiters = new Set<() => void>();
+  /** The waiters currently parked in `wait`, for tests and tooling. */
+  async waiting(tenant_id: string, identity_id: string): Promise<number> {
+    bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
+    return this.#waiters.size;
+  }
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -56,14 +65,16 @@ export class Inbox extends DurableObject<Env> {
 
   async deliver(tenant_id: string, identity_id: string, items: WakeItem[]): Promise<number> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
+    // Acked items are kept 30 days (they show with include_acked), then pruned.
+    this.ctx.storage.sql.exec("DELETE FROM item WHERE acked_at IS NOT NULL AND acked_at < ?", Date.now() - LIMITS.INBOX_ACKED_KEEP_MS);
     let added = 0;
     for (const it of items) {
-      if (this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM item WHERE key = ?", it.key)[0]!.n > 0) continue;
-      this.ctx.storage.sql.exec(
-        `INSERT INTO item (key, kind, conversation_id, seq, msg_id, thread_root, hop, author_id, wake, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      added += this.#q<{ item_seq: number }>(
+        // OR IGNORE settles a duplicate key; the NOT EXISTS keeps a duplicate from using up an item number.
+        `INSERT OR IGNORE INTO item (key, kind, conversation_id, seq, msg_id, thread_root, hop, author_id, wake, created_at)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE NOT EXISTS (SELECT 1 FROM item WHERE key = ?1) RETURNING item_seq`,
         it.key, it.kind, it.conversation_id, it.seq, it.msg_id, it.thread_root, it.hop, it.author_id, it.wake ? 1 : 0, it.created_at,
-      );
-      added++;
+      ).length;
     }
     if (added > 0) for (const wake of [...this.#waiters]) wake();
     return added;
@@ -71,24 +82,32 @@ export class Inbox extends DurableObject<Env> {
 
   async list(tenant_id: string, identity_id: string, q: { after: number; limit: number; include_acked: boolean }): Promise<{ head: number; items: InboxItem[] }> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
-    return { head: this.#head(), items: this.#open(q.after, q.limit, q.include_acked) };
+    return { head: this.#head(), items: this.#open(q.after, clampLimit(q.limit), q.include_acked) };
   }
 
-  /** Open items after `after`, now; or the first delivery within `wait_ms` (at most 20 s); or none. */
+  /**
+   * Open items after `after`, now; or the first that qualifies within `wait_ms` (at most 20 s); or none. A delivery
+   * that does not qualify (nothing open after `after`) does not end the wait: it loops until the deadline. At most
+   * INBOX_WAITERS_MAX polls park at once; beyond that a call answers at once, as if `wait_ms` were 0.
+   */
   async wait(tenant_id: string, identity_id: string, q: { after: number; limit: number; wait_ms: number }): Promise<{ head: number; items: InboxItem[] }> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
-    const ready = this.#open(q.after, q.limit, false);
-    if (ready.length > 0 || q.wait_ms <= 0) return { head: this.#head(), items: ready };
-    await new Promise<void>((resolve) => {
-      const done = () => {
-        clearTimeout(timer);
-        this.#waiters.delete(done);
-        resolve();
-      };
-      const timer = setTimeout(done, Math.min(q.wait_ms, LIMITS.INBOX_WAIT_MAX_S * 1000));
-      this.#waiters.add(done);
-    });
-    return { head: this.#head(), items: this.#open(q.after, q.limit, false) };
+    const limit = clampLimit(q.limit);
+    const deadline = Date.now() + Math.min(Math.max(0, q.wait_ms), LIMITS.INBOX_WAIT_MAX_S * 1000);
+    for (;;) {
+      const ready = this.#open(q.after, limit, false);
+      const left = deadline - Date.now();
+      if (ready.length > 0 || left <= 0 || this.#waiters.size >= LIMITS.INBOX_WAITERS_MAX) return { head: this.#head(), items: ready };
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          this.#waiters.delete(done);
+          resolve();
+        };
+        const timer = setTimeout(done, left);
+        this.#waiters.add(done);
+      });
+    }
   }
 
   async ack(tenant_id: string, identity_id: string, through: number, now: number): Promise<number> {
@@ -127,7 +146,12 @@ export class Inbox extends DurableObject<Env> {
     const w = this.#q<{ hop: number }>(
       "SELECT hop FROM item WHERE wake = 1 AND acked_at IS NULL AND conversation_id = ? AND thread_root IS NULL ORDER BY item_seq DESC LIMIT 1", q.conversation_id,
     )[0];
-    return { ok: true, wake_hop: w ? w.hop : null };
+    // Newest open wake per scope: a thread's own wakes, and the wake on its root message (ruling C-4).
+    const thread_wake_hops: Record<string, number> = {};
+    for (const r of this.#q<{ k: string; hop: number }>(
+      "SELECT COALESCE(thread_root, msg_id) AS k, hop FROM item WHERE wake = 1 AND acked_at IS NULL AND conversation_id = ? ORDER BY item_seq DESC LIMIT 200", q.conversation_id,
+    )) if (!(r.k in thread_wake_hops)) thread_wake_hops[r.k] = r.hop;
+    return { ok: true, wake_hop: w ? w.hop : null, thread_wake_hops };
   }
 
   async noteRefusal(tenant_id: string, identity_id: string, now: number): Promise<number> {

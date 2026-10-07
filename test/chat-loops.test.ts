@@ -1,6 +1,8 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { inboxStub } from "../src/chat/stubs";
+import type { Conversation } from "../src/chat/conversationDO";
+import { conversationStub, inboxStub } from "../src/chat/stubs";
+import { getChannelBySlug, setAgentMute, setAgentPolicy, setAgentsEnabled } from "../src/db/chat";
 import { seedAgent } from "./helpers";
 import { call, channelWith, chatWorld, ok, type World } from "./chat-helpers";
 
@@ -75,5 +77,69 @@ describe("loop limits end to end", () => {
     await ok(w.dev.token, "channel.remove_agent", { c: "general", agent: "tidy" });
     await ok(w.lead.token, "chat.post", { c: "general", body: "anyone?", reply_to: root.seq });
     expect((await inboxOf(w, w.tidy.agent.identity.id)).map((i) => i.seq)).toEqual([1]);
+  });
+});
+
+describe("loop limits and wakes: fix wave", () => {
+  it("agents replying to a human root still reach the hop limit (C-4)", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const root = await ok(w.lead.token, "chat.post", { c: "general", body: "@scout @tidy please look" });
+    const a = await ok(w.scout.token, "chat.post", { c: "general", body: "@tidy on it", after: root.head, reply_to: root.seq });
+    // Both reply to the human root, whose own hop is 0: the open wake in the thread carries the chain's hop.
+    const b = await ok(w.tidy.token, "chat.post", { c: "general", body: "@scout done here", after: a.head, reply_to: root.seq });
+    const c = await ok(w.scout.token, "chat.post", { c: "general", body: "@tidy and more", after: b.head, reply_to: root.seq });
+    expect([root.hop, a.hop, b.hop, c.hop]).toEqual([0, 1, 2, 3]);
+    // Only the human who started the thread is told; tidy is not woken a fourth time.
+    expect(c.woke).toBe(1);
+    expect((await inboxOf(w, w.tidy.agent.identity.id)).filter((i) => i.wake).map((i) => i.seq)).toEqual([1, 2]);
+    const ev = await env.HUB_DB.prepare("SELECT summary FROM event WHERE kind = 'chat.wake_suppressed'").all<{ summary: string }>();
+    expect(ev.results.map((e) => e.summary)).toEqual(["1 wakes suppressed at hop 3 in #general"]);
+  });
+
+  it("skips wakes at delivery for a muted agent, the kill switch, and a muted channel; notifications still arrive", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const ch = (await getChannelBySlug(env.HUB_DB, w.acme.id, "general"))!;
+    const conv = conversationStub(env, w.acme.id, ch.project_id);
+    await conv.head(w.acme.id, ch.project_id);
+    const scoutId = w.scout.agent.identity.id;
+    const leadId = w.lead.identity.id;
+    let n = 0;
+    // Queue one wake for scout and one plain notification for lead, as a post that raced a mute would have, then drain.
+    const queue = async () => {
+      n++;
+      const base = { kind: "mention", conversation_id: ch.project_id, seq: n, msg_id: `M${n}`, thread_root: null, hop: 0, author_id: leadId, created_at: Date.now() };
+      await runInDurableObject(conv, async (o: Conversation, state) => {
+        for (const [id, wake] of [[scoutId, true], [leadId, false]] as const) {
+          const key = `${ch.project_id}:${n}:${id}`;
+          state.storage.sql.exec("INSERT INTO inbox_outbox (key, identity_id, item_json) VALUES (?, ?, ?)", key, id, JSON.stringify({ ...base, key, wake }));
+        }
+        await o.alarm();
+      });
+    };
+    const got = async (id: string) => (await inboxStub(env, w.acme.id, id).list(w.acme.id, id, { after: 0, limit: 100, include_acked: true })).items.map((i) => i.seq);
+    const left = () => runInDurableObject(conv, (_o: Conversation, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM inbox_outbox").one().n);
+
+    await queue();
+    expect([await got(scoutId), await got(leadId)]).toEqual([[1], [1]]);
+
+    await setAgentMute(env.HUB_DB, w.acme.id, scoutId, Date.now() + 60_000, leadId, "test");
+    await queue();
+    expect([await got(scoutId), await got(leadId), await left()]).toEqual([[1], [1, 2], 0]);
+    await setAgentMute(env.HUB_DB, w.acme.id, scoutId, null, leadId, null);
+
+    await setAgentsEnabled(env.HUB_DB, w.acme.id, false, leadId, "drill", Date.now());
+    await queue();
+    expect([await got(scoutId), await got(leadId), await left()]).toEqual([[1], [1, 2, 3], 0]);
+    await setAgentsEnabled(env.HUB_DB, w.acme.id, true, leadId, null, Date.now());
+
+    await setAgentPolicy(env.HUB_DB, w.acme.id, ch.project_id, "muted");
+    await queue();
+    expect([await got(scoutId), await got(leadId), await left()]).toEqual([[1], [1, 2, 3, 4], 0]);
+
+    await setAgentPolicy(env.HUB_DB, w.acme.id, ch.project_id, "open");
+    await queue();
+    expect(await got(scoutId)).toEqual([1, 5]);
   });
 });

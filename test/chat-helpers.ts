@@ -33,3 +33,13 @@ export async function channelWith(w: World, slug = "general", agents: Array<"sco
   await ok(w.lead.token, "channel.create", { slug });
   for (const a of agents) await ok(a === "tidy" ? w.dev.token : w.lead.token, "channel.add_agent", { c: slug, agent: a });
 }
+
+/** Polls until `check` is true, so a test acts only once an asynchronous step (a parked long poll) has happened. */
+export async function until(check: () => Promise<boolean> | boolean, what = "condition", ms = 5000): Promise<void> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (await check()) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}

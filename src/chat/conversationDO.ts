@@ -3,6 +3,7 @@ import type { Env } from "../env";
 import { ulid } from "../ids";
 import { bindOnce, storedBinding } from "./bound";
 import { inboxStub } from "./stubs";
+import { getControls } from "../db/chat";
 import { LIMITS, computeHop, gateRefuses, nextAgentRun, pairTrip, wakesAllowed } from "./rules";
 import type {
   AuthorKind, ChatSessionKind, Digest, DigestQuery, MsgView, PostInput, PostOk, PostOutcome, ReadPage, ReadQuery, StoredRef, Suppressed,
@@ -26,9 +27,17 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS scope_state (scope TEXT PRIMARY KEY, agent_run INTEGER NOT NULL, gate_noted INTEGER NOT NULL)",
   "CREATE TABLE IF NOT EXISTS pair_block (a TEXT NOT NULL, b TEXT NOT NULL, until INTEGER NOT NULL, PRIMARY KEY (a, b))",
   "CREATE TABLE IF NOT EXISTS idem (identity_id TEXT NOT NULL, key TEXT NOT NULL, result_json TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (identity_id, key))",
-  "CREATE TABLE IF NOT EXISTS inbox_outbox (key TEXT PRIMARY KEY, identity_id TEXT NOT NULL, item_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0)",
-  "CREATE TABLE IF NOT EXISTS index_outbox (seq INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0)",
+  "CREATE TABLE IF NOT EXISTS inbox_outbox (key TEXT PRIMARY KEY, identity_id TEXT NOT NULL, item_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0)",
+  "CREATE TABLE IF NOT EXISTS index_outbox (seq INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0)",
 ];
+// Objects created before the backoff column existed: the ALTER fails harmlessly on a table that already has it.
+const UPGRADES = [
+  "ALTER TABLE inbox_outbox ADD COLUMN next_at INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE index_outbox ADD COLUMN next_at INTEGER NOT NULL DEFAULT 0",
+];
+
+type Op = "post" | "edit" | "retract";
+type OutboxTable = "inbox_outbox" | "index_outbox";
 
 type MsgRow = {
   msg_id: string; first_seq: number; last_seq: number; rev: number; kind: string; author_id: string; author_kind: string;
@@ -54,10 +63,19 @@ const MSG_SELECT = "SELECT m.*, a.body, a.meta_json FROM msg m JOIN artifact a O
 export class Conversation extends DurableObject<Env> {
   #tenant = "";
   #id = "";
+  /** Tail of the drain chain: drains run one at a time, so index flushes cannot interleave. */
+  #draining: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     for (const s of SCHEMA) this.ctx.storage.sql.exec(s);
+    for (const s of UPGRADES) {
+      try {
+        this.ctx.storage.sql.exec(s);
+      } catch {
+        // already upgraded
+      }
+    }
   }
 
   #q<T extends Record<string, SqlStorageValue>>(query: string, ...binds: SqlStorageValue[]): T[] {
@@ -133,14 +151,19 @@ export class Conversation extends DurableObject<Env> {
     for (const r of refs) this.#run("INSERT OR IGNORE INTO ref (seq, msg_id, rev, kind, key, title_snapshot) VALUES (?, ?, ?, ?, ?, ?)", seq, msg_id, rev, r.kind, r.key, r.title);
   }
 
-  #replay(identity_id: string, key: string | null): PostOk | null {
+  /** Keys are namespaced by operation (a post key never replays an edit) and expire after 24 h. */
+  #replay(identity_id: string, op: Op, key: string | null, now: number): PostOk | null {
     if (!key) return null;
-    const r = this.#q<{ result_json: string }>("SELECT result_json FROM idem WHERE identity_id = ? AND key = ?", identity_id, key)[0];
+    const r = this.#q<{ result_json: string }>(
+      "SELECT result_json FROM idem WHERE identity_id = ? AND key = ? AND created_at > ?", identity_id, `${op}:${key}`, now - LIMITS.IDEM_TTL_MS,
+    )[0];
     return r ? { ...(JSON.parse(r.result_json) as PostOk), replayed: true } : null;
   }
 
-  #remember(identity_id: string, key: string | null, result: PostOk, now: number): void {
-    if (key) this.#run("INSERT OR IGNORE INTO idem (identity_id, key, result_json, created_at) VALUES (?, ?, ?, ?)", identity_id, key, JSON.stringify(result), now);
+  #remember(identity_id: string, op: Op, key: string | null, result: PostOk, now: number): void {
+    if (!key) return;
+    this.#run("DELETE FROM idem WHERE created_at <= ?", now - LIMITS.IDEM_TTL_MS);
+    this.#run("INSERT OR REPLACE INTO idem (identity_id, key, result_json, created_at) VALUES (?, ?, ?, ?)", identity_id, `${op}:${key}`, JSON.stringify(result), now);
   }
 
   /** Spec 6.4: messages by others, not system, newer than `after` in the scope (the thread, or the top level). */
@@ -176,9 +199,9 @@ export class Conversation extends DurableObject<Env> {
     return this.#head();
   }
 
-  async replay(tenant_id: string, conversation_id: string, identity_id: string, key: string): Promise<PostOk | null> {
+  async replay(tenant_id: string, conversation_id: string, identity_id: string, op: Op, key: string): Promise<PostOk | null> {
     this.#bind(tenant_id, conversation_id);
-    return this.#replay(identity_id, key);
+    return this.#replay(identity_id, op, key, Date.now());
   }
 
   async post(input: PostInput): Promise<PostOutcome> {
@@ -190,8 +213,14 @@ export class Conversation extends DurableObject<Env> {
 
   #post(p: PostInput): PostOutcome {
     const me = p.author;
-    const prior = this.#replay(me.id, p.idempotency_key);
+    const prior = this.#replay(me.id, "post", p.idempotency_key, p.now);
     if (prior) return prior;
+    // The Worker checks these from D1 first; the object refuses too, so a bug or a race there cannot let an agent through.
+    if (me.kind === "agent") {
+      if (!p.audience.agents_enabled) return { refused: "forbidden", detail: "agent posting is switched off in this tenant" };
+      if (p.audience.muted_agents.includes(me.id)) return { refused: "forbidden", detail: "this agent is muted" };
+      if (p.policy === "muted") return { refused: "forbidden", detail: "this channel takes no agent posts" };
+    }
     let target: MsgRow | null = null;
     if (p.reply_to !== null) {
       target = this.#msg(p.reply_to);
@@ -227,7 +256,8 @@ export class Conversation extends DurableObject<Env> {
       return { refused: "needs_human" };
     }
 
-    const hop = computeHop(me.kind, target ? target.hop : p.wake_hop);
+    const scopeWake = root ? p.thread_wake_hops[root] ?? null : p.wake_hop;
+    const hop = computeHop(me.kind, target ? target.hop : null, scopeWake);
     const { seq, msg_id } = this.#newMessage({
       kind: "say", author_id: me.id, author_kind: me.kind, session_id: me.session_id, session_kind: me.session_kind, thread_root: root,
       body: p.body, body_sha256: p.body_sha256, meta: { mentions: p.mentions.map((m) => m.identity_id), hop_limited: !wakesAllowed(hop) },
@@ -291,7 +321,7 @@ export class Conversation extends DurableObject<Env> {
     }
 
     const result: PostOk = { refused: null, seq, msg_id, rev: 1, hop, head: this.#head(), woke, suppressed, loop_tripped: loop, replayed: false };
-    this.#remember(me.id, p.idempotency_key, result, p.now);
+    this.#remember(me.id, "post", p.idempotency_key, result, p.now);
     return result;
   }
 
@@ -305,7 +335,8 @@ export class Conversation extends DurableObject<Env> {
   /** Spec 4.4: a new artifact with rev + 1. Edits by the author only; retraction also by an agent's operator or an admin. */
   #version(v: VersionInput): PostOutcome {
     const me = v.actor;
-    const prior = this.#replay(me.id, v.idempotency_key);
+    const op: Op = v.body === null ? "retract" : "edit";
+    const prior = this.#replay(me.id, op, v.idempotency_key, v.now);
     if (prior) return prior;
     const m = this.#msg(v.msg);
     if (!m) return { refused: "not_found" };
@@ -317,7 +348,8 @@ export class Conversation extends DurableObject<Env> {
       return { refused: "forbidden", detail: retract ? "only the author, the agent's operator, or an admin may retract this" : "only the author may edit" };
     }
     if (m.retracted === 1) return { refused: "conflict", detail: "message is retracted" };
-    if (m.rev >= LIMITS.VERSIONS_MAX) return { refused: "edit_cap" };
+    // The cap bounds edits only: a message at the cap can still be retracted (B-I2).
+    if (!retract && m.rev >= LIMITS.VERSIONS_MAX) return { refused: "edit_cap" };
     if (!retract && v.after !== null) {
       const missed = this.#stale(me.id, v.after, m.thread_root);
       if (missed.length > 0) return { refused: "stale_view", head: this.#head(), missed };
@@ -332,7 +364,7 @@ export class Conversation extends DurableObject<Env> {
     if (!retract) this.#storeRefs(seq, m.msg_id, rev, v.refs);
     this.#run("UPDATE msg SET last_seq = ?, rev = ?, retracted = ?, updated_at = ? WHERE msg_id = ?", seq, rev, retract ? 1 : 0, v.now, m.msg_id);
     const result: PostOk = { refused: null, seq, msg_id: m.msg_id, rev, hop: m.hop, head: this.#head(), woke: [], suppressed: [], loop_tripped: null, replayed: false };
-    this.#remember(me.id, v.idempotency_key, result, v.now);
+    this.#remember(me.id, op, v.idempotency_key, result, v.now);
     return result;
   }
 
@@ -421,57 +453,149 @@ export class Conversation extends DurableObject<Env> {
     await this.#drain();
   }
 
-  /** Deliver queued inbox items and index rows now; anything that fails stays queued for the alarm (spec 9.2, 9.3). */
-  async #drain(): Promise<void> {
-    const pending = this.#q<{ key: string; identity_id: string; item_json: string }>("SELECT key, identity_id, item_json FROM inbox_outbox ORDER BY rowid LIMIT 200");
-    const byIdentity = new Map<string, Array<{ key: string; item: WakeItem }>>();
-    for (const p of pending) {
+  #backoff(attempts: number): number {
+    return Math.min(LIMITS.OUTBOX_BACKOFF_BASE_MS * 2 ** Math.max(0, attempts - 1), LIMITS.OUTBOX_BACKOFF_MAX_MS);
+  }
+
+  /** One row failed: retry later with a capped exponential backoff, and give up on it after OUTBOX_MAX_ATTEMPTS. */
+  #fail(table: OutboxTable, col: "key" | "seq", id: string | number, attempts: number, now: number): void {
+    const n = attempts + 1;
+    if (n >= LIMITS.OUTBOX_MAX_ATTEMPTS) {
+      console.log(`${table} row dropped after ${n} attempts`);
+      this.#run(`DELETE FROM ${table} WHERE ${col} = ?`, id);
+      return;
+    }
+    this.#run(`UPDATE ${table} SET attempts = ?, next_at = ? WHERE ${col} = ?`, n, now + this.#backoff(n), id);
+  }
+
+  /** Drains run one after another (spec 9.2, 9.3): a second caller waits for the first instead of racing it. */
+  #drain(): Promise<void> {
+    const run = this.#draining.then(() => this.#drainOnce());
+    this.#draining = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Spec 6.7: the Worker checked D1 when the message was posted; a wake is checked again when it is delivered, so a
+   * mute, the kill switch, or a muted channel that arrived since drops the wake. Notifications to humans are unaffected.
+   */
+  async #wakeGate(now: number): Promise<(identity_id: string) => boolean> {
+    const [controls, ch] = await Promise.all([
+      getControls(this.env.HUB_DB, this.#tenant, now),
+      this.env.HUB_DB.prepare("SELECT agent_policy FROM channel WHERE project_id = ? AND tenant_id = ?").bind(this.#id, this.#tenant).first<{ agent_policy: string }>(),
+    ]);
+    if (!controls.agents_enabled || ch?.agent_policy === "muted") return () => false;
+    const muted = new Set(controls.muted);
+    return (id) => !muted.has(id);
+  }
+
+  /** Deliver queued inbox items and index rows now; anything that fails stays queued, with backoff, for the alarm. */
+  async #drainOnce(): Promise<void> {
+    const now = Date.now();
+    const rows = this.#q<{ key: string; identity_id: string; item_json: string; attempts: number }>(
+      "SELECT key, identity_id, item_json, attempts FROM inbox_outbox WHERE next_at <= ? ORDER BY rowid LIMIT 200", now,
+    );
+    const parsed: Array<{ key: string; identity_id: string; item: WakeItem; attempts: number }> = [];
+    for (const r of rows) {
+      try {
+        parsed.push({ key: r.key, identity_id: r.identity_id, item: JSON.parse(r.item_json) as WakeItem, attempts: r.attempts });
+      } catch {
+        this.#fail("inbox_outbox", "key", r.key, r.attempts, now);
+      }
+    }
+    let allows: ((identity_id: string) => boolean) | null = null;
+    if (parsed.some((p) => p.item.wake)) {
+      try {
+        allows = await this.#wakeGate(now);
+      } catch (e) {
+        console.log("wake gate failed", e instanceof Error ? e.name : "error");
+      }
+    }
+    const byIdentity = new Map<string, typeof parsed>();
+    for (const p of parsed) {
+      if (p.item.wake) {
+        if (!allows) {
+          this.#fail("inbox_outbox", "key", p.key, p.attempts, now);
+          continue;
+        }
+        if (!allows(p.identity_id)) {
+          this.#run("DELETE FROM inbox_outbox WHERE key = ?", p.key);
+          continue;
+        }
+      }
       const list = byIdentity.get(p.identity_id) ?? [];
-      list.push({ key: p.key, item: JSON.parse(p.item_json) as WakeItem });
+      list.push(p);
       byIdentity.set(p.identity_id, list);
     }
     for (const [identity, list] of byIdentity) {
+      const send = (xs: typeof list) => inboxStub(this.env, this.#tenant, identity).deliver(this.#tenant, identity, xs.map((x) => x.item));
       try {
-        await inboxStub(this.env, this.#tenant, identity).deliver(this.#tenant, identity, list.map((x) => x.item));
+        await send(list);
         for (const x of list) this.#run("DELETE FROM inbox_outbox WHERE key = ?", x.key);
       } catch (e) {
         console.log("inbox delivery failed", e instanceof Error ? e.name : "error");
-        for (const x of list) this.#run("UPDATE inbox_outbox SET attempts = attempts + 1 WHERE key = ?", x.key);
+        // One bad row must not hold back the others: retry each on its own.
+        for (const x of list) {
+          try {
+            await send([x]);
+            this.#run("DELETE FROM inbox_outbox WHERE key = ?", x.key);
+          } catch {
+            this.#fail("inbox_outbox", "key", x.key, x.attempts, now);
+          }
+        }
       }
     }
-    await this.#flushIndex();
-    const left = this.#q<{ n: number }>("SELECT (SELECT COUNT(*) FROM inbox_outbox) + (SELECT COUNT(*) FROM index_outbox) AS n")[0]!.n;
-    if (left > 0 && (await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + 5_000);
+    await this.#flushIndex(now);
+    const next = this.#q<{ n: number | null }>(
+      "SELECT MIN(n) AS n FROM (SELECT MIN(next_at) AS n FROM inbox_outbox UNION ALL SELECT MIN(next_at) FROM index_outbox)",
+    )[0]?.n ?? null;
+    if (next !== null && (await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Math.max(next, Date.now() + 1_000));
+  }
+
+  /** The D1 statements for one artifact: its index row, and for a new version, replace the message's refs. */
+  #indexStatements(seq: number): D1PreparedStatement[] {
+    const a = this.#q<ArtifactRow>("SELECT seq, msg_id, rev, kind, author_id, session_id, session_kind, thread_root, body, meta_json, hop, created_at FROM artifact WHERE seq = ?", seq)[0];
+    if (!a) return [];
+    const db = this.env.HUB_DB;
+    const stmts: D1PreparedStatement[] = [];
+    const retracted = (JSON.parse(a.meta_json) as Meta).retracted === true;
+    stmts.push(db.prepare(
+      `INSERT OR IGNORE INTO msg_index (tenant_id, conversation_id, msg_id, seq, rev, kind, author_id, session_id, thread_root, hop, title, state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+    ).bind(this.#tenant, this.#id, a.msg_id, a.seq, a.rev, a.kind, a.author_id, a.session_id, a.thread_root, a.hop, retracted ? "retracted" : "live", a.created_at));
+    if (a.rev > 1) stmts.push(db.prepare("DELETE FROM msg_ref WHERE conversation_id = ? AND msg_id = ? AND rev < ?").bind(this.#id, a.msg_id, a.rev));
+    for (const r of this.#q<{ kind: string; key: string }>("SELECT kind, key FROM ref WHERE seq = ?", seq)) {
+      // Skipped when a newer version is already indexed: an old flush arriving late must not bring back refs the newer one replaced (B-I3).
+      stmts.push(db.prepare(
+        `INSERT OR IGNORE INTO msg_ref (tenant_id, target_kind, target_key, conversation_id, msg_id, rev, seq, msg_kind, author_id, created_at)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+          WHERE NOT EXISTS (SELECT 1 FROM msg_index WHERE conversation_id = ?4 AND msg_id = ?5 AND rev > ?6)`,
+      ).bind(this.#tenant, r.kind, r.key, this.#id, a.msg_id, a.rev, a.seq, a.kind, a.author_id, a.created_at));
+    }
+    return stmts;
   }
 
   /** Idempotent upserts keyed by (conversation_id, seq); a new version replaces the message's refs in msg_ref. */
-  async #flushIndex(): Promise<void> {
-    const seqs = this.#q<{ seq: number }>("SELECT seq FROM index_outbox ORDER BY seq LIMIT 50").map((r) => r.seq);
-    if (seqs.length === 0) return;
+  async #flushIndex(now: number): Promise<void> {
+    const rows = this.#q<{ seq: number; attempts: number }>("SELECT seq, attempts FROM index_outbox WHERE next_at <= ? ORDER BY seq LIMIT 50", now);
+    if (rows.length === 0) return;
     const db = this.env.HUB_DB;
-    const stmts: D1PreparedStatement[] = [];
-    for (const seq of seqs) {
-      const a = this.#q<ArtifactRow>("SELECT seq, msg_id, rev, kind, author_id, session_id, session_kind, thread_root, body, meta_json, hop, created_at FROM artifact WHERE seq = ?", seq)[0];
-      if (!a) continue;
-      const retracted = (JSON.parse(a.meta_json) as Meta).retracted === true;
-      stmts.push(db.prepare(
-        `INSERT OR IGNORE INTO msg_index (tenant_id, conversation_id, msg_id, seq, rev, kind, author_id, session_id, thread_root, hop, title, state, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-      ).bind(this.#tenant, this.#id, a.msg_id, a.seq, a.rev, a.kind, a.author_id, a.session_id, a.thread_root, a.hop, retracted ? "retracted" : "live", a.created_at));
-      if (a.rev > 1) stmts.push(db.prepare("DELETE FROM msg_ref WHERE conversation_id = ? AND msg_id = ? AND rev < ?").bind(this.#id, a.msg_id, a.rev));
-      for (const r of this.#q<{ kind: string; key: string }>("SELECT kind, key FROM ref WHERE seq = ?", seq)) {
-        stmts.push(db.prepare(
-          `INSERT OR IGNORE INTO msg_ref (tenant_id, target_kind, target_key, conversation_id, msg_id, rev, seq, msg_kind, author_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).bind(this.#tenant, r.kind, r.key, this.#id, a.msg_id, a.rev, a.seq, a.kind, a.author_id, a.created_at));
-      }
-    }
     try {
+      const stmts = rows.flatMap((r) => this.#indexStatements(r.seq));
       if (stmts.length > 0) await db.batch(stmts);
-      for (const s of seqs) this.#run("DELETE FROM index_outbox WHERE seq = ?", s);
+      for (const r of rows) this.#run("DELETE FROM index_outbox WHERE seq = ?", r.seq);
     } catch (e) {
       console.log("index flush failed", e instanceof Error ? e.name : "error");
-      for (const s of seqs) this.#run("UPDATE index_outbox SET attempts = attempts + 1 WHERE seq = ?", s);
+      // Isolate the failure: each seq on its own, so one bad row does not stall the rest.
+      for (const r of rows) {
+        try {
+          const stmts = this.#indexStatements(r.seq);
+          if (stmts.length > 0) await db.batch(stmts);
+          this.#run("DELETE FROM index_outbox WHERE seq = ?", r.seq);
+        } catch {
+          this.#fail("index_outbox", "seq", r.seq, r.attempts, now);
+        }
+      }
     }
   }
 }

@@ -19,13 +19,23 @@ export const LIMITS = {
   HUMAN_PER_MIN: 30,
   TRIPWIRE_REFUSALS: 20,
   INBOX_WAIT_MAX_S: 20,
+  INBOX_WAITERS_MAX: 8,
+  INBOX_LIMIT_MAX: 100,
+  INBOX_ACKED_KEEP_MS: 30 * 86_400_000,
+  IDEM_TTL_MS: 86_400_000,
+  OUTBOX_BACKOFF_BASE_MS: 5_000,
+  OUTBOX_BACKOFF_MAX_MS: 600_000,
+  OUTBOX_MAX_ATTEMPTS: 20,
   BUDGET_DEFAULT: 1500,
   BUDGET_MAX: 8000,
 } as const;
 
-/** Human 0; agent 1 + the cause's hop; an unprompted agent message has cause hop 0. */
-export function computeHop(kind: AuthorKind, causeHop: number | null): number {
-  return kind === "agent" ? 1 + (causeHop ?? 0) : 0;
+/**
+ * Human 0; agent 1 + the higher of the replied-to message's hop and the hop of the newest open wake in the scope
+ * (ruling C-4), so replying to a human root cannot reset a chain. No cause at all counts as hop 0.
+ */
+export function computeHop(kind: AuthorKind, targetHop: number | null, wakeHop: number | null = null): number {
+  return kind === "agent" ? 1 + Math.max(targetHop ?? 0, wakeHop ?? 0) : 0;
 }
 
 export function wakesAllowed(hop: number): boolean {

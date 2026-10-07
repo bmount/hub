@@ -2,6 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { inboxStub } from "../src/chat/stubs";
 import type { WakeItem } from "../src/chat/types";
+import { until } from "./chat-helpers";
 
 const T = "T1";
 const box = (id = "I1") => inboxStub(env, T, id);
@@ -32,11 +33,68 @@ describe("Inbox object", () => {
   it("long-polls: answers as soon as an item lands, or empty at the deadline", async () => {
     const waiting = box().wait(T, "I1", { after: 0, limit: 10, wait_ms: 5000 });
     const t0 = Date.now();
+    // Deliver only once the poll is parked, so it is the delivery that answers it.
+    await until(async () => (await box().waiting(T, "I1")) === 1, "the poll to park");
     await box().deliver(T, "I1", [item(1)]);
     expect((await waiting).items.map((i) => i.seq)).toEqual([1]);
     expect(Date.now() - t0).toBeLessThan(3000);
     expect((await box("I2").wait(T, "I2", { after: 0, limit: 10, wait_ms: 200 })).items).toEqual([]);
     expect((await box().wait(T, "I1", { after: 0, limit: 10, wait_ms: 5000 })).items.map((i) => i.seq)).toEqual([1]);
+  });
+
+  it("keeps waiting after a delivery that does not qualify, until the deadline", async () => {
+    const t0 = Date.now();
+    const waiting = box().wait(T, "I1", { after: 5, limit: 10, wait_ms: 900 });
+    await until(async () => (await box().waiting(T, "I1")) === 1, "the poll to park");
+    await box().deliver(T, "I1", [item(1)]);
+    expect((await waiting).items).toEqual([]);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(850);
+    expect(await box().waiting(T, "I1")).toBe(0);
+  });
+
+  it("clamps the limit to 1..100", async () => {
+    await box().deliver(T, "I1", Array.from({ length: 120 }, (_, i) => item(i + 1)));
+    expect((await box().list(T, "I1", { after: 0, limit: 0, include_acked: false })).items.length).toBe(1);
+    expect((await box().list(T, "I1", { after: 0, limit: -5, include_acked: false })).items.length).toBe(1);
+    expect((await box().list(T, "I1", { after: 0, limit: 1_000_000, include_acked: false })).items.length).toBe(100);
+    expect((await box().wait(T, "I1", { after: 0, limit: 1_000_000, wait_ms: 0 })).items.length).toBe(100);
+  });
+
+  it("caps concurrent waiters: the ninth poll answers at once, and every waiter cleans up", async () => {
+    const parked = Array.from({ length: 8 }, () => box().wait(T, "I1", { after: 0, limit: 10, wait_ms: 3000 }));
+    await until(async () => (await box().waiting(T, "I1")) === 8, "eight polls to park");
+    const t0 = Date.now();
+    expect((await box().wait(T, "I1", { after: 0, limit: 10, wait_ms: 3000 })).items).toEqual([]);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(await box().waiting(T, "I1")).toBe(8);
+    await box().deliver(T, "I1", [item(1)]);
+    for (const r of await Promise.all(parked)) expect(r.items.map((i) => i.seq)).toEqual([1]);
+    expect(await box().waiting(T, "I1")).toBe(0);
+  });
+
+  it("holds a poll at most 20 seconds whatever it asks, and leaves no waiter behind", { timeout: 45_000 }, async () => {
+    const t0 = Date.now();
+    expect((await box().wait(T, "I1", { after: 0, limit: 10, wait_ms: 600_000 })).items).toEqual([]);
+    const took = Date.now() - t0;
+    expect(took).toBeGreaterThanOrEqual(19_500);
+    expect(took).toBeLessThan(25_000);
+    expect(await box().waiting(T, "I1")).toBe(0);
+  });
+
+  it("prunes acked items after 30 days, on delivery, and keeps newer ones", async () => {
+    await box().deliver(T, "I1", [item(1), item(2)]);
+    await box().ack(T, "I1", 1, Date.now() - 31 * 86_400_000);
+    await box().ack(T, "I1", 2, Date.now() - 29 * 86_400_000);
+    await box().deliver(T, "I1", [item(3)]);
+    const all = await box().list(T, "I1", { after: 0, limit: 10, include_acked: true });
+    expect(all.items.map((i) => i.seq)).toEqual([2, 3]);
+    expect(all.head).toBe(3);
+  });
+
+  it("returns the newest open wake hop per scope, its thread root or its own message", async () => {
+    await box().deliver(T, "I1", [item(1, { hop: 0 }), item(2, { hop: 1, thread_root: "M1" }), item(3, { hop: 2, thread_root: "M3x" }), item(4, { hop: 0, wake: false })]);
+    const r = await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() });
+    expect(r).toEqual({ ok: true, wake_hop: 0, thread_wake_hops: { M3x: 2, M1: 1 } });
   });
 
   it("keeps read cursors monotonic", async () => {
@@ -65,9 +123,9 @@ describe("Inbox object", () => {
   it("reports the hop of the newest open top-level wake in the conversation", async () => {
     await box().deliver(T, "I1", [item(1, { hop: 1 }), item(2, { hop: 2, thread_root: "M1" }), item(3, { hop: 0, wake: false, key: "C1:3:I1" })]);
     const r = await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() });
-    expect(r).toEqual({ ok: true, wake_hop: 1 });
+    expect(r).toEqual({ ok: true, wake_hop: 1, thread_wake_hops: { M1: 2 } });
     await box().ack(T, "I1", 3, Date.now());
-    expect(await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() })).toEqual({ ok: true, wake_hop: null });
+    expect(await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() })).toEqual({ ok: true, wake_hop: null, thread_wake_hops: {} });
   });
 
   it("counts refusals in the last hour", async () => {

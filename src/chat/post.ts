@@ -12,7 +12,7 @@ import { resolveRefs, type Unresolved } from "./refs";
 import { LIMITS } from "./rules";
 import { conversationStub, inboxStub } from "./stubs";
 import type { ReserveResult } from "./inboxDO";
-import type { Audience, Author, ChatSessionKind, Mention, PostOk, PostOutcome, Refusal, StoredRef } from "./types";
+import type { AgentPolicy, Audience, Author, ChatSessionKind, Mention, PostOk, PostOutcome, Refusal, StoredRef } from "./types";
 
 export type PostParams = { c: string; body: string; after: number | null; reply_to: string | null; refs: Array<{ kind: string; key: string }>; idempotency_key: string | null };
 export type VersionParams = { c: string; msg: string; body: string | null; after: number | null; idempotency_key: string | null };
@@ -34,7 +34,7 @@ function authorOf(ctx: Ctx): Author {
 const needsAfter = (a: Author) => a.session_kind === "agent_run" || a.session_kind === "oauth";
 
 /** D1 is the truth for who may post and be woken (spec 6.2, 6.7, 9.3), read on every command. */
-async function gate(ctx: Ctx, ch: ChannelRow, author: Author): Promise<{ audience: Audience; policy: "open" | "mention_only" }> {
+async function gate(ctx: Ctx, ch: ChannelRow, author: Author): Promise<{ audience: Audience; policy: AgentPolicy }> {
   if (ch.state !== "active") throw conflict("channel is archived");
   const [controls, members] = await Promise.all([getControls(ctx.db, ch.tenant_id, ctx.now), listAgentMembers(ctx.db, ch.tenant_id, ch.project_id)]);
   if (author.kind === "agent") {
@@ -46,7 +46,7 @@ async function gate(ctx: Ctx, ch: ChannelRow, author: Author): Promise<{ audienc
   for (const m of members) if (m.operator_id) operators[m.identity_id] = m.operator_id;
   return {
     audience: { agent_members: members.map((m) => m.identity_id), operators, muted_agents: controls.muted, agents_enabled: controls.agents_enabled },
-    policy: ch.agent_policy === "mention_only" ? "mention_only" : "open",
+    policy: ch.agent_policy,
   };
 }
 
@@ -149,7 +149,7 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
   const ch = await readableChannel(ctx, p.c);
   const conv = conversationStub(ctx.env, ch.tenant_id, ch.project_id);
   if (p.idempotency_key) {
-    const prior = (await conv.replay(ch.tenant_id, ch.project_id, author.id, p.idempotency_key)) as PostOk | null;
+    const prior = (await conv.replay(ch.tenant_id, ch.project_id, author.id, "post", p.idempotency_key)) as PostOk | null;
     if (prior) return result(ch, prior, [], 0);
   }
   const { audience, policy } = await gate(ctx, ch, author);
@@ -163,7 +163,7 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
   }
   const o = (await conv.post({
     tenant_id: ch.tenant_id, conversation_id: ch.project_id, now: ctx.now, author, policy, body: p.body, body_sha256: await sha256Hex(p.body),
-    after: p.after, reply_to: p.reply_to, refs: x.resolved, mentions: x.mentions, wake_hop: reserve.wake_hop, idempotency_key: p.idempotency_key, audience,
+    after: p.after, reply_to: p.reply_to, refs: x.resolved, mentions: x.mentions, wake_hop: reserve.wake_hop, thread_wake_hops: reserve.thread_wake_hops, idempotency_key: p.idempotency_key, audience,
   })) as PostOutcome;
   if (o.refused !== null) throw await refusalError(ctx, author, ch, o);
   await events(ctx, ch, author, o, "chat.post");
@@ -178,7 +178,7 @@ export async function versionMessage(ctx: Ctx, p: VersionParams): Promise<PostRe
   const ch = await readableChannel(ctx, p.c);
   const conv = conversationStub(ctx.env, ch.tenant_id, ch.project_id);
   if (p.idempotency_key) {
-    const prior = (await conv.replay(ch.tenant_id, ch.project_id, author.id, p.idempotency_key)) as PostOk | null;
+    const prior = (await conv.replay(ch.tenant_id, ch.project_id, author.id, retract ? "retract" : "edit", p.idempotency_key)) as PostOk | null;
     if (prior) return result(ch, prior, [], 0);
   }
   await gate(ctx, ch, author);

@@ -16,7 +16,7 @@ function input(author: Author, body: string, extra: Partial<PostInput> = {}): Po
   clock += 1000;
   return {
     tenant_id: T, conversation_id: C, now: clock, author, policy: "open", body, body_sha256: `sha:${body}`, after: null, reply_to: null,
-    refs: [], mentions: [], wake_hop: null, idempotency_key: null, audience: AUDIENCE, ...extra,
+    refs: [], mentions: [], wake_hop: null, thread_wake_hops: {}, idempotency_key: null, audience: AUDIENCE, ...extra,
   };
 }
 /** Takes the RPC result as unknown: the stub's return type is the object's, wrapped by workers-types. */
@@ -67,7 +67,7 @@ describe("Conversation: messages and versions", () => {
     const first = ok(await conv().post(input(human("H1"), "once", { idempotency_key: "k1" })));
     const again = ok(await conv().post(input(human("H1"), "once", { idempotency_key: "k1" })));
     expect(again).toEqual({ ...first, replayed: true });
-    expect(await conv().replay(T, C, "H1", "k1")).toEqual({ ...first, replayed: true });
+    expect(await conv().replay(T, C, "H1", "post", "k1")).toEqual({ ...first, replayed: true });
     expect(await conv().head(T, C)).toBe(1);
   });
 
@@ -108,6 +108,15 @@ describe("Conversation: messages and versions", () => {
     const m = ok(await conv().post(input(human("H1"), "v1")));
     for (let i = 2; i <= 50; i++) ok(await conv().version(edit(human("H1"), String(m.seq), `v${i}`)));
     expect((await conv().version(edit(human("H1"), String(m.seq), "v51"))).refused).toBe("edit_cap");
+  });
+
+  it("applies the version cap to edits only: a message at rev 50 can still be retracted (B-I2)", async () => {
+    const m = ok(await conv().post(input(human("H1"), "v1")));
+    for (let i = 2; i <= 50; i++) ok(await conv().version(edit(human("H1"), String(m.seq), `v${i}`)));
+    expect((await conv().version(edit(human("H1"), String(m.seq), "v51"))).refused).toBe("edit_cap");
+    const r = ok(await conv().version(edit(human("H1"), String(m.seq), null)));
+    expect(r.rev).toBe(51);
+    expect((await conv().getMessage(T, C, String(m.seq)))!.retracted).toBe(true);
   });
 });
 
@@ -230,5 +239,95 @@ describe("Conversation: index, retries, binding", () => {
     await runInDurableObject(conv(), async (o: Conversation) => {
       await expect(o.head("T2", C)).rejects.toThrow(/another tenant/);
     });
+  });
+});
+
+describe("Conversation: fix wave (B-I3, C-4, idempotency, outbox)", () => {
+  const refs = () => env.HUB_DB.prepare("SELECT target_key, rev FROM msg_ref WHERE conversation_id = ?").bind(C).all();
+  const A_REF = [{ kind: "ticket" as const, key: "site#k7q2", title: null }];
+  const B_REF = [{ kind: "ticket" as const, key: "site#ab12", title: null }];
+
+  it("leaves only the latest version's refs when a post and an edit drain at the same time (B-I3)", async () => {
+    const posting = conv().post(input(human("H1"), "see site#k7q2", { refs: A_REF }));
+    const editing = conv().version(edit(human("H1"), "1", "now site#ab12", { refs: B_REF }));
+    ok(await posting);
+    ok(await editing);
+    expect((await refs()).results).toEqual([{ target_key: "site#ab12", rev: 2 }]);
+  });
+
+  it("does not index an older version's refs when its flush arrives after a newer one (B-I3)", async () => {
+    ok(await conv().post(input(human("H1"), "see site#k7q2", { refs: A_REF })));
+    ok(await conv().version(edit(human("H1"), "1", "now site#ab12", { refs: B_REF })));
+    expect((await refs()).results).toEqual([{ target_key: "site#ab12", rev: 2 }]);
+    // A late flush of seq 1 (rev 1), as an interleaved drain would have sent it.
+    await runInDurableObject(conv(), async (o: Conversation, state) => {
+      state.storage.sql.exec("INSERT INTO index_outbox (seq) VALUES (1)");
+      await o.alarm();
+    });
+    expect((await refs()).results).toEqual([{ target_key: "site#ab12", rev: 2 }]);
+  });
+
+  it("counts the hop of the newest open wake in the thread, not just the replied-to message (C-4)", async () => {
+    const root = ok(await conv().post(input(human("H1"), "root @a1 @a2", { mentions: [{ identity_id: "A1", kind: "agent" }, { identity_id: "A2", kind: "agent" }] })));
+    const reply = async (author: Author, thread_wake_hops: Record<string, number>) =>
+      ok(await conv().post(input(author, `reply ${clock}`, { reply_to: String(root.seq), thread_wake_hops })));
+    expect(root.hop).toBe(0);
+    expect((await reply(agent("A1"), {})).hop).toBe(1);
+    expect((await reply(agent("A2"), { [root.msg_id]: 1 })).hop).toBe(2);
+    expect((await reply(agent("A1"), { [root.msg_id]: 2 })).hop).toBe(3);
+    // The wake of another thread does not count here.
+    expect((await reply(agent("A3"), { OTHER: 2 })).hop).toBe(1);
+    expect((await reply(human("H2"), { [root.msg_id]: 2 })).hop).toBe(0);
+  });
+
+  it("namespaces idempotency keys by operation and expires them after 24 hours", async () => {
+    const first = ok(await conv().post(input(human("H1"), "once", { idempotency_key: "k" })));
+    const edited = ok(await conv().version(edit(human("H1"), String(first.seq), "twice", { idempotency_key: "k" })));
+    expect([edited.replayed, edited.rev]).toEqual([false, 2]);
+    expect(ok(await conv().version(edit(human("H1"), String(first.seq), "thrice", { idempotency_key: "k" }))).replayed).toBe(true);
+    const gone = ok(await conv().version(edit(human("H1"), String(first.seq), null, { idempotency_key: "k" })));
+    expect([gone.replayed, gone.rev]).toEqual([false, 3]);
+    expect(await conv().replay(T, C, "H1", "post", "k")).toEqual({ ...first, replayed: true });
+    expect(await conv().replay(T, C, "H1", "edit", "k")).toMatchObject({ rev: 2, replayed: true });
+    const later = ok(await conv().post(input(human("H1"), "once", { idempotency_key: "k", now: clock + 25 * 3_600_000 })));
+    expect([later.replayed, later.seq]).toEqual([false, 4]);
+  });
+
+  it("refuses an agent post inside the object when the kill switch, a mute, or a muted channel says so", async () => {
+    const off = await conv().post(input(agent("A1"), "x", { audience: { ...AUDIENCE, agents_enabled: false } }));
+    expect(off).toMatchObject({ refused: "forbidden", detail: expect.stringContaining("switched off") });
+    const muted = await conv().post(input(agent("A1"), "x", { audience: { ...AUDIENCE, muted_agents: ["A1"] } }));
+    expect(muted).toMatchObject({ refused: "forbidden", detail: expect.stringContaining("muted") });
+    expect((await conv().post(input(agent("A1"), "x", { policy: "muted" }))).refused).toBe("forbidden");
+    expect((await conv().post(input(human("H1"), "x", { policy: "muted", audience: { ...AUDIENCE, agents_enabled: false } }))).refused).toBeNull();
+    expect((await conv().post(input(agent("A2"), "fine", { audience: { ...AUDIENCE, muted_agents: ["A1"] } }))).refused).toBeNull();
+  });
+
+  const outbox = (item: Record<string, unknown>, key: string, identity: string) => ({ key, identity, json: JSON.stringify(item) });
+  const wake = (key: string) => ({ key, kind: "mention", conversation_id: C, seq: 1, msg_id: "M", thread_root: null, hop: 0, author_id: "H1", wake: true, created_at: clock });
+
+  it("backs off a failing row, isolates it from the others, and drops it after the attempt cap", async () => {
+    ok(await conv().post(input(human("H1"), "seed")));
+    const good = outbox(wake(`${C}:1:A1`), `${C}:1:A1`, "A1");
+    await runInDurableObject(conv(), async (o: Conversation, state) => {
+      const sql = state.storage.sql;
+      sql.exec("INSERT INTO inbox_outbox (key, identity_id, item_json) VALUES ('poison', 'A2', '{not json')");
+      sql.exec("INSERT INTO inbox_outbox (key, identity_id, item_json) VALUES (?, ?, ?)", good.key, good.identity, good.json);
+      await o.alarm();
+    });
+    expect((await items("A1")).length).toBe(1);
+    const row = () => runInDurableObject(conv(), (_o: Conversation, state) =>
+      state.storage.sql.exec<{ attempts: number; next_at: number }>("SELECT attempts, next_at FROM inbox_outbox WHERE key = 'poison'").toArray());
+    const [first] = await row();
+    expect(first!.attempts).toBe(1);
+    expect(first!.next_at).toBeGreaterThan(Date.now() + 1000);
+    // Not due yet: another drain leaves it alone.
+    await runInDurableObject(conv(), (o: Conversation) => o.alarm());
+    expect((await row())[0]!.attempts).toBe(1);
+    await runInDurableObject(conv(), async (o: Conversation, state) => {
+      state.storage.sql.exec("UPDATE inbox_outbox SET attempts = 19, next_at = 0 WHERE key = 'poison'");
+      await o.alarm();
+    });
+    expect(await row()).toEqual([]);
   });
 });

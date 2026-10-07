@@ -16,9 +16,12 @@ export type Mention = { identity_id: string; kind: "human" | "agent" };
 export type Audience = { agent_members: string[]; operators: Record<string, string>; muted_agents: string[]; agents_enabled: boolean };
 
 export type PostInput = {
-  tenant_id: string; conversation_id: string; now: number; author: Author; policy: "open" | "mention_only";
+  tenant_id: string; conversation_id: string; now: number; author: Author; policy: AgentPolicy;
   body: string; body_sha256: string; after: number | null; reply_to: string | null;
-  refs: StoredRef[]; mentions: Mention[]; wake_hop: number | null; idempotency_key: string | null; audience: Audience;
+  refs: StoredRef[]; mentions: Mention[];
+  /** Hop of the author's newest open top-level wake here, and of the newest open wake per thread (ruling C-4), from the author's Inbox. */
+  wake_hop: number | null; thread_wake_hops: Record<string, number>;
+  idempotency_key: string | null; audience: Audience;
 };
 
 export type VersionInput = {
