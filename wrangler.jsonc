@@ -7,9 +7,6 @@
   "workers_dev": false,
   "routes": [
     { "pattern": "pimwell.com", "custom_domain": true },
-    // Staging tenant reachable without the wildcard DNS record: a Workers Custom Domain
-    // creates its own DNS record and certificate. Remove once `*` is in DNS.
-    { "pattern": "blue.pimwell.com", "custom_domain": true },
     { "pattern": "*.pimwell.com/*", "zone_name": "pimwell.com" }
   ],
   "vars": { "HUB_DOMAIN": "pimwell.com" },

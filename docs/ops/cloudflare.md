@@ -39,8 +39,7 @@ The deploy token is scoped to the one account and, for DNS, to the pimwell.com z
 | Thing | Set up by |
 | --- | --- |
 | Worker `pimwell-hub`, routes `pimwell.com` (custom domain) and `*.pimwell.com/*` | `wrangler.jsonc` |
-| `blue.pimwell.com` custom domain | `wrangler.jsonc` (temporary until the wildcard record exists) |
-| `*.pimwell.com` proxied A record | `cf.py dns-wildcard` |
+| `*.pimwell.com` proxied A record `192.0.2.1` | Added by the owner in the dashboard, 2026-10-06 (`cf.py dns-wildcard` does the same with the deploy token) |
 | D1 `pimwell-hub`, KV `RATE`, KV `pimwell-oauth` | `wrangler d1 create`, `wrangler kv namespace create`; ids in `wrangler.jsonc` |
 | Secrets `HUB_BOOTSTRAP_TOKEN`, `HUB_INTERNAL_SECRET` | `wrangler secret put` |
 | Email Routing on, rules `login@` and `signup@` to `pimwell-hub` | `wrangler email routing enable`, `wrangler email routing rules create` (2026-10-06) |
