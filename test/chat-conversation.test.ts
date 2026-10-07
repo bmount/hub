@@ -63,6 +63,20 @@ describe("Conversation: messages and versions", () => {
     expect(page.messages.map((m) => [m.seq, m.body, m.edited, m.rev])).toEqual([[1, "one, edited", true, 2]]);
   });
 
+  it("orders and limits a read after a cursor by what it filters on, so its cursor skips and repeats nothing", async () => {
+    ok(await conv().post(input(human("H1"), "one")));
+    ok(await conv().post(input(human("H1"), "two")));
+    ok(await conv().post(input(human("H1"), "three")));
+    ok(await conv().version(edit(human("H1"), "1", "one, edited")));
+    const q = (after: number) => conv().read({ tenant_id: T, conversation_id: C, after, before: null, thread: null, limit: 2 });
+    const first = await q(0);
+    expect(first.messages.map((m) => m.body)).toEqual(["two", "three"]);
+    expect([first.has_more, first.cursors]).toEqual([true, { 2: 2, 3: 3 }]);
+    const second = await q(first.cursors[3]!);
+    expect(second.messages.map((m) => [m.seq, m.body])).toEqual([[1, "one, edited"]]);
+    expect(second.has_more).toBe(false);
+  });
+
   it("replays an idempotent post instead of posting twice", async () => {
     const first = ok(await conv().post(input(human("H1"), "once", { idempotency_key: "k1" })));
     const again = ok(await conv().post(input(human("H1"), "once", { idempotency_key: "k1" })));
@@ -305,6 +319,34 @@ describe("Conversation: fix wave (B-I3, C-4, idempotency, outbox)", () => {
 
   const outbox = (item: Record<string, unknown>, key: string, identity: string) => ({ key, identity, json: JSON.stringify(item) });
   const wake = (key: string) => ({ key, kind: "mention", conversation_id: C, seq: 1, msg_id: "M", thread_root: null, hop: 0, author_id: "H1", wake: true, created_at: clock });
+
+  it("never drops an index row: it survives more than 20 failures and lands when D1 recovers", async () => {
+    await env.HUB_DB.exec("CREATE TRIGGER fail_msg_index BEFORE INSERT ON msg_index BEGIN SELECT RAISE(ABORT, 'd1 down'); END");
+    try {
+      ok(await conv().post(input(human("H1"), "see site#k7q2", { refs: A_REF })));
+      const row = () => runInDurableObject(conv(), (_o: Conversation, state) =>
+        state.storage.sql.exec<{ attempts: number; next_at: number }>("SELECT attempts, next_at FROM index_outbox").toArray());
+      expect((await row())[0]!.attempts).toBe(1);
+      for (let i = 0; i < 22; i++) {
+        await runInDurableObject(conv(), async (o: Conversation, state) => {
+          state.storage.sql.exec("UPDATE index_outbox SET next_at = 0");
+          await o.alarm();
+        });
+      }
+      const [stuck] = await row();
+      expect(stuck!.attempts).toBe(23);
+      // The delay stays capped at 10 minutes however many attempts there were.
+      expect(stuck!.next_at).toBeLessThanOrEqual(Date.now() + 600_000);
+    } finally {
+      await env.HUB_DB.exec("DROP TRIGGER fail_msg_index");
+    }
+    await runInDurableObject(conv(), async (o: Conversation, state) => {
+      state.storage.sql.exec("UPDATE index_outbox SET next_at = 0");
+      await o.alarm();
+    });
+    expect((await refs()).results).toEqual([{ target_key: "site#k7q2", rev: 1 }]);
+    expect(await runInDurableObject(conv(), (_o: Conversation, state) => state.storage.sql.exec("SELECT 1 FROM index_outbox").toArray().length)).toBe(0);
+  });
 
   it("backs off a failing row, isolates it from the others, and drops it after the attempt cap", async () => {
     ok(await conv().post(input(human("H1"), "seed")));

@@ -120,19 +120,28 @@ describe("Inbox object", () => {
     expect((await box().reserve(T, "I1", { session_id: "S9", is_agent: false, conversation_id: "C1", now: now + 40 })).ok).toBe(false);
   });
 
-  it("reports the hop of the newest open top-level wake in the conversation", async () => {
+  it("reports the hop of the newest recent top-level wake in the conversation", async () => {
     await box().deliver(T, "I1", [item(1, { hop: 1 }), item(2, { hop: 2, thread_root: "M1" }), item(3, { hop: 0, wake: false, key: "C1:3:I1" })]);
     const r = await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() });
     expect(r).toEqual({ ok: true, wake_hop: 1, thread_wake_hops: { M1: 2 } });
     await box().ack(T, "I1", 3, Date.now());
-    expect(await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() })).toEqual({ ok: true, wake_hop: null, thread_wake_hops: {} });
+    // Acked or not, a wake counts as the cause for 10 minutes (ruling C-4); after that it does not.
+    expect(await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() })).toEqual({ ok: true, wake_hop: 1, thread_wake_hops: { M1: 2 } });
+    expect(await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() + 11 * 60_000 })).toEqual({ ok: true, wake_hop: null, thread_wake_hops: {} });
   });
 
   it("counts refusals in the last hour", async () => {
     const now = Date.now();
-    expect(await box().noteRefusal(T, "I1", now)).toBe(1);
-    expect(await box().noteRefusal(T, "I1", now + 1)).toBe(2);
-    expect(await box().noteRefusal(T, "I1", now + 3_700_000)).toBe(1);
+    expect(await box().noteRefusal(T, "I1", now)).toEqual({ count: 1, tripped: false });
+    expect(await box().noteRefusal(T, "I1", now + 1)).toEqual({ count: 2, tripped: false });
+    expect(await box().noteRefusal(T, "I1", now + 3_700_000)).toEqual({ count: 1, tripped: false });
+  });
+
+  it("trips on the 21st refusal in an hour and starts a fresh window", async () => {
+    const now = Date.now();
+    for (let i = 1; i <= 20; i++) expect((await box().noteRefusal(T, "I1", now + i)).tripped).toBe(false);
+    expect(await box().noteRefusal(T, "I1", now + 21)).toEqual({ count: 21, tripped: true });
+    expect(await box().noteRefusal(T, "I1", now + 22)).toEqual({ count: 1, tripped: false });
   });
 
   it("refuses a request for another binding", async () => {

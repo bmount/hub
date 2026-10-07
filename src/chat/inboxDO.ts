@@ -144,20 +144,24 @@ export class Inbox extends DurableObject<Env> {
     if (!v.ok) return v;
     this.ctx.storage.sql.exec("INSERT INTO stamp (scope, at) VALUES (?, ?), ('identity', ?)", session, q.now, q.now);
     const w = this.#q<{ hop: number }>(
-      "SELECT hop FROM item WHERE wake = 1 AND acked_at IS NULL AND conversation_id = ? AND thread_root IS NULL ORDER BY item_seq DESC LIMIT 1", q.conversation_id,
+      "SELECT hop FROM item WHERE wake = 1 AND created_at > ? AND conversation_id = ? AND thread_root IS NULL ORDER BY item_seq DESC LIMIT 1", q.now - LIMITS.WAKE_HOP_WINDOW_MS, q.conversation_id,
     )[0];
     // Newest open wake per scope: a thread's own wakes, and the wake on its root message (ruling C-4).
     const thread_wake_hops: Record<string, number> = {};
     for (const r of this.#q<{ k: string; hop: number }>(
-      "SELECT COALESCE(thread_root, msg_id) AS k, hop FROM item WHERE wake = 1 AND acked_at IS NULL AND conversation_id = ? ORDER BY item_seq DESC LIMIT 200", q.conversation_id,
+      "SELECT COALESCE(thread_root, msg_id) AS k, hop FROM item WHERE wake = 1 AND created_at > ? AND conversation_id = ? ORDER BY item_seq DESC LIMIT 200", q.now - LIMITS.WAKE_HOP_WINDOW_MS, q.conversation_id,
     )) if (!(r.k in thread_wake_hops)) thread_wake_hops[r.k] = r.hop;
     return { ok: true, wake_hop: w ? w.hop : null, thread_wake_hops };
   }
 
-  async noteRefusal(tenant_id: string, identity_id: string, now: number): Promise<number> {
+  /** Counts a refusal; the one that makes more than 20 in an hour trips the wire and clears the window, so it can trip again after an unmute. */
+  async noteRefusal(tenant_id: string, identity_id: string, now: number): Promise<{ count: number; tripped: boolean }> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
     this.ctx.storage.sql.exec("DELETE FROM refusal WHERE at <= ?", now - 3_600_000);
     this.ctx.storage.sql.exec("INSERT INTO refusal (at) VALUES (?)", now);
-    return this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM refusal")[0]!.n;
+    const count = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM refusal")[0]!.n;
+    const tripped = count > LIMITS.TRIPWIRE_REFUSALS;
+    if (tripped) this.ctx.storage.sql.exec("DELETE FROM refusal");
+    return { count, tripped };
   }
 }

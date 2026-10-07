@@ -20,6 +20,8 @@ export const LIMITS = {
   TRIPWIRE_REFUSALS: 20,
   INBOX_WAIT_MAX_S: 20,
   INBOX_WAITERS_MAX: 8,
+  /** A wake delivered this recently is the cause of an agent's next post, acked or not (ruling C-4). */
+  WAKE_HOP_WINDOW_MS: 10 * 60_000,
   INBOX_LIMIT_MAX: 100,
   INBOX_ACKED_KEEP_MS: 30 * 86_400_000,
   IDEM_TTL_MS: 86_400_000,

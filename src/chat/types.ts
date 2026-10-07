@@ -68,7 +68,8 @@ export type Refusal =
 export type PostOutcome = PostOk | Refusal;
 
 export type ReadQuery = { tenant_id: string; conversation_id: string; after: number | null; before: number | null; thread: string | null; limit: number };
-export type ReadPage = { head: number; found: boolean; root: MsgView | null; messages: MsgView[]; has_more: boolean };
+/** `cursors` (reads after a cursor only): for each message number, the position the read ordered and filtered it by; pass the last one shown as the next `after`. */
+export type ReadPage = { head: number; found: boolean; root: MsgView | null; messages: MsgView[]; has_more: boolean; cursors: Record<number, number> };
 
 export type DigestQuery = { tenant_id: string; conversation_id: string; since: number; me: string; max_items: number };
 export type Digest = {

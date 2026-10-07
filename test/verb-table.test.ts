@@ -115,4 +115,28 @@ describe("verb table", () => {
     const p = getVerb("chat.post")!.parse({ c: "general", body: "hi", author_id: "x", display_name: "x", avatar: "x", handle: "x", session_id: "x" }) as Record<string, unknown>;
     expect(Object.keys(p).sort()).toEqual(["after", "body", "c", "idempotency_key", "refs", "reply_to"]);
   });
+
+  // Table-driven: every chat., channel., inbox. and ref. verb is parsed with a valid input for its own parameters
+  // plus author-like keys; a new verb with a parameter missing from SAMPLE fails here until a sample is added.
+  it("takes no author from the input of any chat, channel, inbox, or ref verb (messaging spec 4.6)", () => {
+    const SAMPLE: Record<string, unknown> = {
+      c: "general", body: "hi", msg: "1", agent: "scout", slug: "general", display_name: "General", topic: "t", policy: "open", kind: "ticket",
+      key: "site#k7q2", through: 1, seq: 1, after: 0, before: 5, limit: 10, wait_s: 1, budget: 500, minutes: 5, reason: "r", reply_to: "1", thread: "1",
+      idempotency_key: "k", refs: [], state: "active", prefix: false,
+    };
+    // Where one name means different things to different verbs.
+    const OVERRIDE: Record<string, Record<string, unknown>> = { "chat.post": { kind: "say" } };
+    const AUTHORISH = ["author", "author_id", "as", "identity", "identity_id", "display_name_override", "session_id", "name_tag", "via", "by", "handle", "avatar", "on_behalf_of"];
+    const planted = Object.fromEntries(AUTHORISH.map((k) => [k, "01PLANTED0000000000000000000"]));
+    const keysDeep = (v: unknown): string[] => (v && typeof v === "object" ? Object.entries(v).flatMap(([k, x]) => [k, ...keysDeep(x)]) : []);
+    const chat = verbs().filter((x) => /^(chat|channel|inbox|ref)\./.test(x.name));
+    expect(chat.length).toBeGreaterThan(15);
+    for (const v of chat) {
+      // `display_name` is a real parameter of channel.create, so it is in SAMPLE; the planted keys are only the ones no verb has.
+      const parsed = v.parse({ ...planted, ...SAMPLE, ...OVERRIDE[v.name] });
+      const leaked = keysDeep(parsed).filter((k) => AUTHORISH.includes(k));
+      expect({ verb: v.name, leaked }).toEqual({ verb: v.name, leaked: [] });
+      expect(JSON.stringify(parsed)).not.toContain("PLANTED");
+    }
+  });
 });

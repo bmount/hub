@@ -5,7 +5,7 @@ import { listAgentsForOperator } from "../db/agents";
 import { MUTE_FOREVER, getControls, listAgentMembers, setAgentMute, type ChannelRow } from "../db/chat";
 import { sha256Hex } from "../ids";
 import { readableChannel } from "./access";
-import { parseBody, parseRefText, type ParsedRef } from "./grammar";
+import { parseBody, parseRefText, type ParsedBody, type ParsedRef } from "./grammar";
 import { people } from "./handles";
 import { readResult } from "./present";
 import { resolveRefs, type Unresolved } from "./refs";
@@ -52,7 +52,10 @@ async function gate(ctx: Ctx, ch: ChannelRow, author: Author): Promise<{ audienc
 
 type Extracted = { resolved: StoredRef[]; unresolved: Unresolved[]; mentions: Mention[]; not_waking: number };
 
-async function extract(ctx: Ctx, body: string, explicit: Array<{ kind: string; key: string }>, me: string): Promise<Extracted> {
+type Structure = { parsed: ParsedBody; all: ParsedRef[] };
+
+/** The checks that need no I/O, run before anything reads D1 or an object: refs and mentions in the text, explicit refs, the ref count. */
+function structure(body: string, explicit: Array<{ kind: string; key: string }>): Structure {
   const parsed = parseBody(body);
   const given: ParsedRef[] = explicit.map((r) => {
     const x = parseRefText(r.kind, r.key);
@@ -61,6 +64,11 @@ async function extract(ctx: Ctx, body: string, explicit: Array<{ kind: string; k
   });
   const all = [...given, ...parsed.refs];
   if (all.length > LIMITS.REFS_MAX) throw badRequest(`at most ${LIMITS.REFS_MAX} references per message`);
+  return { parsed, all };
+}
+
+async function extract(ctx: Ctx, s: Structure, me: string): Promise<Extracted> {
+  const { parsed, all } = s;
   const dir = await people(ctx.db, ctx.tenant!.id);
   if (!dir.get(me)?.active) throw forbidden("only members of this tenant post");
   const { resolved, unresolved } = await resolveRefs(ctx, all);
@@ -71,16 +79,17 @@ async function extract(ctx: Ctx, body: string, explicit: Array<{ kind: string; k
     if (!p) unresolved.push({ kind: "mention", text: `@${h}`, reason: "not_found" });
     else if (p.identity_id !== me) mentioned.push({ identity_id: p.identity_id, kind: p.kind });
   }
-  // Spec 6.5: at most 10 mentions wake; the rest are rendered and reported.
-  const mentions = mentioned.slice(0, LIMITS.WAKING_MENTIONS_MAX);
+  // Spec 6.5: at most 10 agent mentions wake; the rest are rendered and reported. A human's inbox item is never capped.
+  let agents = 0;
+  const mentions = mentioned.filter((m) => m.kind === "human" || ++agents <= LIMITS.WAKING_MENTIONS_MAX);
   return { resolved, unresolved, mentions, not_waking: mentioned.length - mentions.length };
 }
 
 /** Spec 6.5: more than 20 rate or duplicate refusals in an hour mutes the agent tenant-wide and tells its operator. */
 async function noteRefusal(ctx: Ctx, author: Author, ch: ChannelRow): Promise<void> {
   if (author.kind !== "agent") return;
-  const n = await inboxStub(ctx.env, ch.tenant_id, author.id).noteRefusal(ch.tenant_id, author.id, ctx.now);
-  if (n !== LIMITS.TRIPWIRE_REFUSALS + 1) return;
+  const { count: n, tripped } = (await inboxStub(ctx.env, ch.tenant_id, author.id).noteRefusal(ch.tenant_id, author.id, ctx.now)) as { count: number; tripped: boolean };
+  if (!tripped) return;
   await setAgentMute(ctx.db, ch.tenant_id, author.id, MUTE_FOREVER, null, "tripwire");
   await recordEvent(ctx.db, {
     tenant_id: ch.tenant_id, identity_id: author.id, session_id: author.session_id, kind: "chat.tripwire", target_kind: "identity", target_id: author.id,
@@ -89,7 +98,7 @@ async function noteRefusal(ctx: Ctx, author: Author, ch: ChannelRow): Promise<vo
   const op = ctx.identity!.operator_id;
   if (op) {
     await inboxStub(ctx.env, ch.tenant_id, op).deliver(ch.tenant_id, op, [{
-      key: `tripwire:${author.id}:${Math.floor(ctx.now / 3_600_000)}`, kind: "tripwire", conversation_id: ch.project_id, seq: 0, msg_id: "", thread_root: null,
+      key: `tripwire:${author.id}:${ctx.now}`, kind: "tripwire", conversation_id: ch.project_id, seq: 0, msg_id: "", thread_root: null,
       hop: 0, author_id: author.id, wake: false, created_at: ctx.now,
     }]);
   }
@@ -143,9 +152,19 @@ async function events(ctx: Ctx, ch: ChannelRow, author: Author, o: PostOk, kind:
   }
 }
 
+/** The message is committed by now: a failed event write is logged (name only, never text) and must not turn the success into a 500. */
+async function safeEvents(ctx: Ctx, ch: ChannelRow, author: Author, o: PostOk, kind: "chat.post" | "chat.edit" | "chat.retract"): Promise<void> {
+  try {
+    await events(ctx, ch, author, o, kind);
+  } catch (e) {
+    console.log("chat event write failed", e instanceof Error ? e.name : "error");
+  }
+}
+
 export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> {
   const author = authorOf(ctx);
   if (p.after === null && needsAfter(author)) throw badRequest("after is required: pass the head from chat.read or chat.catchup");
+  const shape = structure(p.body, p.refs);
   const ch = await readableChannel(ctx, p.c);
   const conv = conversationStub(ctx.env, ch.tenant_id, ch.project_id);
   if (p.idempotency_key) {
@@ -153,7 +172,7 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
     if (prior) return result(ch, prior, [], 0);
   }
   const { audience, policy } = await gate(ctx, ch, author);
-  const x = await extract(ctx, p.body, p.refs, author.id);
+  const x = await extract(ctx, shape, author.id);
   const reserve = (await inboxStub(ctx.env, ch.tenant_id, author.id).reserve(ch.tenant_id, author.id, {
     session_id: author.session_id, is_agent: author.kind === "agent", conversation_id: ch.project_id, now: ctx.now,
   })) as ReserveResult;
@@ -166,7 +185,7 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
     after: p.after, reply_to: p.reply_to, refs: x.resolved, mentions: x.mentions, wake_hop: reserve.wake_hop, thread_wake_hops: reserve.thread_wake_hops, idempotency_key: p.idempotency_key, audience,
   })) as PostOutcome;
   if (o.refused !== null) throw await refusalError(ctx, author, ch, o);
-  await events(ctx, ch, author, o, "chat.post");
+  await safeEvents(ctx, ch, author, o, "chat.post");
   return result(ch, o, x.unresolved, x.not_waking);
 }
 
@@ -175,6 +194,7 @@ export async function versionMessage(ctx: Ctx, p: VersionParams): Promise<PostRe
   const author = authorOf(ctx);
   const retract = p.body === null;
   if (!retract && p.after === null && needsAfter(author)) throw badRequest("after is required: pass the head from chat.read");
+  const shape = retract ? null : structure(p.body!, []);
   const ch = await readableChannel(ctx, p.c);
   const conv = conversationStub(ctx.env, ch.tenant_id, ch.project_id);
   if (p.idempotency_key) {
@@ -182,7 +202,17 @@ export async function versionMessage(ctx: Ctx, p: VersionParams): Promise<PostRe
     if (prior) return result(ch, prior, [], 0);
   }
   await gate(ctx, ch, author);
-  const x: Extracted = retract ? { resolved: [], unresolved: [], mentions: [], not_waking: 0 } : await extract(ctx, p.body!, [], author.id);
+  // An agent's edits and retractions count against its per-session window like its posts, so edit loops are limited too.
+  if (author.kind === "agent") {
+    const reserve = (await inboxStub(ctx.env, ch.tenant_id, author.id).reserve(ch.tenant_id, author.id, {
+      session_id: author.session_id, is_agent: true, conversation_id: ch.project_id, now: ctx.now,
+    })) as ReserveResult;
+    if (!reserve.ok) {
+      await noteRefusal(ctx, author, ch);
+      throw new HubError(429, "rate", `retry after ${reserve.retry_after_s} s`, { retry_after: reserve.retry_after_s });
+    }
+  }
+  const x: Extracted = shape ? await extract(ctx, shape, author.id) : { resolved: [], unresolved: [], mentions: [], not_waking: 0 };
   const operatorOf = author.kind === "human"
     ? (await listAgentsForOperator(ctx.db, author.id)).filter((a) => a.tenant.id === ch.tenant_id).map((a) => a.identity.id)
     : [];
@@ -192,6 +222,6 @@ export async function versionMessage(ctx: Ctx, p: VersionParams): Promise<PostRe
     operator_of: operatorOf, is_admin: rank(ctx.role) >= rank("admin"), idempotency_key: p.idempotency_key,
   })) as PostOutcome;
   if (o.refused !== null) throw await refusalError(ctx, author, ch, o);
-  await events(ctx, ch, author, o, retract ? "chat.retract" : "chat.edit");
+  await safeEvents(ctx, ch, author, o, retract ? "chat.retract" : "chat.edit");
   return result(ch, o, x.unresolved, x.not_waking);
 }

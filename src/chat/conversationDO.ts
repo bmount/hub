@@ -375,7 +375,7 @@ export class Conversation extends DurableObject<Env> {
     if (q.thread !== null) {
       root = this.#msg(q.thread);
       if (root && root.thread_root) root = this.#msg(root.thread_root);
-      if (!root) return { head, found: false, root: null, messages: [], has_more: false };
+      if (!root) return { head, found: false, root: null, messages: [], has_more: false, cursors: {} };
     }
     const cond = [root ? "m.thread_root = ?" : "m.thread_root IS NULL"];
     const args: SqlStorageValue[] = root ? [root.msg_id] : [];
@@ -391,11 +391,19 @@ export class Conversation extends DurableObject<Env> {
       cond.push("m.first_seq < ?");
       args.push(q.before);
     }
-    const rows = this.#q<MsgRow>(`${MSG_SELECT} WHERE ${cond.join(" AND ")} ORDER BY m.first_seq ${order} LIMIT ?`, ...args, q.limit + 1);
+    // After a cursor the page is ordered and limited by the very expression it was filtered on, so the last message's
+    // `touched` is a cursor that neither skips nor repeats anything. Otherwise it is the message number.
+    const sortBy = q.after !== null ? "touched" : "m.first_seq";
+    const rows = this.#q<MsgRow & { touched: number }>(
+      `${MSG_SELECT.replace("SELECT m.*,", `SELECT m.*, ${touched} AS touched,`)} WHERE ${cond.join(" AND ")} ORDER BY ${sortBy} ${order}, m.first_seq ${order} LIMIT ?`,
+      ...args, q.limit + 1,
+    );
     const has_more = rows.length > q.limit;
     const page = rows.slice(0, q.limit);
     if (order === "DESC") page.reverse();
-    return { head, found: true, root: root ? this.#view(root) : null, messages: page.map((r) => this.#view(r)), has_more };
+    const cursors: Record<number, number> = {};
+    if (q.after !== null) for (const r of page) cursors[r.first_seq] = r.touched;
+    return { head, found: true, root: root ? this.#view(root) : null, messages: page.map((r) => this.#view(r)), has_more, cursors };
   }
 
   async getMessage(tenant_id: string, conversation_id: string, ref: string): Promise<MsgView | null> {
@@ -457,10 +465,11 @@ export class Conversation extends DurableObject<Env> {
     return Math.min(LIMITS.OUTBOX_BACKOFF_BASE_MS * 2 ** Math.max(0, attempts - 1), LIMITS.OUTBOX_BACKOFF_MAX_MS);
   }
 
-  /** One row failed: retry later with a capped exponential backoff, and give up on it after OUTBOX_MAX_ATTEMPTS. */
+  /** One row failed: retry later with a capped exponential backoff; a wake is given up on after OUTBOX_MAX_ATTEMPTS, an index row never. */
   #fail(table: OutboxTable, col: "key" | "seq", id: string | number, attempts: number, now: number): void {
     const n = attempts + 1;
-    if (n >= LIMITS.OUTBOX_MAX_ATTEMPTS) {
+    // Only wakes are given up on; an index row is the record of a committed message and retries at the capped backoff for as long as it takes.
+    if (table === "inbox_outbox" && n >= LIMITS.OUTBOX_MAX_ATTEMPTS) {
       console.log(`${table} row dropped after ${n} attempts`);
       this.#run(`DELETE FROM ${table} WHERE ${col} = ?`, id);
       return;

@@ -33,8 +33,10 @@ describe("loop limits end to end", () => {
       const { agent, other } = turns[i % 2]!;
       const id = agent.agent.identity.id;
       const box = inboxStub(env, w.acme.id, id);
-      // Acking first means no open wake is the cause, so every post has hop 1 and the hop limit never fires.
+      // With no recent wake as the cause every post has hop 1, so the hop limit never fires and the pair breaker must.
       await box.ack(w.acme.id, id, (await box.head(w.acme.id, id)), Date.now());
+      // And the wake is older than the 10-minute window (ruling C-4), so it no longer counts as the cause.
+      await runInDurableObject(box, (_o, state) => { state.storage.sql.exec("UPDATE item SET created_at = 0"); });
       last = await ok(agent.token, "chat.post", { c: "general", body: `@${other} turn ${i}`, after: head });
       head = last.head;
       expect(last.hop).toBe(1);
@@ -70,6 +72,20 @@ describe("loop limits end to end", () => {
     expect((await inboxOf(w, w.lead.identity.id)).map((i) => i.kind)).toEqual(["tripwire"]);
     expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'chat.tripwire'").first<{ n: number }>())!.n).toBe(1);}, 30_000);
 
+  it("trips again after an unmute: 21 more refusals mute the agent and write a second tripwire event (C-I1)", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const head = (await ok(w.scout.token, "chat.post", { c: "general", body: "same", after: 0 })).head;
+    const refuse = async () => { for (let i = 0; i < 21; i++) expect([409, 429]).toContain((await call(w.scout.token, "chat.post", { c: "general", body: "same", after: head })).status); };
+    await refuse();
+    expect((await call(w.scout.token, "chat.post", { c: "general", body: "new", after: head })).body.error).toBe("muted");
+    await ok(w.lead.token, "chat.agent_unmute", { agent: "scout" });
+    await refuse();
+    expect((await call(w.scout.token, "chat.post", { c: "general", body: "new", after: head })).body.error).toBe("muted");
+    expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'chat.tripwire'").first<{ n: number }>())!.n).toBe(2);
+    expect((await inboxOf(w, w.lead.identity.id)).map((i) => i.kind)).toEqual(["tripwire", "tripwire"]);
+  }, 30_000);
+
   it("never wakes an agent removed from the channel through an old thread subscription", async () => {
     const w = await chatWorld();
     await channelWith(w);
@@ -95,6 +111,21 @@ describe("loop limits and wakes: fix wave", () => {
     expect((await inboxOf(w, w.tidy.agent.identity.id)).filter((i) => i.wake).map((i) => i.seq)).toEqual([1, 2]);
     const ev = await env.HUB_DB.prepare("SELECT summary FROM event WHERE kind = 'chat.wake_suppressed'").all<{ summary: string }>();
     expect(ev.results.map((e) => e.summary)).toEqual(["1 wakes suppressed at hop 3 in #general"]);
+  });
+
+  it("acking a wake does not reset the chain: the hop limit is still reached (C-4 gap)", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const ackAll = async (id: string) => { const box = inboxStub(env, w.acme.id, id); await box.ack(w.acme.id, id, await box.head(w.acme.id, id), Date.now()); };
+    const root = await ok(w.lead.token, "chat.post", { c: "general", body: "@scout @tidy please look" });
+    await ackAll(w.scout.agent.identity.id);
+    const a = await ok(w.scout.token, "chat.post", { c: "general", body: "@tidy on it", after: root.head, reply_to: root.seq });
+    await ackAll(w.tidy.agent.identity.id);
+    const b = await ok(w.tidy.token, "chat.post", { c: "general", body: "@scout done here", after: a.head, reply_to: root.seq });
+    await ackAll(w.scout.agent.identity.id);
+    const c = await ok(w.scout.token, "chat.post", { c: "general", body: "@tidy and more", after: b.head, reply_to: root.seq });
+    expect([a.hop, b.hop, c.hop]).toEqual([1, 2, 3]);
+    expect((await inboxOf(w, w.tidy.agent.identity.id)).filter((i) => i.wake).map((i) => i.seq)).toEqual([1, 2]);
   });
 
   it("skips wakes at delivery for a muted agent, the kill switch, and a muted channel; notifications still arrive", async () => {
