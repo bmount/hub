@@ -11,7 +11,8 @@ account can be rebuilt and audited. Secrets come from the macOS Keychain and are
 
 Keychain items (service names):
   pimwell-cloudflare-bootstrap  a short-lived token that can create tokens; delete it after use
-  pimwell-cloudflare-deploy     the scoped deploy token used by deploys, agents, and CI
+  pimwell-cloudflare-dev        token pimwell-001: the developer + deploy credential used by
+                                humans, deploy agents and (later) the self-modifying hub
 """
 import json, subprocess, sys, urllib.request, urllib.error, datetime
 
@@ -19,7 +20,7 @@ API = "https://api.cloudflare.com/client/v4"
 ACCOUNT_ID = "f48d61ea6cf57096b3f7bcb02fa0c3e5"
 ZONE = "pimwell.com"
 BOOTSTRAP = "pimwell-cloudflare-bootstrap"
-DEPLOY = "pimwell-cloudflare-deploy"
+DEPLOY = "pimwell-cloudflare-dev"  # token pimwell-001: developer + deploy
 
 # What a pimwell deploy needs, by permission-group name. Account-scoped unless marked zone.
 ACCOUNT_GROUPS = [
@@ -83,7 +84,7 @@ def zone_id(token):
 
 
 def whoami():
-    for service, label in [(DEPLOY, "deploy"), (BOOTSTRAP, "bootstrap")]:
+    for service, label in [(DEPLOY, "pimwell-001"), (BOOTSTRAP, "bootstrap")]:
         t = keychain_get(service)
         if not t:
             print(f"{label}: not in Keychain")

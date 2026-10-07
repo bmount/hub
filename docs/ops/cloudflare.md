@@ -6,33 +6,27 @@ Everything pimwell needs from Cloudflare, who can change it, and how it was set 
 
 | Credential | Lives in | Can do | Used by |
 | --- | --- | --- | --- |
-| `pimwell-deploy` API token | macOS Keychain `pimwell-cloudflare-deploy`; CI secret `CLOUDFLARE_API_TOKEN` | Workers, routes, custom domains, D1, KV, R2, Email Routing and Sending, DNS on pimwell.com only | deploys, deploy agents, `scripts/cf/cf.py` |
-| bootstrap token | Keychain `pimwell-cloudflare-bootstrap`, deleted after use | create tokens | `cf.py make-deploy-token`, once |
-| personal wrangler login | `~/Library/Preferences/.wrangler` | everything the owner can do, no DNS write | not used by pimwell once the deploy token exists |
+| `pimwell-001` (Cloudflare user API token, id `52f2e643…`) | macOS Keychain `pimwell-cloudflare-dev`; CI secret `CLOUDFLARE_API_TOKEN` when CI exists | Workers, routes, custom domains, D1, KV, R2, Email Routing and Sending, DNS on pimwell.com | every deploy and migration (`npm run deploy`, `npm run migrate:remote`, `npm run cf -- <wrangler args>`), deploy agents, `scripts/cf/cf.py` |
+| personal wrangler login | `~/Library/Preferences/.wrangler` | everything the owner can do, no DNS write | nothing in pimwell since 2026-10-06 |
 
-The deploy token is scoped to the one account and, for DNS, to the pimwell.com zone. It expires after a year; rotate by running `make-deploy-token` again with a fresh bootstrap token.
+`pimwell-001` is the developer + deploy credential. The owner created it in the dashboard on 2026-10-06; it expires 2035-10-02. It is user-owned, so it acts as the owner within its permissions. The plaintext copy the owner handed over was moved into the Keychain and deleted.
 
-## One-time setup (owner)
+The hub is meant to become self-modifying. When it does, the running hub should not hold `pimwell-001`: give it a separate, narrower token (deploy its own Worker only, no DNS, no D1 schema changes without review) so a compromised or misbehaving hub cannot rewrite the account. That token does not exist yet.
 
-1. In the Cloudflare dashboard, open My Profile, API Tokens, Create Token, and use the template "Create Additional Tokens". Give it a short expiry (a day is plenty). Copy the value.
-2. Store it in the Keychain without echoing it (copy the token to the clipboard first):
+### Replacing or rotating `pimwell-001`
 
-       security add-generic-password -a pimwell -s pimwell-cloudflare-bootstrap -w "$(pbpaste)"
+- Roll it in the dashboard (My Profile, API Tokens, the token, Roll), then store the new value:
 
-3. Mint the deploy token and add the wildcard record:
+      security add-generic-password -U -a pimwell -s pimwell-cloudflare-dev -w "$(pbpaste)"
 
-       python3 scripts/cf/cf.py make-deploy-token
-       python3 scripts/cf/cf.py dns-wildcard
-       python3 scripts/cf/cf.py audit
+- Or mint a fresh one from a short-lived "Create Additional Tokens" token with `python3 scripts/cf/cf.py make-deploy-token` (stores into the same Keychain item).
+- `python3 scripts/cf/cf.py whoami` shows which token is in use, its status and expiry.
 
-4. Delete the bootstrap token in the dashboard and from the Keychain:
+## Deploying
 
-       security delete-generic-password -a pimwell -s pimwell-cloudflare-bootstrap
-
-## Deploying as the deploy token
-
-    scripts/cf/with-deploy-token.sh npx wrangler deploy
-    scripts/cf/with-deploy-token.sh npx wrangler d1 migrations apply HUB_DB --remote
+    npm run deploy                         # wrangler deploy as pimwell-001
+    npm run migrate:remote                 # D1 migrations as pimwell-001
+    npm run cf -- <any wrangler command>   # e.g. npm run cf -- tail
 
 ## What is configured, and where it came from
 

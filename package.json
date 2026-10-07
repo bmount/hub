@@ -8,8 +8,9 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "migrate:local": "wrangler d1 migrations apply HUB_DB --local",
-    "migrate:remote": "wrangler d1 migrations apply HUB_DB --remote",
-    "deploy": "wrangler deploy"
+    "migrate:remote": "scripts/cf/with-deploy-token.sh wrangler d1 migrations apply HUB_DB --remote",
+    "deploy": "scripts/cf/with-deploy-token.sh wrangler deploy",
+    "cf": "scripts/cf/with-deploy-token.sh wrangler"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.2",
