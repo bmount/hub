@@ -56,17 +56,22 @@ export async function createAgent(
   const email = agentAddress(slug, input.tenant.slug, input.hubDomain);
   const identity: Identity = { id: ulid(now), kind: "agent", display_name, is_root: 0, email, operator_id: input.operator_id, state: "active", created_at: now };
   const membership: Membership = { id: ulid(now), identity_id: identity.id, tenant_id: input.tenant.id, role: input.role, state: "active", created_at: now };
+  let made: D1Result[];
   try {
-    await db.batch([
-      db.prepare("INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) VALUES (?, 'agent', ?, 0, ?, ?, 'active', ?)")
-        .bind(identity.id, display_name, email, input.operator_id, now),
-      db.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, ?, 'active', ?)")
-        .bind(membership.id, identity.id, input.tenant.id, input.role, now),
+    made = await db.batch([
+      // Projects and helpers share one name space per organization (mailboxes spec, amendment 2026-10-07 b); the check
+      // is inside the insert, so a project created at the same moment cannot also win the name.
+      db.prepare(`INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) SELECT ?, 'agent', ?, 0, ?, ?, 'active', ?
+        WHERE NOT EXISTS (SELECT 1 FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel')`)
+        .bind(identity.id, display_name, email, input.operator_id, now, input.tenant.id, slug),
+      db.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) SELECT ?, ?, ?, ?, 'active', ? WHERE EXISTS (SELECT 1 FROM identity WHERE id = ?)")
+        .bind(membership.id, identity.id, input.tenant.id, input.role, now, identity.id),
     ]);
   } catch (e) {
     if (String(e).includes("UNIQUE")) throw conflict("agent slug taken in this tenant");
     throw e;
   }
+  if (made[0]!.meta.changes !== 1) throw conflict(`"${slug}" is the name of a project in this organization; choose another helper name`);
   return { identity, membership, tenant: input.tenant, slug };
 }
 
