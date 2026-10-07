@@ -55,7 +55,9 @@ describe("ref and mention grammar", () => {
   it("collects mentions once, separates broadcasts, and never reads addresses", () => {
     expect(parseBody("@lead and @scout, @scout again; not dev@example.com; @here @channel.\n@tidy.").handles).toEqual(["lead", "scout", "tidy"]);
     expect(parseBody("@here @channel @all @everyone").broadcasts).toEqual(["here", "channel", "all", "everyone"]);
-    expect(parseBody("@Lead @x @a-very-long-handle-that-is-over-24").handles).toEqual([]);
+    expect(parseBody("@Lead @x @a-very-long-handle-that-is-over-24").handles).toEqual(["lead"]);
+    expect(parseBody("@Scout @SCOUT @scout & @HERE").handles).toEqual(["scout"]);
+    expect(parseBody("@HERE").broadcasts).toEqual(["here"]);
   });
 
   it("blanks code without moving positions", () => {

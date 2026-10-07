@@ -16,7 +16,8 @@ const COMMIT = new RegExp(`${LEAD}(?:commit:)?(${NAME})@([0-9a-f]{7,40})(?![0-9A
 const TICKET = new RegExp(`${LEAD}(?:ticket:)?(${NAME})#([a-z0-9]{4,16})(?![0-9A-Za-z_-])`, "g");
 const SESSION = new RegExp(`${LEAD}session:(${ULID})(?![0-9A-Za-z])`, "g");
 const MSG = new RegExp(`${LEAD}msg:(?:(${NAME})/(\\d{1,9})|(${ULID}))(?![0-9A-Za-z])`, "g");
-const MENTION = /(?<![A-Za-z0-9_@./-])@([a-z][a-z0-9-]{1,23})(?![a-z0-9-]|\.[A-Za-z0-9]|@)/g;
+// Handles are lowercase; a mention is read case-insensitively and folded (`@Scout` mentions scout).
+const MENTION = /(?<![A-Za-z0-9_@./-])@([A-Za-z][A-Za-z0-9-]{1,23})(?![A-Za-z0-9-]|\.[A-Za-z0-9]|@)/g;
 // A backtick fence takes no backtick in its info string (CommonMark); "```a`` x" is a code span, not a fence.
 const FENCE = /^ {0,3}(`{3,}(?![^\n]*`)|~{3,})/;
 
@@ -32,7 +33,11 @@ function blankSpans(text: string, blank: (m: string) => string): string {
   }
   // Runs by length, in order; each opener takes the first later run of its length. Linear overall.
   const byLen = new Map<number, number[]>();
-  runs.forEach((r, idx) => byLen.set(r.len, [...(byLen.get(r.len) ?? []), idx]));
+  runs.forEach((r, idx) => {
+    const list = byLen.get(r.len);
+    if (list) list.push(idx);
+    else byLen.set(r.len, [idx]);
+  });
   const cursor = new Map<number, number>();
   let out = "";
   let pos = 0;
@@ -111,7 +116,7 @@ export function parseBody(body: string): ParsedBody {
   const handles: string[] = [];
   const broadcasts: string[] = [];
   for (const m of text.matchAll(MENTION)) {
-    const h = m[1]!;
+    const h = m[1]!.toLowerCase();
     const list = BROADCAST.has(h) ? broadcasts : handles;
     if (!list.includes(h)) list.push(h);
   }
