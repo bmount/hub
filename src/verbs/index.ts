@@ -1,3 +1,4 @@
+import { appApprove, appList, appRegister, deployList, deployRecord, traceList, traceRead } from "./apps";
 import { modelPriceSet, usageReport, usageSummary } from "./usage";
 import { attentionDone, attentionList, workComment, workSubscribe } from "./collab";
 import { memberRemove, memberSetRole } from "./member";
@@ -38,6 +39,7 @@ export function registerAllVerbs(): void {
     memberSetRole, memberRemove,
     workComment, workSubscribe, attentionList, attentionDone,
     usageReport, usageSummary, modelPriceSet,
+    appRegister, appApprove, appList, traceList, traceRead, deployList, deployRecord,
     skillList, skillRead, capabilities, projectHistory,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,

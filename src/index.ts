@@ -1,3 +1,7 @@
+import { onboardBody } from "./skills/onboard";
+import { adminAppsPage, appsPage } from "./http/appsPages";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { ingest } from "./apps/ingest";
 import { usagePage } from "./http/usagePages";
 import { assetResponse } from "./assets";
 import { page } from "./html";
@@ -70,6 +74,8 @@ app.use("*", async (c, next) => {
 const workerCtx = (c: unknown): ExecutionContext => c as ExecutionContext;
 
 app.get("/healthz", (c) => c.text("ok"));
+// What an agent reads when its person says "set up pimwell.com" (skill: onboard). Public: it holds no secrets.
+app.get("/setup", (c) => new Response(`# Set up Pimwell\n\n${onboardBody(c.env.HUB_DOMAIN)}\n`, { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" } }));
 app.get("/assets/:file", (c) => assetResponse(new URL(c.req.url).pathname));
 app.get("/signed-out", (c) => c.html(page("Signed out", `<h1>You're signed out</h1><p><a href="https://${c.env.HUB_DOMAIN}/login">Sign in again</a></p>`)));
 app.get("/privacy", () => privacyPage());
@@ -103,6 +109,8 @@ app.get("/docket", (c) => orgDocketPage(c.req.raw, c.env));
 app.get("/new", (c) => newWorkPage(c.req.raw, c.env));
 app.get("/attention", (c) => attentionPage(c.req.raw, c.env));
 app.get("/usage", (c) => usagePage(c.req.raw, c.env));
+app.get("/apps", (c) => appsPage(c.req.raw, c.env));
+app.get("/admin/apps", (c) => adminAppsPage(c.req.raw, c.env));
 app.get("/jump", (c) => jumpPage(c.req.raw, c.env));
 app.get("/planned", (c) => plannedPage(c.req.raw, c.env, null));
 app.get("/planned/:area", (c) => plannedPage(c.req.raw, c.env, c.req.param("area")));
@@ -132,3 +140,10 @@ app.notFound(() => notFoundPage());
 app.get("/:project", (c) => projectPage(c.req.raw, c.env, c.req.param("project")));
 
 export default { fetch: app.fetch, email: handleEmail } satisfies ExportedHandler<Env>;
+
+/** App telemetry from pimwell-tail (src/apps/ingest.ts). An RPC entrypoint: callable only through a service binding. */
+export class Ingest extends WorkerEntrypoint<Env> {
+  async events(batch: unknown): Promise<{ accepted: number; dropped: number }> {
+    return ingest(this.env, batch, Date.now());
+  }
+}

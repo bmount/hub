@@ -4,7 +4,7 @@ import type { Ctx } from "../auth/context";
 import { rank } from "../auth/context";
 import type { Shell } from "../html";
 
-export type Section = "home" | "usage" | "attention" | "docket" | "mine" | "mail" | "chat" | "people" | "admin" | "account" | "hub" | "project" | "playground" | "planned" | "new";
+export type Section = "home" | "apps" | "usage" | "attention" | "docket" | "mine" | "mail" | "chat" | "people" | "admin" | "account" | "hub" | "project" | "playground" | "planned" | "new";
 
 // Short reminders that the old way is not required any more. One per page, chosen by page, so it rotates.
 export const TIPS = [
@@ -40,6 +40,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
       link("/c", "Conversations", "chat"),
       link("/people", "People and agents", "people"),
       link("/playground", "Playground", "playground"),
+      link("/apps", "Apps", "apps"),
       link("/usage", "AI usage", "usage"),
       ...(rank(ctx.role) >= rank("admin") ? [link("/admin/agents", "Admin", "admin")] : []),
     ];
@@ -60,7 +61,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
     { href: "/", label: "Your organizations", section: "home" },
     { href: "/me", label: "Account", section: "account" },
     { href: "/me/sessions", label: "Sessions", section: "hub" },
-    ...(ctx.identity.is_root === 1 ? [{ href: "/admin/orgs", label: "Hub admin", section: "admin" }] : []),
+    ...(ctx.identity.is_root === 1 ? [{ href: "/admin/orgs", label: "Hub admin", section: "admin" }, { href: "/admin/apps", label: "Apps to approve", section: "apps" }] : []),
   ];
   return { brandHref: hub, org: null, me, tip: tipFor(key), nav: nav.map((n) => ({ href: n.href, label: n.label, active: n.section === active })) };
 }
@@ -69,6 +70,5 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
 export const PLANNED_LINKS = [
   { href: "/planned/review", label: "Reviews", key: "review" },
   { href: "/planned/code", label: "Code", key: "code" },
-  { href: "/planned/traces", label: "Traces and deploys", key: "traces" },
   { href: "/planned", label: "Everything coming", key: "all" },
 ];

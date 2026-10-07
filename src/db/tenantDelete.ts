@@ -5,6 +5,7 @@ import { badRequest, conflict, notFound } from "../errors";
 /** Tables holding rows that belong to one tenant, children before parents. */
 const TENANT_TABLES = [
   "attention", "follow", "work_comment",
+  "app_event", "app_error_group", "app_deploy", "app_stat", "app_source",
   "msg_ref", "msg_index", "conversation_member", "agent_chat_state", "chat_control", "channel",
   "model_call", "model_route", "provider_credential", "signin_grant",
   "event", "oauth_grant", "api_token", "invite", "consent",

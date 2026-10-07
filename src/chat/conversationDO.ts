@@ -209,6 +209,12 @@ export class Conversation extends DurableObject<Env> {
     this.#run("INSERT OR IGNORE INTO inbox_outbox (key, identity_id, item_json) VALUES (?, ?, ?)", full.key, identity_id, JSON.stringify(full));
   }
 
+  /** Pimwell's own notice (app telemetry on #<project>-ops): a system message; nobody is woken. */
+  async notice(tenant_id: string, conversation_id: string, body: string, now: number): Promise<{ seq: number; msg_id: string }> {
+    this.#bind(tenant_id, conversation_id);
+    return this.ctx.storage.transactionSync(() => this.#system(body, null, {}, now));
+  }
+
   async head(tenant_id: string, conversation_id: string): Promise<number> {
     this.#bind(tenant_id, conversation_id);
     return this.#head();

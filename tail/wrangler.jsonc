@@ -1,0 +1,11 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  // The tail consumer for apps in this account (docs/superpowers/specs/2026-10-07-app-telemetry-and-agent-mail-design.md).
+  // Deploy: npm run deploy:tail. No routes and no workers.dev URL: it can only be reached as a tail consumer.
+  "name": "pimwell-tail",
+  "main": "index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": false,
+  "services": [{ "binding": "HUB", "service": "pimwell-hub", "entrypoint": "Ingest" }],
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } }
+}

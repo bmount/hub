@@ -129,3 +129,29 @@ them, replies go through the Email Service REST API from the Worker, with a scop
 2. A1 and A3: tail worker, redaction, mapping, Traces, deploys, ops-channel posts.
 3. A2: health probes.
 4. B3: outbound mail behind the gate, after the DNS records.
+
+## Built (2026-10-07)
+
+Owner decisions:
+- **Plan:** the account is on Workers Paid.
+- **App changes:** no edits to other repositories. An onboard skill (served at /setup) tells each person's agent how to
+  instrument their apps.
+- **Golden-rule window:** 30 days.
+- **Sending:** already set up. Email Service sending has been enabled for pimwell.com since 2026-10-06, with return
+  path cf-bounce.pimwell.com and DKIM selector cf-bounce, both confirmed through the API and DNS.
+
+What was built:
+- **A1, logs and exceptions:**
+  - `pimwell-tail` (tail/, `npm run deploy:tail`), redaction in `src/apps/redact.ts`, and the hub's `Ingest` RPC
+    entrypoint with `src/apps/ingest.ts`;
+  - error groups, hourly stats and #<project>-ops notices;
+  - app AI usage lines, which join the usage ledger.
+- **Registration (changed from the draft):** `app_register` (member) is approved by root at /admin/apps, and is
+  automatic when root registers. This replaces the draft's log-line proof: a script name is account-wide, so mapping
+  one to an organization is the account owner's call.
+- **A3, deploys:** recorded from tail script versions, with `deploy_record` for anything else.
+- **A2, health probes: not yet.** Health is read from the tail stream (requests and errors per hour) until apps export
+  `PimwellProbe`.
+- **A4, Pimwell itself: not a tail producer.** Its own Ingest calls would loop.
+- **B1, addresses and inbound mail:** done.
+- **B3, outbound mail:** next.

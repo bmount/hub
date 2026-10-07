@@ -2,6 +2,8 @@
 // through the skill tools for clients without resource support, and as pages at /skills. Keep each one short: an
 // agent should learn it in a few hundred tokens.
 
+import { onboardSkill } from "./onboard";
+
 export type Skill = { name: string; title: string; summary: string; body: string };
 
 export const SKILLS: Skill[] = [
@@ -111,6 +113,7 @@ If the record doesn't show something, say so plainly instead of guessing. Never 
 - Commit often, link commits to items, and keep the record honest.
 - Never paper over a failure with a workaround. Report it and use the real path.`,
   },
+  onboardSkill("pimwell.com"),
 ];
 
 export function skill(name: string): Skill | null {
