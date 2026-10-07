@@ -48,19 +48,30 @@ export function getWorkByNumber(db: D1Database, project_id: string, number: numb
   return db.prepare("SELECT * FROM work_item WHERE project_id = ? AND number = ?").bind(project_id, number).first<WorkItem>();
 }
 
-export async function listWork(
-  db: D1Database, tenant_id: string,
-  f: { project_id?: string | null; kinds?: WorkKind[]; states?: WorkState[]; owner_id?: string | null; parent_id?: string | null; limit: number; before?: number | null },
-): Promise<WorkItem[]> {
+export type WorkFilter = {
+  project_id?: string | null; kinds?: WorkKind[]; states?: WorkState[]; owner_id?: string | null; parent_id?: string | null; limit: number; before?: number | null;
+  /** Owner by email, resolved inside the query so a filtered page stays one round trip. */
+  owner_email?: string | null;
+  /** Quest by its number in `project_id`, resolved inside the query. */
+  parent_number?: number | null;
+};
+
+/** The Docket query as a statement, so pages can put it in a batch. */
+export function listWorkStatement(db: D1Database, tenant_id: string, f: WorkFilter): D1PreparedStatement {
   const where = ["tenant_id = ?"]; const args: unknown[] = [tenant_id];
   if (f.project_id) { where.push("project_id = ?"); args.push(f.project_id); }
   if (f.kinds?.length) { where.push(`kind IN (${f.kinds.map(() => "?").join(",")})`); args.push(...f.kinds); }
   if (f.states?.length) { where.push(`state IN (${f.states.map(() => "?").join(",")})`); args.push(...f.states); }
   if (f.owner_id) { where.push("owner_id = ?"); args.push(f.owner_id); }
+  if (f.owner_email) { where.push("owner_id = (SELECT id FROM identity WHERE email = ?)"); args.push(f.owner_email.trim().toLowerCase()); }
   if (f.parent_id) { where.push("parent_id = ?"); args.push(f.parent_id); }
+  if (f.parent_number && f.project_id) { where.push("parent_id = (SELECT id FROM work_item WHERE project_id = ? AND number = ?)"); args.push(f.project_id, f.parent_number); }
   if (f.before) { where.push("updated_at < ?"); args.push(f.before); }
-  const r = await db.prepare(`SELECT * FROM work_item WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, id DESC LIMIT ?`).bind(...args, f.limit).all<WorkItem>();
-  return r.results;
+  return db.prepare(`SELECT * FROM work_item WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, id DESC LIMIT ?`).bind(...args, f.limit);
+}
+
+export async function listWork(db: D1Database, tenant_id: string, f: WorkFilter): Promise<WorkItem[]> {
+  return (await listWorkStatement(db, tenant_id, f).all<WorkItem>()).results;
 }
 
 export async function updateWork(
@@ -102,8 +113,12 @@ export async function linkWork(db: D1Database, item: WorkItem, input: { target_k
   return row;
 }
 
+export function listLinksStatement(db: D1Database, item_id: string): D1PreparedStatement {
+  return db.prepare("SELECT * FROM work_link WHERE item_id = ? ORDER BY created_at").bind(item_id);
+}
+
 export async function listLinks(db: D1Database, item_id: string): Promise<WorkLink[]> {
-  return (await db.prepare("SELECT * FROM work_link WHERE item_id = ? ORDER BY created_at").bind(item_id).all<WorkLink>()).results;
+  return (await listLinksStatement(db, item_id).all<WorkLink>()).results;
 }
 
 export async function requireWork(db: D1Database, tenant_id: string, id: string): Promise<WorkItem> {

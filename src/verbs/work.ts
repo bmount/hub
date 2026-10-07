@@ -231,7 +231,9 @@ export const workUpdate = defineVerb({
       parent_id = parent.id;
     }
     const updated = await updateWork(ctx.db, item, {
-      title: optString(i, "title", { max: 200 }) ?? undefined, body: optString(i, "body", { max: 20_000 }) ?? undefined,
+      title: optString(i, "title", { max: 200 }) ?? undefined,
+      // An empty body sent on purpose clears the details; leaving it out changes nothing.
+      body: i.body === undefined || i.body === null ? undefined : optString(i, "body", { max: 20_000 }) ?? "",
       kind: kind ?? undefined, state: (stateRaw as WorkState | null) ?? undefined, owner_id: await ownerId(ctx, optString(i, "owner", { max: 254 })), parent_id,
     }, ctx.now);
     const what = updated.state !== item.state ? `${STATES[item.state]} to ${STATES[updated.state]}` : "details";

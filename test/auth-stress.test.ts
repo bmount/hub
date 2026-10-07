@@ -95,7 +95,9 @@ describe("auth stress", () => {
   it("limits calls per connection", async () => {
     const w = await world();
     let limited = 0;
-    for (let i = 0; i < 125; i++) {
+    // The bucket counts per calendar minute (120). Twice the limit plus one guarantees a full count even when the
+    // loop straddles a minute boundary, which made 125 calls flaky.
+    for (let i = 0; i < 241 && limited === 0; i++) {
       const r = await mcpPost("acme", w.access, "tools/list");
       if (r.status === 429) limited++;
     }

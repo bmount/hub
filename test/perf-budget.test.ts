@@ -6,7 +6,7 @@ import { createProject } from "../src/db/projects";
 import { apiPost, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
-export const TRIP_BUDGET = 5;
+export const TRIP_BUDGET = 4;
 
 function trips(header: string | null): { trips: number; statements: number } {
   const m = /db;desc="(\d+) round trips, (\d+) statements"/.exec(header ?? "");
