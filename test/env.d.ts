@@ -1,8 +1,11 @@
-import type { Env } from "../src/env";
-import type { D1Migration } from "@cloudflare/vitest-pool-workers/config";
+import type { Env as HubEnv } from "../src/env";
+import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 
-declare module "cloudflare:test" {
-  interface ProvidedEnv extends Env {
-    TEST_MIGRATIONS: D1Migration[];
+// The pool types `cloudflare:test`'s env as Cloudflare.Env; the hub's bindings plus the test-only migrations.
+declare global {
+  namespace Cloudflare {
+    interface Env extends HubEnv {
+      TEST_MIGRATIONS: D1Migration[];
+    }
   }
 }

@@ -1,10 +1,14 @@
-import { env, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { env } from "cloudflare:test";
+import { inDO } from "./do-helper";
+import { beforeEach, describe, expect, it } from "vitest";
 import { inboxStub } from "../src/chat/stubs";
 import type { WakeItem } from "../src/chat/types";
+import type { Inbox } from "../src/chat/inboxDO";
 import { until } from "./chat-helpers";
 
-const T = "T1";
+// A fresh tenant id per test: the pool isolates storage per file, so objects must not be shared between tests.
+let T = "T1";
+beforeEach(() => { T = `T${crypto.randomUUID()}`; });
 const box = (id = "I1") => inboxStub(env, T, id);
 const item = (seq: number, over: Partial<WakeItem> = {}): WakeItem => ({
   key: `C1:${seq}:I1`, kind: "mention", conversation_id: "C1", seq, msg_id: `M${seq}`, thread_root: null, hop: 0, author_id: "H1", wake: true,
@@ -147,7 +151,7 @@ describe("Inbox object", () => {
   it("refuses a request for another binding", async () => {
     await box().head(T, "I1");
     // Checked inside the object: a rejection across RPC breaks vitest-pool-workers' isolated storage (see chat-objects.test.ts).
-    await runInDurableObject(box(), async (obj) => {
+    await inDO(box(), async (obj: Inbox) => {
       await expect(obj.list("T2", "I1", { after: 0, limit: 1, include_acked: false })).rejects.toThrow(/another tenant/);
     });
   });

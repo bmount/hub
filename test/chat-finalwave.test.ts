@@ -1,5 +1,6 @@
-import { env, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { env } from "cloudflare:test";
+import { inDO } from "./do-helper";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Conversation } from "../src/chat/conversationDO";
 import type { Inbox } from "../src/chat/inboxDO";
 import { decodeCursors, encodeCursors } from "../src/chat/catchup";
@@ -10,7 +11,9 @@ import { call, channelWith, chatWorld, ok } from "./chat-helpers";
 
 // Messaging phase 1 final fix wave.
 
-const T = "T9";
+// A fresh tenant id per test: the pool isolates storage per file, so objects must not be shared between tests.
+let T = "T9";
+beforeEach(() => { T = `T${crypto.randomUUID()}`; });
 const C = "C9";
 const conv = () => conversationStub(env, T, C);
 const human = (id: string): Author => ({ id, kind: "human", session_id: `S${id}`, session_kind: "browser" });
@@ -33,11 +36,11 @@ function posted(result: unknown): PostOk {
   if (o.refused !== null) throw new Error(`refused: ${JSON.stringify(o)}`);
   return o;
 }
-const sql = <T>(f: (q: SqlStorage) => T) => runInDurableObject(conv(), (_o: Conversation, state) => f(state.storage.sql));
+const sql = <T>(f: (q: SqlStorage) => T) => inDO(conv(), (_o, state) => f(state.storage.sql));
 
 // A test that leaves an alarm scheduled must not let it fire into a later test.
 afterEach(async () => {
-  await runInDurableObject(conv(), (_o: Conversation, state) => state.storage.deleteAlarm());
+  await inDO(conv(), (_o, state) => state.storage.deleteAlarm());
 });
 
 describe("stale-view bypass", () => {
@@ -137,7 +140,7 @@ describe("outbox (C-9) and alarms", () => {
   // An Inbox bound to another owner throws on every delivery (bindOnce's invariant guard); the Conversation sees the failure and queues a retry.
   const poisoned = (key: string, wake: boolean) =>
     JSON.stringify({ key, kind: "mention", conversation_id: C, seq: 1, msg_id: "M", thread_root: null, hop: 0, author_id: "H1", wake, created_at: clock });
-  const breakInbox = (id: string) => runInDurableObject(inboxStub(env, T, id), (_o: Inbox, state) => {
+  const breakInbox = (id: string) => inDO(inboxStub(env, T, id), (_o, state) => {
     state.storage.sql.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     state.storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('tenant_id', 'other'), ('owner_id', 'other')");
   });
@@ -150,11 +153,11 @@ describe("outbox (C-9) and alarms", () => {
       q.exec("INSERT INTO inbox_outbox (key, identity_id, item_json, attempts) VALUES ('w', 'A1', ?, 19)", poisoned("w", true));
       q.exec("INSERT INTO inbox_outbox (key, identity_id, item_json, attempts) VALUES ('n', 'H2', ?, 19)", poisoned("n", false));
     });
-    await runInDurableObject(conv(), (o: Conversation) => o.alarm());
+    await inDO(conv(), (o: Conversation) => o.alarm());
     const rows = await sql((q) => q.exec<{ key: string; attempts: number; next_at: number }>("SELECT key, attempts, next_at FROM inbox_outbox").toArray());
     expect(rows.map((r) => [r.key, r.attempts])).toEqual([["n", 20]]);
     for (let i = 0; i < 3; i++) {
-      await runInDurableObject(conv(), async (o: Conversation, state) => {
+      await inDO(conv(), async (o: Conversation, state) => {
         state.storage.sql.exec("UPDATE inbox_outbox SET next_at = 0");
         await o.alarm();
       });
@@ -167,15 +170,15 @@ describe("outbox (C-9) and alarms", () => {
   it("pulls the alarm earlier when a sooner retry is due", async () => {
     posted(await conv().post(input(human("H1"), "seed")));
     await sql((q) => q.exec("INSERT INTO inbox_outbox (key, identity_id, item_json) VALUES ('bad', 'A1', '{not json')"));
-    await runInDurableObject(conv(), (_o: Conversation, state) => state.storage.setAlarm(Date.now() + 3_600_000));
-    await runInDurableObject(conv(), (o: Conversation) => o.alarm());
-    const at = await runInDurableObject(conv(), (_o: Conversation, state) => state.storage.getAlarm());
+    await inDO(conv(), (_o, state) => state.storage.setAlarm(Date.now() + 3_600_000));
+    await inDO(conv(), (o: Conversation) => o.alarm());
+    const at = await inDO(conv(), (_o, state) => state.storage.getAlarm());
     expect(at).not.toBeNull();
     expect(at!).toBeLessThan(Date.now() + 60_000);
   });
 
   it("keeps an index on acked_at for the inbox prune", async () => {
-    const names = await runInDurableObject(inboxStub(env, T, "I9"), (_o: Inbox, state) =>
+    const names = await inDO(inboxStub(env, T, "I9"), (_o, state) =>
       state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'item'").toArray().map((r) => r.name));
     expect(names).toContain("item_acked");
   });

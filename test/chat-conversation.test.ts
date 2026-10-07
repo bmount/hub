@@ -1,10 +1,13 @@
-import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { env, runDurableObjectAlarm } from "cloudflare:test";
+import { inDO } from "./do-helper";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
 import type { Conversation } from "../src/chat/conversationDO";
 import type { Author, PostInput, PostOk, PostOutcome, VersionInput } from "../src/chat/types";
 
-const T = "T1";
+// A fresh tenant id per test: the pool isolates storage per file, so objects must not be shared between tests.
+let T = "T1";
+beforeEach(() => { T = `T${crypto.randomUUID()}`; });
 const C = "C1";
 const conv = () => conversationStub(env, T, C);
 const human = (id: string): Author => ({ id, kind: "human", session_id: `S${id}`, session_kind: "browser" });
@@ -34,7 +37,7 @@ function edit(actor: Author, msg: string, body: string | null, extra: Partial<Ve
 }
 // Tests that fail deliveries on purpose leave an alarm scheduled; it must not fire into a later test.
 afterEach(async () => {
-  await runInDurableObject(conv(), (_o: Conversation, state) => state.storage.deleteAlarm());
+  await inDO(conv(), (_o, state) => state.storage.deleteAlarm());
 });
 const items = async (id: string) => (await inboxStub(env, T, id).list(T, id, { after: 0, limit: 100, include_acked: true })).items;
 
@@ -239,13 +242,13 @@ describe("Conversation: index, retries, binding", () => {
   it("retries a stranded delivery from the alarm without duplicating the item", async () => {
     ok(await conv().post(input(human("H1"), "@a1", { mentions: [{ identity_id: "A1", kind: "agent" }] })));
     const stranded = { key: `${C}:1:A1`, kind: "mention", conversation_id: C, seq: 1, msg_id: "M", thread_root: null, hop: 0, author_id: "H1", wake: true, created_at: clock };
-    await runInDurableObject(conv(), async (_o: Conversation, state) => {
+    await inDO(conv(), async (_o, state) => {
       state.storage.sql.exec("INSERT INTO inbox_outbox (key, identity_id, item_json) VALUES (?, 'A1', ?)", stranded.key, JSON.stringify(stranded));
       state.storage.sql.exec("INSERT INTO index_outbox (seq) VALUES (1)");
       await state.storage.setAlarm(Date.now() + 60_000);
     });
     expect(await runDurableObjectAlarm(conv())).toBe(true);
-    const left = await runInDurableObject(conv(), (_o: Conversation, state) =>
+    const left = await inDO(conv(), (_o, state) =>
       state.storage.sql.exec<{ n: number }>("SELECT (SELECT COUNT(*) FROM inbox_outbox) + (SELECT COUNT(*) FROM index_outbox) AS n").one().n);
     expect(left).toBe(0);
     expect((await items("A1")).length).toBe(1);
@@ -254,7 +257,7 @@ describe("Conversation: index, retries, binding", () => {
   it("refuses a request for another tenant", async () => {
     ok(await conv().post(input(human("H1"), "hello")));
     // C-1: a throw must not cross RPC in tests (isolated storage), so observe it inside the object.
-    await runInDurableObject(conv(), async (o: Conversation) => {
+    await inDO(conv(), async (o: Conversation) => {
       await expect(o.head("T2", C)).rejects.toThrow(/another tenant/);
     });
   });
@@ -278,7 +281,7 @@ describe("Conversation: fix wave (B-I3, C-4, idempotency, outbox)", () => {
     ok(await conv().version(edit(human("H1"), "1", "now site#ab12", { refs: B_REF })));
     expect((await refs()).results).toEqual([{ target_key: "site#ab12", rev: 2 }]);
     // A late flush of seq 1 (rev 1), as an interleaved drain would have sent it.
-    await runInDurableObject(conv(), async (o: Conversation, state) => {
+    await inDO(conv(), async (o: Conversation, state) => {
       state.storage.sql.exec("INSERT INTO index_outbox (seq) VALUES (1)");
       await o.alarm();
     });
@@ -328,11 +331,11 @@ describe("Conversation: fix wave (B-I3, C-4, idempotency, outbox)", () => {
     await env.HUB_DB.exec("CREATE TRIGGER fail_msg_index BEFORE INSERT ON msg_index BEGIN SELECT RAISE(ABORT, 'd1 down'); END");
     try {
       ok(await conv().post(input(human("H1"), "see site#k7q2", { refs: A_REF })));
-      const row = () => runInDurableObject(conv(), (_o: Conversation, state) =>
+      const row = () => inDO(conv(), (_o, state) =>
         state.storage.sql.exec<{ attempts: number; next_at: number }>("SELECT attempts, next_at FROM index_outbox").toArray());
       expect((await row())[0]!.attempts).toBe(1);
       for (let i = 0; i < 22; i++) {
-        await runInDurableObject(conv(), async (o: Conversation, state) => {
+        await inDO(conv(), async (o: Conversation, state) => {
           state.storage.sql.exec("UPDATE index_outbox SET next_at = 0");
           await o.alarm();
         });
@@ -344,33 +347,33 @@ describe("Conversation: fix wave (B-I3, C-4, idempotency, outbox)", () => {
     } finally {
       await env.HUB_DB.exec("DROP TRIGGER fail_msg_index");
     }
-    await runInDurableObject(conv(), async (o: Conversation, state) => {
+    await inDO(conv(), async (o: Conversation, state) => {
       state.storage.sql.exec("UPDATE index_outbox SET next_at = 0");
       await o.alarm();
     });
     expect((await refs()).results).toEqual([{ target_key: "site#k7q2", rev: 1 }]);
-    expect(await runInDurableObject(conv(), (_o: Conversation, state) => state.storage.sql.exec("SELECT 1 FROM index_outbox").toArray().length)).toBe(0);
+    expect(await inDO(conv(), (_o, state) => state.storage.sql.exec("SELECT 1 FROM index_outbox").toArray().length)).toBe(0);
   });
 
   it("backs off a failing row, isolates it from the others, and drops it after the attempt cap", async () => {
     ok(await conv().post(input(human("H1"), "seed")));
     const good = outbox(wake(`${C}:1:A1`), `${C}:1:A1`, "A1");
-    await runInDurableObject(conv(), async (o: Conversation, state) => {
+    await inDO(conv(), async (o: Conversation, state) => {
       const sql = state.storage.sql;
       sql.exec("INSERT INTO inbox_outbox (key, identity_id, item_json) VALUES ('poison', 'A2', '{not json')");
       sql.exec("INSERT INTO inbox_outbox (key, identity_id, item_json) VALUES (?, ?, ?)", good.key, good.identity, good.json);
       await o.alarm();
     });
     expect((await items("A1")).length).toBe(1);
-    const row = () => runInDurableObject(conv(), (_o: Conversation, state) =>
+    const row = () => inDO(conv(), (_o, state) =>
       state.storage.sql.exec<{ attempts: number; next_at: number }>("SELECT attempts, next_at FROM inbox_outbox WHERE key = 'poison'").toArray());
     const [first] = await row();
     expect(first!.attempts).toBe(1);
     expect(first!.next_at).toBeGreaterThan(Date.now() + 1000);
     // Not due yet: another drain leaves it alone.
-    await runInDurableObject(conv(), (o: Conversation) => o.alarm());
+    await inDO(conv(), (o: Conversation) => o.alarm());
     expect((await row())[0]!.attempts).toBe(1);
-    await runInDurableObject(conv(), async (o: Conversation, state) => {
+    await inDO(conv(), async (o: Conversation, state) => {
       state.storage.sql.exec("UPDATE inbox_outbox SET attempts = 19, next_at = 0 WHERE key = 'poison'");
       await o.alarm();
     });

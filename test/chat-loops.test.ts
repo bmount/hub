@@ -1,4 +1,5 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:test";
+import { inDO } from "./do-helper";
 import { describe, expect, it } from "vitest";
 import type { Conversation } from "../src/chat/conversationDO";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
@@ -36,7 +37,7 @@ describe("loop limits end to end", () => {
       // With no recent wake as the cause every post has hop 1, so the hop limit never fires and the pair breaker must.
       await box.ack(w.acme.id, id, (await box.head(w.acme.id, id)), Date.now());
       // And the wake is older than the 10-minute window (ruling C-4), so it no longer counts as the cause.
-      await runInDurableObject(box, (_o, state) => { state.storage.sql.exec("UPDATE item SET created_at = 0"); });
+      await inDO(box, (_o, state) => { state.storage.sql.exec("UPDATE item SET created_at = 0"); });
       last = await ok(agent.token, "chat.post", { c: "general", body: `@${other} turn ${i}`, after: head });
       head = last.head;
       expect(last.hop).toBe(1);
@@ -142,7 +143,7 @@ describe("loop limits and wakes: fix wave", () => {
     const queue = async () => {
       n++;
       const base = { kind: "mention", conversation_id: ch.project_id, seq: n, msg_id: `M${n}`, thread_root: null, hop: 0, author_id: leadId, created_at: Date.now() };
-      await runInDurableObject(conv, async (o: Conversation, state) => {
+      await inDO(conv, async (o: Conversation, state) => {
         for (const [id, wake] of [[scoutId, true], [leadId, false]] as const) {
           const key = `${ch.project_id}:${n}:${id}`;
           state.storage.sql.exec("INSERT INTO inbox_outbox (key, identity_id, item_json) VALUES (?, ?, ?)", key, id, JSON.stringify({ ...base, key, wake }));
@@ -151,7 +152,7 @@ describe("loop limits and wakes: fix wave", () => {
       });
     };
     const got = async (id: string) => (await inboxStub(env, w.acme.id, id).list(w.acme.id, id, { after: 0, limit: 100, include_acked: true })).items.map((i) => i.seq);
-    const left = () => runInDurableObject(conv, (_o: Conversation, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM inbox_outbox").one().n);
+    const left = () => inDO(conv, (_o, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM inbox_outbox").one().n);
 
     await queue();
     expect([await got(scoutId), await got(leadId)]).toEqual([[1], [1]]);
