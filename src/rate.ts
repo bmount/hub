@@ -40,8 +40,19 @@ async function putCounter(kv: KVNamespace, bucket: RateBucket, key: string, valu
   }
 }
 
-export async function takeRateDetail(kv: KVNamespace, bucket: RateBucket, subject: string, now: number): Promise<RateResult> {
+/**
+ * `defer`, when given, takes the counter write off the response path for buckets whose writes already fail open: the
+ * decision comes from the read either way. The email buckets (addr, ip) always wait, because they fail closed.
+ */
+export async function takeRateDetail(
+  kv: KVNamespace, bucket: RateBucket, subject: string, now: number, defer?: (p: Promise<unknown>) => void,
+): Promise<RateResult> {
   const { limit, windowMs } = RATE_RULES[bucket];
+  const write = (p: Promise<void>): Promise<void> | undefined => {
+    if (!defer || bucket === "addr" || bucket === "ip") return p;
+    defer(p);
+    return undefined;
+  };
   const window = Math.floor(now / windowMs);
   const retryAfterS = Math.max(1, Math.ceil(((window + 1) * windowMs - now) / 1000));
   const ttl = Math.max(60, Math.ceil((2 * windowMs) / 1000));
@@ -67,10 +78,10 @@ export async function takeRateDetail(kv: KVNamespace, bucket: RateBucket, subjec
       return { ok: false, first: false, retryAfterS };
     }
     if (marked !== null) return { ok: false, first: false, retryAfterS };
-    await putCounter(kv, bucket, overKey, "1", ttl);
+    await write(putCounter(kv, bucket, overKey, "1", ttl));
     return { ok: false, first: true, retryAfterS };
   }
-  await putCounter(kv, bucket, key, String(used + 1), ttl);
+  await write(putCounter(kv, bucket, key, String(used + 1), ttl));
   return { ok: true, first: false, retryAfterS };
 }
 

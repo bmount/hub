@@ -25,4 +25,21 @@ describe("rate counters", () => {
     expect((await takeRateDetail(kv, "mcp_grant_hour", "g1", Date.now())).ok).toBe(true);
     await expect(takeRateDetail(kv, "ip", "x", Date.now())).rejects.toThrow("boom");
   });
+  it("hand the counter write to defer without waiting, except for the fail-closed email buckets", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const kv = stub({ put: () => gate });
+    const deferred: Promise<unknown>[] = [];
+    // The write never settles until released, so an awaited write would hang this call.
+    expect(await takeRateDetail(kv, "mcp_anon_ip", "198.51.100.40", Date.now(), (p) => deferred.push(p))).toMatchObject({ ok: true });
+    expect(deferred).toHaveLength(1);
+    let settled = false;
+    const mail = takeRateDetail(kv, "addr", "a@example.com", Date.now(), (p) => deferred.push(p)).then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(deferred).toHaveLength(1);
+    release();
+    await mail;
+    expect(settled).toBe(true);
+  });
 });

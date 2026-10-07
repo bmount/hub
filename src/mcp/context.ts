@@ -33,7 +33,7 @@ export async function mcpAuth(
   // The anon bucket only guards a 401, so it lives in KV and fails open when KV errors.
   const charge = async () => {
     try {
-      return await takeRateDetail(env.RATE, "mcp_anon_ip", ip, now);
+      return await takeRateDetail(env.RATE, "mcp_anon_ip", ip, now, waitUntil);
     } catch (e) {
       console.log("anon rate failed", e instanceof Error ? e.name : "error");
       return { ok: true, first: false, retryAfterS: 1 };
