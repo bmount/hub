@@ -45,12 +45,15 @@ const REASONS: Record<string, string> = {
   unauthorized: "Sign in first.",
 };
 
+/** The Ray ID, so a person can point at the exact log line (docs/ops/logging.md). */
+const reference = (request: Request) => { const ray = request.headers.get("cf-ray"); return ray ? `<p><small>Reference: <code>${esc(ray)}</code></small></p>` : ""; };
+
 /** A readable page for a refused form, instead of raw JSON. */
 function formError(e: HubError, request: Request): string {
   const back = request.headers.get("referer");
   const self = new URL(request.url).origin;
   const href = back && back.startsWith(self + "/") ? esc(back) : "/";
-  return `<h1>Not done</h1><p class="lede">${esc(REASONS[e.reason] ?? "That was refused.")}</p>${e.detail ? `<p>${esc(e.detail)}</p>` : ""}<p><a href="${href}">Go back</a></p>`;
+  return `<h1>Not done</h1><p class="lede">${esc(REASONS[e.reason] ?? "That was refused.")}</p>${e.detail ? `<p>${esc(e.detail)}</p>` : ""}<p><a href="${href}">Go back</a></p>${reference(request)}`;
 }
 
 /** Refusals of sensitive actions go in the audit trail with who tried, so they can be reconstructed later. */
@@ -128,7 +131,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     if (e instanceof SyntaxError) return finish(ctx, env, json({ ok: false, error: "bad_request", detail: "invalid JSON" }, 400));
     note(request, { error: { reason: "internal", detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e) } });
     console.error(JSON.stringify({ msg: "verb failed", verb: name, ray: request.headers.get("cf-ray"), stack: e instanceof Error ? e.stack ?? null : null }));
-    if (isForm) return finish(ctx, env, htmlResponse(page("Not done", `<h1>That didn't work</h1><p>Something went wrong on our side, and it is in the log. Nothing was changed.</p><p><a href="javascript:history.back()">Go back</a></p>`), 500));
+    if (isForm) return finish(ctx, env, htmlResponse(page("Not done", `<h1>That didn't work</h1><p>Something went wrong on our side, and it is in the log. Nothing was changed.</p><p><a href="javascript:history.back()">Go back</a></p>${reference(request)}`), 500));
     return finish(ctx, env, json({ ok: false, error: "internal", detail: null }, 500));
   }
 }

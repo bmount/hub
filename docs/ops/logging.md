@@ -23,7 +23,7 @@ Status 500 and above logs at error level, 400 and above at warn level, and every
 Crashes add a separate `msg: "exception"` or `msg: "verb failed"` line with the stack. Inbound mail writes
 `msg: "mail"`, with to, from, size, timing and any error.
 
-**Never logged:** tokens, cookies, request bodies and query values. `/invite/<token>` and `/auth/<token>` become
+**Never stored:** Cloudflare's own invocation entries are off, because they record full URLs. Live `tail` still shows full URLs, but it isn't stored. Also never logged: tokens, cookies, request bodies and query values. `/invite/<token>` and `/auth/<token>` become
 `/invite/:token` and `/auth/:token`, and a query keeps only its key names (`/docket?owner=…`).
 
 ## Looking at logs
