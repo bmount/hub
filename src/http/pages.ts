@@ -136,7 +136,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
   }
   if (!ctx.tenant || !ctx.role) return notFoundPage(extra);
   const agentsLink = rank(ctx.role) >= rank("admin") ? ` · <a href="/admin/agents">agents</a>` : "";
-  const body = `<h1>${esc(ctx.tenant.display_name)}</h1><p>You are ${esc(ctx.role)} · <a href="/archive">archive</a>${agentsLink} · <a href="https://${esc(env.HUB_DOMAIN)}/">hub</a></p>` + (await tenantListing(env, ctx.tenant.id, "active"));
+  const body = `<h1>${esc(ctx.tenant.display_name)}</h1><p>You are ${esc(ctx.role)} · <a href="/c">channels</a> · <a href="/inbox">inbox</a> · <a href="/archive">archive</a>${agentsLink} · <a href="https://${esc(env.HUB_DOMAIN)}/">hub</a></p>` + (await tenantListing(env, ctx.tenant.id, "active"));
   return htmlResponse(page(ctx.tenant.display_name, body), 200, extra);
 }
 
