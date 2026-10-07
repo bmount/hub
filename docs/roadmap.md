@@ -25,6 +25,38 @@ Anyone can ask what happened and why and get an answer with evidence. Anyone can
 Pimwell itself or from their own ChatGPT or Claude session, and the change is as traceable as the
 problem.
 
+## The pitch, and what delivers it
+
+The landing page makes one promise per cloud. Each promise is tied here to the roadmap items that make it true,
+so the pitch and the product can't drift apart. Draft 2026-10-07, still being iterated with the owner.
+
+| # | Cloud header | Delivered by |
+| --- | --- | --- |
+| 1 | Source control that follows your code into production. | M1 project page; M3 deploy records and "what came after" |
+| 2 | Performance monitoring, built in. | M4 error ingestion, timing per route and release, alerts |
+| 3 | Know who your changes reach. | M4 reach; M5 product events |
+| 4 | Customer feedback, in context. | M4 customer feedback intake (below) |
+| 5 | Every change has a reason on record. | M2 links among tasks, commits and sessions; commit-to-task binding |
+| 6 | Revenue, traced to features. | M5 revenue events, feature ledger |
+| 7 | One home for the whole company. | M1 organizations and project-level access; admin spec P4 |
+| 8 | Plans from your email threads. | M4b thread to structure, history backfill |
+| 9 | Delays and handoffs disappear. | M2 work subscriptions and email to job (below); M6 helpers that build, deploy and debug |
+| 10 | Straight answers, from the record. | M2 status from records; M7 situations in, the truth out |
+
+Page-level promise: "AI can do a lot." The first-run experience below has to prove it within minutes.
+
+## First run: the aha (now)
+
+People who sign in for the first time should see Pimwell do something no other tool does with their own work,
+before they configure anything.
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| Pick the aha moment: a candidate is "connect a repo, and Pimwell tells you the story of the last month: what shipped, why, who asked, what broke" | now | decided with the owner |
+| A guided first project: import a repo, or forward one email thread, in one step | next | |
+| The answer appears with its sources, and the person can ask a follow-up in plain words | next | uses the `deep` and `reasoning` purposes |
+| First-run measured: time from sign-in to the first useful answer | later | target: under five minutes |
+
 ## The model, corrected (2026-10-06)
 
 - **Tenant means organization.** One tenant per company or organization, at `<org>.pimwell.com`.
@@ -99,6 +131,9 @@ Goal: every piece of work has an owner, a reason, and a trail.
 | Commit trailers or push metadata that bind a commit to a task and a helper session | next | Ardi records the identity and session already |
 | Status from records: "what happened since Monday" on a project or task, built from commits, deploys, and tasks | later | the honest status report, before any model writes prose |
 | Task, assignment, and status verbs over MCP | next | parity rule: anything on a page is a verb |
+| Work subscriptions: people and helpers subscribe to kinds of work (build, deploy, debug, review, upload) and are notified the moment it arrives | next | messaging wakeups exist; "delays and handoffs disappear" |
+| Email to job: a message to the team's address becomes a task, routed to its subscribers with the thread attached | next | needs mailboxes; consent rules stay |
+| No lookups: every job arrives with what the system already knows (code, history, owners, recent errors) | next | the job carries links, not homework |
 
 Exit test: a task about an imported project is assigned to a helper. The helper's commit lands linked
 to the task, and the task page shows the commit, the session, and the person the helper answers to.
@@ -130,6 +165,7 @@ Goal: from a logged error to the line of code, the commit, and the reason it was
 | Reach: distinct users affected by an error or a change | later | "how many users noticed"; privacy-preserving counts |
 | Alerts into channels; helpers can subscribe and wake on them | next | messaging wakeups exist |
 | Pimwell monitors Pimwell | next | dogfood from day one |
+| Customer feedback intake: support email and in-app feedback, linked to the feature, release, and code it's about | next | "customer feedback, in context" |
 
 Exit test: an error in a deployed imported project opens to the exact line at the deployed commit, with
 who wrote it, why, and how many users hit it.
