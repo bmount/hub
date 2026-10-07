@@ -38,3 +38,19 @@ Plan: docs/superpowers/plans/2026-10-07-overnight.md. One entry per task: what s
 - d2524ce: one design system and shell; a deep organization home, project pages with one timeline, the organization-wide Docket, and People and helpers. Each page reads in one D1 batch.
 - Found and fixed: channels (project rows of kind channel) leaked into the new project lookups. Work, pages and mail addresses now all exclude them.
 - Checks: 606/606 tests. Local render 6 to 12 ms per page, 6 to 8 KB of HTML. Screenshots reviewed at desktop and true phone width.
+
+## T5: MCP history, the Docket, skills, capabilities (done)
+- 3353976: six skills served as MCP resources (pimwell://skills/<name>), as skill_list and skill_read, and at /skills. The server's instructions point new helpers at start-here.
+- capabilities explains every unavailable tool. project_history pages through events. The Docket was already work_list.
+- Project names that would hide a built-in page (docket, mail, skills and others) are refused.
+- Check: 612/612.
+
+## T6: MCP sandbox and Playground (stopped: needs an owner decision)
+- The Playground must exercise the real auth path. The faithful design is a browser client on the organization's own host doing the real OAuth dance (dynamic registration, PKCE, the real consent page, token exchange) and then calling /mcp.
+- That needs two security-relevant changes: allow https://<org>.pimwell.com/playground/callback as an OAuth redirect, and let each organization's own origin call its /mcp (CORS). The plan's guardrail says to stop on changes to a spec's security property, so this waits for the owner.
+- Alternative: run the dance server-side, with no new redirect or CORS. It is less faithful to real clients, but it adds no new surface.
+- Sandbox organizations and the auth stress suite are not started; they don't depend on the decision, and come next.
+
+## T7: performance watch (started)
+- Server-Timing (app;dur) is on every hub response; live public pages report 0 ms of Worker time.
+- Not yet: D1 query counts in Server-Timing, and a production perf smoke script for signed-in pages.
