@@ -74,3 +74,21 @@ Plan: docs/superpowers/plans/2026-10-07-overnight.md. One entry per task: what s
 - Ruling: the plan's "6 statements, a batch counts as one" is enforced on round trips (statements vary with batching), and set at 5, today's worst page. Cost if wrong: one number to change.
 - 05ede91: the anonymous /mcp 401, the first hop of every assistant connecting, waited on a KV write: 347 ms median. The anonymous bucket already failed open on write, so the write now runs in waitUntil: 37 ms median. The email buckets still wait (they fail closed).
 - Production smoke (node scripts/perf-smoke.mjs <org>), 9 runs each, median: apex / 33 ms, /privacy 24, /login 24, OAuth metadata 24, org home 69 (anonymous 404, one D1 trip of 37 ms), /mcp 401 37. p90 spikes of 250 to 500 ms are cold first hits.
+
+## N5: deep UI, round 2 (done)
+- 551775d, a174aab: each work item page has an Edit panel (title, kind, owner, quest, details). The current owner and quest stay selectable even when the usual lists leave them out, so saving never drops them. Sending an empty body now clears the details; leaving it out still changes nothing.
+- The Docket filters by owner, quest and "mine". Chips keep the other filters, and empty states say what emptied the list. Pages read in one batch after the project lookup; the work item page went from 5 round trips to 4, and the budget tightened to 4.
+- The search shortcut (`/`) waits for search to exist, as the plan said.
+- Screens checked at desktop and at true phone width.
+- Fixed: auth-stress "limits calls per connection" flaked when its 125 calls straddled a minute boundary. It now sends up to 241 calls (twice the limit plus one).
+
+## Pimwell builds Pimwell, round 2
+- Done: pimwell#50, #51, #52, #59, #63. Under way: #53 (sandbox orgs remain) and #62 (helper addresses, first half). All linked to their commits.
+- Filed as done: #73 (edit and filters), #74 and #75 (snags: write never offered; slow first MCP hop), #76 and #77 (calls: in-context Playground; leave Ardi alone, with the owner's words). The Historian's one-hour credentials were revoked after each run.
+
+## N7: helper addresses (first half done; rest waits for the owner)
+- 2b67c05: projects and helpers share one name space per organization, enforced inside each INSERT. Archived helpers keep their names; channels don't hold names. Production had no collisions.
+- Ruling: the address move itself waits. Today every address under an organization subdomain is reserved for helpers (identity spec 6.5). With helpers at <org>.<name>@pimwell.com, something must stop a human identity, invite or sign-in link from using a pimwell.com address. Sign-in mail to a helper's address would otherwise land in mail that members can read. That is a security property, and the plan's guardrail stops there. The production identity migration is also worth a nod first. Cost of waiting: helpers keep their current addresses one more day.
+
+## N6: sandbox organizations (not started; waits for the owner)
+- Ruling: letting any member create organizations changes who may create a tenant (root only today). That waits for the owner's nod.
