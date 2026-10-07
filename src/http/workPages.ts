@@ -89,7 +89,7 @@ const option = (value: string, label: string, selected: boolean) => `<option val
 
 // ---------- The list pane ----------
 
-function docketList(ctx: Ctx, project: Project | null, items: WorkItem[], members: Member[], quests: Quest[], slugs: Map<string, string>, f: Filters): string {
+function docketList(ctx: Ctx, project: Project | null, items: WorkItem[], members: Member[], quests: Quest[], slugs: Map<string, string>, f: Filters, selected: string | null = null): string {
   const base = f.org || !project ? "/docket" : `/${project.slug}/docket`;
   const to = (change: Partial<Filters>) => { const q = qs(f, change); return `${base}${q ? `?${esc(q)}` : ""}`; };
   const names = new Map(members.map((m) => [m.id, m.display_name]));
@@ -108,7 +108,7 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
     const sl = slugs.get(w.project_id) ?? project?.slug ?? "?";
     const href = `/${sl}/w/${w.number}${itemQs ? `?${itemQs}` : ""}`;
     const who = w.owner_id ? (w.owner_id === ctx.identity!.id ? "You" : names.get(w.owner_id) ?? "Former member") : "";
-    return `<tr data-href="${esc(href)}"><td class="ref">${esc(f.org || !project ? `${sl}#${w.number}` : `#${w.number}`)}</td><td class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)}</td><td><a href="${esc(href)}">${esc(w.title)}</a></td><td class="hide-s">${esc(who)}</td><td class="hide-s">${esc(STATES[w.state])}</td><td class="when" title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</td></tr>`;
+    return `<tr data-href="${esc(href)}"${w.id === selected ? ' aria-selected="true"' : ""}><td class="ref">${esc(f.org || !project ? `${sl}#${w.number}` : `#${w.number}`)}</td><td class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)}</td><td><a href="${esc(href)}">${esc(w.title)}</a></td><td class="hide-s">${esc(who)}</td><td class="hide-s">${esc(STATES[w.state])}</td><td class="when" title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</td></tr>`;
   }).join("");
   const filtered = f.kind !== null || f.owner !== null || f.quest !== null;
   const empty = f.owner === "me" && !f.closed && f.kind === null && f.quest === null
@@ -215,7 +215,7 @@ async function listAndInspect(request: Request, env: Env, slug: string | null, n
   const members = r[1]!.results as Member[];
   const slugs = new Map((r[2]!.results as Array<{ id: string; slug: string }>).map((x) => [x.id, x.slug]));
   const quests = questFor ? (r[3]!.results as Quest[]) : [];
-  const listHtml = docketList(ctx, project, items, members, quests, slugs, f);
+  const listHtml = docketList(ctx, project, items, members, quests, slugs, f, w?.id ?? null);
   const listBase = f.org || !project ? "/docket" : `/${project.slug}/docket`;
   const q = qs(f);
   const back = `${listBase}${q ? `?${q}` : ""}`;

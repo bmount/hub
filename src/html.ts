@@ -24,9 +24,9 @@ export type Panes = { list: string; listKey: string; inspector: string | null; i
 // when the system asks, system fonts only, no external requests. Old variable names stay as aliases.
 const CSS = `
 :root{--bg:#f2f4f7;--panel:#fff;--sunk:#eaeef2;--line:#d9dfe6;--ink:#17202b;--muted:#5d6a79;--faint:#8794a2;--accent:#1b7a69;--accent-soft:#dff0ec;--focus:#1b7a69;
---wish:#6d52de;--snag:#cc3d3d;--errand:#1b7a69;--quest:#a96f12;--call:#475569;--spark:#c2410c}
+--wish:#6d52de;--snag:#cc3d3d;--errand:#1b7a69;--quest:#a96f12;--call:#475569;--spark:#b4307a}
 @media (prefers-color-scheme:dark){:root{--bg:#0e1217;--panel:#151a21;--sunk:#1a2028;--line:#28313c;--ink:#e3e8ee;--muted:#9ba7b4;--faint:#6d7987;--accent:#45c1aa;--accent-soft:#163430;--focus:#45c1aa;
---wish:#a593ff;--snag:#ff8578;--errand:#45c1aa;--quest:#e2b04f;--call:#a8b4c3;--spark:#ff9b5e}}
+--wish:#a593ff;--snag:#ff8578;--errand:#45c1aa;--quest:#e2b04f;--call:#a8b4c3;--spark:#f07ab8}}
 :root{--paper:var(--bg);--card:var(--panel);--soft:var(--sunk);--teal:var(--accent);--violet:var(--wish);--coral:var(--snag);--gold:var(--quest)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-variant-numeric:tabular-nums}
@@ -47,9 +47,9 @@ form.filters{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 8
 table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
 th,td{padding:4px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:11.5px;color:var(--muted);font-weight:600;background:var(--sunk);position:sticky;top:0}
 tr:last-child td{border-bottom:0}tr[data-href]{cursor:pointer}tr[data-href]:hover td{background:var(--sunk)}tr[aria-selected=true] td{background:var(--accent-soft)}
-td.ref,td.when{white-space:nowrap;color:var(--muted);font-size:12.5px}td a{color:var(--ink);text-decoration:none}td a:hover{text-decoration:underline}
+td[class^=k-]{white-space:nowrap}td.ref,td.when{white-space:nowrap;color:var(--muted);font-size:12.5px}td a{color:var(--ink);text-decoration:none}td a:hover{text-decoration:underline}
 .timeline{list-style:none;padding:0;margin:0}.timeline li{display:grid;grid-template-columns:7rem 1fr;gap:8px;padding:3px 0;border-bottom:1px solid var(--line);font-size:13px}
-.timeline time{color:var(--muted);font-size:12px}
+.timeline time{color:var(--muted);font-size:12px}#inspector .timeline li{grid-template-columns:3.2rem 1fr}
 button,.button{font:inherit;font-size:13px;font-weight:600;padding:3px 10px;border-radius:5px;border:1px solid var(--ink);background:var(--ink);color:var(--panel);cursor:pointer;text-decoration:none;display:inline-block}
 button:hover,.button:hover{background:var(--accent);border-color:var(--accent)}button.quiet,.button.quiet{background:var(--panel);color:var(--ink);border-color:var(--line)}
 button:disabled{opacity:.5;cursor:not-allowed}

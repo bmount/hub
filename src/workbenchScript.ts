@@ -20,7 +20,7 @@ export const WORKBENCH_JS = String.raw`
 
   function markSelected() {
     var here = location.pathname;
-    $$("#list [data-href]").forEach(function (r) { r.setAttribute("aria-selected", r.getAttribute("data-href") === here ? "true" : "false"); });
+    $$("#list [data-href]").forEach(function (r) { r.setAttribute("aria-selected", new URL(r.getAttribute("data-href"), location.href).pathname === here ? "true" : "false"); });
   }
   function closeRail() { var r = $("#rail"); if (r) r.classList.remove("open"); if (location.hash === "#rail") history.replaceState(history.state, "", location.pathname + location.search); }
 
