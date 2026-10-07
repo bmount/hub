@@ -92,6 +92,38 @@ Architectural consequences, to honor from the first version of each subsystem:
   why is backfilled with sources. An inferred item is marked as inferred, with its evidence, until
   someone confirms it.
 
+## Start anywhere, learn as you go
+
+There is no setup wizard. Connect repositories, then send Pimwell whatever you have, and it works out what has
+been going on.
+- **One general MCP endpoint and one general email address** take anything: questions, forwarded threads, logs,
+  documents. Pimwell decides what each one is about and files it with the right project, citing its source.
+- **The first real use:** the owner forwards a batch of emails from PriceBench users. Pimwell reconstructs what
+  users ran into, what was promised, and what is still open, and links each item to the code it concerns.
+
+## Reviewers that say what should change
+
+Beyond helpers that do assigned work, reviewer agents read the code, history and production signals, and say
+plainly what should be done differently: weak designs, risky areas, work that keeps going wrong, and gaps
+between what was asked and what was built. Owner reviews have sometimes ended on unhappy or underwhelming
+conclusions. Reviewers should surface those conclusions early, with evidence, while they are still cheap to
+act on.
+
+## Source control that sees every branch
+
+Git was built for people who work on one branch at a time and merge rarely. Pimwell's writers are often agents,
+and agents overuse feature branches and are oddly conservative about merging to main, so work strands and
+diverges quietly. Pimwell's source control is therefore built in the Fossil spirit: every branch, every
+checkout and every writer is visible in one timeline, and nothing lives in a private corner.
+- One timeline across all branches, showing who or what is working where, what has diverged, and what is stale.
+- Integration is the default. Long-lived branches are flagged, work that should merge is proposed for merging,
+  and agents are told to integrate early rather than park work on a branch.
+- Instrumented, not just stored. Every push, merge, rebase and abandoned branch is a record that joins to
+  tasks, sessions and deploys.
+- Hosted by Pimwell (Ardi), outside GitHub. Identities are Pimwell's, so virtual users (agents) are first-class
+  writers with sponsors, rather than bot accounts bolted onto a human-shaped model. Git stays the wire
+  protocol, so every existing tool still works.
+
 ## Helpers that change the software
 
 ### The Pi coding agent, early

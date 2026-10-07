@@ -52,7 +52,8 @@ before they configure anything.
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Pick the aha moment: a candidate is "connect a repo, and Pimwell tells you the story of the last month: what shipped, why, who asked, what broke" | now | decided with the owner |
+| Decided (2026-10-07): no wizard. Connect repos, then send anything through one general MCP endpoint and one general email address; Pimwell learns as it goes | now | `docs/direction.md`, Start anywhere |
+| First real use: the owner forwards PriceBench user emails; Pimwell reconstructs what users hit, what was promised, what is open, linked to code | now | needs the general email address and thread-to-structure |
 | A guided first project: import a repo, or forward one email thread, in one step | next | |
 | The answer appears with its sources, and the person can ask a follow-up in plain words | next | uses the `deep` and `reasoning` purposes |
 | First-run measured: time from sign-in to the first useful answer | later | target: under five minutes |
@@ -98,6 +99,9 @@ Goal: open the organization and understand each project's code and history witho
 | Create a repo project from the hub; the hub creates the Ardi repo | next | removes the manual `repo.create` step |
 | Git credentials and clone instructions on the project page | next | `session.git` exists; this is the UX |
 | Upstream sync: keep imported repos current with their GitHub upstreams, mirroring in or out | now | the imports are snapshots until this exists |
+| One timeline across all branches: who or what works where, divergence, stale branches | next | `docs/direction.md`, Source control that sees every branch |
+| Integration by default: long-lived branches flagged, merges proposed, agents told to integrate early | next | |
+| Every push, merge, rebase and abandoned branch recorded and joined to tasks, sessions, deploys | next | |
 | Large pushes: one push of any reasonable size | now | Ardi; the deployed git host still crashes on a 13.5 MB push (2026-10-07). No workarounds: the imported repos are re-imported by one push once fixed |
 | Repository and organization purge in the git host | now | Ardi; needed to re-import cleanly and to release deleted organizations' names |
 | Super-admin delete of organizations | done | 2026-10-07: /admin/orgs; the name stays reserved until the git host can purge |
@@ -206,6 +210,7 @@ Goal: helpers fix and build, safely and accountably.
 | Item | Status | Notes |
 | --- | --- | --- |
 | Pi coding agent as a hosted helper in a sandbox, working on Pimwell repos | next | `docs/direction.md` |
+| Reviewer agents: read code, history and production signals; say plainly what should change, with evidence, early | next | `docs/direction.md`, Reviewers |
 | Model subscriptions as well as API keys, per sponsoring person or team | next | |
 | Change requests: a branch, a diff, review, approve, merge, all in Pimwell | next | needed before helpers write to main |
 | CI runs on push, with results linked to the commit | later | |
