@@ -1,4 +1,5 @@
 import { registerVerbs } from "./table";
+import { plannedVerbs } from "./planned";
 import { bootstrap } from "./bootstrap";
 import { whoami } from "./whoami";
 import { tenantArchive, tenantCreate, tenantDelete, tenantList, tenantUnarchive } from "./tenant";
@@ -30,6 +31,7 @@ export function registerAllVerbs(): void {
     tenantCreate, tenantArchive, tenantUnarchive, tenantList, tenantDelete,
     mailList, mailRead, mailRelease, mailProposeWork,
     workCreate, workList, workRead, workUpdate, workClaim, workLink,
+    ...plannedVerbs,
     skillList, skillRead, capabilities, projectHistory,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,

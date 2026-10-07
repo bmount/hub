@@ -1,4 +1,5 @@
 // Helping helpers find their way (overnight plan task 5): skills, what this connection can do, and project history.
+import { PLANNED } from "./planned";
 import { defineVerb, listVerbs } from "./table";
 import { optInt, reqString } from "./params";
 import { notFound } from "../errors";
@@ -49,18 +50,21 @@ export const capabilities = defineVerb({
     scope: "read", destructive: false, title: "Capabilities",
     input: { type: "object", properties: {}, additionalProperties: false },
     render: (r) => {
-      const x = r as { who: string; role: string | null; scopes: string[]; tools: string[]; not_available: Array<{ tool: string; why: string }> };
+      const x = r as { who: string; role: string | null; scopes: string[]; tools: string[]; not_available: Array<{ tool: string; why: string }>; planned: Array<{ tool: string; area: string; summary: string }> };
       return [`You are ${cleanText(x.who)}, role ${x.role ?? "none here"}, with scopes ${x.scopes.join(", ") || "none"}.`,
         `**Available** (${x.tools.length}): ${x.tools.join(", ")}`,
-        x.not_available.length ? `**Not available**:\n${x.not_available.map((n) => `- ${n.tool}: ${n.why}`).join("\n")}` : ""].filter(Boolean).join("\n\n");
+        x.not_available.length ? `**Not available**:\n${x.not_available.map((n) => `- ${n.tool}: ${n.why}`).join("\n")}` : "",
+        x.planned.length ? `**Planned, not built yet** (calling one answers not_implemented with its spec):\n${x.planned.map((n) => `- ${n.tool} (${n.area}): ${n.summary}`).join("\n")}` : ""].filter(Boolean).join("\n\n");
     },
   },
   parse: () => ({}),
   run: async (ctx) => {
     const scopes = scopesOf(ctx);
-    const available = exposedVerbs(ctx.role, scopes);
-    const have = new Set(available.map((v) => v.name));
-    const not_available = listVerbs().filter((v) => v.mcp && !have.has(v.name)).map((v) => {
+    const all = exposedVerbs(ctx.role, scopes);
+    const available = all.filter((v) => !PLANNED.has(v.name));
+    const have = new Set(all.map((v) => v.name));
+    const planned = [...PLANNED.values()].map((pl) => ({ tool: toolName(pl.name), area: pl.area, summary: pl.summary }));
+    const not_available = listVerbs().filter((v) => v.mcp && !have.has(v.name) && !PLANNED.has(v.name)).map((v) => {
       let why: string;
       if (mcpViolations(v).length) why = "not offered over MCP yet (administration arrives with the admin spec's plans and approvals)";
       else if (!scopes.includes(v.mcp!.scope)) why = `needs the ${v.mcp!.scope} scope; reconnect and grant it`;
@@ -69,7 +73,7 @@ export const capabilities = defineVerb({
     });
     return {
       who: ctx.identity ? `${ctx.identity.display_name} <${ctx.identity.email}>` : "not signed in",
-      role: ctx.role, scopes, tools: available.map((v) => toolName(v.name)), not_available,
+      role: ctx.role, scopes, tools: available.map((v) => toolName(v.name)), not_available, planned,
       tenant: ctx.tenant?.slug ?? null, is_helper: ctx.identity?.kind === "agent",
     };
   },

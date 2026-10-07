@@ -1,3 +1,4 @@
+import { PLANNED } from "../src/verbs/planned";
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import { getVerb, listVerbs } from "../src/verbs/table";
@@ -56,7 +57,8 @@ const TABLE: Record<string, Decl> = {
   "oauth.grant.approve": T("hub", "public", 600, { humanOnly: true }),
 };
 
-const verbs = () => listVerbs().filter((v) => !v.name.startsWith("test."));
+// Planned stubs are pinned in test/planned.test.ts; this table pins the live verbs.
+const verbs = () => listVerbs().filter((v) => !v.name.startsWith("test.") && !PLANNED.has(v.name));
 const hostFor = (scope: string) => (scope === "tenant" ? "acme.pimwell.test" : "pimwell.test");
 
 describe("verb table", () => {

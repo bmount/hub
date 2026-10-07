@@ -1,3 +1,4 @@
+import { PLANNED } from "../src/verbs/planned";
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildContext, credentialUsable, oauthContext } from "../src/auth/context";
@@ -12,7 +13,8 @@ import { apiPost, bearer, seedGrant, seedHuman, seedTenant } from "./helpers";
 
 beforeAll(() => registerAllVerbs());
 
-const names = (vs: VerbDef<unknown, unknown>[]) => vs.map((v) => v.name);
+// Live verbs only; the planned stubs are pinned in test/planned.test.ts.
+const names = (vs: VerbDef<unknown, unknown>[]) => vs.map((v) => v.name).filter((n) => !PLANNED.has(n));
 const noop = { parse: () => ({}), run: async () => ({}) };
 const input = { type: "object" as const, properties: {}, additionalProperties: false as const };
 
