@@ -6,6 +6,7 @@ import { clearSessionCookie, sessionCookie } from "../auth/cookie";
 import { NEUTRAL_LOGIN_MESSAGE, cleanNext, consumeLink, openLink, requestLink } from "../auth/login";
 import type { LinkPurpose } from "../db/types";
 import { notFoundPage } from "./pages";
+import { googleConfigured } from "./googleLogin";
 
 export function isApex(request: Request, env: Env): boolean {
   return classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN).kind === "apex";
@@ -69,8 +70,15 @@ function inboundHint(env: Env): string {
   return `<p>Or send any message to <strong>login@${esc(env.HUB_DOMAIN)}</strong> from your address. The reply carries a link. The hub only writes to addresses that have written to it first.</p>`;
 }
 
+function googleButton(env: Env, next: string | null): string {
+  if (!googleConfigured(env)) return "";
+  const href = "/login/google" + (next ? `?next=${encodeURIComponent(next)}` : "");
+  return `<p><a class="google" href="${esc(href)}">Sign in with Google</a></p><p>Or get a link by email:</p>`;
+}
+
 function loginBody(env: Env, next: string | null, note: string): string {
   return `<h1>Sign in to Pimwell</h1>${note}
+${googleButton(env, next)}
 <form method="post" action="/login">
 <label>Email <input type="email" name="email" required autocomplete="email" maxlength="254"></label>
 ${nextInput(next)}

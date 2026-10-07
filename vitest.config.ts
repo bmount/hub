@@ -16,6 +16,8 @@ export default defineWorkersConfig(async () => {
               HUB_DOMAIN: "pimwell.test",
               HUB_BOOTSTRAP_TOKEN: "test-bootstrap-token",
               HUB_INTERNAL_SECRET: "test-internal-secret",
+              GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
+              GOOGLE_CLIENT_SECRET: "test-google-secret",
             },
             // Stands in for the Ardi Worker: echoes what reached it, so tests can check the forward.
             serviceBindings: {

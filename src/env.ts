@@ -8,6 +8,9 @@ export type Env = {
   HUB_DOMAIN: string;
   HUB_BOOTSTRAP_TOKEN: string;
   HUB_INTERNAL_SECRET?: string;
+  /** Sign in with Google (OAuth web client). Both unset means the Google button is hidden. */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
   /** The Ardi git host (service binding); absent means git URLs answer 503. */
   ARDI?: Fetcher;
   /** One SQLite object per channel, named `<tenant_id>:<conversation_id>` (messaging spec 9.1). */

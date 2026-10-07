@@ -30,7 +30,7 @@ export type Ctx = {
 
 export type OAuthCtx = { grant_id: string; client_id: string; client_name: string; scopes: string[] };
 
-const RANK: Record<Role, number> = { root: 4, admin: 3, member: 2, reader: 1 };
+export const RANK: Record<Role, number> = { root: 4, admin: 3, member: 2, reader: 1 };
 
 export function rank(role: Role | null): number {
   return role ? RANK[role] : 0;

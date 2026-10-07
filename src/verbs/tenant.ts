@@ -1,4 +1,5 @@
 import { defineVerb } from "./table";
+import { applyStandingGrants } from "../auth/googleAdmit";
 import { reqString, stateParam } from "./params";
 import { conflict, notFound } from "../errors";
 import { createTenant, getTenantBySlug, listTenants, setTenantState } from "../db/tenants";
@@ -30,6 +31,8 @@ export const tenantCreate = defineVerb({
   parse: (i) => ({ slug: reqString(i, "slug", { max: 63 }), display_name: reqString(i, "display_name", { max: 80 }) }),
   run: async (ctx, p) => {
     const tenant = await createTenant(ctx.db, p, ctx.now);
+    // People granted admin or membership on every tenant get this one too (Google sign-in rules).
+    await applyStandingGrants(ctx.db, tenant.id, ctx.now);
     await recordEvent(ctx.db, { tenant_id: tenant.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "tenant.create", target_kind: "tenant", target_id: tenant.id, summary: `Created tenant ${tenant.slug}` }, ctx.now);
     return { tenant };
   },

@@ -30,15 +30,16 @@ Design goals:
 ## 2. Non-goals for v1
 
 - Passwords. There are none.
-- Google or passkey sign-in. The schema reserves room (section 6.6); nothing
-  is built.
+- Passkey sign-in. The schema reserves room (section 6.6); nothing is built.
+  (Google sign-in was moved into scope on 2026-10-06; see the amendment at the end.)
 - Per-namespace permissions. Roles live at tenant level.
 - Agent-to-agent delegation, agents creating agents, or agents inviting.
 - Mailboxes, agent email, and the outbound consent rules for arbitrary mail.
   This spec covers only the two auth-related addresses.
 - OAuth authorization server for MCP clients. Separate spec; this one provides
   the session and fresh-proof primitives it needs.
-- Public signup. Every account begins with an invite from a root or admin.
+- Public signup. Every account begins with an invite from a root or admin, or
+  with a Google sign-in that matches a root-managed sign-in rule (amendment below).
 - SCIM, SSO, audit export to third parties.
 
 ## 3. Privacy rule
@@ -271,8 +272,7 @@ The Worker's `email` handler receives mail to `login@` and `signup@`.
 Reserved for later proofs: `proof(id, identity_id, kind, subject,
 created_at)` with `kind` in {`email`, `google`, `passkey`}. Accepting an
 invite or consuming a magic link records an `email` proof. Google sign-in
-will add a `google` proof bound to an existing identity only, never creating
-one.
+records a `google` proof (amendment below).
 
 ### 6.7 Fresh proof
 
@@ -463,3 +463,37 @@ Rulings from the phase 1 reviews, folded into the sections above:
 6. 4.5: archived identities are treated as signed out everywhere.
 7. 6.4: inbound consent is kept only when the DMARC-gated reply succeeds, and
    the rate limit is applied before consent is granted.
+
+## Amendment 2026-10-06: Sign in with Google
+
+The owner moved Google sign-in into v1. The goal is zero-friction onboarding behind
+cautious, root-managed lists. This replaces the earlier rule that Google may only bind to
+an existing identity.
+
+- **Flow.** OIDC authorization code with PKCE (S256), a `state` bound to the browser by
+  a short `pmw_gstate` cookie and stored once in `OAUTH_KV`, and a `nonce` bound to the
+  ID token. Routes are `GET /login/google` and `GET /login/google/callback` on the apex.
+  The redirect URI is `https://<HUB_DOMAIN>/login/google/callback`.
+- **Token checks.** RS256 signature against Google's published keys, issuer, audience,
+  expiry, nonce, and `email_verified`. Unverified addresses are refused.
+- **Admission.** A verified Google identity is admitted when one of these holds:
+  - an active human identity has that email;
+  - an open invite is addressed to it, in which case the verified address accepts the
+    invite, root invites included;
+  - an active `signin_rule` matches the email;
+  - an active `signin_rule` matches the domain. A domain rule matches only when Google's
+    hosted-domain claim `hd` equals the email's domain, which proves a Workspace-managed
+    account.
+
+  Everyone else is refused, and nothing is written except a refusal event.
+- **New accounts.** An admitted address with no identity gets a new human identity,
+  named from the token.
+- **Grants.** Each `signin_grant` of a matching rule adds or raises a tenant membership
+  at every sign-in. It never lowers a role and never revives a removed membership. A grant
+  with no tenant covers every active tenant, and `tenant.create` applies such grants to
+  known identities immediately.
+- **Account binding.** `google_account` binds the first Google `sub` to the identity. The
+  same email arriving from a different Google account is refused.
+- **Managing the lists.** Rules and grants are rows managed by root. Production values
+  are kept out of the repository, per the privacy rule for this project. See
+  `docs/ops/google-signin.md`.
