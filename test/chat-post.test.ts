@@ -96,6 +96,20 @@ describe("chat.post", () => {
     expect((await stub.getMessage(w.acme.id, ch.project_id, "1"))!.refs).toEqual([{ kind: "ticket", key: "site#k7q2", title: null }]);
   });
 
+  it("lets a muted agent retract its own message but not edit it", async () => {
+    const w = await chatWorld();
+    await channelWith(w, "general", ["scout"]);
+    await ok(w.scout.token, "chat.post", { c: "general", body: "scout says", after: 0 });
+    await ok(w.scout.token, "chat.post", { c: "general", body: "scout again", after: 1 });
+    await ok(w.lead.token, "chat.agent_mute", { agent: "scout", minutes: 5 });
+    const edit = await call(w.scout.token, "chat.edit", { c: "general", msg: 1, body: "changed", after: 2 });
+    expect(edit.status).toBe(403);
+    expect(edit.body.error).toBe("muted");
+    expect((await ok(w.scout.token, "chat.retract", { c: "general", msg: 1 })).rev).toBe(2);
+    await ok(w.lead.token, "channel.set_agent_policy", { c: "general", policy: "muted" });
+    expect((await ok(w.scout.token, "chat.retract", { c: "general", msg: 2 })).rev).toBe(2);
+  });
+
   it("edits by the author only; retracts an agent's message by its operator or an admin, never a human's", async () => {
     const w = await chatWorld();
     await channelWith(w);

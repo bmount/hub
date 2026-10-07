@@ -22,6 +22,18 @@ describe("handles", () => {
     expect(skeleton("lead")).not.toBe(skeleton("dev"));
   });
 
+  it("collides i and l, so a look-alike of lead is not a distinct handle", async () => {
+    expect(skeleton("iead")).toBe(skeleton("lead"));
+    expect(skeleton("Iead")).toBe(skeleton("lead"));
+    const acme = await seedTenant("acme");
+    const lead = await seedHuman("lead@example.com", { memberships: [{ tenant_id: acme.id, role: "member" }] });
+    await tick();
+    const iead = await seedHuman("iead@example.com", { memberships: [{ tenant_id: acme.id, role: "member" }] });
+    const dir = await people(env.HUB_DB, acme.id);
+    expect(dir.get(lead.identity.id)!.handle).toBe("lead");
+    expect(dir.get(iead.identity.id)!.handle).not.toBe("iead");
+  });
+
   it("folds confusables independent of order (TR39 style)", () => {
     for (const [a, b] of [["c1ark", "clark"], ["c-lark", "clark"], ["r-nay", "may"], ["v-vest", "west"]]) expect(skeleton(a!)).toBe(skeleton(b!));
   });

@@ -45,9 +45,10 @@ describe("batch C minors", () => {
     const w = await chatWorld();
     await ok(w.lead.token, "channel.create", { slug: "general" });
     const extra = await seedHuman("extra@example.com", { memberships: [{ tenant_id: w.acme.id, role: "member" }] });
+    // Skips "i": it folds to "l", so boti and botl would collide as handles.
     const names: string[] = [];
     for (let i = 0; i < 12; i++) {
-      const name = `bot${String.fromCharCode(97 + i)}`;
+      const name = `bot${"abcdefghjklm"[i]}`;
       await seedAgent(w.acme, w.lead.identity, name);
       await ok(w.lead.token, "channel.add_agent", { c: "general", agent: name });
       names.push(name);

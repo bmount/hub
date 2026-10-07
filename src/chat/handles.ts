@@ -16,9 +16,9 @@ export const RESERVED_SKELETONS = new Set([...RESERVED_HANDLES].map((h) => skele
  * confusables apply; hyphens are dropped so `ti-dy` cannot sit beside `tidy`.
  */
 export function skeleton(h: string): string {
-  // Single-character maps and hyphen removal first, then every multi-character confusable expanded to its canonical
+  // Single-character maps (0→o, 1→l, i→l) and hyphen removal first, then every multi-character confusable expanded to its canonical
   // pair (m→rn, d→cl, w→vv), so the result does not depend on the order of the folds.
-  return h.toLowerCase().replace(/0/g, "o").replace(/1/g, "l").replace(/-/g, "").replace(/m/g, "rn").replace(/d/g, "cl").replace(/w/g, "vv");
+  return h.toLowerCase().replace(/0/g, "o").replace(/[1i]/g, "l").replace(/-/g, "").replace(/m/g, "rn").replace(/d/g, "cl").replace(/w/g, "vv");
 }
 
 /** The handle an address suggests. Agents get their slug: their address is `<slug>@<tenant>.<domain>`. */

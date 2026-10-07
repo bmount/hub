@@ -34,13 +34,14 @@ function authorOf(ctx: Ctx): Author {
 const needsAfter = (a: Author) => a.session_kind === "agent_run" || a.session_kind === "oauth";
 
 /** D1 is the truth for who may post and be woken (spec 6.2, 6.7, 9.3), read on every command. */
-async function gate(ctx: Ctx, ch: ChannelRow, author: Author): Promise<{ audience: Audience; policy: AgentPolicy }> {
+async function gate(ctx: Ctx, ch: ChannelRow, author: Author, retract = false): Promise<{ audience: Audience; policy: AgentPolicy }> {
   if (ch.state !== "active") throw conflict("channel is archived");
   const [controls, members] = await Promise.all([getControls(ctx.db, ch.tenant_id, ctx.now), listAgentMembers(ctx.db, ch.tenant_id, ch.project_id)]);
   if (author.kind === "agent") {
     if (!controls.agents_enabled) throw new HubError(403, "agents_disabled", "agent posting is switched off in this tenant");
-    if (controls.muted.includes(author.id)) throw new HubError(403, "muted", "this agent is muted");
-    if (ch.agent_policy === "muted") throw new HubError(403, "muted", "this channel takes no agent posts");
+    // A retraction skips the mute and channel-policy checks (ruling C-11); the conversation still limits who may retract what.
+    if (!retract && controls.muted.includes(author.id)) throw new HubError(403, "muted", "this agent is muted");
+    if (!retract && ch.agent_policy === "muted") throw new HubError(403, "muted", "this channel takes no agent posts");
   }
   const operators: Record<string, string> = {};
   for (const m of members) if (m.operator_id) operators[m.identity_id] = m.operator_id;
@@ -202,7 +203,7 @@ export async function versionMessage(ctx: Ctx, p: VersionParams): Promise<PostRe
     const prior = (await conv.replay(ch.tenant_id, ch.project_id, author.id, retract ? "retract" : "edit", p.idempotency_key)) as PostOk | null;
     if (prior) return result(ch, prior, [], 0);
   }
-  await gate(ctx, ch, author);
+  await gate(ctx, ch, author, retract);
   // An agent's edits count against its per-session window like its posts, so edit loops are limited too. A retraction is
   // exempt from the window and the tripwire (ruling C-8): taking back what it said must always be possible.
   if (author.kind === "agent" && !retract) {
