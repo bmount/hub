@@ -9,6 +9,8 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS item (item_seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, kind TEXT NOT NULL,
      conversation_id TEXT NOT NULL, seq INTEGER NOT NULL, msg_id TEXT NOT NULL, thread_root TEXT, hop INTEGER NOT NULL,
      author_id TEXT NOT NULL, wake INTEGER NOT NULL, created_at INTEGER NOT NULL, acked_at INTEGER)`,
+  // The prune in deliver() looks up acked rows by age; partial, so unacked rows cost nothing. DO-local schema: IF NOT EXISTS guards an existing object.
+  "CREATE INDEX IF NOT EXISTS item_acked ON item (acked_at) WHERE acked_at IS NOT NULL",
   "CREATE TABLE IF NOT EXISTS cursor (conversation_id TEXT PRIMARY KEY, read_seq INTEGER NOT NULL)",
   "CREATE TABLE IF NOT EXISTS stamp (scope TEXT NOT NULL, at INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS stamp_scope ON stamp (scope, at)",
@@ -133,7 +135,8 @@ export class Inbox extends DurableObject<Env> {
 
   /**
    * Spec 6.5 per-identity and per-session windows, counted exactly; on success the post is counted and the hop of
-   * the newest open top-level wake in this conversation comes back as the cause for a top-level post (spec 6.6).
+   * the newest wake delivered in this conversation within 10 minutes (any thread or the top level, acked or not)
+   * comes back as a cause for the post (ruling C-7).
    */
   async reserve(tenant_id: string, identity_id: string, q: { session_id: string; is_agent: boolean; conversation_id: string; now: number }): Promise<ReserveResult> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
@@ -144,7 +147,7 @@ export class Inbox extends DurableObject<Env> {
     if (!v.ok) return v;
     this.ctx.storage.sql.exec("INSERT INTO stamp (scope, at) VALUES (?, ?), ('identity', ?)", session, q.now, q.now);
     const w = this.#q<{ hop: number }>(
-      "SELECT hop FROM item WHERE wake = 1 AND created_at > ? AND conversation_id = ? AND thread_root IS NULL ORDER BY item_seq DESC LIMIT 1", q.now - LIMITS.WAKE_HOP_WINDOW_MS, q.conversation_id,
+      "SELECT hop FROM item WHERE wake = 1 AND created_at > ? AND conversation_id = ? ORDER BY item_seq DESC LIMIT 1", q.now - LIMITS.WAKE_HOP_WINDOW_MS, q.conversation_id,
     )[0];
     // Newest open wake per scope: a thread's own wakes, and the wake on its root message (ruling C-4).
     const thread_wake_hops: Record<string, number> = {};

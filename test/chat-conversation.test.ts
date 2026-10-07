@@ -1,5 +1,5 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
 import type { Conversation } from "../src/chat/conversationDO";
 import type { Author, PostInput, PostOk, PostOutcome, VersionInput } from "../src/chat/types";
@@ -32,6 +32,10 @@ function edit(actor: Author, msg: string, body: string | null, extra: Partial<Ve
     operator_of: [], is_admin: false, idempotency_key: null, ...extra,
   };
 }
+// Tests that fail deliveries on purpose leave an alarm scheduled; it must not fire into a later test.
+afterEach(async () => {
+  await runInDurableObject(conv(), (_o: Conversation, state) => state.storage.deleteAlarm());
+});
 const items = async (id: string) => (await inboxStub(env, T, id).list(T, id, { after: 0, limit: 100, include_acked: true })).items;
 
 describe("Conversation: messages and versions", () => {

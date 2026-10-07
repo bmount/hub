@@ -30,10 +30,10 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS inbox_outbox (key TEXT PRIMARY KEY, identity_id TEXT NOT NULL, item_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0)",
   "CREATE TABLE IF NOT EXISTS index_outbox (seq INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0)",
 ];
-// Objects created before the backoff column existed: the ALTER fails harmlessly on a table that already has it.
-const UPGRADES = [
-  "ALTER TABLE inbox_outbox ADD COLUMN next_at INTEGER NOT NULL DEFAULT 0",
-  "ALTER TABLE index_outbox ADD COLUMN next_at INTEGER NOT NULL DEFAULT 0",
+// Objects created before the backoff column existed get it added; a pragma table_info check says whether they need it.
+const UPGRADES: Array<{ table: string; column: string; ddl: string }> = [
+  { table: "inbox_outbox", column: "next_at", ddl: "ALTER TABLE inbox_outbox ADD COLUMN next_at INTEGER NOT NULL DEFAULT 0" },
+  { table: "index_outbox", column: "next_at", ddl: "ALTER TABLE index_outbox ADD COLUMN next_at INTEGER NOT NULL DEFAULT 0" },
 ];
 
 type Op = "post" | "edit" | "retract";
@@ -69,12 +69,9 @@ export class Conversation extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     for (const s of SCHEMA) this.ctx.storage.sql.exec(s);
-    for (const s of UPGRADES) {
-      try {
-        this.ctx.storage.sql.exec(s);
-      } catch {
-        // already upgraded
-      }
+    for (const u of UPGRADES) {
+      const has = this.ctx.storage.sql.exec<{ name: string }>(`SELECT name FROM pragma_table_info('${u.table}')`).toArray().some((c) => c.name === u.column);
+      if (!has) this.ctx.storage.sql.exec(u.ddl);
     }
   }
 
@@ -176,6 +173,24 @@ export class Conversation extends DurableObject<Env> {
     return ids.map((x) => this.#view(this.#msg(x.msg_id)!));
   }
 
+  /** The newest few messages by others in the scope: what a post that claims a view past the head is shown. */
+  #tail(me: string, root: string | null): MsgView[] {
+    const scope = root ? "(thread_root = ? OR msg_id = ?)" : "thread_root IS NULL";
+    const ids = this.#q<{ msg_id: string }>(
+      `SELECT msg_id FROM artifact WHERE author_id <> ? AND kind <> 'system' AND ${scope} GROUP BY msg_id ORDER BY MIN(seq) DESC LIMIT 5`,
+      me, ...(root ? [root, root] : []),
+    );
+    return ids.reverse().map((x) => this.#view(this.#msg(x.msg_id)!));
+  }
+
+  /** `after` is the head the caller read; one past the head cannot be a view of anything, and would skip read-first. */
+  #staleCheck(me: string, after: number, root: string | null): PostOutcome | null {
+    const head = this.#head();
+    if (after > head) return { refused: "stale_view", head, missed: this.#tail(me, root) };
+    const missed = this.#stale(me, after, root);
+    return missed.length > 0 ? { refused: "stale_view", head, missed } : null;
+  }
+
   #blocked(x: string, y: string, now: number): boolean {
     const [a, b] = x < y ? [x, y] : [y, x];
     return this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM pair_block WHERE a = ? AND b = ? AND until > ?", a, b, now)[0]!.n > 0;
@@ -232,15 +247,15 @@ export class Conversation extends DurableObject<Env> {
       if (!mentioned) return { refused: "forbidden", detail: "this channel takes agent posts only as replies in threads that mention the agent" };
     }
     if (p.after !== null) {
-      const missed = this.#stale(me.id, p.after, root);
-      if (missed.length > 0) return { refused: "stale_view", head: this.#head(), missed };
+      const stale = this.#staleCheck(me.id, p.after, root);
+      if (stale) return stale;
     }
     const dup = this.#q<{ n: number }>(
       "SELECT COUNT(*) AS n FROM artifact WHERE author_id = ? AND body_sha256 = ? AND kind = 'say' AND created_at > ?", me.id, p.body_sha256, p.now - LIMITS.DUPLICATE_WINDOW_MS,
     )[0]!.n;
     if (dup > 0) return { refused: "duplicate" };
     if (me.kind === "agent") {
-      const recent = this.#q<{ at: number }>("SELECT created_at AS at FROM artifact WHERE session_kind = 'agent_run' AND kind = 'say' AND created_at > ? ORDER BY created_at", p.now - 60_000)
+      const recent = this.#q<{ at: number }>("SELECT created_at AS at FROM artifact WHERE session_kind = 'agent_run' AND kind = 'say' AND rev = 1 AND created_at > ? ORDER BY created_at", p.now - 60_000)
         .map((r) => r.at);
       if (recent.length >= LIMITS.CONV_AGENT_PER_MIN) {
         return { refused: "rate", retry_after_s: Math.max(1, Math.ceil((recent[recent.length - LIMITS.CONV_AGENT_PER_MIN]! + 60_000 - p.now) / 1000)) };
@@ -256,7 +271,9 @@ export class Conversation extends DurableObject<Env> {
       return { refused: "needs_human" };
     }
 
-    const scopeWake = root ? p.thread_wake_hops[root] ?? null : p.wake_hop;
+    // Ruling C-7: the newest wake this agent was given anywhere in the conversation counts, so a top-level post after a thread wake cannot reset the chain.
+    const threadWake = root ? p.thread_wake_hops[root] ?? null : null;
+    const scopeWake = threadWake === null && p.wake_hop === null ? null : Math.max(threadWake ?? 0, p.wake_hop ?? 0);
     const hop = computeHop(me.kind, target ? target.hop : null, scopeWake);
     const { seq, msg_id } = this.#newMessage({
       kind: "say", author_id: me.id, author_kind: me.kind, session_id: me.session_id, session_kind: me.session_kind, thread_root: root,
@@ -308,7 +325,7 @@ export class Conversation extends DurableObject<Env> {
       let reason: Suppressed["reason"] | null = null;
       if (t.kind === "agent") {
         if (!p.audience.agent_members.includes(id)) reason = "not_member";
-        else if (!p.audience.agents_enabled || p.audience.muted_agents.includes(id)) reason = "muted";
+        else if (!p.audience.agents_enabled || p.audience.muted_agents.includes(id) || p.policy === "muted") reason = "muted";
         else if (!wakesAllowed(hop)) reason = "hop_limit";
         else if (me.kind === "agent" && this.#blocked(me.id, id, p.now)) reason = "pair_block";
       }
@@ -351,8 +368,8 @@ export class Conversation extends DurableObject<Env> {
     // The cap bounds edits only: a message at the cap can still be retracted (B-I2).
     if (!retract && m.rev >= LIMITS.VERSIONS_MAX) return { refused: "edit_cap" };
     if (!retract && v.after !== null) {
-      const missed = this.#stale(me.id, v.after, m.thread_root);
-      if (missed.length > 0) return { refused: "stale_view", head: this.#head(), missed };
+      const stale = this.#staleCheck(me.id, v.after, m.thread_root);
+      if (stale) return stale;
     }
     const rev = m.rev + 1;
     const seq = this.#append({
@@ -430,27 +447,32 @@ export class Conversation extends DurableObject<Env> {
     this.#bind(q.tenant_id, q.conversation_id);
     const since = q.since;
     const counts = this.#q<{ n: number; agents: number }>(
-      "SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN author_kind = 'agent' THEN 1 ELSE 0 END), 0) AS agents FROM msg WHERE kind = 'say' AND first_seq > ?", since,
+      "SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN author_kind = 'agent' THEN 1 ELSE 0 END), 0) AS agents FROM msg WHERE kind = 'say' AND retracted = 0 AND first_seq > ?", since,
     )[0]!;
     // Identity ids are ULIDs, so a quoted id inside meta_json is an exact match.
-    const mentions_me = this.#q<MsgRow>(
+    // One row past the cap says the list was cut, so the caller does not move its cursor over what it never saw.
+    const mentionRows = this.#q<MsgRow>(
       `${MSG_SELECT} WHERE m.kind = 'say' AND m.first_seq > ? AND m.author_id <> ? AND m.retracted = 0 AND a.meta_json LIKE ? ORDER BY m.first_seq LIMIT ?`,
-      since, q.me, `%"${q.me}"%`, q.max_items,
-    ).map((r) => this.#view(r));
-    const my_threads = this.#q<{ thread_root: string; n: number; newest: number }>(
-      `SELECT thread_root, COUNT(*) AS n, MAX(first_seq) AS newest FROM msg WHERE kind = 'say' AND first_seq > ? AND author_id <> ?
+      since, q.me, `%"${q.me}"%`, q.max_items + 1,
+    );
+    const mentions_truncated = mentionRows.length > q.max_items;
+    const mentions_me = mentionRows.slice(0, q.max_items).map((r) => this.#view(r));
+    const threadRows = this.#q<{ thread_root: string; n: number; newest: number }>(
+      `SELECT thread_root, COUNT(*) AS n, MAX(first_seq) AS newest FROM msg WHERE kind = 'say' AND retracted = 0 AND first_seq > ? AND author_id <> ?
          AND thread_root IN (SELECT thread_root FROM thread_sub WHERE identity_id = ?) GROUP BY thread_root ORDER BY newest DESC LIMIT ?`,
-      since, q.me, q.me, q.max_items,
-    ).map((t) => ({ root: this.#view(this.#msg(t.thread_root)!), replies: t.n, newest: this.#view(this.#msg(String(t.newest))!) }));
+      since, q.me, q.me, q.max_items + 1,
+    );
+    const my_threads_truncated = threadRows.length > q.max_items;
+    const my_threads = threadRows.slice(0, q.max_items).map((t) => ({ root: this.#view(this.#msg(t.thread_root)!), replies: t.n, newest: this.#view(this.#msg(String(t.newest))!) }));
     const threads = this.#q<{ thread_root: string; n: number }>(
-      "SELECT thread_root, COUNT(*) AS n FROM msg WHERE kind = 'say' AND first_seq > ? AND thread_root IS NOT NULL GROUP BY thread_root ORDER BY n DESC, thread_root LIMIT 5", since,
+      "SELECT thread_root, COUNT(*) AS n FROM msg WHERE kind = 'say' AND retracted = 0 AND first_seq > ? AND thread_root IS NOT NULL GROUP BY thread_root ORDER BY n DESC, thread_root LIMIT 5", since,
     ).map((t) => ({ root: this.#view(this.#msg(t.thread_root)!), replies: t.n }));
     const authors = this.#q<{ author_id: string }>("SELECT author_id FROM msg WHERE kind = 'say' AND first_seq > ? GROUP BY author_id ORDER BY MIN(first_seq)", since)
       .map((r) => r.author_id);
     const refs = this.#q<{ kind: string; key: string; title: string | null }>(
       "SELECT kind, key, MAX(title_snapshot) AS title FROM ref WHERE seq > ? GROUP BY kind, key ORDER BY MIN(seq) LIMIT 20", since,
     ).map((r) => ({ kind: r.kind as StoredRef["kind"], key: r.key, title: r.title }));
-    return { head: this.#head(), since, new_messages: counts.n, agent_messages: counts.agents, mentions_me, my_threads, threads, authors, refs };
+    return { head: this.#head(), since, new_messages: counts.n, agent_messages: counts.agents, mentions_me, mentions_truncated, my_threads, my_threads_truncated, threads, authors, refs };
   }
 
   async alarm(): Promise<void> {
@@ -465,11 +487,13 @@ export class Conversation extends DurableObject<Env> {
     return Math.min(LIMITS.OUTBOX_BACKOFF_BASE_MS * 2 ** Math.max(0, attempts - 1), LIMITS.OUTBOX_BACKOFF_MAX_MS);
   }
 
-  /** One row failed: retry later with a capped exponential backoff; a wake is given up on after OUTBOX_MAX_ATTEMPTS, an index row never. */
-  #fail(table: OutboxTable, col: "key" | "seq", id: string | number, attempts: number, now: number): void {
+  /**
+   * One row failed: retry later with a capped exponential backoff. Only a wake (or an unreadable row) is given up on after
+   * OUTBOX_MAX_ATTEMPTS (ruling C-9); an index row and a human's notification retry at the capped backoff for as long as it takes.
+   */
+  #fail(table: OutboxTable, col: "key" | "seq", id: string | number, attempts: number, now: number, droppable = true): void {
     const n = attempts + 1;
-    // Only wakes are given up on; an index row is the record of a committed message and retries at the capped backoff for as long as it takes.
-    if (table === "inbox_outbox" && n >= LIMITS.OUTBOX_MAX_ATTEMPTS) {
+    if (table === "inbox_outbox" && droppable && n >= LIMITS.OUTBOX_MAX_ATTEMPTS) {
       console.log(`${table} row dropped after ${n} attempts`);
       this.#run(`DELETE FROM ${table} WHERE ${col} = ?`, id);
       return;
@@ -549,7 +573,7 @@ export class Conversation extends DurableObject<Env> {
             await send([x]);
             this.#run("DELETE FROM inbox_outbox WHERE key = ?", x.key);
           } catch {
-            this.#fail("inbox_outbox", "key", x.key, x.attempts, now);
+            this.#fail("inbox_outbox", "key", x.key, x.attempts, now, x.item.wake);
           }
         }
       }
@@ -558,7 +582,12 @@ export class Conversation extends DurableObject<Env> {
     const next = this.#q<{ n: number | null }>(
       "SELECT MIN(n) AS n FROM (SELECT MIN(next_at) AS n FROM inbox_outbox UNION ALL SELECT MIN(next_at) FROM index_outbox)",
     )[0]?.n ?? null;
-    if (next !== null && (await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Math.max(next, Date.now() + 1_000));
+    if (next !== null) {
+      // Pull the alarm earlier when a sooner retry is due; never push one that is already set earlier.
+      const due = Math.max(next, Date.now() + 1_000);
+      const set = await this.ctx.storage.getAlarm();
+      if (set === null || set > due) await this.ctx.storage.setAlarm(due);
+    }
   }
 
   /** The D1 statements for one artifact: its index row, and for a new version, replace the message's refs. */

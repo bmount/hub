@@ -18,7 +18,7 @@ export type PostParams = { c: string; body: string; after: number | null; reply_
 export type VersionParams = { c: string; msg: string; body: string | null; after: number | null; idempotency_key: string | null };
 export type PostResult = {
   channel: string; seq: number; msg_id: string; rev: number; hop: number; head: number; woke: number; unresolved: Unresolved[];
-  mentions_not_waking: number; replayed: boolean;
+  mentions_not_waking: number; suppressed: Array<{ identity_id: string; reason: string }>; replayed: boolean;
 };
 
 /** Spec 6.1: agents speak only from run sessions; humans from browser sessions, or oauth sessions over MCP. */
@@ -132,7 +132,8 @@ async function refusalError(ctx: Ctx, author: Author, ch: ChannelRow, r: Refusal
 }
 
 function result(ch: ChannelRow, o: PostOk, unresolved: Unresolved[], not_waking: number): PostResult {
-  return { channel: ch.slug, seq: o.seq, msg_id: o.msg_id, rev: o.rev, hop: o.hop, head: o.head, woke: o.woke.length, unresolved, mentions_not_waking: not_waking, replayed: o.replayed };
+  return { channel: ch.slug, seq: o.seq, msg_id: o.msg_id, rev: o.rev, hop: o.hop, head: o.head, woke: o.woke.length, unresolved, mentions_not_waking: not_waking,
+    suppressed: o.suppressed.map((x) => ({ identity_id: x.identity_id, reason: x.reason })), replayed: o.replayed };
 }
 
 /** Events carry ids only, never text (spec 3). */
@@ -202,8 +203,9 @@ export async function versionMessage(ctx: Ctx, p: VersionParams): Promise<PostRe
     if (prior) return result(ch, prior, [], 0);
   }
   await gate(ctx, ch, author);
-  // An agent's edits and retractions count against its per-session window like its posts, so edit loops are limited too.
-  if (author.kind === "agent") {
+  // An agent's edits count against its per-session window like its posts, so edit loops are limited too. A retraction is
+  // exempt from the window and the tripwire (ruling C-8): taking back what it said must always be possible.
+  if (author.kind === "agent" && !retract) {
     const reserve = (await inboxStub(ctx.env, ch.tenant_id, author.id).reserve(ch.tenant_id, author.id, {
       session_id: author.session_id, is_agent: true, conversation_id: ch.project_id, now: ctx.now,
     })) as ReserveResult;

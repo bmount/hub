@@ -74,6 +74,8 @@ export type ReadPage = { head: number; found: boolean; root: MsgView | null; mes
 export type DigestQuery = { tenant_id: string; conversation_id: string; since: number; me: string; max_items: number };
 export type Digest = {
   head: number; since: number; new_messages: number; agent_messages: number; mentions_me: MsgView[];
+  /** The lists were cut at the cap (one more row existed). */
+  mentions_truncated: boolean; my_threads_truncated: boolean;
   my_threads: Array<{ root: MsgView; replies: number; newest: MsgView }>; threads: Array<{ root: MsgView; replies: number }>;
   authors: string[]; refs: StoredRef[];
 };

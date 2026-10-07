@@ -23,8 +23,10 @@ describe("batch C minors", () => {
     for (let i = 0; i < 3; i++) head = (await ok(w.scout.token, "chat.edit", { c: "general", msg: seqs[i], body: `edit ${i}`, after: head })).head;
     const edit = await call(w.scout.token, "chat.edit", { c: "general", msg: seqs[0], body: "one more", after: head });
     expect([edit.status, edit.body.error]).toEqual([429, "rate"]);
+    // Ruling C-8: a retraction is exempt from the window, and from the tripwire.
     const retract = await call(w.scout.token, "chat.retract", { c: "general", msg: seqs[1] });
-    expect([retract.status, retract.body.error]).toEqual([429, "rate"]);
+    expect([retract.status, retract.body.error]).toEqual([200, undefined]);
+    expect((await call(w.scout.token, "chat.retract", { c: "general", msg: seqs[2] })).status).toBe(200);
     // A human's edits are not held to the agent window.
     const mine = await ok(w.lead.token, "chat.post", { c: "general", body: "human" });
     for (let i = 0; i < 8; i++) await ok(w.lead.token, "chat.edit", { c: "general", msg: mine.seq, body: `human ${i}` });

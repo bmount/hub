@@ -94,7 +94,7 @@ describe("Inbox object", () => {
   it("returns the newest open wake hop per scope, its thread root or its own message", async () => {
     await box().deliver(T, "I1", [item(1, { hop: 0 }), item(2, { hop: 1, thread_root: "M1" }), item(3, { hop: 2, thread_root: "M3x" }), item(4, { hop: 0, wake: false })]);
     const r = await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() });
-    expect(r).toEqual({ ok: true, wake_hop: 0, thread_wake_hops: { M3x: 2, M1: 1 } });
+    expect(r).toEqual({ ok: true, wake_hop: 2, thread_wake_hops: { M3x: 2, M1: 1 } });
   });
 
   it("keeps read cursors monotonic", async () => {
@@ -120,13 +120,13 @@ describe("Inbox object", () => {
     expect((await box().reserve(T, "I1", { session_id: "S9", is_agent: false, conversation_id: "C1", now: now + 40 })).ok).toBe(false);
   });
 
-  it("reports the hop of the newest recent top-level wake in the conversation", async () => {
+  it("reports the hop of the newest recent wake anywhere in the conversation (C-7)", async () => {
     await box().deliver(T, "I1", [item(1, { hop: 1 }), item(2, { hop: 2, thread_root: "M1" }), item(3, { hop: 0, wake: false, key: "C1:3:I1" })]);
     const r = await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() });
-    expect(r).toEqual({ ok: true, wake_hop: 1, thread_wake_hops: { M1: 2 } });
+    expect(r).toEqual({ ok: true, wake_hop: 2, thread_wake_hops: { M1: 2 } });
     await box().ack(T, "I1", 3, Date.now());
     // Acked or not, a wake counts as the cause for 10 minutes (ruling C-4); after that it does not.
-    expect(await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() })).toEqual({ ok: true, wake_hop: 1, thread_wake_hops: { M1: 2 } });
+    expect(await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() })).toEqual({ ok: true, wake_hop: 2, thread_wake_hops: { M1: 2 } });
     expect(await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() + 11 * 60_000 })).toEqual({ ok: true, wake_hop: null, thread_wake_hops: {} });
   });
 
