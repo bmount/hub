@@ -25,6 +25,44 @@ Anyone can ask what happened and why and get an answer with evidence. Anyone can
 Pimwell itself or from their own ChatGPT or Claude session, and the change is as traceable as the
 problem.
 
+## Where it stands (2026-10-07, evening)
+
+The milestone tables below keep their original statuses. This is the current picture.
+
+**Built and live:**
+- **Workspace:** the workbench, with a rail, jump box, + File, list and inspector panes, keyboard and phone layout.
+  Docket, Mail, People, Apps, AI usage, Needs me and the Assistant all live in it.
+- **Work (M2):**
+  - items with kinds, owners, quests, claim leases and in-place edits;
+  - comments with mentions, following, and "What needs me";
+  - links to commits, mail and URLs;
+  - every verb over MCP, including write.
+- **Mail (M2, M9):**
+  - **Inbound:** organization, project and agent addresses, vetted, with "Propose work" that cites the message, and
+    agent inboxes that wake the agent.
+  - **Outbound:** replies and agent mail under the golden rule, off until an admin turns it on.
+- **Deploys and errors (M3, M4 in part):** apps in the Cloudflare account report through `pimwell-tail`, with
+  redaction at the source. Errors are grouped by cause, deploys are recorded from script versions (with the commit as
+  tag), and new problems are posted in #<project>-ops. The onboard skill at /setup tells agents how to wire an app.
+- **AI usage and cost (M5 in part):** one ledger covering Pimwell's own calls, what agents report, and app usage,
+  priced when recorded, per person, agent, model and work item.
+- **People and administration:** invites, roles, removal, root-approved app registrations, model keys and prices,
+  organization delete, request logging with who acted, and the audit trail.
+- **Assistant (M6 in part):** chat that calls Pimwell's tools as the person, read-only unless switched.
+- **Planned features stand in place:** each planned verb answers `not_implemented` with its spec, and each appears
+  under "Coming".
+
+**Next, roughly in order:**
+1. **Search:** work, mail and conversations (`work.search`, `message.search`, `search.query`).
+2. **Board and bulk changes:** `work.board`, `work.bulk_update`.
+3. **Hub readiness:** rate limits and long-poll costs for always-connected agents; MCP heavy-user budgets.
+4. **Code views through Ardi:** branches, commits, files, diffs (M1), then reviews and integration (M6). These wait
+   on read APIs from Ardi, requested through docs/requests/.
+5. **Errors to code:** stack frames to lines at the deployed commit (M4), and "what came after this commit" (M3).
+6. **Project-level access, then folding Commons into its organization (M1, admin P4).**
+7. **Pi as a hosted coding agent and reviewer agents (M6).**
+8. **Situations in, the truth out (M7).**
+
 ## The pitch, and what delivers it
 
 The landing page makes one promise per cloud. Each promise is tied here to the roadmap items that make it true,
