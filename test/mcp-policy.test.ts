@@ -20,7 +20,7 @@ const input = { type: "object" as const, properties: {}, additionalProperties: f
 
 describe("MCP exposure rules", () => {
   it("exposes exactly these tools", () => {
-    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["app.list", "app.register", "attention.done", "attention.list", "capabilities", "chat.catchup", "chat.inbox", "chat.read", "chat.thread", "deploy.list", "deploy.record", "event.list", "mail.list", "mail.propose_work", "mail.read", "project.history", "project.list", "ref.backlinks", "skill.list", "skill.read", "trace.list", "trace.read", "usage.report", "usage.summary", "whoami", "work.claim", "work.comment", "work.create", "work.link", "work.list", "work.read", "work.subscribe", "work.update"]);
+    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["app.list", "app.register", "attention.done", "attention.list", "capabilities", "chat.catchup", "chat.inbox", "chat.read", "chat.thread", "deploy.list", "deploy.record", "event.list", "mail.list", "mail.propose_work", "mail.read", "mail.reply", "mail.send", "project.history", "project.list", "ref.backlinks", "skill.list", "skill.read", "trace.list", "trace.read", "usage.report", "usage.summary", "whoami", "work.claim", "work.comment", "work.create", "work.link", "work.list", "work.read", "work.subscribe", "work.update"]);
     expect(toolName("project.list")).toBe("project_list");
   });
 

@@ -22,7 +22,9 @@
       "migrations_dir": "migrations"
     }
   ],
-  "send_email": [{ "name": "MAIL", "allowed_sender_addresses": ["login@pimwell.com"] }],
+  // Outbound mail: sign-in links from login@, and replies and agent mail from org, project and agent addresses
+  // (src/verbs/mailOut.ts decides the From address; nobody passes one in).
+  "send_email": [{ "name": "MAIL" }],
   // Git smart HTTP on tenant hosts goes to Ardi (docs/superpowers/specs/2026-10-06-ardi-hub-integration.md).
   "services": [{ "binding": "ARDI", "service": "ardi-pimwell" }],
   "kv_namespaces": [

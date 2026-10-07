@@ -5,7 +5,7 @@ import { normalizeEmail } from "../db/identities";
 import { hasActiveConsent } from "../db/consent";
 import { buildMime, safeMessageId } from "./mime";
 
-export type Outbound = { to: string; subject: string; text: string };
+export type Outbound = { to: string; subject: string; text: string; from?: string; inReplyTo?: string | null; references?: string[]; utf8?: boolean };
 export type SendResult = "sent" | "no_consent" | "failed";
 export type SentMail = { from: string; to: string; subject: string; text: string; raw: string };
 
@@ -27,11 +27,11 @@ export async function sendMail(env: Env, mail: Outbound, now: number, opts: { re
   const to = normalizeEmail(reply ? reply.from : mail.to);
   try {
     if (!(await hasActiveConsent(env.HUB_DB, to))) return "no_consent";
-    const from = reply ? reply.to.trim().toLowerCase() : senderAddress(env);
+    const from = reply ? reply.to.trim().toLowerCase() : mail.from ?? senderAddress(env);
     const raw = buildMime({
       from, to, subject: mail.subject, text: mail.text,
       messageId: `<${ulid(now)}@${env.HUB_DOMAIN}>`, date: new Date(now),
-      inReplyTo: reply ? safeMessageId(reply.headers.get("message-id")) : null,
+      inReplyTo: reply ? safeMessageId(reply.headers.get("message-id")) : mail.inReplyTo ?? null, references: mail.references, utf8: mail.utf8,
     });
     if (reply) await reply.reply(new EmailMessage(from, reply.from, raw));
     else if (testTransport) await testTransport({ from, to, subject: mail.subject, text: mail.text, raw });

@@ -9,7 +9,7 @@ const TENANT_TABLES = [
   "msg_ref", "msg_index", "conversation_member", "agent_chat_state", "chat_control", "channel",
   "model_call", "model_route", "provider_credential", "signin_grant",
   "event", "oauth_grant", "api_token", "invite", "consent",
-  "work_item", "inbound_mail",
+  "outbound_mail", "work_item", "inbound_mail",
   "session", "membership", "project", "namespace",
 ] as const;
 

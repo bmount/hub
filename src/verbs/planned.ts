@@ -85,10 +85,6 @@ const PLANS: Plan[] = [
     spec: "Integrates by default once approved and checks pass; refuses when the base moved and conflicts; records the merge commit on linked work.",
     input: { id: S("Review") }, required: ["id"] },
   // Messaging
-  { name: "mail.reply", area: "messaging", kind: "command", minRole: "member", title: "Reply by mail",
-    summary: "Reply to mail received at a project address, from that address.",
-    spec: "Golden rule: only to an address that wrote to us first, within limits and kill switches; the reply joins the thread and the work it produced.",
-    input: { id: S("Mail id"), body: S("The reply") }, required: ["id", "body"] },
   { name: "message.search", area: "messaging", kind: "query", minRole: "reader", title: "Search conversations",
     summary: "Search messages in the conversations you can read.",
     spec: "Ranked results with the thread around each hit; filters for channel, person and date.",

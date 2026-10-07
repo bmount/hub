@@ -12,7 +12,7 @@ beforeAll(() => registerAllVerbs());
 describe("planned capabilities", () => {
   it("are exactly these, each a tenant verb inside the MCP rules", () => {
     expect([...PLANNED.keys()].sort()).toEqual([
-      "mail.reply", "message.search",
+      "message.search",
       "repo.branches", "repo.diff", "repo.file", "repo.log", "repo.search",
       "review.comment", "review.integrate", "review.list", "review.read", "review.request", "review.verdict",
       "search.query",
