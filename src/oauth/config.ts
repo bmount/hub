@@ -3,7 +3,8 @@ import type { Env } from "../env";
 import { classifyHost } from "../tenant";
 
 /** Phase 1 grants `read` only; `write` arrives in phase 2 (MCP spec 13). */
-export const OAUTH_SCOPES: readonly string[] = ["read"];
+/** MCP spec 8.1: read covers queries, write covers ordinary commands. Admin and hub scopes arrive with the admin spec. */
+export const OAUTH_SCOPES: readonly string[] = ["read", "write"];
 export const ACCESS_TOKEN_TTL_S = 3600;
 export const REFRESH_IDLE_TTL_S = 30 * 24 * 3600;
 export const CLIENT_UNUSED_TTL_S = 30 * 24 * 3600;

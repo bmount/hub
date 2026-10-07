@@ -20,7 +20,8 @@ import { isApex, sameOrigin } from "./login";
 import { notFoundPage } from "./pages";
 
 const SCOPE_TEXT: Record<string, (tenant: string) => string> = {
-  read: (t) => `See projects, activity, and your profile in ${t}.`,
+  read: (t) => `See projects, work, mail, conversations, and activity in ${t}.`,
+  write: (t) => `Act for you in ${t}: file and update work, post in conversations, and create projects. Nothing it does is hidden: every action is recorded under this connection.`,
 };
 
 function redirect(location: string, headers: Record<string, string> = {}): Response {
@@ -59,7 +60,9 @@ export async function authorizePage(request: Request, env: Env, now: number = Da
   const slug = tenantOfResource(env, req.resource);
   if (!slug) return redirect(authorizationErrorRedirect(req, "invalid_target", "resource must be https://<tenant>.<hub>/mcp"));
   if (req.codeChallengeMethod !== "S256" || !req.codeChallenge) return redirect(authorizationErrorRedirect(req, "invalid_request", "PKCE with S256 is required"));
-  const scopes = req.scope.length === 0 ? ["read"] : req.scope;
+  // MCP spec 8.1: choosing write grants read and write together.
+  const asked = req.scope.length === 0 ? ["read"] : req.scope;
+  const scopes = asked.includes("write") && !asked.includes("read") ? ["read", ...asked] : asked;
   if (scopes.some((s) => !OAUTH_SCOPES.includes(s))) return redirect(authorizationErrorRedirect(req, "invalid_scope", `available scopes: ${OAUTH_SCOPES.join(" ")}`));
   const client = await api.lookupClient(req.clientId);
   if (!client) return errorPage(400, "This app cannot connect", "It is not registered.");
@@ -77,8 +80,8 @@ function pendingIdFrom(request: Request): string | null {
 
 function consentBody(env: Env, p: Pending, identity: Identity, tenant: Tenant, role: Role): string {
   const shown = p.loopback ? new URL(p.request.redirectUri).host : p.redirect_host;
-  const tools = exposedVerbs(role, p.scopes).map((v) => `<li><code>${esc(toolName(v.name))}</code> ${esc(v.mcp!.title)}</li>`).join("");
-  const scopes = p.scopes.map((s) => `<li>${esc(SCOPE_TEXT[s]?.(tenant.display_name) ?? s)} <details><summary>Tools</summary><ul>${tools}</ul></details></li>`).join("");
+  const toolsOf = (s: string) => exposedVerbs(role, p.scopes).filter((v) => v.mcp!.scope === s).map((v) => `<li><code>${esc(toolName(v.name))}</code> ${esc(v.mcp!.title)}</li>`).join("");
+  const scopes = p.scopes.map((s) => `<li>${esc(SCOPE_TEXT[s]?.(tenant.display_name) ?? s)} <details><summary>Tools</summary><ul>${toolsOf(s) || "<li>None at your role.</li>"}</ul></details></li>`).join("");
   const form = (decision: "approve" | "deny", label: string) =>
     `<form class="inline" method="post" action="/oauth/consent/${esc(p.id)}"><input type="hidden" name="form_token" value="${esc(p.form_token!)}">`
     + `<input type="hidden" name="decision" value="${decision}"><button type="submit">${label}</button></form>`;

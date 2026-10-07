@@ -81,11 +81,11 @@ export function decide(id: string, token: string, form_token: string, decision: 
 }
 
 /** Register, authorize, view consent, and approve as the human whose browser session is `token`. */
-export async function connect(token: string, opts: { slug?: string; redirect?: string } = {}) {
+export async function connect(token: string, opts: { slug?: string; redirect?: string; scope?: string } = {}) {
   const redirect = opts.redirect ?? LOOPBACK;
   const client_id = await registerClient(redirect);
   const { verifier, challenge } = await pkce();
-  const id = pendingIdOf(await authorize({ client_id, challenge, redirect_uri: redirect, resource: resourceFor(opts.slug ?? "acme") }));
+  const id = pendingIdOf(await authorize({ client_id, challenge, redirect_uri: redirect, resource: resourceFor(opts.slug ?? "acme"), scope: opts.scope }));
   const page = await viewConsent(id, token);
   const res = await decide(id, token, formTokenOf(await page.text()), "approve");
   if (res.status !== 302) throw new Error(`approve failed ${res.status}`);
@@ -102,7 +102,7 @@ export function tokenRequest(fields: Record<string, string>, path = "/oauth/toke
 export type Tokens = { access_token: string; refresh_token: string; token_type: string; expires_in: number; scope: string; resource: string };
 
 /** connect() plus the code exchange: a working assistant connection. */
-export async function connectWithTokens(token: string, opts: { slug?: string } = {}) {
+export async function connectWithTokens(token: string, opts: { slug?: string; scope?: string } = {}) {
   const c = await connect(token, opts);
   const res = await tokenRequest({
     grant_type: "authorization_code", code: c.code, redirect_uri: c.redirect, client_id: c.client_id, code_verifier: c.verifier,

@@ -45,7 +45,7 @@ describe("the full dance", () => {
 
     // 5. MCP: initialize, list, call.
     expect((await rpcBody(await mcpPost("acme", t1.access_token, "initialize", INIT))).result.serverInfo.name).toBe("pimwell");
-    expect((await rpcBody(await mcpPost("acme", t1.access_token, "tools/list"))).result.tools.map((t: { name: string }) => t.name)).toEqual(["capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "event_list", "mail_list", "mail_read", "project_history", "project_list", "ref_backlinks", "skill_list", "skill_read", "whoami", "work_list", "work_read"]);
+    expect((await rpcBody(await mcpPost("acme", t1.access_token, "tools/list"))).result.tools.map((t: { name: string }) => t.name)).toEqual(["capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "event_list", "mail_list", "mail_read", "project_history", "project_list", "ref_backlinks", "skill_list", "skill_read", "whoami", "work_claim", "work_create", "work_link", "work_list", "work_read", "work_update"]);
     const listed = await rpcBody(await mcpPost("acme", t1.access_token, "tools/call", { name: "project_list", arguments: {} }));
     expect(listed.result.structuredContent.projects.map((p: { path: string }) => p.path)).toEqual(["site"]);
 

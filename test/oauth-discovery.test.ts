@@ -18,7 +18,7 @@ describe("discovery", () => {
       token_endpoint: "https://pimwell.test/oauth/token",
       registration_endpoint: "https://pimwell.test/oauth/register",
       revocation_endpoint: "https://pimwell.test/oauth/revoke",
-      scopes_supported: ["read"],
+      scopes_supported: ["read", "write"],
       response_types_supported: ["code"],
       response_modes_supported: ["query"],
       grant_types_supported: ["authorization_code", "refresh_token"],
@@ -35,7 +35,7 @@ describe("discovery", () => {
     await seedTenant("acme");
     for (const path of ["/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-protected-resource"]) {
       expect(await (await get(`https://acme.pimwell.test${path}`)).json()).toEqual({
-        resource: "https://acme.pimwell.test/mcp", authorization_servers: ["https://pimwell.test"], scopes_supported: ["read"], bearer_methods_supported: ["header"],
+        resource: "https://acme.pimwell.test/mcp", authorization_servers: ["https://pimwell.test"], scopes_supported: ["read", "write"], bearer_methods_supported: ["header"],
       });
     }
     expect(((await (await get("https://nosuch.pimwell.test/.well-known/oauth-protected-resource/mcp")).json()) as any).resource).toBe("https://nosuch.pimwell.test/mcp");
@@ -48,9 +48,9 @@ describe("discovery", () => {
     const real = await anonymousMcp("acme");
     const unknown = await anonymousMcp("nosuch");
     expect(real.status).toBe(401);
-    expect(real.headers.get("www-authenticate")).toBe('Bearer resource_metadata="https://acme.pimwell.test/.well-known/oauth-protected-resource/mcp", scope="read"');
+    expect(real.headers.get("www-authenticate")).toBe('Bearer resource_metadata="https://acme.pimwell.test/.well-known/oauth-protected-resource/mcp", scope="read write"');
     expect(unknown.status).toBe(401);
-    expect(unknown.headers.get("www-authenticate")).toBe('Bearer resource_metadata="https://nosuch.pimwell.test/.well-known/oauth-protected-resource/mcp", scope="read"');
+    expect(unknown.headers.get("www-authenticate")).toBe('Bearer resource_metadata="https://nosuch.pimwell.test/.well-known/oauth-protected-resource/mcp", scope="read write"');
     expect(await real.text()).toBe(await unknown.text());
     expect((await SELF.fetch(`${APEX}/mcp`, { method: "POST", body: "{}" })).status).toBe(404);
   });

@@ -64,7 +64,7 @@ describe("authorize", () => {
   it("treats an omitted scope as read", async () => {
     const { h, client_id, challenge } = await setup();
     const id = pendingIdOf(await authorize({ client_id, challenge, scope: null }));
-    expect(await (await viewConsent(id, h.token)).text()).toContain("See projects, activity, and your profile in ACME.");
+    expect(await (await viewConsent(id, h.token)).text()).toContain("See projects, work, mail, conversations, and activity in ACME.");
   });
 
   it("forgets a request after 30 minutes", async () => {
@@ -96,7 +96,7 @@ describe("authorize", () => {
     }
     expect(errorOf(await authorize({ client_id, challenge, method: "plain" })).get("error")).toBe("invalid_request");
     expect(errorOf(await authorize({ client_id, challenge, method: null })).get("error")).toBe("invalid_request");
-    expect(errorOf(await authorize({ client_id, challenge, scope: "write" })).get("error")).toBe("invalid_scope");
+    expect(errorOf(await authorize({ client_id, challenge, scope: "admin" })).get("error")).toBe("invalid_scope");
     expect(errorOf(await authorize({ client_id, challenge, scope: "read admin" })).get("error")).toBe("invalid_scope");
   });
 });
@@ -118,7 +118,7 @@ describe("consent page", () => {
     expect(html).toContain("This connects a program on your own computer.");
     expect(html).toContain('"Claude Code" (name supplied by the app)');
     expect(html).toContain("ann@example.com");
-    expect(html).toContain("See projects, activity, and your profile in ACME.");
+    expect(html).toContain("See projects, work, mail, conversations, and activity in ACME.");
     expect(html).toContain("<code>event_list</code>");
     expect(html).toContain('action="/api/session.end"');
     expect(formTokenOf(html)).toMatch(/^[A-Za-z0-9_-]{43}$/);

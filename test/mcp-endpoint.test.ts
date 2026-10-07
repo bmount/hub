@@ -51,7 +51,7 @@ describe("/mcp with a token", () => {
     const { acme, h, access, grant } = await connected();
     const blue = await mcpPost("blue", access, "tools/list");
     expect(blue.status).toBe(401);
-    expect(blue.headers.get("www-authenticate")).toBe('Bearer error="invalid_token", resource_metadata="https://blue.pimwell.test/.well-known/oauth-protected-resource/mcp", scope="read"');
+    expect(blue.headers.get("www-authenticate")).toBe('Bearer error="invalid_token", resource_metadata="https://blue.pimwell.test/.well-known/oauth-protected-resource/mcp", scope="read write"');
     await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ? AND tenant_id = ?").bind(h.identity.id, acme.id).run();
     expect((await mcpPost("acme", access, "tools/list")).status).toBe(401);
     await env.HUB_DB.prepare("UPDATE membership SET state = 'active' WHERE identity_id = ? AND tenant_id = ?").bind(h.identity.id, acme.id).run();
