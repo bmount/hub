@@ -2,6 +2,7 @@
 
 Control plane for the pimwell team hub: tenants, identities, sessions, invites.
 Design: `docs/superpowers/specs/2026-10-06-identity-design.md`.
+Why it exists and what every design must serve: `docs/direction.md`.
 
 ## Local
 
