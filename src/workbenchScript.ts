@@ -114,7 +114,8 @@ export const WORKBENCH_JS = String.raw`
     var u = new URL(f.getAttribute("action") || location.href, location.href);
     if (u.origin !== location.origin || /^\/(login|logout|oauth|auth|invite)\b/.test(u.pathname)) return;
     e.preventDefault();
-    var data = new URLSearchParams(new FormData(f));
+    // Include the button that was pressed: forms like Approve / Ask for changes carry their choice on it.
+    var data = new URLSearchParams(e.submitter ? new FormData(f, e.submitter) : new FormData(f));
     if ((f.getAttribute("method") || "get").toLowerCase() === "post") go(u.href, { method: "POST", body: data });
     else { u.search = data.toString(); go(u.href); }
   });

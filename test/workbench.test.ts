@@ -80,10 +80,10 @@ describe("the workbench", () => {
   it("lists what is coming, with each planned verb's spec", async () => {
     const w = await world();
     const all = await (await w.get("/planned")).text();
-    expect(all).toContain("<code>review.request</code>");
-    const one = await (await w.get("/planned/review?v=review.request")).text();
-    expect(one).toContain("<code>review_request</code>");
-    expect(one).toContain("POST /api/review.request");
+    expect(all).toContain("<code>review.integrate</code>");
+    const one = await (await w.get("/planned/review?v=review.integrate")).text();
+    expect(one).toContain("<code>review_integrate</code>");
+    expect(one).toContain("POST /api/review.integrate");
     expect(one).toContain("501 not_implemented");
     expect((await w.get("/planned/nosuch")).status).toBe(404);
   });

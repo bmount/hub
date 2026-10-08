@@ -4,6 +4,7 @@ import { badRequest, conflict, notFound } from "../errors";
 
 /** Tables holding rows that belong to one tenant, children before parents. */
 const TENANT_TABLES = [
+  "review_comment", "review",
   "assistant_message", "assistant_thread", "ardi_cred", "code_event", "code_sync",
   "attention", "follow", "work_comment",
   "app_event", "app_error_group", "app_deploy", "app_stat", "app_source",
@@ -41,6 +42,8 @@ export async function deleteTenant(db: D1Database, slug: string, deleted_by: str
   // Records elsewhere that point at this organization's sessions keep their meaning without the link.
   stmts.push(db.prepare(`UPDATE event SET session_id = NULL WHERE session_id IN (${sessions}) AND IFNULL(tenant_id, '') != ?`).bind(t.id, t.id));
   stmts.push(db.prepare(`UPDATE oauth_grant SET approved_by_session_id = NULL WHERE approved_by_session_id IN (${sessions}) AND tenant_id != ?`).bind(t.id, t.id));
+  // Review verdicts carry no tenant column; they go with their reviews, before the reviews.
+  stmts.push(db.prepare("DELETE FROM review_reviewer WHERE review_id IN (SELECT id FROM review WHERE tenant_id = ?)").bind(t.id));
   // Work links carry no tenant column; they go with their items, before the items.
   stmts.push(db.prepare("DELETE FROM work_link WHERE item_id IN (SELECT id FROM work_item WHERE tenant_id = ?)").bind(t.id));
   for (const table of TENANT_TABLES) stmts.push(db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).bind(t.id));

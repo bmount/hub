@@ -352,10 +352,10 @@ export async function attentionPage(request: Request, env: Env): Promise<Respons
   const { ctx, extra, ok } = await tenantCtx(request, env);
   if (!ok) return notFoundPage(extra);
   const showDone = new URL(request.url).searchParams.get("done") === "1";
-  const entries = (await attentionQuery(ctx, showDone, 200).all<{ id: string; reason: string; summary: string; created_at: number; done_at: number | null; slug: string | null; number: number | null; title: string | null; actor: string | null }>()).results;
+  const entries = (await attentionQuery(ctx, showDone, 200).all<{ id: string; reason: string; summary: string; created_at: number; done_at: number | null; slug: string | null; number: number | null; title: string | null; actor: string | null; href: string | null }>()).results;
   const label: Record<string, string> = { mention: "Mentioned you", comment: "Comment", assigned: "Yours now", changed: "Changed", filed: "Filed for you" };
   const rows = entries.map((e) => {
-    const href = e.slug ? `/${e.slug}/w/${e.number}` : "/attention";
+    const href = e.slug ? `/${e.slug}/w/${e.number}` : e.href ?? "/attention";
     return `<tr data-href="${esc(href)}"${e.done_at ? ' style="opacity:.6"' : ""}><td class="when">${esc(label[e.reason] ?? e.reason)}</td><td class="ref">${e.slug ? esc(`${e.slug}#${e.number}`) : ""}</td><td><a href="${esc(href)}">${esc(e.summary)}</a></td><td class="when">${ago(e.created_at, ctx.now)}</td></tr>`;
   }).join("");
   const list = `<div class="head"><h1>Needs me</h1><span>${entries.length} ${showDone ? "recent" : "waiting"}</span>

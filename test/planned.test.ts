@@ -13,7 +13,7 @@ describe("planned capabilities", () => {
   it("are exactly these, each a tenant verb inside the MCP rules", () => {
     expect([...PLANNED.keys()].sort()).toEqual([
             "repo.search",
-      "review.comment", "review.integrate", "review.list", "review.read", "review.request", "review.verdict",
+      "review.integrate",
       
       "work.board", "work.bulk_update",
     ]);
@@ -27,10 +27,10 @@ describe("planned capabilities", () => {
   it("answer 501 not_implemented with the spec, naming its area", async () => {
     const t = await seedTenant("acme");
     const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
-    const res = await apiPost("acme.pimwell.test", "review.request", { project: "site", branch: "topic" }, cookieHeaders(pat.token, "acme.pimwell.test"));
+    const res = await apiPost("acme.pimwell.test", "review.integrate", { id: "site!1" }, cookieHeaders(pat.token, "acme.pimwell.test"));
     expect(res.status).toBe(501);
     const body = (await res.json()) as { error: string; detail: string; data: { planned: boolean; area: string } };
     expect(body).toMatchObject({ error: "not_implemented", data: { planned: true, area: "review" } });
-    expect(body.detail).toContain("review.request is planned:");
+    expect(body.detail).toContain("review.integrate is planned:");
   });
 });

@@ -81,7 +81,7 @@ export const workSubscribe = defineVerb({
 type Entry = { id: string; reason: string; summary: string; created_at: number; done_at: number | null; slug: string | null; number: number | null; title: string | null; actor: string | null };
 
 export function attentionQuery(ctx: { db: D1Database; tenant: { id: string } | null; identity: { id: string } | null }, includeDone: boolean, limit: number): D1PreparedStatement {
-  return ctx.db.prepare(`SELECT a.id, a.reason, a.summary, a.created_at, a.done_at, p.slug, w.number, w.title, x.display_name AS actor
+  return ctx.db.prepare(`SELECT a.id, a.reason, a.summary, a.created_at, a.done_at, p.slug, w.number, w.title, x.display_name AS actor, a.href
     FROM attention a LEFT JOIN work_item w ON w.id = a.item_id LEFT JOIN project p ON p.id = w.project_id LEFT JOIN identity x ON x.id = a.actor_id
     WHERE a.tenant_id = ? AND a.identity_id = ? AND (? OR a.done_at IS NULL) ORDER BY a.created_at DESC LIMIT ?`)
     .bind(ctx.tenant!.id, ctx.identity!.id, includeDone ? 1 : 0, limit);
