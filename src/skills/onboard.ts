@@ -6,20 +6,23 @@ import type { Skill } from "./index";
 export function onboardBody(hub: string): string {
   return `Your person asked you to set up Pimwell for them. Work through these steps in order, and tell them what you did at the end. Ask them only what you cannot find out yourself.
 
-**0. Account: your person's, never yours**
-- Pimwell has no public sign-up. People join an organization by invitation, or by signing in with Google when the organization allows their address.
-- Don't try to create an account, and never handle your person's password, passkey or verification codes.
-- If your person can't sign in at https://${hub}/login, stop. Tell them to ask an admin of their organization for an invite (People → Invite someone), then sign in themselves.
-- If they can sign in, the organizations they belong to are listed at https://${hub}. Each one is at https://<org>.${hub}. If there are several, ask which one.
+**0. Accounts: you get your own, from your person**
+- Pimwell has no public sign-up, for people or agents. Don't try to register, and never handle your person's password, passkey or verification codes.
+- You join as an agent of your person: you act under your own name, and you can do what they can, up to a member's rights.
+- Your person must already belong to an organization. If they don't, they ask an admin of it for an invite (People → Invite someone).
 
 **1. Connect**
 
-Add the MCP server \`https://<org>.${hub}/mcp\` to your client. It uses OAuth: your client opens a browser page, your person signs in if needed, and they approve the connection. Ask them to grant **read and write**, so you can file work and register apps.
-- **Claude Code:** \`claude mcp add --transport http pimwell https://<org>.${hub}/mcp\`, then run \`/mcp\` and choose pimwell to authenticate.
-- **Claude or ChatGPT on the web or desktop:** your person adds a custom connector with that URL in the app's connector settings. You can't do this for them; tell them the URL.
-- **Any other MCP client:** add a remote (streamable HTTP) MCP server with that URL. The client discovers the sign-in itself.
+**If you run without a browser** (Claude Code, Codex or any agent on a server or in a terminal; this is the usual case):
+1. Ask your person for a **connect link**. They make it in Pimwell: People and agents → Connect an agent. It looks like \`https://<org>.${hub}/connect/pmc_…\`, works once, and lasts 24 hours.
+2. Claim it with a POST, for example \`curl -sX POST '<link>'\`. Opening it with a GET only shows instructions; it doesn't use it up.
+3. The answer gives you your own token and the MCP server \`https://<org>.${hub}/agent/mcp\`, with the exact command for your client. For Claude Code:
+   \`claude mcp add --transport http pimwell https://<org>.${hub}/agent/mcp --header "Authorization: Bearer <token>"\`
+4. Keep the token only in your MCP client's configuration: never in a repository, a message or a log. When it expires (90 days), ask for a new link.
 
-Then call \`whoami\`, \`capabilities\`, and \`skill_read\` with \`start-here\`. If \`whoami\` fails, the connection wasn't approved; ask your person to finish the browser step.
+**If you are your person's chat app** (Claude or ChatGPT on the web, desktop or phone): your person adds a custom connector with \`https://<org>.${hub}/mcp\`. They sign in and approve it in their browser, granting **read and write**. You can't do this for them; tell them the URL.
+
+Then call \`whoami\`, \`capabilities\`, and \`skill_read\` with \`start-here\`. If \`whoami\` fails, the connection isn't finished: a claimed link's token is missing from the header, or the browser approval wasn't completed.
 
 **2. Report your own AI usage**
 - After each working session, call \`usage_report\` with the calls you made: provider, model, input_tokens, output_tokens, and cached_tokens if known. Add cost_usd only if your tool reports it.
@@ -61,6 +64,6 @@ Never send Pimwell secrets, tokens, or customer data. If an app logs those today
 export const onboardSkill = (hub: string): Skill => ({
   name: "onboard",
   title: "Set up Pimwell",
-  summary: "What to do when your person says \"set up pimwell.com\": connect, report AI usage, and instrument their apps.",
+  summary: "What to do when your person says \"set up pimwell.com\": connect (with a one-time connect link if you have no browser), report AI usage, and instrument their apps.",
   body: onboardBody(hub),
 });

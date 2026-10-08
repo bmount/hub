@@ -33,6 +33,12 @@ export type Ctx = {
    * rules as an assistant connection holding exactly these scopes; it can only narrow the person's own authority.
    */
   playground?: { scopes: string[] };
+  /**
+   * Set only on /agent/mcp: a headless agent connected with its own long-lived token (src/auth/connect.ts). It obeys
+   * the same exposure rules as an assistant connection with these scopes. `sealed` is its run session's token, opened
+   * only to read code as the agent.
+   */
+  agentMcp?: { token_id: string; scopes: string[]; sealed: { ciphertext: string; iv: string } };
   /** An agent's own run token, held for this request only so the hub can read code as it (src/code/ardi.ts). Never logged. */
   bearerToken?: string;
   /** The workbench rail's numbers, read in the same batch as the sign-in lookup (no extra round trip). Page views only. */
@@ -50,6 +56,14 @@ export const RANK: Record<Role, number> = { root: 4, admin: 3, member: 2, reader
 
 export function rank(role: Role | null): number {
   return role ? RANK[role] : 0;
+}
+
+/** The scopes of a connection that obeys MCP exposure rules (assistant, Playground, agent MCP), or null for any other caller. */
+export function connectionScopes(ctx: Ctx): string[] | null {
+  if (ctx.authKind === "oauth") return ctx.oauth?.scopes ?? [];
+  if (ctx.playground) return ctx.playground.scopes;
+  if (ctx.agentMcp) return ctx.agentMcp.scopes;
+  return null;
 }
 
 export function roleFor(identity: Identity | null, membership: Membership | null): Role | null {

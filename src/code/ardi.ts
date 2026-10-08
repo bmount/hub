@@ -47,6 +47,7 @@ export async function codeAuth(ctx: Ctx): Promise<string> {
   if (!id || !ctx.tenant) throw new HubError(401, "unauthorized");
   if (id.kind === "agent") {
     if (ctx.authKind === "bearer" && ctx.bearerToken && ctx.session?.kind === "agent_run") return basic("agent", ctx.bearerToken);
+    if (ctx.agentMcp && ctx.session?.kind === "agent_run") return basic("agent", await open(ctx.env.HUB_SECRETS_KEY, ctx.agentMcp.sealed));
     throw new HubError(403, "forbidden", "agents read code with their run session");
   }
   const row = await ctx.db.prepare("SELECT ciphertext, iv, expires_at FROM ardi_cred WHERE identity_id = ? AND tenant_id = ? AND kind = 'git_session'")

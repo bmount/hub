@@ -16,6 +16,11 @@ export const RATE_RULES = {
   mcp_anon_ip: { limit: 60, windowMs: MINUTE_MS },
   mcp_grant_minute: { limit: 120, windowMs: MINUTE_MS },
   mcp_grant_hour: { limit: 2000, windowMs: RATE_WINDOW_MS },
+  // Headless agents on /agent/mcp, per long-lived token: the same allowance as one assistant connection.
+  agent_mcp_minute: { limit: 120, windowMs: MINUTE_MS },
+  agent_mcp_hour: { limit: 2000, windowMs: RATE_WINDOW_MS },
+  // Claiming connect links, per IP: links are unguessable, so this only slows down someone trying.
+  connect_ip: { limit: 20, windowMs: RATE_WINDOW_MS },
   // The in-context Playground: per browser session, like one assistant connection.
   playground_session: { limit: 120, windowMs: MINUTE_MS },
   // Each proposal is a model call: per person, per hour.

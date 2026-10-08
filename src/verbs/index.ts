@@ -24,7 +24,7 @@ import { projectArchive, projectCreate, projectList, projectUnarchive } from "./
 import { sessionEnd, sessionGit, sessionList, sessionRevoke, sessionStart } from "./session";
 import { loginRequest, loginVerify } from "./login";
 import { inviteCreate, inviteList, inviteRevoke } from "./invite";
-import { agentArchive, agentCreate } from "./agent";
+import { agentArchive, agentConnect, agentCreate } from "./agent";
 import { tokenCreate, tokenList, tokenRevoke } from "./token";
 import { consentList, consentRevoke } from "./consent";
 import { eventList } from "./event";
@@ -63,7 +63,7 @@ export function registerAllVerbs(): void {
     sessionList, sessionRevoke, sessionEnd, sessionStart, sessionGit,
     loginRequest, loginVerify,
     consentList, consentRevoke,
-    agentCreate, agentArchive,
+    agentCreate, agentArchive, agentConnect,
     tokenCreate, tokenRevoke, tokenList,
     eventList,
     oauthGrantApprove,

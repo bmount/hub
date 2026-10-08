@@ -1,6 +1,8 @@
 import { defineVerb } from "./table";
 import { optString, reqString } from "./params";
-import { badRequest, conflict, forbidden } from "../errors";
+import { badRequest, conflict, forbidden, HubError } from "../errors";
+import { esc } from "../html";
+import { agentMcpUrl, createConnectLink } from "../auth/connect";
 import { archiveAgent, createAgent, getAgentById } from "../db/agents";
 import { getIdentityByEmail, normalizeEmail } from "../db/identities";
 import { getMembership } from "../db/memberships";
@@ -69,4 +71,63 @@ export const agentArchive = defineVerb({
     }, ctx.now);
     return { ok: true, tokens_revoked: r.tokens, sessions_revoked: r.sessions };
   },
+});
+
+/** A readable agent name from what the person typed: "Build box 2" → "build-box-2". */
+export function slugFromName(name: string): string {
+  const s = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "");
+  return /^[a-z]/.test(s) ? s : `agent-${s || "1"}`.replace(/-+$/, "");
+}
+
+type ConnectResult = { agent: ReturnType<typeof agentView>; link: string; expires_at: number; mcp_url: string };
+
+export const agentConnect = defineVerb({
+  name: "agent.connect", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: 60, humanOnly: true,
+  summary: "Connect a headless agent: creates the agent (it answers to you and can do what you can, up to a member's rights) or takes one you manage, and returns a one-time connect link, valid 24 hours, to paste to it.",
+  parse: (i) => ({
+    agent_id: optString(i, "agent_id", { max: 26 }),
+    display_name: optString(i, "display_name", { max: 80 }),
+    slug: optString(i, "slug", { max: 63 }),
+  }),
+  run: async (ctx, p): Promise<ConnectResult> => {
+    const { identity, session } = requireHuman(ctx);
+    const tenant = ctx.tenant!;
+    let agent: Agent;
+    if (p.agent_id) {
+      agent = await manageableAgent(ctx, await getAgentById(ctx.db, p.agent_id));
+      if (agent.tenant.id !== tenant.id) throw badRequest("that agent belongs to another organization");
+      if (agent.identity.state !== "active") throw conflict("agent is archived");
+    } else {
+      const name = (p.display_name ?? "").trim();
+      if (!name) throw badRequest("name the agent");
+      // Agents inherit their person's rights (owner, 2026-10-08), never more than a member's.
+      const role = rank(ctx.role) >= rank("member") ? "member" : "reader";
+      const base = p.slug ? p.slug.trim().toLowerCase() : slugFromName(name);
+      let made: Agent | null = null;
+      for (let n = 1; !made; n++) {
+        try {
+          made = await createAgent(ctx.db, { tenant, slug: n === 1 ? base : `${base}-${n}`, display_name: name, operator_id: identity.id, role, hubDomain: ctx.env.HUB_DOMAIN }, ctx.now);
+        } catch (e) {
+          if (p.slug || n >= 9 || !(e instanceof HubError) || e.status !== 409) throw e;
+        }
+      }
+      agent = made;
+      await recordEvent(ctx.db, {
+        tenant_id: tenant.id, identity_id: identity.id, session_id: session.id, kind: "agent.create", target_kind: "identity", target_id: agent.identity.id,
+        summary: `Created agent ${agent.identity.email} operated by ${identity.email}`,
+      }, ctx.now);
+    }
+    const link = await createConnectLink(ctx.env, { tenant, agent_id: agent.identity.id, created_by: identity.id }, ctx.now);
+    await recordEvent(ctx.db, {
+      tenant_id: tenant.id, identity_id: identity.id, session_id: session.id, kind: "agent.connect_link", target_kind: "identity", target_id: agent.identity.id,
+      summary: `Made a connect link for ${agent.identity.email}`,
+    }, ctx.now);
+    return { agent: agentView(agent), link: link.link, expires_at: link.expires_at, mcp_url: agentMcpUrl(ctx.env, tenant.slug) };
+  },
+  renderForm: (r: ConnectResult) => `<a class="back" href="/people">‹ People</a><h1>Connect ${esc(r.agent.display_name)}</h1>
+<p class="lede">Paste this to your agent. It works once, until ${esc(new Date(r.expires_at).toISOString().slice(0, 16).replace("T", " "))} UTC. Copy it now: it won't be shown again.</p>
+<pre>Connect to Pimwell: claim this one-time link with an HTTP POST, then follow the instructions in the answer.
+${esc(r.link)}</pre>
+<p>The agent gets its own token for <code>${esc(r.mcp_url)}</code>, as <code>${esc(r.agent.address)}</code>. It answers to you and can do what you can, up to a member's rights. If the link expires or leaks, make a new one from the agent's page; an unclaimed link simply stops working.</p>
+<p><a href="/people/${esc(encodeURIComponent(r.agent.address))}">Go to ${esc(r.agent.display_name)}</a></p>`,
 });

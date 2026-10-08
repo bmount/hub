@@ -8,7 +8,7 @@ import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
 
-type Person = { id: string; display_name: string; email: string; kind: string; is_root: number; role: string; created_at: number; sponsor: string | null; last_seen: number | null; open: number };
+type Person = { id: string; display_name: string; email: string; kind: string; is_root: number; role: string; created_at: number; sponsor: string | null; operator_id: string | null; last_seen: number | null; open: number };
 type Invite = { id: string; email: string; role: string; display_name: string | null; created_at: number; expires_at: number; by: string | null };
 type Activity = { summary: string; created_at: number };
 
@@ -27,10 +27,12 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
   const admin = rank(ctx.role) >= rank("admin");
   const url = new URL(request.url);
   const inviting = admin && url.searchParams.get("invite") === "1";
+  const canConnect = rank(ctx.role) >= rank("member");
+  const connecting = canConnect && url.searchParams.get("connect") === "1";
   const email = who ? decodeURIComponent(who).trim().toLowerCase() : null;
   const tid = ctx.tenant.id;
   const stmts: D1PreparedStatement[] = [
-    ctx.db.prepare(`SELECT i.id, i.display_name, i.email, i.kind, i.is_root, m.role, m.created_at, op.display_name AS sponsor,
+    ctx.db.prepare(`SELECT i.id, i.display_name, i.email, i.kind, i.is_root, m.role, m.created_at, op.display_name AS sponsor, i.operator_id,
         (SELECT MAX(e.created_at) FROM event e WHERE e.identity_id = i.id AND e.tenant_id = m.tenant_id) AS last_seen,
         (SELECT COUNT(*) FROM work_item w WHERE w.tenant_id = m.tenant_id AND w.owner_id = i.id AND w.state IN ('open', 'doing')) AS open
       FROM membership m JOIN identity i ON i.id = m.identity_id LEFT JOIN identity op ON op.id = i.operator_id
@@ -55,12 +57,20 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
     : `<p class="empty">${agent ? "No agents yet." : "Nobody yet."}</p>`;
   const pending = admin ? `<h2>Invites waiting</h2>${invites.length ? `<table><thead><tr><th>Address</th><th>Role</th><th class="hide-s">By</th><th>Expires</th><th></th></tr></thead><tbody>${invites.map((v) =>
     `<tr><td><code>${esc(v.email)}</code></td><td>${esc(v.role)}</td><td class="hide-s">${esc(v.by ?? "")}</td><td class="when">${day(v.expires_at)}</td><td><form class="inline" method="post" action="/api/invite.revoke"><input type="hidden" name="invite_id" value="${esc(v.id)}"><input type="hidden" name="_back" value="/people"><button class="quiet" type="submit">Revoke</button></form></td></tr>`).join("")}</tbody></table>` : `<p class="lede">None.</p>`}` : "";
-  const list = `<div class="head"><h1>People and agents</h1><span>${humans.length} people, ${agents.length} agents</span>${admin ? `<a class="button" href="/people?invite=1">Invite someone</a>` : ""}</div>
+  const list = `<div class="head"><h1>People and agents</h1><span>${humans.length} people, ${agents.length} agents</span>${canConnect ? `<a class="button quiet" href="/people?connect=1">Connect an agent</a>` : ""}${admin ? `<a class="button" href="/people?invite=1">Invite someone</a>` : ""}</div>
 <p class="lede">Every agent answers to a named person, and everything anyone does here is on the record.</p>
 <h2>People</h2>${table(humans, false)}<h2>Agents</h2>${table(agents, true)}${admin ? `<p><a href="/admin/agents">Manage agents</a></p>` : ""}${pending}`;
 
   let inspector: string | null = null; let key = "";
-  if (inviting) {
+  if (connecting) {
+    inspector = `<a class="back" href="/people">‹ People</a><h1>Connect an agent</h1>
+<p class="lede">For agents on machines without a browser, such as Claude Code or Codex on a server. You get a one-time link to paste to the agent; it works for 24 hours. The agent answers to you and can do what you can here, up to a member's rights.</p>
+<form method="post" action="/api/agent.connect">
+<label style="display:block">Name <input name="display_name" required maxlength="80" style="display:block;width:100%" placeholder="Build box" autofocus></label>
+<p><button type="submit">Make connect link</button></p></form>
+<p class="lede">People connect their own chat apps with the assistant connection instead: <code>https://${esc(ctx.tenant.slug)}.${esc(env.HUB_DOMAIN)}/mcp</code>.</p>`;
+    key = "connect";
+  } else if (inviting) {
     const root = ctx.identity.is_root === 1;
     inspector = `<a class="back" href="/people">‹ People</a><h1>Invite someone</h1>
 <p class="lede">You get a single-use link to send yourself; Pimwell never emails people who haven't written to it. They can also just sign in with Google at ${esc(env.HUB_DOMAIN)} as the invited address.</p>
@@ -86,6 +96,8 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
 <dl class="meta"><dt>Address</dt><dd><code>${esc(person.email)}</code></dd><dt>Role</dt><dd>${esc(person.is_root ? "root" : person.role)}</dd>
 ${person.sponsor ? `<dt>Answers to</dt><dd>${esc(person.sponsor)}</dd>` : ""}<dt>Here since</dt><dd>${day(person.created_at)}</dd><dt>Last active</dt><dd>${ago(person.last_seen, ctx.now)}</dd>
 <dt>Open work</dt><dd><a href="/docket?owner=${esc(encodeURIComponent(person.email))}">${person.open} item${person.open === 1 ? "" : "s"}</a></dd></dl>
+${person.kind === "agent" && canConnect && (admin || person.operator_id === ctx.identity.id) ? `<h2>Connect</h2><p class="lede">A new one-time link, valid 24 hours, gives the agent a fresh token. Its earlier tokens keep working until they expire or are revoked.</p>
+<form method="post" action="/api/agent.connect"><input type="hidden" name="agent_id" value="${esc(person.id)}"><button type="submit" class="quiet">Make connect link</button></form>` : ""}
 ${sponsored.length ? `<h2>Agents who answer to them</h2><ul>${sponsored.map((s) => `<li><a href="/people/${esc(encodeURIComponent(s.email))}">${esc(s.display_name)}</a></li>`).join("")}</ul>` : ""}
 ${manage}
 <h2>Recent activity</h2>${activity.length ? `<ul class="timeline">${activity.map((a) => `<li><time>${ago(a.created_at, ctx.now)}</time><span>${esc(a.summary)}</span></li>`).join("")}</ul>` : `<p class="lede">Nothing yet.</p>`}`;

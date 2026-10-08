@@ -40,7 +40,9 @@ import { asMetadataPage, protectedResourcePage } from "./http/oauthMeta";
 import { authorizePage, consentPage, consentPost } from "./http/oauthAuthorize";
 import { tokenEndpoint } from "./oauth/token";
 import { registerEndpoint } from "./http/oauthRegister";
-import { handleMcp } from "./mcp/handler";
+import { handleAgentMcp, handleMcp } from "./mcp/handler";
+import { claimConnectLink, connectInstructions } from "./auth/connect";
+import { classifyHost } from "./tenant";
 import { channelPage, channelPost, channelsPage, inboxPage, permalinkPage, threadPage } from "./http/chatPages";
 import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sessionsPage } from "./http/pages";
 
@@ -155,6 +157,13 @@ app.post("/oauth/revoke", (c) => tokenEndpoint(c.req.raw, c.env, workerCtx(c.exe
 app.get("/oauth/consent/:id", (c) => consentPage(c.req.raw, c.env));
 app.post("/oauth/consent/:id", (c) => consentPost(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.all("/mcp", (c) => handleMcp(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
+// Headless agents: their own MCP endpoint, and the one-time connect link that gives them a token for it.
+app.all("/agent/mcp", (c) => handleAgentMcp(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
+app.get("/connect/:token", (c) => classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN).kind === "tenant" ? connectInstructions(c.req.raw) : notFoundPage());
+app.post("/connect/:token", (c) => {
+  const host = classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN);
+  return host.kind === "tenant" ? claimConnectLink(c.req.raw, c.env, host.slug, c.req.param("token"), Date.now(), (p) => c.executionCtx.waitUntil(p)) : notFoundPage();
+});
 app.notFound(() => notFoundPage());
 
 // Last: a project's own page, /<project>. Every named page above wins first.

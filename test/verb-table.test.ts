@@ -77,6 +77,7 @@ const TABLE: Record<string, Decl> = {
   "login.request": T("hub", "public", null), "login.verify": T("hub", "public", null),
   "consent.list": T("public", "public", null), "consent.revoke": T("public", "public", null),
   "agent.create": T("public", "public", 60, { humanOnly: true }), "agent.archive": T("public", "public", 60, { humanOnly: true }),
+  "agent.connect": T("tenant", "member", 60, { humanOnly: true }),
   "token.create": T("public", "public", 60, { humanOnly: true }), "token.revoke": T("public", "public", 60, { humanOnly: true }),
   "token.list": T("public", "public", null, { humanOnly: true }),
   "event.list": T("tenant", "member", null, { mcp: "read" }),

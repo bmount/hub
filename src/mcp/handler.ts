@@ -7,6 +7,8 @@ import { classifyHost } from "../tenant";
 import { oauthJson } from "../http/oauthMeta";
 import { notFoundPage } from "../http/pages";
 import { mcpAuth } from "./context";
+import { agentMcpAuth } from "./agentAuth";
+import { agentMcpUrl } from "../auth/connect";
 import { callTool, toolDefinition, toolsFor } from "./tools";
 import { SKILLS, skill } from "../skills";
 
@@ -65,7 +67,25 @@ export async function handleMcp(request: Request, env: Env, waitUntil?: (p: Prom
   if (origin !== null && !ALLOWED_ORIGINS.has(origin)) return oauthJson({ error: "forbidden_origin" }, 403);
   const auth = await mcpAuth(request, env, host.slug, now, waitUntil);
   if (auth.kind === "deny") { note(request, { tenant: host.slug, via: "mcp" }); return auth.response; }
-  noteCtx(request, auth.ctx, "mcp");
+  const o = auth.ctx.oauth!;
+  return serve(request, auth.ctx, "mcp", { token: auth.token, clientId: o.client_id, scopes: o.scopes, expiresAt: auth.expiresAt, resource: new URL(auth.resource) });
+}
+
+/** /agent/mcp: headless agents with their own token (src/mcp/agentAuth.ts). No browser ever calls it, so any Origin is refused. */
+export async function handleAgentMcp(request: Request, env: Env, waitUntil?: (p: Promise<unknown>) => void, now: number = Date.now()): Promise<Response> {
+  const host = classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN);
+  if (host.kind !== "tenant") return notFoundPage();
+  if (request.headers.get("origin") !== null) return oauthJson({ error: "forbidden_origin" }, 403);
+  const auth = await agentMcpAuth(request, env, host.slug, now, waitUntil);
+  if (auth.kind === "deny") { note(request, { tenant: host.slug, via: "agent-mcp" }); return auth.response; }
+  const a = auth.ctx.agentMcp!;
+  return serve(request, auth.ctx, "agent-mcp", { token: auth.token, clientId: `agent:${auth.ctx.identity!.id}`, scopes: a.scopes, expiresAt: auth.expiresAt, resource: new URL(agentMcpUrl(env, host.slug)) });
+}
+
+type Auth = { token: string; clientId: string; scopes: string[]; expiresAt: number; resource: URL };
+
+async function serve(request: Request, ctx: Ctx, via: string, auth: Auth): Promise<Response> {
+  noteCtx(request, ctx, via);
   if (request.method === "POST") {
     try {
       const m = JSON.parse(await request.clone().text()) as { method?: unknown; params?: { name?: unknown } };
@@ -76,8 +96,5 @@ export async function handleMcp(request: Request, env: Env, waitUntil?: (p: Prom
   if (request.method === "POST" && (await isBatch(request))) {
     return oauthJson({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "JSON-RPC batch requests are not supported" } }, 400);
   }
-  const o = auth.ctx.oauth!;
-  return mcpHandler().fetch(request, {
-    authInfo: { token: auth.token, clientId: o.client_id, scopes: o.scopes, expiresAt: auth.expiresAt, resource: new URL(auth.resource), extra: { hub: auth.ctx } },
-  });
+  return mcpHandler().fetch(request, { authInfo: { ...auth, extra: { hub: ctx } } });
 }

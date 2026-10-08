@@ -6,7 +6,7 @@ import { notFound } from "../errors";
 import { exposedVerbs, mcpViolations, toolName } from "../mcp/policy";
 import { SKILLS, skill } from "../skills";
 import { DATA_NOTE, cleanText } from "../mcp/render";
-import type { Ctx } from "../auth/context";
+import { connectionScopes, type Ctx } from "../auth/context";
 
 export const skillList = defineVerb({
   name: "skill.list", kind: "query", scope: "public", minRole: "public", freshProofMinutes: null,
@@ -38,9 +38,8 @@ export const skillRead = defineVerb({
 
 /** Scopes a connection holds: an assistant's granted scopes, or everything its role allows on pages and the API. */
 function scopesOf(ctx: Ctx): string[] {
-  if (ctx.authKind === "oauth") return [...(ctx.oauth?.scopes ?? [])];
-  if (ctx.playground) return [...ctx.playground.scopes];
-  return ["read", "write"];
+  const c = connectionScopes(ctx);
+  return c ? [...c] : ["read", "write"];
 }
 
 export const capabilities = defineVerb({

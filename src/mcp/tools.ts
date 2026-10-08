@@ -1,5 +1,5 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/server";
-import type { Ctx } from "../auth/context";
+import { connectionScopes, type Ctx } from "../auth/context";
 import { HubError } from "../errors";
 import { recordEvent } from "../db/events";
 import { runVerb } from "../verbs/dispatch";
@@ -30,9 +30,9 @@ export function toolsFor(ctx: Ctx): VerbDef<unknown, unknown>[] {
   return exposedVerbs(ctx.role, mcpScopes(ctx));
 }
 
-/** The scopes an MCP-style call runs with: the assistant grant's, or the Playground's choice; nothing otherwise. */
+/** The scopes an MCP-style call runs with: the assistant grant's, the Playground's choice, or an agent token's; nothing otherwise. */
 export function mcpScopes(ctx: Ctx): string[] {
-  return ctx.oauth?.scopes ?? ctx.playground?.scopes ?? [];
+  return connectionScopes(ctx) ?? [];
 }
 
 const ARG_VALUE_MAX = 64;

@@ -53,6 +53,9 @@ The milestone tables below keep their original statuses. This is the current pic
 - **AI usage and cost (M5 in part):** one ledger across the hub, reported usage and apps, priced when recorded.
 - **Assistant:** chat over Pimwell's own tools. **Situations (M7, first version):** a read-only diagnosis with
   cited evidence, kept and later compared with what happened.
+- **Agents without a browser:** a person makes a one-time connect link (People and agents → Connect an agent, valid
+  24 hours); the agent claims it with a POST and works over `/agent/mcp` with its own 90-day token, within its
+  person's rights (at most a member's), every call on the record. `/mcp` stays OAuth-only for chat apps.
 - **Administration:** people, roles, invites, app approvals, model keys and prices, organization delete, request
   logging with who acted, the audit trail. MCP calls cost 2 round trips; pages cost 4 at most.
 

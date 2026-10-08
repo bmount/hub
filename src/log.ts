@@ -38,6 +38,7 @@ export function notesFor(request: Request): LogNote {
 const SECRET_PATHS: Array<[RegExp, string]> = [
   [/^\/invite\/[^/]+/, "/invite/:token"],
   [/^\/auth\/[^/]+/, "/auth/:token"],
+  [/^\/connect\/[^/]+/, "/connect/:token"],
 ];
 
 /** The path with secrets removed, and the query reduced to its key names (values may be tokens or addresses). */
