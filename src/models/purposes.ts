@@ -24,6 +24,7 @@ export const PURPOSES: Purpose[] = [
   { id: "reasoning", title: "Reasoning", why: "Summaries, plans, status reports, assignment proposals.", provider: "openai", model: "gpt-6.1-sol" },
   { id: "assistant", title: "Assistant", why: "The in-app Assistant: conversations that call Pimwell's tools for people who don't use an MCP client.", provider: "openai", model: "gpt-6.1-sol" },
   { id: "fast", title: "Fast", why: "Titles, short classifications, quick checks.", provider: "openai", model: "gpt-6-luna" },
+  { id: "transcribe", title: "Voice", why: "Speech to text in every message box, prompted with the conversation and the organization's names.", provider: "openai", model: "gpt-4o-transcribe" },
   { id: "code", title: "Code", why: "Agents that read and change code, run through the Pi coding agent.", provider: "openai", model: "gpt-6.1-sol" },
 ];
 

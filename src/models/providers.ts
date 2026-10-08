@@ -27,6 +27,8 @@ export interface Provider {
   ask: (key: string, model: string, input: string, opts: { instructions?: string; maxOutputTokens?: number }) => Promise<AskResult>;
   /** One step of a tool-using conversation: the model either answers or asks for function calls. Nothing is stored at the provider. */
   turn: (key: string, model: string, items: TurnItem[], opts: { instructions: string; tools: FunctionTool[]; maxOutputTokens?: number }) => Promise<TurnResult>;
+  /** Speech to text. `prompt` carries the vocabulary and conversation that make names come out right. */
+  transcribe?: (key: string, model: string, audio: Blob, filename: string, prompt: string) => Promise<AskResult>;
 }
 
 async function errorText(res: Response): Promise<string> {
@@ -92,6 +94,18 @@ const openai: Provider = {
     const calls = output.filter((o) => o.type === "function_call" && typeof o.call_id === "string" && typeof o.name === "string")
       .map((o) => ({ call_id: o.call_id!, name: o.name!, arguments: typeof o.arguments === "string" ? o.arguments : "{}" }));
     return { text, calls, output, inputTokens: body.usage?.input_tokens ?? null, outputTokens: body.usage?.output_tokens ?? null, cachedTokens: body.usage?.input_tokens_details?.cached_tokens ?? null };
+  },
+  async transcribe(key, model, audio, filename, prompt) {
+    const form = new FormData();
+    form.set("file", audio, filename);
+    form.set("model", model);
+    form.set("response_format", "json");
+    form.set("temperature", "0");
+    if (prompt) form.set("prompt", prompt);
+    const res = await modelFetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", headers: { authorization: `Bearer ${key}` }, body: form });
+    if (!res.ok) throw new Error(await errorText(res));
+    const body = (await res.json()) as { text?: string; usage?: { input_tokens?: number; output_tokens?: number } };
+    return { text: (body.text ?? "").trim(), inputTokens: body.usage?.input_tokens ?? null, outputTokens: body.usage?.output_tokens ?? null };
   },
 };
 

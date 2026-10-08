@@ -3,16 +3,18 @@
 import type { Env } from "../env";
 import { ulid } from "../ids";
 import { HubError } from "../errors";
-import { provider as providerById } from "./providers";
+import { provider as providerById, type AskResult, type Provider } from "./providers";
 import { open } from "./secretbox";
 import { activeCredentialRow, resolveRoute } from "./store";
 import { usageStatement } from "./usage";
 
 export type Answer = { text: string; purpose: string; provider: string; model: string; key_fingerprint: string; ms: number };
 
-export async function ask(
-  env: Env, purposeId: string, input: string,
-  opts: { tenant_id?: string | null; identity_id?: string | null; session_id?: string | null; project_id?: string | null; work_item_id?: string | null; instructions?: string; maxOutputTokens?: number; now?: number } = {},
+type CallOpts = { tenant_id?: string | null; identity_id?: string | null; session_id?: string | null; project_id?: string | null; work_item_id?: string | null; now?: number };
+
+async function metered(
+  env: Env, purposeId: string, opts: CallOpts,
+  call: (p: Provider, key: string, model: string) => Promise<AskResult>,
 ): Promise<Answer> {
   const db = env.HUB_DB;
   const tenant_id = opts.tenant_id ?? null;
@@ -36,12 +38,25 @@ export async function ask(
     ]);
   try {
     const key = await open(env.HUB_SECRETS_KEY, { ciphertext: cred.secret_ciphertext, iv: cred.secret_iv });
-    const r = await p.ask(key, route.model, input, { instructions: opts.instructions, maxOutputTokens: opts.maxOutputTokens });
+    const r = await call(p, key, route.model);
     await record(true, r.inputTokens, r.outputTokens, null);
     return { text: r.text, purpose: purposeId, provider: route.provider, model: route.model, key_fingerprint: cred.fingerprint, ms: Date.now() - started };
   } catch (e) {
+    if (e instanceof HubError) throw e;
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 300);
     await record(false, null, null, msg);
     throw new HubError(502, "provider_error", msg);
   }
+}
+
+export function ask(env: Env, purposeId: string, input: string, opts: CallOpts & { instructions?: string; maxOutputTokens?: number } = {}): Promise<Answer> {
+  return metered(env, purposeId, opts, (p, key, model) => p.ask(key, model, input, { instructions: opts.instructions, maxOutputTokens: opts.maxOutputTokens }));
+}
+
+/** Speech to text through the "transcribe" purpose's route. */
+export function transcribe(env: Env, audio: Blob, filename: string, prompt: string, opts: CallOpts = {}): Promise<Answer> {
+  return metered(env, "transcribe", opts, (p, key, model) => {
+    if (!p.transcribe) throw new HubError(503, "unavailable", `${p.name} has no speech to text here`);
+    return p.transcribe(key, model, audio, filename, prompt);
+  });
 }

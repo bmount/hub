@@ -6,7 +6,7 @@ import { syncAll } from "./code/sync";
 import { codePage, filesPage } from "./http/codePages";
 import { searchPage } from "./http/searchPage";
 import { assistantChat, assistantPage } from "./http/assistantPages";
-import { onboardBody } from "./skills/onboard";
+import { onboardBody, setupPage } from "./skills/onboard";
 import { adminAppsPage, appsPage } from "./http/appsPages";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { ingest } from "./apps/ingest";
@@ -41,6 +41,7 @@ import { authorizePage, consentPage, consentPost } from "./http/oauthAuthorize";
 import { tokenEndpoint } from "./oauth/token";
 import { registerEndpoint } from "./http/oauthRegister";
 import { handleAgentMcp, handleMcp } from "./mcp/handler";
+import { voiceCorrect, voiceTranscribe } from "./http/voice";
 import { claimConnectLink, connectInstructions } from "./auth/connect";
 import { classifyHost } from "./tenant";
 import { channelPage, channelPost, channelsPage, inboxPage, permalinkPage, threadPage } from "./http/chatPages";
@@ -85,7 +86,8 @@ const workerCtx = (c: unknown): ExecutionContext => c as ExecutionContext;
 
 app.get("/healthz", (c) => c.text("ok"));
 // What an agent reads when its person says "set up pimwell.com" (skill: onboard). Public: it holds no secrets.
-app.get("/setup", (c) => new Response(`# Set up Pimwell\n\n${onboardBody(c.env.HUB_DOMAIN)}\n`, { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" } }));
+app.get("/setup", (c) => new Response(setupPage(c.env.HUB_DOMAIN), { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" } }));
+app.get("/llms.txt", (c) => new Response(`# Pimwell\n\n> A shared workplace for a small team and its AI agents.\n\nAI agents and coding assistants asked to "set up pimwell.com": read https://${c.env.HUB_DOMAIN}/setup and follow it.\n`, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=300" } }));
 app.get("/assets/:file", (c) => assetResponse(new URL(c.req.url).pathname));
 app.get("/signed-out", (c) => c.html(page("Signed out", `<h1>You're signed out</h1><p><a href="https://${c.env.HUB_DOMAIN}/login">Sign in again</a></p>`)));
 app.get("/privacy", () => privacyPage());
@@ -130,6 +132,8 @@ app.get("/people/:who", (c) => peoplePage(c.req.raw, c.env, c.req.param("who")))
 app.get("/skills", (c) => skillsPage(c.req.raw, c.env));
 app.get("/assistant", (c) => assistantPage(c.req.raw, c.env));
 app.post("/assistant/chat", (c) => assistantChat(c.req.raw, c.env));
+app.post("/voice/transcribe", (c) => voiceTranscribe(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
+app.post("/voice/correct", (c) => voiceCorrect(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.get("/assistant/tools", (c) => playgroundPage(c.req.raw, c.env));
 app.get("/playground", (c) => c.redirect("/assistant/tools", 301));
 app.post("/playground/call", (c) => playgroundCall(c.req.raw, c.env));

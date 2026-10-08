@@ -26,6 +26,8 @@ export const RATE_RULES = {
   // Each proposal is a model call: per person, per hour.
   propose_identity: { limit: 20, windowMs: RATE_WINDOW_MS },
   assistant_turn: { limit: 120, windowMs: RATE_WINDOW_MS },
+  // Voice: each clip is a transcription and a correction, per person, per hour.
+  voice_identity: { limit: 240, windowMs: RATE_WINDOW_MS },
 } as const;
 export type RateBucket = keyof typeof RATE_RULES;
 

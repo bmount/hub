@@ -2,7 +2,7 @@
 // Admins invite, change roles and remove people here (member.set_role, member.remove, invite.create, invite.revoke);
 // everyone else sees who is here and what they are on. One D1 batch per page.
 import type { Env } from "../env";
-import { esc, htmlResponse, workbench } from "../html";
+import { esc, htmlResponse, onramp, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -57,7 +57,8 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
     : `<p class="empty">${agent ? "No agents yet." : "Nobody yet."}</p>`;
   const pending = admin ? `<h2>Invites waiting</h2>${invites.length ? `<table><thead><tr><th>Address</th><th>Role</th><th class="hide-s">By</th><th>Expires</th><th></th></tr></thead><tbody>${invites.map((v) =>
     `<tr><td><code>${esc(v.email)}</code></td><td>${esc(v.role)}</td><td class="hide-s">${esc(v.by ?? "")}</td><td class="when">${day(v.expires_at)}</td><td><form class="inline" method="post" action="/api/invite.revoke"><input type="hidden" name="invite_id" value="${esc(v.id)}"><input type="hidden" name="_back" value="/people"><button class="quiet" type="submit">Revoke</button></form></td></tr>`).join("")}</tbody></table>` : `<p class="lede">None.</p>`}` : "";
-  const list = `<div class="head"><h1>People and agents</h1><span>${humans.length} people, ${agents.length} agents</span>${canConnect ? `<a class="button quiet" href="/people?connect=1">Connect an agent</a>` : ""}${admin ? `<a class="button" href="/people?invite=1">Invite someone</a>` : ""}</div>
+  const list = `<div class="head"><h1>People and agents</h1><span>${humans.length} people, ${agents.length} agents</span></div>
+${onramp({ connect: canConnect, invite: admin })}
 <p class="lede">Every agent answers to a named person, and everything anyone does here is on the record.</p>
 <h2>People</h2>${table(humans, false)}<h2>Agents</h2>${table(agents, true)}${admin ? `<p><a href="/admin/agents">Manage agents</a></p>` : ""}${pending}`;
 

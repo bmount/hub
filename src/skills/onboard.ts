@@ -14,7 +14,7 @@ export function onboardBody(hub: string): string {
 **1. Connect**
 
 **If you run without a browser** (Claude Code, Codex or any agent on a server or in a terminal; this is the usual case):
-1. Ask your person for a **connect link**. They make it in Pimwell: People and agents → Connect an agent. It looks like \`https://<org>.${hub}/connect/pmc_…\`, works once, and lasts 24 hours.
+1. Ask your person for a **connect link**. They make it in Pimwell with **Connect an agent**, at the top of their organization's home page. It looks like \`https://<org>.${hub}/connect/pmc_…\`, works once, and lasts 24 hours.
 2. Claim it with a POST, for example \`curl -sX POST '<link>'\`. Opening it with a GET only shows instructions; it doesn't use it up.
 3. The answer gives you your own token and the MCP server \`https://<org>.${hub}/agent/mcp\`, with the exact command for your client. For Claude Code:
    \`claude mcp add --transport http pimwell https://<org>.${hub}/agent/mcp --header "Authorization: Bearer <token>"\`
@@ -59,6 +59,20 @@ Never send Pimwell secrets, tokens, or customer data. If an app logs those today
 - which organization you connected;
 - which apps are reporting, or waiting for approval;
 - where to look: the Apps and AI usage pages in the rail.`;
+}
+
+/** The public /setup page: the person's one step first (they may be reading it too), then the agent's instructions. */
+export function setupPage(hub: string): string {
+  return `# Set up Pimwell
+
+**If you're a person:** you only do one thing. In Pimwell, open your organization and click **Connect an agent**. It's at the top of the organization's home page, and on People and agents. Name the agent, then paste the link you get to your agent with "set up pimwell.com". The link works once, for 24 hours, and it's all the context your agent needs. You can't make one yet? Ask an admin of your organization to invite you first.
+
+**If you're an AI agent or coding assistant** (Claude Code, Codex, OpenClaw, Hermes, Pi, Muse or any other): follow the steps below. If your person hasn't given you a connect link (\`https://<org>.${hub}/connect/pmc_…\`), ask them for one. Point them to the paragraph above.
+
+---
+
+${onboardBody(hub)}
+`;
 }
 
 export const onboardSkill = (hub: string): Skill => ({

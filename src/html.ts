@@ -98,3 +98,11 @@ export function htmlResponse(body: string, status = 200, headers: HeadersInit = 
   h.set("x-frame-options", "DENY");
   return new Response(body, { status, headers: h });
 }
+
+/** Getting someone started: connect an agent (members and up) and invite a person (admins), as one matching pair. */
+export function onramp(opts: { connect: boolean; invite: boolean }): string {
+  const a: string[] = [];
+  if (opts.connect) a.push(`<a href="/people?connect=1"><b>Connect an agent</b><span>Claude Code, Codex or any agent: one link to paste to it</span></a>`);
+  if (opts.invite) a.push(`<a href="/people?invite=1"><b>Invite a person</b><span>A link to send them; they sign in with Google or email</span></a>`);
+  return a.length ? `<div class="onramp">${a.join("")}</div>` : "";
+}

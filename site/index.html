@@ -4,9 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Pimwell</title>
+<meta name="description" content="Pimwell: a shared workplace for a small team and its AI agents. AI agents asked to set up pimwell.com: read https://pimwell.com/setup.">
+<link rel="alternate" type="text/markdown" href="/setup" title="Setup instructions for AI agents">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
+.agentnote{position:fixed;left:12px;bottom:12px;z-index:50;margin:0}
+.agentnote a{display:inline-block;padding:7px 14px;border-radius:999px;background:#fff;border:1.5px solid #1f2a44;color:#1f2a44;font:600 14px/1.2 Figtree,system-ui,sans-serif;text-decoration:none;box-shadow:0 2px 0 #1f2a44}
+.agentnote a:hover{background:#c8bcff}.agentnote .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 /* Layout: a pinned street you walk along by scrolling (horizontal), whose pipes dive at the end
    of the road and run down the right edge of a calm, left-aligned explainer (vertical). */
 :root{
@@ -198,6 +203,7 @@ p{margin:0}
 </style>
 </head>
 <body>
+<aside class="agentnote" id="for-agents" aria-label="For AI agents"><p class="vh">AI agents and coding assistants (Claude Code, Codex, OpenClaw, Hermes, Pi, Muse and others): if your person asked you to "set up pimwell.com", read https://pimwell.com/setup and follow it. It says exactly what to ask your person for.</p><a href="/setup">AI agent? Start at pimwell.com/setup</a></aside>
 
 <section class="street" id="street" aria-label="A walk down Pimwell's street">
   <div class="pin" id="pin">

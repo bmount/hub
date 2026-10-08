@@ -37,6 +37,9 @@ details.edit{margin:8px 0;max-width:46rem}details.edit summary{cursor:pointer;fo
 details.edit label>input,details.edit label>textarea{display:block;width:100%;margin-top:2px}details.edit label>select{display:block;margin-top:2px}details.edit .row{display:flex;flex-wrap:wrap;gap:0 12px}
 .tip:before{content:"Old constraints, gone: ";font-weight:650;color:var(--accent)}
 .bars{display:flex;align-items:flex-end;gap:2px;height:64px;margin:4px 0 12px}.bars div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;min-width:0}.bars span{display:block;width:100%;background:var(--accent);border-radius:var(--r-xs) var(--r-xs) 0 0}.bars small{font-size:9px;color:var(--faint)}
+.onramp{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:10px;margin:10px 0 18px;max-width:46rem}
+.onramp a{display:flex;flex-direction:column;justify-content:center;gap:2px;min-height:64px;padding:12px 16px;border-radius:var(--r);background:var(--accent);border:1px solid var(--accent);color:var(--panel);text-decoration:none}
+.onramp a:hover{filter:brightness(1.08)}.onramp b{font-size:calc(var(--fs) + 2px)}.onramp b:before{content:"+ ";font-weight:800}.onramp span{font-size:var(--fs-sm);opacity:.92}
 .only-s{display:none}
 .assist{display:flex;flex-direction:column;min-height:100%;max-width:48rem;margin:0 auto;font-size:var(--fs-chat);line-height:1.55}
 .assist-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.assist-top .chips{margin:0}
