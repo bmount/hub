@@ -49,6 +49,7 @@ details.edit label>input,details.edit label>textarea{display:block;width:100%;ma
 .intent{position:static;background:none;padding:6px 0 4px;max-width:46rem}.intent .box{box-shadow:none}.intent textarea{font-size:calc(var(--fs) + 1px)}
 .intent-page{max-width:46rem}.intent-page .said{font-size:calc(var(--fs) + 1px);color:var(--muted);margin:4px 0 8px}.intent-page .small{font-size:var(--fs-sm);margin-top:18px}
 .intent-card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r);padding:12px 14px;margin:10px 0}
+.hits{margin:4px 0 8px;padding-left:20px}.hits li{margin:4px 0}.hits small{color:var(--muted)}div.hits{padding-left:0}
 .intent-card .say{margin:0 0 8px;font-weight:600}.intent-card .say:last-child{margin:0}.intent-card label.f{display:block;margin:0 0 10px}.intent-card label.f>span{display:block;font-size:var(--fs-sm);color:var(--muted);margin-bottom:2px}
 .intent-card label.f input,.intent-card label.f textarea,.intent-card label.f select{display:block;width:100%}.intent-card .row{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
 @media (max-width:760px){.intent-card .row{grid-template-columns:1fr}}

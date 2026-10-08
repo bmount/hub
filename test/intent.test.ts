@@ -88,4 +88,18 @@ describe("intent", () => {
     expect(r.headers.get("location")).toBe("/assistant?ask=What%20changed%20this%20week%3F");
     expect(await (await SELF.fetch(`https://${HOST}${r.headers.get("location")}`, { headers: h })).text()).toContain('data-autoask="What changed this week?"');
   });
+
+  it("answers list questions with the person's own read verbs, results never shown to the model", async () => {
+    const { h } = await setup();
+    reply = '{"action":"show","params":{"what":"projects"},"say":"Your projects."}';
+    const page = await (await doIt(h, "what are my projects?")).text();
+    expect(page).toContain('href="/skyledger/docket">SkyLedger</a>');
+    expect(page).toContain('href="/site/docket">Website</a>');
+    await SELF.fetch(`https://${HOST}/api/work.create`, { method: "POST", headers: { ...h, "content-type": "application/json" }, body: JSON.stringify({ project: "site", kind: "snag", title: "Export button does nothing", owner: "me" }) });
+    reply = '{"action":"show","params":{"what":"my_work"}}';
+    const mine = await (await doIt(h, "my latest issues")).text();
+    expect(mine).toContain('href="/site/w/1">site#1</a> Export button does nothing');
+    expect(sent.join("\n")).not.toContain("Export button");
+    expect(sent.join("\n").toLowerCase()).not.toContain("skyledger");
+  });
 });

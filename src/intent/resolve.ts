@@ -6,6 +6,41 @@ import { rank } from "../auth/context";
 import { esc } from "../html";
 import { KINDS } from "../work/names";
 import type { Intent } from "./catalog";
+import { getVerb } from "../verbs/table";
+import { runVerb } from "../verbs/dispatch";
+import { DATA_NOTE } from "../mcp/render";
+import { format } from "../http/assistantPages";
+
+/** "show": the person's own read verb, with their own rights, as they'd get from the API or MCP. The model never sees it. */
+const SHOW: Record<string, { verb: string; page: string; title: string }> = {
+  projects: { verb: "project.list", page: "/", title: "Projects" },
+  waiting_on_me: { verb: "attention.list", page: "/attention", title: "Waiting on you" },
+  my_work: { verb: "work.list", page: "/docket?owner=me", title: "Your open work" },
+  work: { verb: "work.list", page: "/docket", title: "Work" },
+  reviews: { verb: "review.list", page: "/reviews", title: "Open reviews" },
+  apps: { verb: "app.list", page: "/apps", title: "Apps" },
+  situations: { verb: "situation.list", page: "/situations", title: "Situations" },
+  mail: { verb: "mail.list", page: "/mail", title: "Mail" },
+};
+
+type WorkRow = { project: string; number: number; title: string; kind: string; state: string };
+function showHtml(what: string, result: unknown, verbName: string): string {
+  if (what === "projects") {
+    const ps = (result as { projects: Array<{ slug: string; display_name: string; path: string; kind: string }> }).projects.filter((x) => x.kind !== "channel");
+    return ps.length ? `<ul class="hits">${ps.map((x) => `<li><a href="/${esc(x.slug)}/docket">${esc(x.display_name)}</a> <small>${esc(x.path)}</small></li>`).join("")}</ul>` : `<p class="lede">No projects yet.</p>`;
+  }
+  if (verbName === "work.list") {
+    const items = (result as { items: WorkRow[] }).items;
+    return items.length ? `<ul class="hits">${items.slice(0, 15).map((w) => `<li><a href="/${esc(w.project)}/w/${w.number}">${esc(w.project)}#${w.number}</a> ${esc(w.title)} <small>${esc(KINDS[w.kind as keyof typeof KINDS]?.name ?? w.kind)}${w.state === "doing" ? ", under way" : ""}</small></li>`).join("")}</ul>` : `<p class="lede">Nothing here right now.</p>`;
+  }
+  if (what === "waiting_on_me") {
+    const es = (result as { entries: Array<{ slug: string | null; number: number | null; summary: string; reason: string }> }).entries;
+    return es.length ? `<ul class="hits">${es.slice(0, 15).map((e) => `<li>${e.slug ? `<a href="/${esc(e.slug)}/w/${e.number}">${esc(e.slug)}#${e.number}</a> ` : ""}${esc(e.summary)} <small>${esc(e.reason)}</small></li>`).join("")}</ul>` : `<p class="lede">Nothing is waiting on you.</p>`;
+  }
+  const v = getVerb(verbName);
+  const text = v?.mcp?.render ? v.mcp.render(result) : JSON.stringify(result);
+  return `<div class="hits">${format(text.replace(DATA_NOTE, "").trim().split("\n").slice(0, 30).join("\n"))}</div>`;
+}
 
 export type Outcome = { kind: "go"; href: string; say: string } | { kind: "card"; html: string };
 
@@ -61,6 +96,39 @@ export async function resolve(ctx: Ctx, intent: Intent): Promise<Outcome> {
     case "go": {
       if (p.section === "account") return { kind: "go", href: `https://${ctx.env.HUB_DOMAIN}/me`, say };
       return { kind: "go", href: SECTION_HREF[str("section")] ?? "/", say };
+    }
+    case "show": {
+      const what = str("what"), def = SHOW[what];
+      if (!def) return card("I couldn't find a way to do that here.", "");
+      const input: Record<string, unknown> = {};
+      let page = def.page;
+      if (what === "my_work") input.owner = "me";
+      if (what === "work" || what === "reviews") {
+        if (str("project")) {
+          const m = findProject(str("project"));
+          if (!m.one) return whichProject(str("project"), m.maybe, (slug) => `/do?q=${encodeURIComponent(`show ${what} in ${slug}`)}`);
+          input.project = m.one.slug; page = what === "reviews" ? "/reviews" : `/${m.one.slug}/docket`;
+        }
+      }
+      if (what === "work") {
+        if (p.kind) input.kind = str("kind");
+        if (p.finished === true) input.state = "done";
+        const owner = str("owner");
+        if (owner) {
+          if (owner.toLowerCase() === "me" || owner.includes("@")) input.owner = owner.toLowerCase();
+          else { const who = bestMatch(owner, people, (x) => [x.name, x.email.split("@")[0]!]); if (who.one) input.owner = who.one.email; }
+        }
+        input.limit = 15;
+      }
+      if (what === "my_work") input.limit = 15;
+      const verb = getVerb(def.verb);
+      if (!verb) return card("I couldn't find a way to do that here.", "");
+      try {
+        const result = await runVerb(ctx, verb, input);
+        return card(say || def.title, `${showHtml(what, result, def.verb)}<p><a href="${esc(page)}">Open ${esc(def.title.toLowerCase())}</a></p>`);
+      } catch {
+        return card("That list isn't available to you here.", "");
+      }
     }
     case "search": return { kind: "go", href: `/search?q=${encodeURIComponent(str("query"))}`, say };
     case "ask_assistant": return { kind: "go", href: `/assistant?ask=${encodeURIComponent(str("question"))}`, say };
