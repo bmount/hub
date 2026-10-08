@@ -122,6 +122,21 @@ async function tenantListing(env: Env, tenant_id: string, state: State): Promise
   return listSection("Namespaces", namespaces.map((n) => esc(n.slug))) + listSection("Projects", paths.map((p) => `<code>${esc(p)}</code>`));
 }
 
+/** How to bring an agent in: steps on the home page, with a direct link to each organization's connect form. */
+function setupCard(env: Env, orgs: Array<{ slug: string; name: string }>): string {
+  const connect = (o: { slug: string; name: string }) => `<a href="https://${esc(o.slug)}.${esc(env.HUB_DOMAIN)}/people?connect=1" data-reload>${orgs.length > 1 ? esc(o.name) : "Connect an agent"}</a>`;
+  const where = orgs.length === 0 ? "In your organization, open People and agents → Connect an agent"
+    : orgs.length === 1 ? `Make a connect link: ${connect(orgs[0]!)}` : `Make a connect link in ${orgs.map(connect).join(", ")}`;
+  return `<div class="card"><h3>Set up with your agent</h3>
+<p>For Claude Code, Codex or any agent in a terminal or on a server:</p>
+<ol>
+<li>${where}. Name the agent; you get a link that works once, for 24 hours.</li>
+<li>Paste the link to your agent and say: <b>"set up pimwell.com with this link"</b>.</li>
+<li>The agent claims the link, connects with its own key, and follows <a href="/setup" data-reload>${esc(env.HUB_DOMAIN)}/setup</a>: it reports its AI usage and wires your apps' errors and deploys in.</li>
+</ol>
+<p class="lede">The agent answers to you and can do what you can, up to a member's rights. For Claude or ChatGPT in a browser or on your phone, add a custom connector instead, with <code>https://&lt;org&gt;.${esc(env.HUB_DOMAIN)}/mcp</code>.</p></div>`;
+}
+
 export async function homePage(request: Request, env: Env): Promise<Response> {
   if (classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN).kind === "tenant") return orgHomePage(request, env);
   const ctx = await buildContext(request, env);
@@ -131,7 +146,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
     const memberships = (await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id)).filter((m) => m.tenant.state === "active" && m.membership.state === "active");
     const card = (slug: string, name: string, note: string) => `<a class="card big" href="https://${esc(slug)}.${esc(env.HUB_DOMAIN)}/" data-reload><h3>${esc(name)}</h3><p>${esc(note)}</p><p><code>${esc(slug)}.${esc(env.HUB_DOMAIN)}</code></p></a>`;
     let body = `<h1>Hello, ${esc(ctx.identity.display_name)}</h1><p class="lede">AI can do a lot. Pick an organization to see what is happening, or ask from Claude or ChatGPT over MCP.</p>
-<div class="card"><h3>Set up with your agent</h3><p>Tell your coding agent: <b>"set up pimwell.com"</b>. It reads <a href="/setup" data-reload>${esc(env.HUB_DOMAIN)}/setup</a>, connects, reports its AI usage, and wires your apps' errors and deploys in.</p></div>`;
+${setupCard(env, memberships.filter((m) => m.membership.role !== "reader" || ctx.identity!.is_root === 1).map((m) => ({ slug: m.tenant.slug, name: m.tenant.display_name })))}`;
     body += `<h2>Your organizations</h2>` + (memberships.length ? `<div class="grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, `You are ${m.membership.role}`)).join("")}</div>` : `<p class="lede">None yet. Ask whoever invited you to add you to an organization.</p>`);
     if (ctx.identity.is_root === 1) {
       const mine = new Set(memberships.map((m) => m.tenant.id));
