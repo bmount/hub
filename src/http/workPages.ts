@@ -106,11 +106,13 @@ function docketList(ctx: Ctx, project: Project | null, items: WorkItem[], member
 ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.quest === null)}${quests.map((q) => option(String(q.number), `#${q.number} ${q.title}`, f.quest === q.number)).join("")}</select></label>` : ""}
 <button type="submit" class="quiet">Show</button><input data-filter placeholder="Filter these (/)" aria-label="Filter the list" size="16"></form>`;
   const itemQs = qs(f, {}, true);
+  const canBulk = rank(ctx.role) >= rank("member") && items.length > 0;
   const rows = items.map((w) => {
     const sl = slugs.get(w.project_id) ?? project?.slug ?? "?";
     const href = `/${sl}/w/${w.number}${itemQs ? `?${itemQs}` : ""}`;
     const who = w.owner_id ? (w.owner_id === ctx.identity!.id ? "You" : names.get(w.owner_id) ?? "Former member") : "";
-    return `<tr data-href="${esc(href)}"${w.id === selected ? ' aria-selected="true"' : ""}><td class="ref">${esc(f.org || !project ? `${sl}#${w.number}` : `#${w.number}`)}</td><td class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)}</td><td><a href="${esc(href)}">${esc(w.title)}</a></td><td class="hide-s">${esc(who)}</td><td class="hide-s">${esc(STATES[w.state])}</td><td class="when" title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</td></tr>`;
+    const box = canBulk ? `<td><input type="checkbox" name="ids" value="${esc(`${sl}#${w.number}`)}" form="bulk" aria-label="Select ${esc(`${sl}#${w.number}`)}"></td>` : "";
+    return `<tr data-href="${esc(href)}"${w.id === selected ? ' aria-selected="true"' : ""}>${box}<td class="ref">${esc(f.org || !project ? `${sl}#${w.number}` : `#${w.number}`)}</td><td class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)}</td><td><a href="${esc(href)}">${esc(w.title)}</a></td><td class="hide-s">${esc(who)}</td><td class="hide-s">${esc(STATES[w.state])}</td><td class="when" title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</td></tr>`;
   }).join("");
   const filtered = f.kind !== null || f.owner !== null || f.quest !== null;
   const empty = f.owner === "me" && !f.closed && f.kind === null && f.quest === null
@@ -120,12 +122,17 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
     : project ? "Nothing open. File something, or forward a thread to the project's address."
     : "Nothing open. File work with + File, or forward a thread to a project's address.";
   const where = f.org || !project ? esc(ctx.tenant!.display_name) : esc(project.display_name);
-  const scope = project && !f.org ? `<a href="/docket">All projects</a> · <a href="/${esc(project.slug)}/code">Code</a>` : "";
+  const scope = project && !f.org ? `<a href="/docket">All projects</a> · <a href="/${esc(project.slug)}/board">Board</a> · <a href="/${esc(project.slug)}/code">Code</a>` : `<a href="/board">Board</a>`;
+  const bulk = canBulk ? `<form id="bulk" class="bulk" method="post" action="/api/work.bulk_update"><input type="hidden" name="_back" value="${esc(base)}${qs(f) ? `?${esc(qs(f))}` : ""}"><span>With the checked:</span>
+<select name="state"><option value="">state…</option><option value="open">Open</option><option value="doing">Under way</option><option value="done">Done</option><option value="dropped">Let go</option></select>
+<select name="owner"><option value="">owner…</option><option value="me">Me</option><option value="none">Nobody</option>${members.map((m) => option(m.email, m.display_name, false)).join("")}</select>
+<button type="submit" class="quiet">Apply</button></form>` : "";
   return `<p class="crumbs"><a href="/">${esc(ctx.tenant!.display_name)}</a>${project && !f.org ? ` / <a href="/${esc(project.slug)}">${esc(project.display_name)}</a>` : ""}</p>
 <div class="head"><h1>${esc(DOCKET.name)}</h1><span>${items.length} ${f.closed ? "finished" : "open"} in ${where}</span>${scope}</div>
 <div class="chips">${kinds}</div><div class="chips">${quick}</div>
 ${filterForm}
-${items.length ? `<table><thead><tr><th></th><th>Kind</th><th>Title</th><th class="hide-s">Owner</th><th class="hide-s">State</th><th>Updated</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">${empty}</p>`}`;
+${bulk}
+${items.length ? `<table><thead><tr>${canBulk ? "<th></th>" : ""}<th></th><th>Kind</th><th>Title</th><th class="hide-s">Owner</th><th class="hide-s">State</th><th>Updated</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">${empty}</p>`}`;
 }
 
 // ---------- Inspector panes ----------

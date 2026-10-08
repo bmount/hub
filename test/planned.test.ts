@@ -15,7 +15,6 @@ describe("planned capabilities", () => {
             "repo.search",
       "review.integrate",
       
-      "work.board", "work.bulk_update",
     ]);
     for (const v of listVerbs().filter((x) => PLANNED.has(x.name))) {
       expect(mcpViolations(v), v.name).toEqual([]);

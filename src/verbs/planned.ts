@@ -26,15 +26,6 @@ const I = (description: string) => ({ type: "integer", minimum: 1, description }
 
 const PLANS: Plan[] = [
   // Project work
-  { name: "work.board", area: "work", kind: "query", minRole: "reader", title: "Work board",
-    summary: "Quests with their progress, and items grouped by state, for one project or the organization.",
-    spec: "Columns open, doing, done; quest progress bars; who is on what; stalled items (no activity in 7 days) flagged.",
-    input: { project: S("Project slug; omit for the organization") } },
-  { name: "work.bulk_update", area: "work", kind: "command", minRole: "member", title: "Change many items",
-    summary: "Change state, owner, kind or quest on many items at once.",
-    spec: "One audited change per item; preview before applying; undo within ten minutes.",
-    input: { ids: { type: "array", items: { type: "string" }, description: "Items to change" }, state: S("open, doing, done or dropped"), owner: S("me, an email, or none"), parent: I("Quest number") }, required: ["ids"] },
-  // Code (through the git host)
   { name: "repo.search", area: "code", kind: "query", minRole: "reader", title: "Search code",
     summary: "Search the code of a repository at a ref.",
     spec: "Literal and regular-expression search with file and line results, across all branches on request.",

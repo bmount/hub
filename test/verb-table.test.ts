@@ -33,6 +33,8 @@ const TABLE: Record<string, Decl> = {
   "work.search": T("tenant", "reader", null, { mcp: "read" }),
   "repo.branches": T("tenant", "reader", null, { mcp: "read" }),
   "review.request": T("tenant", "member", null, { mcp: "write" }),
+  "work.board": T("tenant", "reader", null, { mcp: "read" }),
+  "work.bulk_update": T("tenant", "member", null, { mcp: "write" }),
   "review.list": T("tenant", "reader", null, { mcp: "read" }),
   "review.read": T("tenant", "reader", null, { mcp: "read" }),
   "review.comment": T("tenant", "member", null, { mcp: "write" }),

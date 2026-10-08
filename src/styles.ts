@@ -46,6 +46,10 @@ details.edit label>input,details.edit label>textarea{display:block;width:100%;ma
 table.diff{font-family:var(--mono);font-size:12px;margin:4px 0 14px}table.diff td{padding:0 6px;border:0;white-space:pre-wrap;word-break:break-all}table.diff code{background:none;padding:0;font-size:12px;font-family:var(--mono)}
 table.diff td.ln{color:var(--faint);text-align:right;width:1%;white-space:nowrap;user-select:none}table.diff tr.ins td{background:var(--add-bg)}table.diff tr.dl td{background:var(--del-bg)}
 table.diff tr.hunk td{color:var(--muted);background:var(--sunk)}.add{color:var(--add)}.del{color:var(--del)}
+.board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:8px}.bcol{background:var(--sunk);border-radius:var(--r);padding:6px 8px}.bcol h2{margin:4px 0 8px}
+.bcard{margin:0 0 6px;font-size:var(--fs-md)}.bar{height:6px;background:var(--sunk);border-radius:3px;overflow:hidden;margin:6px 0}.bar span{display:block;height:100%;background:var(--accent)}
+.bulk{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0;font-size:var(--fs-md)}
+@media (max-width:760px){.board{grid-template-columns:1fr}}
 .pill{display:inline-block;font-size:10.5px;font-weight:650;padding:0 5px;border-radius:var(--r-xs);background:var(--sunk);color:var(--muted);border:1px solid var(--line);vertical-align:1px;margin-left:4px}
 .planned{border:1px dashed var(--line);border-radius:var(--r);padding:6px 10px;margin:8px 0;color:var(--muted);font-size:var(--fs-md)}.planned b{color:var(--ink)}
 .meta{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;font-size:var(--fs-md);margin:6px 0}.meta dt{color:var(--muted)}.meta dd{margin:0}
