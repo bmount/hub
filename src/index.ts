@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "./env";
 import { handleApi } from "./http/api";
+import { connectAssistantPage } from "./http/connectAssistant";
 import { registerAllVerbs } from "./verbs/index";
 import { authLinkPage, consumeLinkPage, loginPage, loginPostPage } from "./http/login";
 import { googleCallbackPage, googleStartPage } from "./http/googleLogin";
@@ -42,6 +43,8 @@ app.use("*", async (c, next) => {
 const workerCtx = (c: unknown): ExecutionContext => c as ExecutionContext;
 
 app.get("/healthz", (c) => c.text("ok"));
+app.get("/connect-assistant", (c) => connectAssistantPage(c.req.raw, c.env));
+app.get("/connect-assistant.json", (c) => connectAssistantPage(c.req.raw, c.env));
 app.get("/privacy", () => privacyPage());
 app.get("/terms", () => termsPage());
 app.post("/api/*", (c) => handleApi(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));

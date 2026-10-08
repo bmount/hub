@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { handleEmail } from "../src/mail/inbound";
-import { STRANGER_REASON } from "../src/mail/projectMail";
+import { STRANGER_REASON, parseMail, MAX_ATTACHMENT_TEXT_CHARS } from "../src/mail/projectMail";
 import { hasActiveConsent } from "../src/db/consent";
 import { createProject } from "../src/db/projects";
 import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
@@ -9,12 +9,13 @@ import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
 const ctx = {} as ExecutionContext;
 const HUB = "pimwell.test";
 
-function mime(opts: { from: string; to: string; subject?: string; body?: string; html?: string; rfc822?: string }) {
+function mime(opts: { from: string; to: string; subject?: string; body?: string; html?: string; rfc822?: string; attachments?: Array<{ name: string; type: string; text: string }> }) {
   const b = "XBOUNDARYX";
   const parts: string[] = [];
   if (opts.body !== undefined) parts.push(`--${b}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${opts.body}\r\n`);
   if (opts.html !== undefined) parts.push(`--${b}\r\nContent-Type: text/html; charset=utf-8\r\n\r\n${opts.html}\r\n`);
   if (opts.rfc822 !== undefined) parts.push(`--${b}\r\nContent-Type: message/rfc822\r\nContent-Disposition: attachment; filename="fwd.eml"\r\n\r\n${opts.rfc822}\r\n`);
+  for (const a of opts.attachments ?? []) parts.push(`--${b}\r\nContent-Type: ${a.type}\r\nContent-Disposition: attachment; filename="${a.name}"\r\n\r\n${a.text}\r\n`);
   return `From: ${opts.from}\r\nTo: ${opts.to}\r\nSubject: ${opts.subject ?? "hello"}\r\nMessage-ID: <m${Math.random().toString(36).slice(2)}@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="${b}"\r\n\r\n${parts.join("")}--${b}--\r\n`;
 }
 
@@ -102,6 +103,36 @@ describe("mail to organizations and projects", () => {
     expect(m!.forwarded).toBe(1);
     expect(m!.text).toContain("FYI see below");
     expect(m!.text).toContain("off by 10x");
+  });
+
+  it("preserves bounded text audit attachments but never HTML or binary content", async () => {
+    const parsed = await parseMail(mime({ from: "pat@example.com", to: `acme@${HUB}`, body: "Audit attached", attachments: [
+      { name: "findings.md", type: "text/markdown", text: "Finding: broken connection guidance" },
+      { name: "large.txt", type: "text/plain", text: "x".repeat(MAX_ATTACHMENT_TEXT_CHARS + 100) },
+      { name: "unsafe.html", type: "text/html", text: "<script>danger()</script>" },
+      { name: "run.bin", type: "application/octet-stream", text: "do not execute" },
+    ] }));
+    expect(parsed.attachments[0]!.text).toContain("broken connection guidance");
+    expect(parsed.attachments[1]!.text).toHaveLength(MAX_ATTACHMENT_TEXT_CHARS);
+    expect(parsed.attachments[1]!.truncated).toBe(true);
+    expect(parsed.attachments[2]!.text).toBeUndefined();
+    expect(parsed.attachments[3]!.text).toBeUndefined();
+  });
+
+  it("shares admitted attachment evidence only with members and keeps held attachments unreadable", async () => {
+    const w = await world();
+    const raw = mime({ from: "pat@example.com", to: `acme@${HUB}`, body: "audit", attachments: [{ name: "audit.md", type: "text/markdown", text: "Private finding" }] });
+    await handleEmail(fake("pat@example.com", `acme@${HUB}`, raw).message, env, ctx);
+    await handleEmail(fake("pat@example.com", `acme@${HUB}`, raw, { replyThrows: true }).message, env, ctx);
+    const rows = (await env.HUB_DB.prepare("SELECT id, verdict FROM inbound_mail").all<{ id: string; verdict: string }>()).results;
+    const host = `acme.${HUB}`;
+    const admitted = rows.find(r => r.verdict === "admitted")!;
+    const held = rows.find(r => r.verdict === "quarantined")!;
+    const response = await apiPost(host, "mail.read", { id: admitted.id }, cookieHeaders(w.member.token, host));
+    expect(await response.text()).toContain("Private finding");
+    expect((await apiPost(host, "mail.read", { id: held.id }, cookieHeaders(w.member.token, host))).status).toBe(404);
+    const outsider = await seedHuman("elsewhere@example.com");
+    expect((await apiPost(host, "mail.read", { id: admitted.id }, cookieHeaders(outsider.token, host))).status).toBe(404);
   });
 
   it("refuses oversized mail", async () => {

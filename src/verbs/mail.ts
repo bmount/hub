@@ -55,9 +55,18 @@ export const mailRead = defineVerb({
     render: (r) => {
       const m = (r as { mail: MailRow }).mail;
       const body = cutText(m.text ?? "", 15_000);
+      const attachments = JSON.parse(m.attachments) as Array<{ filename: string | null; mime_type: string; text?: string; truncated?: boolean }>;
+      let attachmentBudget = 12_000;
+      const attachmentBodies = attachments.flatMap((a) => {
+        if (typeof a.text !== "string" || attachmentBudget <= 0) return [];
+        const excerpt = cutText(a.text, attachmentBudget);
+        attachmentBudget -= excerpt.text.length;
+        return ["", `Attachment evidence: ${cleanText(a.filename ?? "unnamed")} (${cleanText(a.mime_type)})`,
+          "```text", excerpt.text.replace(/```/g, "'''"), "```", a.truncated || excerpt.cut ? "(attachment text truncated)" : ""];
+      });
       return [DATA_NOTE, MAIL_NOTE, "", `**${cleanText(m.subject || "(no subject)")}**`, `From ${cleanText(m.from_email)} to ${cleanText(m.to_address)}, ${new Date(m.received_at).toISOString().slice(0, 16)}${m.forwarded ? ", carries forwarded mail" : ""}`,
         `Attachments: ${(JSON.parse(m.attachments) as Array<{ filename: string | null; mime_type: string }>).map((a) => `${a.filename ?? "unnamed"} (${a.mime_type})`).join(", ") || "none"}`,
-        "", "```text", body.text.replace(/```/g, "'''"), "```", body.cut ? "(text cut for length)" : ""].join("\n");
+        "", "```text", body.text.replace(/```/g, "'''"), "```", body.cut ? "(text cut for length)" : "", ...attachmentBodies].join("\n");
     },
   },
   parse: (i) => ({ id: reqString(i, "id", { max: 40 }) }),

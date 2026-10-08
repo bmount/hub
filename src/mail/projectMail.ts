@@ -46,7 +46,10 @@ export async function resolveMailAddress(db: D1Database, hubDomain: string, to: 
   return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: p.id, project_slug: p.slug, project_name: p.display_name };
 }
 
-type Parsed = { subject: string; text: string; attachments: Array<{ filename: string | null; mime_type: string; size: number }>; forwarded: boolean; date: string | null };
+export const MAX_ATTACHMENT_TEXT_CHARS = 20_000;
+export const MAX_TOTAL_ATTACHMENT_TEXT_CHARS = 60_000;
+type Attachment = { filename: string | null; mime_type: string; size: number; text?: string; truncated?: boolean };
+type Parsed = { subject: string; text: string; attachments: Attachment[]; forwarded: boolean; date: string | null };
 
 function htmlToText(html: string): string {
   return html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|h\d)>/gi, "\n")
@@ -57,9 +60,23 @@ function htmlToText(html: string): string {
 export async function parseMail(raw: ReadableStream<Uint8Array> | ArrayBuffer | string): Promise<Parsed> {
   const m = await PostalMime.parse(raw as never, { attachmentEncoding: "arraybuffer" } as never);
   let text = (m.text ?? "").trim() || (m.html ? htmlToText(m.html) : "");
-  const attachments = (m.attachments ?? []).map((a) => ({
-    filename: a.filename ?? null, mime_type: a.mimeType, size: typeof a.content === "string" ? a.content.length : (a.content as ArrayBuffer).byteLength,
-  }));
+  let remainingAttachmentText = MAX_TOTAL_ATTACHMENT_TEXT_CHARS;
+  const attachments: Attachment[] = (m.attachments ?? []).map((a) => {
+    const attachment: Attachment = {
+      filename: a.filename ?? null, mime_type: a.mimeType,
+      size: typeof a.content === "string" ? new TextEncoder().encode(a.content).byteLength : (a.content as ArrayBuffer).byteLength,
+    };
+    // Retain bounded plain-text evidence, never HTML, executable files, or arbitrary binary.
+    // Admission and quarantine checks still protect access to the enclosing message.
+    if (["text/plain", "text/markdown"].includes(a.mimeType.toLowerCase()) && remainingAttachmentText > 0) {
+      const text = typeof a.content === "string" ? a.content : new TextDecoder().decode(a.content as ArrayBuffer);
+      const limit = Math.min(MAX_ATTACHMENT_TEXT_CHARS, remainingAttachmentText);
+      attachment.text = text.slice(0, limit);
+      attachment.truncated = text.length > limit;
+      remainingAttachmentText -= attachment.text.length;
+    }
+    return attachment;
+  });
   // Forwarded messages arrive inline ("Forwarded message" / "Begin forwarded message") or as message/rfc822 parts.
   const inlineFwd = /-{2,}\s*Forwarded message\s*-{2,}|Begin forwarded message:/i.test(text);
   const rfc822 = (m.attachments ?? []).filter((a) => a.mimeType === "message/rfc822");
