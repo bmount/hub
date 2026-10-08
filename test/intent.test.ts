@@ -102,4 +102,25 @@ describe("intent", () => {
     expect(sent.join("\n")).not.toContain("Export button");
     expect(sent.join("\n").toLowerCase()).not.toContain("skyledger");
   });
+
+  it("works from the hub's home page: one organization, a named one, or a choice", async () => {
+    const { h } = await setup();
+    const cookie = { cookie: h.cookie!, origin: "https://pimwell.test" };
+    const apex = (q: string) => SELF.fetch(`https://pimwell.test/do?q=${encodeURIComponent(q)}`, { headers: cookie, redirect: "manual" });
+    const one = await apex("open sky ledger");
+    expect(one.status).toBe(303);
+    expect(one.headers.get("location")).toBe("https://acme.pimwell.test/do?q=open%20sky%20ledger");
+    expect(await (await SELF.fetch("https://pimwell.test/", { headers: cookie })).text()).toContain('action="/do"');
+    expect(sent.length).toBe(0);
+
+    const t2 = await seedTenant("north");
+    const me = await env.HUB_DB.prepare("SELECT identity_id FROM session WHERE token_hash IS NOT NULL ORDER BY created_at DESC LIMIT 1").first<{ identity_id: string }>();
+    await env.HUB_DB.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES ('m-north', ?, ?, 'member', 'active', ?)").bind(me!.identity_id, t2.id, Date.now()).run();
+    expect((await apex("file a snag in north: login loops")).headers.get("location")).toBe("https://north.pimwell.test/do?q=file%20a%20snag%20in%20north%3A%20login%20loops");
+    const pick = await apex("show my work");
+    expect(pick.status).toBe(200);
+    const html = await pick.text();
+    expect(html).toContain("In which organization?");
+    expect(html).toContain("https://north.pimwell.test/do?q=show%20my%20work");
+  });
 });

@@ -16,6 +16,7 @@ import { listNamespaces } from "../db/namespaces";
 import { listProjects } from "../db/projects";
 import type { State } from "../db/types";
 import intro from "../../site/index.html";
+import { intentBox } from "../intent/page";
 
 export function neutralInvitePage(): string {
   return page("Invite", `<h1>This invite link is not valid</h1><p>It may have expired, been used already, or been revoked. Ask the person who invited you for a new link.</p>`);
@@ -145,7 +146,9 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
     if (!ctx.identity) return htmlResponse(intro, 200, extra);
     const memberships = (await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id)).filter((m) => m.tenant.state === "active" && m.membership.state === "active");
     const card = (slug: string, name: string, note: string) => `<a class="card big" href="https://${esc(slug)}.${esc(env.HUB_DOMAIN)}/" data-reload><h3>${esc(name)}</h3><p>${esc(note)}</p><p><code>${esc(slug)}.${esc(env.HUB_DOMAIN)}</code></p></a>`;
-    let body = `<h1>Hello, ${esc(ctx.identity.display_name)}</h1><p class="lede">AI can do a lot. Pick an organization to see what is happening, or ask from Claude or ChatGPT over MCP.</p>
+    let body = `<h1>Hello, ${esc(ctx.identity.display_name)}</h1>
+${intentBox({ placeholder: "What do you want to do? Say it or type it" })}
+<p class="lede">AI can do a lot. Ask here, pick an organization below, or ask from Claude or ChatGPT over MCP.</p>
 ${setupCard(env, memberships.filter((m) => m.membership.role !== "reader" || ctx.identity!.is_root === 1).map((m) => ({ slug: m.tenant.slug, name: m.tenant.display_name })))}`;
     body += `<h2>Your organizations</h2>` + (memberships.length ? `<div class="grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, `You are ${m.membership.role}`)).join("")}</div>` : `<p class="lede">None yet. Ask whoever invited you to add you to an organization.</p>`);
     if (ctx.identity.is_root === 1) {

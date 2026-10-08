@@ -358,6 +358,9 @@ export const WORKBENCH_JS = String.raw`
     else if (e.key === "Escape") { closeRail(); var back = $("#inspector .back"); if (back && document.body.getAttribute("data-focus") === "inspector" && innerWidth <= 760) go(back.href); }
   });
 
+  function grow(t) { t.style.height = "auto"; t.style.height = t.scrollHeight + 2 + "px"; }
+  document.addEventListener("input", function (e) { var t = e.target; if (t.matches && t.matches("textarea[data-grow]")) grow(t); });
+
   document.addEventListener("keydown", function (e) {
     var t = e.target;
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && t.matches && t.matches("textarea[data-enter-submits]") && t.form) { e.preventDefault(); if (t.value.trim()) t.form.requestSubmit(); }

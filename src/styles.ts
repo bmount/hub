@@ -46,7 +46,11 @@ details.edit label>input,details.edit label>textarea{display:block;width:100%;ma
 .voicebar{display:flex;align-items:center;gap:10px;margin:6px 0}.voicestate{font-size:var(--fs-sm);color:var(--muted)}.voicestate:empty{display:none}
 .voicestate.live{color:var(--snag);font-weight:600}.voicestate.err{color:var(--snag)}.voicestate.ok{color:var(--accent)}.composer .voicestate{display:block;padding:6px 4px 0}
 @media (max-width:760px){.mic{width:44px;height:44px}.mic svg{width:24px;height:24px}}
-.intent{position:static;background:none;padding:6px 0 4px;max-width:46rem}.intent .box{box-shadow:none}.intent textarea{font-size:calc(var(--fs) + 1px)}
+.intent{position:static;background:none;padding:8px 0 6px;max-width:46rem}
+.intent .box{padding:12px 12px 12px 18px;border-radius:18px;border-width:1.5px;box-shadow:0 2px 10px rgba(0,0,0,.06)}
+.intent textarea{font-size:20px;line-height:1.5;min-height:4.5em;max-height:55vh;overflow-y:auto;padding:4px 0}
+.intent textarea::placeholder{color:var(--faint)}
+@media (max-width:760px){.intent textarea{font-size:19px;min-height:5em}.intent .box{padding:10px 10px 10px 14px}}
 .intent-page{max-width:46rem}.intent-page .said{font-size:calc(var(--fs) + 1px);color:var(--muted);margin:4px 0 8px}.intent-page .small{font-size:var(--fs-sm);margin-top:18px}
 .intent-card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r);padding:12px 14px;margin:10px 0}
 .hits{margin:4px 0 8px;padding-left:20px}.hits li{margin:4px 0}.hits small{color:var(--muted)}div.hits{padding-left:0}
