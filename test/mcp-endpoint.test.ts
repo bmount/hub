@@ -21,7 +21,7 @@ describe("/mcp with a token", () => {
     const init = await rpcBody(await mcpPost("acme", access, "initialize", INIT));
     expect(init.result.serverInfo.name).toBe("pimwell");
     expect(init.result.capabilities.tools).toBeDefined();
-    expect(live(await toolNames(access))).toEqual(["app_list", "attention_list", "capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "deploy_list", "event_list", "mail_list", "mail_propose_work", "mail_read", "message_search", "project_history", "project_list", "ref_backlinks", "repo_branches", "repo_commit", "repo_diff", "repo_file", "repo_log", "review_list", "review_read", "search_query", "skill_list", "skill_read", "trace_list", "trace_read", "usage_summary", "whoami", "work_board", "work_list", "work_read", "work_search"]);
+    expect(live(await toolNames(access))).toEqual(["app_list", "attention_list", "capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "deploy_list", "event_list", "mail_list", "mail_propose_work", "mail_read", "message_search", "project_history", "project_list", "project_status", "ref_backlinks", "repo_branches", "repo_commit", "repo_diff", "repo_file", "repo_log", "review_list", "review_read", "search_query", "skill_list", "skill_read", "trace_list", "trace_read", "usage_summary", "whoami", "work_board", "work_list", "work_read", "work_search"]);
     await apiPost("acme.pimwell.test", "project.create", { slug: "site", kind: "repo", display_name: "Site" }, bearer(h.token));
     const call = await rpcBody(await mcpPost("acme", access, "tools/call", { name: "project_list", arguments: {} }));
     expect(call.result.isError).toBeUndefined();
@@ -42,7 +42,7 @@ describe("/mcp with a token", () => {
   it("drops tools when the role drops, without re-consent", async () => {
     const { acme, h, access } = await connected();
     await env.HUB_DB.prepare("UPDATE membership SET role = 'reader' WHERE identity_id = ? AND tenant_id = ?").bind(h.identity.id, acme.id).run();
-    expect(live(await toolNames(access))).toEqual(["app_list", "attention_list", "capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "deploy_list", "mail_list", "mail_read", "message_search", "project_history", "project_list", "ref_backlinks", "repo_branches", "repo_commit", "repo_diff", "repo_file", "repo_log", "review_list", "review_read", "search_query", "skill_list", "skill_read", "trace_list", "trace_read", "usage_summary", "whoami", "work_board", "work_list", "work_read", "work_search"]);
+    expect(live(await toolNames(access))).toEqual(["app_list", "attention_list", "capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "deploy_list", "mail_list", "mail_read", "message_search", "project_history", "project_list", "project_status", "ref_backlinks", "repo_branches", "repo_commit", "repo_diff", "repo_file", "repo_log", "review_list", "review_read", "search_query", "skill_list", "skill_read", "trace_list", "trace_read", "usage_summary", "whoami", "work_board", "work_list", "work_read", "work_search"]);
     const denied = await rpcBody(await mcpPost("acme", access, "tools/call", { name: "event_list", arguments: {} }));
     expect(denied.result.isError).toBe(true);
     expect(await env.HUB_DB.prepare("SELECT 1 FROM event WHERE kind = 'mcp.denied'").first()).not.toBeNull();

@@ -106,4 +106,18 @@ describe("code views", () => {
     expect((await w.call(w.h, "repo.branches", { project: "site" })).status).toBe(503);
     expect(await (await SELF.fetch(`https://${HOST}/site/code`, { headers: w.h })).text()).toContain("the git host did not answer");
   });
+
+  it("says what came after a commit: the deploy that shipped it, and new errors since", async () => {
+    const w = await world();
+    const pid = (await env.HUB_DB.prepare("SELECT id FROM project WHERE slug = 'site'").first<{ id: string }>())!.id;
+    const shippedAt = 1791000000 * 1000 + 60_000;
+    await env.HUB_DB.prepare("INSERT INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at) VALUES ('D1', ?, ?, 'site-app', 'v1', ?, 'Fix two', ?)").bind(w.t.id, pid, B.slice(0, 8), shippedAt).run();
+    await env.HUB_DB.prepare(`INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, title, last_message, count, first_seen, last_seen)
+      VALUES ('G1', ?, ?, 'site-app', 'fp1', 'exception', 'TypeError: x', 'x', 3, ?, ?), ('G0', ?, ?, 'site-app', 'fp0', 'exception', 'Older', 'y', 1, 1, 1)`).bind(w.t.id, pid, shippedAt + 1000, shippedAt + 1000, w.t.id, pid).run();
+    const r = await w.call(w.h, "repo.commit", { project: "site", oid: B });
+    expect(r.result.after).toMatchObject({ shipped: { tag: B.slice(0, 8), script: "site-app" }, errors: [{ id: "G1", count: 3 }] });
+    const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
+    expect(page).toContain("<h2>After this commit</h2>");
+    expect(page).toContain("TypeError: x");
+  });
 });

@@ -1,3 +1,4 @@
+import { statusPage } from "./http/statusPage";
 import { boardPage } from "./http/boardPage";
 import { reviewsPage } from "./http/reviewPages";
 import { syncAll } from "./code/sync";
@@ -135,6 +136,7 @@ app.get("/:project/code", (c) => codePage(c.req.raw, c.env, c.req.param("project
 app.get("/reviews", (c) => reviewsPage(c.req.raw, c.env, null, null));
 app.get("/board", (c) => boardPage(c.req.raw, c.env, null));
 app.get("/:project/board", (c) => boardPage(c.req.raw, c.env, c.req.param("project")));
+app.get("/:project/status", (c) => statusPage(c.req.raw, c.env, c.req.param("project")));
 app.get("/:project/reviews", (c) => reviewsPage(c.req.raw, c.env, c.req.param("project"), null));
 app.get("/:project/reviews/:n", (c) => reviewsPage(c.req.raw, c.env, c.req.param("project"), c.req.param("n")));
 app.get("/:project/files", (c) => filesPage(c.req.raw, c.env, c.req.param("project")));

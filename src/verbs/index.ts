@@ -1,3 +1,5 @@
+import { projectStatusVerb } from "./status";
+import { reviewAi } from "./reviewAi";
 import { workBoard, workBulkUpdate } from "./board";
 import { reviewComment, reviewList, reviewRead, reviewRequest, reviewVerdict } from "./review";
 import { repoBranches, repoCommit, repoDiff, repoFile, repoLog } from "./code";
@@ -50,6 +52,7 @@ export function registerAllVerbs(): void {
     repoBranches, repoLog, repoCommit, repoFile, repoDiff,
     reviewRequest, reviewList, reviewRead, reviewComment, reviewVerdict,
     workBoard, workBulkUpdate,
+    projectStatusVerb, reviewAi,
     skillList, skillRead, capabilities, projectHistory,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,

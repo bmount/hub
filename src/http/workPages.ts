@@ -122,7 +122,7 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
     : project ? "Nothing open. File something, or forward a thread to the project's address."
     : "Nothing open. File work with + File, or forward a thread to a project's address.";
   const where = f.org || !project ? esc(ctx.tenant!.display_name) : esc(project.display_name);
-  const scope = project && !f.org ? `<a href="/docket">All projects</a> · <a href="/${esc(project.slug)}/board">Board</a> · <a href="/${esc(project.slug)}/code">Code</a>` : `<a href="/board">Board</a>`;
+  const scope = project && !f.org ? `<a href="/docket">All projects</a> · <a href="/${esc(project.slug)}/board">Board</a> · <a href="/${esc(project.slug)}/status">Status</a> · <a href="/${esc(project.slug)}/code">Code</a>` : `<a href="/board">Board</a>`;
   const bulk = canBulk ? `<form id="bulk" class="bulk" method="post" action="/api/work.bulk_update"><input type="hidden" name="_back" value="${esc(base)}${qs(f) ? `?${esc(qs(f))}` : ""}"><span>With the checked:</span>
 <select name="state"><option value="">state…</option><option value="open">Open</option><option value="doing">Under way</option><option value="done">Done</option><option value="dropped">Let go</option></select>
 <select name="owner"><option value="">owner…</option><option value="me">Me</option><option value="none">Nobody</option>${members.map((m) => option(m.email, m.display_name, false)).join("")}</select>
