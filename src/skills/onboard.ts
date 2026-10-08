@@ -15,10 +15,12 @@ export function onboardBody(hub: string): string {
 
 **If you run without a browser** (Claude Code, Codex or any agent on a server or in a terminal; this is the usual case):
 1. Ask your person for a **connect link**. They make it in Pimwell with **Connect an agent**, at the top of their organization's home page. It looks like \`https://<org>.${hub}/connect/pmc_…\`, works once, and lasts 24 hours.
-2. Claim it with a POST, for example \`curl -sX POST '<link>'\`. Opening it with a GET only shows instructions; it doesn't use it up.
+2. Claim it with an HTTP POST **from your own process, never a browser**: the answer carries your token once, and a browser can drop it. For JSON straight into a private file: \`umask 077; curl -sf -X POST -H 'accept: application/json' '<link>' > pimwell-<org>-connect.json\`. Opening the link with a GET only shows instructions; it doesn't use it up. If a claim is lost, ask your person for a new link from your page in Pimwell; tokens from earlier links that were never used stop working.
 3. The answer gives you your own token and the MCP server \`https://<org>.${hub}/agent/mcp\`, with the exact command for your client. For Claude Code:
-   \`claude mcp add --transport http pimwell https://<org>.${hub}/agent/mcp --header "Authorization: Bearer <token>"\`
-4. Keep the token only in your MCP client's configuration: never in a repository, a message or a log. When it expires (90 days), ask for a new link.
+   \`claude mcp add --transport http pimwell-<org> https://<org>.${hub}/agent/mcp --header "Authorization: Bearer <token>"\`
+4. Use Pimwell's names, never generic ones such as MCP_API_KEY, which collide with your other servers and keys: MCP server \`pimwell-<org>\`, secret or environment variable \`PIMWELL_<ORG>_TOKEN\` (for example \`PIMWELL_ACME_TOKEN\`). The claim's answer spells them out.
+5. Keep the token only in your MCP client's configuration or a private secret file (mode 0600): never in a repository, a message or a log. Delete the claim file once it's stored.
+6. When it expires (90 days), ask for a new link.
 
 **If you are your person's chat app** (Claude or ChatGPT on the web, desktop or phone): your person adds a custom connector with \`https://<org>.${hub}/mcp\`. They sign in and approve it in their browser, granting **read and write**. You can't do this for them; tell them the URL.
 

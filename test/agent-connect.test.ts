@@ -40,19 +40,21 @@ describe("connect links", () => {
 
     const look = await SELF.fetch(`https://${HOST}${pathOf(made.link)}`);
     expect(look.status).toBe(200);
-    expect(await look.text()).toContain("curl -sX POST");
+    expect(await look.text()).toContain("curl -sf -X POST");
 
     const claim = await SELF.fetch(`https://${HOST}${pathOf(made.link)}`, { method: "POST" });
     expect(claim.status).toBe(200);
     const text = await claim.text();
     expect(text).toContain("https://acme.pimwell.test/agent/mcp");
-    expect(text).toContain("claude mcp add --transport http pimwell");
+    expect(text).toContain("claude mcp add --transport http pimwell-acme ");
+    expect(text).toContain("PIMWELL_ACME_TOKEN");
     expect(text).toContain("acme.build-box@pimwell.test");
     expect(tokenIn(text)).toMatch(/^pmw_/);
 
     expect((await SELF.fetch(`https://${HOST}${pathOf(made.link)}`, { method: "POST" })).status).toBe(410);
-    // A second agent with the same name gets the next free name.
-    expect((await makeLink(h, { display_name: "Build box" })).agent.address).toBe("acme.build-box-2@pimwell.test");
+    // Naming one of your own agents again makes a new link for it, not a duplicate; a new name whose address is taken gets the next free one.
+    expect((await makeLink(h, { display_name: "Build box" })).agent.address).toBe("acme.build-box@pimwell.test");
+    expect((await makeLink(h, { display_name: "Build-box" })).agent.address).toBe("acme.build-box-2@pimwell.test");
     // From the People page: the form, then the link shown once.
     expect(await (await SELF.fetch(`https://${HOST}/people?connect=1`, { headers: h })).text()).toContain('action="/api/agent.connect"');
     const form = await SELF.fetch(`https://${HOST}/api/agent.connect`, { method: "POST", headers: { ...h, "content-type": "application/x-www-form-urlencoded" }, body: "display_name=Laptop%20runner" });
@@ -127,3 +129,36 @@ describe("/agent/mcp", () => {
     expect((await agentMcp(token, "tools/list")).status).toBe(401);
   });
 });
+
+describe("claiming from an agent's own process", () => {
+  it("answers in JSON when asked, retires never-used tokens on a new claim, and reuses an agent by name", async () => {
+    const t = await seedTenant("acme");
+    const ann = await seedHuman("ann@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    const h = cookieHeaders(ann.token, HOST);
+    const first = await makeLink(h, { display_name: "Timon" });
+    const claim = (link: string) => SELF.fetch(`https://${HOST}${pathOf(link)}`, { method: "POST", headers: { accept: "application/json" } });
+    const r1 = await claim(first.link);
+    expect(r1.status).toBe(200);
+    const j1 = (await r1.json()) as { ok: boolean; token: string; mcp_url: string; agent: { address: string } };
+    expect(j1).toMatchObject({ ok: true, mcp_url: "https://acme.pimwell.test/agent/mcp", agent: { address: "acme.timon@pimwell.test" } });
+    expect(j1.token).toMatch(/^pmw_/);
+    // Pimwell's own names, per organization, so nothing collides with the agent's other servers and keys.
+    expect((j1 as unknown as { names: { mcp_server: string; secret: string } }).names).toMatchObject({ mcp_server: "pimwell-acme", secret: "PIMWELL_ACME_TOKEN" });
+    const again = await claim(first.link);
+    expect(again.status).toBe(410);
+    expect(await again.json()).toMatchObject({ ok: false, error: "gone" });
+
+    // The first token was lost in transit and never used. Asking for Timon again reuses Timon; the new claim retires it.
+    const second = await makeLink(h, { display_name: "timon" });
+    expect(second.agent.id).toBe(first.agent.id);
+    const j2 = (await (await claim(second.link)).json()) as { token: string };
+    expect((await agentMcp(j1.token, "tools/list")).status).toBe(401);
+    expect((await agentMcp(j2.token, "tools/list")).status).toBe(200);
+
+    // A token that has been used stays live when another link is claimed.
+    const third = await makeLink(h, { agent_id: first.agent.id });
+    await claim(third.link);
+    expect((await agentMcp(j2.token, "tools/list")).status).toBe(200);
+  });
+});
+
