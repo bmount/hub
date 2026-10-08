@@ -87,10 +87,42 @@ export const WORKBENCH_JS = String.raw`
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     var a = e.target.closest("a");
     if (a && a.getAttribute("href") === "#rail") { e.preventDefault(); var r = $("#rail"); if (r) r.classList.toggle("open"); return; }
-    if (a && a.classList.contains("close")) { e.preventDefault(); closeRail(); return; }
+    if (a && (a.classList.contains("close") || a.classList.contains("scrim"))) { e.preventDefault(); closeRail(); return; }
     if (!a) { var row = e.target.closest("[data-href]"); if (row && !e.target.closest("input,select,textarea,button,form")) { e.preventDefault(); go(row.getAttribute("data-href")); } return; }
     if (local(a)) { e.preventDefault(); go(a.href); }
   });
+  // Touch: with the menu open, it follows a finger dragged left and closes past a third of its width (or on a quick
+  // flick). On a phone, swiping right across an open item goes back to the list. Starts near the screen's left edge
+  // are left to the browser's own back gesture.
+  var touch = null;
+  document.addEventListener("touchstart", function (e) {
+    if (e.touches.length !== 1) { touch = null; return; }
+    var t = e.touches[0], r = $("#rail");
+    var open = !!(r && (r.classList.contains("open") || location.hash === "#rail"));
+    touch = { x: t.clientX, y: t.clientY, at: Date.now(), open: open, axis: null, dx: 0 };
+  }, { passive: true });
+  document.addEventListener("touchmove", function (e) {
+    if (!touch) return;
+    var t = e.touches[0], dx = t.clientX - touch.x, dy = t.clientY - touch.y;
+    if (!touch.axis && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) touch.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+    touch.dx = dx;
+    if (touch.open && touch.axis === "x") { var r = $("#rail"); r.style.transition = "none"; r.style.transform = "translateX(" + Math.min(0, dx) + "px)"; }
+  }, { passive: true });
+  document.addEventListener("touchend", function () {
+    if (!touch) return;
+    var t = touch; touch = null;
+    var r = $("#rail");
+    if (t.open && r) {
+      r.style.transition = ""; r.style.transform = "";
+      var fast = t.dx < -40 && Date.now() - t.at < 250;
+      if (t.axis === "x" && (t.dx < -r.offsetWidth / 3 || fast)) closeRail();
+      return;
+    }
+    if (t.axis === "x" && t.dx > 80 && t.x > 30 && innerWidth <= 760 && document.body.getAttribute("data-focus") === "inspector") {
+      var back = $("#inspector .back"); if (back) go(back.href);
+    }
+  });
+
   // Forms marked data-inline submit in place (JSON to the API) and leave everything around them alone: filing one
   // proposal keeps the others on screen. Without the script they post normally.
   function inline(f) {

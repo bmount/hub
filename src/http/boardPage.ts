@@ -18,7 +18,7 @@ export async function boardPage(request: Request, env: Env, slug: string | null)
   const col = (title: string, items: BoardItem[]) => `<div class="bcol"><h2>${esc(title)} <span class="pill">${items.length}</span></h2>${items.slice(0, 60).map(card).join("") || '<p class="lede">None.</p>'}</div>`;
   const list = `<p class="crumbs"><a href="/">${esc(ctx.tenant.display_name)}</a>${slug ? ` / <a href="/${esc(slug)}/docket">${esc(slug)}</a>` : ""}</p>
 <div class="head"><h1>Board</h1><span>${esc(slug ?? ctx.tenant.display_name)}</span>${b.stalled ? `<span class="pill">${b.stalled} stalled</span>` : ""}<a href="${slug ? `/${esc(slug)}/docket` : "/docket"}">List view</a></div>
-${b.quests.length ? `<h2>Quests</h2><div class="grid">${b.quests.map((q) => `<a class="card" href="/${esc(q.slug)}/w/${q.number}"><h3>${esc(q.title)}</h3><div class="bar"><span style="width:${q.total ? Math.round((q.done / q.total) * 100) : 0}%"></span></div><p>${q.done} of ${q.total} done · ${esc(q.ref)}</p></a>`).join("")}</div>` : ""}
+${b.quests.length ? `<h2>Quests</h2><div class="grid">${b.quests.map((q) => `<a class="card" href="/${esc(q.slug)}/w/${q.number}"><h3>${esc(q.title)}</h3><div class="progress"><span style="width:${q.total ? Math.round((q.done / q.total) * 100) : 0}%"></span></div><p>${q.done} of ${q.total} done · ${esc(q.ref)}</p></a>`).join("")}</div>` : ""}
 <div class="board">${col("Open", b.columns.open)}${col("Under way", b.columns.doing)}${col("Done lately", b.columns.done)}</div>`;
   return htmlResponse(workbench("Board", { list, listKey: `board:${slug ?? "org"}`, inspector: null }, shellFor(ctx, env, slug ? "project" : "docket", slug ?? "board")!), 200, extra);
 }

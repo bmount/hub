@@ -15,6 +15,12 @@ for a year and any change gets a new name. No build step is involved.
 ## The variables
 
 - **Type:** `--font`, and the sizes `--fs`, `--fs-md`, `--fs-sm`, `--fs-xs` and `--fs-h1`.
+- **Readability (owner, 2026-10-08):** many readers are in their 50s and 60s, so type and contrast stay generous.
+  - Phones (760px and narrower) redefine the sizes larger: 17px body, `--tap` 44px touch targets, `--bar-h` 56px.
+    Components size buttons, inputs and rows from `--tap`, never from fixed numbers.
+  - `--muted` and `--faint` keep at least 4.5:1 contrast on `--bg`.
+  - `--fs-chat` sets the Assistant's reading size.
+  - The bar and the tabs pad for the phone's safe areas (`env(safe-area-inset-*)`).
 - **Shape:** `--r`, `--r-sm` and `--r-xs` (radii), and `--shadow`.
 - **Layout:** `--rail-w`, `--bar-h` and `--status-h`.
 - **Surfaces:** `--bg` (page), `--panel` (panes and cards), `--sunk` (rail, chips, table heads) and `--line`.

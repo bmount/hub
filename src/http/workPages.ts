@@ -111,8 +111,8 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
     const sl = slugs.get(w.project_id) ?? project?.slug ?? "?";
     const href = `/${sl}/w/${w.number}${itemQs ? `?${itemQs}` : ""}`;
     const who = w.owner_id ? (w.owner_id === ctx.identity!.id ? "You" : names.get(w.owner_id) ?? "Former member") : "";
-    const box = canBulk ? `<td><input type="checkbox" name="ids" value="${esc(`${sl}#${w.number}`)}" form="bulk" aria-label="Select ${esc(`${sl}#${w.number}`)}"></td>` : "";
-    return `<tr data-href="${esc(href)}"${w.id === selected ? ' aria-selected="true"' : ""}>${box}<td class="ref">${esc(f.org || !project ? `${sl}#${w.number}` : `#${w.number}`)}</td><td class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)}</td><td><a href="${esc(href)}">${esc(w.title)}</a></td><td class="hide-s">${esc(who)}</td><td class="hide-s">${esc(STATES[w.state])}</td><td class="when" title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</td></tr>`;
+    const box = canBulk ? `<td class="hide-s"><input type="checkbox" name="ids" value="${esc(`${sl}#${w.number}`)}" form="bulk" aria-label="Select ${esc(`${sl}#${w.number}`)}"></td>` : "";
+    return `<tr data-href="${esc(href)}"${w.id === selected ? ' aria-selected="true"' : ""}>${box}<td class="ref">${esc(f.org || !project ? `${sl}#${w.number}` : `#${w.number}`)}</td><td class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)}</td><td><a href="${esc(href)}">${esc(w.title)}</a></td><td class="hide-s">${esc(who)}</td><td class="hide-s">${esc(STATES[w.state])}</td><td class="when hide-s" title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</td></tr>`;
   }).join("");
   const filtered = f.kind !== null || f.owner !== null || f.quest !== null;
   const empty = f.owner === "me" && !f.closed && f.kind === null && f.quest === null
@@ -123,7 +123,7 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
     : "Nothing open. File work with + File, or forward a thread to a project's address.";
   const where = f.org || !project ? esc(ctx.tenant!.display_name) : esc(project.display_name);
   const scope = project && !f.org ? `<a href="/docket">All projects</a> · <a href="/${esc(project.slug)}/board">Board</a> · <a href="/${esc(project.slug)}/status">Status</a> · <a href="/${esc(project.slug)}/code">Code</a>` : `<a href="/board">Board</a>`;
-  const bulk = canBulk ? `<form id="bulk" class="bulk" method="post" action="/api/work.bulk_update"><input type="hidden" name="_back" value="${esc(base)}${qs(f) ? `?${esc(qs(f))}` : ""}"><span>With the checked:</span>
+  const bulk = canBulk ? `<form id="bulk" class="bulk hide-s" method="post" action="/api/work.bulk_update"><input type="hidden" name="_back" value="${esc(base)}${qs(f) ? `?${esc(qs(f))}` : ""}"><span>With the checked:</span>
 <select name="state"><option value="">state…</option><option value="open">Open</option><option value="doing">Under way</option><option value="done">Done</option><option value="dropped">Let go</option></select>
 <select name="owner"><option value="">owner…</option><option value="me">Me</option><option value="none">Nobody</option>${members.map((m) => option(m.email, m.display_name, false)).join("")}</select>
 <button type="submit" class="quiet">Apply</button></form>` : "";
@@ -132,7 +132,7 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
 <div class="chips">${kinds}</div><div class="chips">${quick}</div>
 ${filterForm}
 ${bulk}
-${items.length ? `<table><thead><tr>${canBulk ? "<th></th>" : ""}<th></th><th>Kind</th><th>Title</th><th class="hide-s">Owner</th><th class="hide-s">State</th><th>Updated</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">${empty}</p>`}`;
+${items.length ? `<table><thead><tr>${canBulk ? '<th class="hide-s"></th>' : ""}<th></th><th>Kind</th><th>Title</th><th class="hide-s">Owner</th><th class="hide-s">State</th><th class="hide-s">Updated</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">${empty}</p>`}`;
 }
 
 // ---------- Inspector panes ----------

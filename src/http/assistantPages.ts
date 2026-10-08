@@ -47,6 +47,14 @@ function stepsHtml(steps: Step[]): string {
     `<li><code>${esc(s.tool)}</code> <small>${esc(s.arguments)}</small>${s.ok ? "" : ' <span class="pill">refused</span>'}<div class="lede">${esc(s.summary)}</div></li>`).join("")}</ul></details>`;
 }
 
+/** Starting points on an empty chat: what people ask on a normal day. */
+const STARTERS: Array<[string, string]> = [
+  ["Today", "What needs my attention today?"],
+  ["This week", "What changed this week, and what shipped?"],
+  ["App health", "Are there any new errors in our apps?"],
+  ["Stuck work", "What work is stuck, and who could unblock it?"],
+];
+
 type Thread = { id: string; title: string; scopes: "read" | "write"; updated_at: number };
 
 export async function assistantPage(request: Request, env: Env): Promise<Response> {
@@ -64,20 +72,32 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
   if (tid && !thread) return notFoundPage(extra);
   const msgs = msgsR!.results as Array<{ role: string; text: string; steps: string | null }>;
   const scopes = thread?.scopes ?? "read";
-  const log = msgs.map((m) => m.role === "user"
-    ? `<div class="msg user"><div>${esc(m.text)}</div></div>`
-    : `<div class="msg assistant"><div>${format(m.text)}${stepsHtml(m.steps ? (JSON.parse(m.steps) as Step[]) : [])}</div></div>`).join("");
-  const list = `<div class="chips"><a class="chip" href="/assistant" aria-current="true">Chat</a><a class="chip" href="/assistant/tools">Tools</a></div>
-<div class="chat">
-<div id="chatlog" class="chatlog">${log || `<div class="empty"><h1>Ask about anything here</h1><p>I look things up with the same tools an assistant over MCP would use, as you, in ${esc(ctx.tenant!.display_name)}. Try: "what needs me today?", "what changed in pricebench this week?", "any new errors in our apps?"</p></div>`}</div>
+  const first = (ctx.identity!.display_name.split(/\s+/)[0] ?? "").trim();
+  const org = ctx.tenant!.display_name;
+  const msgHtml = (role: string, body: string) => role === "user"
+    ? `<div class="msg user"><div class="body">${body}</div></div>`
+    : `<div class="msg assistant"><div class="who" aria-hidden="true">P</div><div class="body">${body}</div></div>`;
+  const log = msgs.map((m) => m.role === "user" ? msgHtml("user", esc(m.text))
+    : msgHtml("assistant", format(m.text) + stepsHtml(m.steps ? (JSON.parse(m.steps) as Step[]) : []))).join("");
+  const welcome = `<div class="welcome"><div class="who big" aria-hidden="true">P</div>
+<h1>${first ? `Hi ${esc(first)}. ` : ""}What would you like to know?</h1>
+<p class="lede">I look through work, code, mail, reviews and app errors in ${esc(org)}, as you. Nothing changes unless you allow it below.</p>
+<div class="starters">${STARTERS.map(([title, ask]) => `<button type="button" class="starter" data-ask="${esc(ask)}"><b>${esc(title)}</b><span>${esc(ask)}</span></button>`).join("")}</div></div>`;
+  const list = `<div class="assist">
+<div class="assist-top"><div class="chips"><a class="chip" href="/assistant" aria-current="true">Chat</a><a class="chip" href="/assistant/tools">Tools</a><a class="chip only-s" href="/assistant?list=1${thread ? `&t=${esc(thread.id)}` : ""}">Conversations</a>${thread ? `<a class="chip" href="/assistant">+ New chat</a>` : ""}</div></div>
+<div id="chatlog" class="chatlog" aria-live="polite">${log || welcome}</div>
 <form id="ask" class="composer" autocomplete="off">
 <input type="hidden" name="thread" value="${esc(thread?.id ?? "")}">
-<textarea name="text" rows="2" required maxlength="8000" placeholder="Ask, or tell me what to do. Enter sends; Shift+Enter adds a line."></textarea>
-<div class="row"><label><select name="scopes"><option value="read"${scopes === "read" ? " selected" : ""}>Look things up (read only)</option><option value="write"${scopes === "write" ? " selected" : ""}>May change things (read and write)</option></select></label><button type="submit">Send</button></div>
+<div class="box"><textarea name="text" rows="1" required maxlength="8000" aria-label="Your message" placeholder="Ask anything about ${esc(org)}…"></textarea><button type="submit" class="send" aria-label="Send">↑</button></div>
+<div class="mode" role="radiogroup" aria-label="What the assistant may do">
+<label><input type="radio" name="scopes" value="read"${scopes === "read" ? " checked" : ""}> Only look things up</label>
+<label><input type="radio" name="scopes" value="write"${scopes === "write" ? " checked" : ""}> Can also make changes</label>
+</div>
 </form></div>
 <script>
 (function () {
   var f = document.getElementById("ask"), log = document.getElementById("chatlog"); if (!f || f.dataset.ready) return; f.dataset.ready = "1";
+  var coarse = window.matchMedia && matchMedia("(pointer:coarse)").matches;
   var esc = function (s) { return s.replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
   function fmt(text) {
     var out = [], list = false;
@@ -95,30 +115,46 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
       return "<li><code>" + esc(x.tool) + "</code> <small>" + esc(x.arguments) + "</small>" + (x.ok ? "" : ' <span class="pill">refused</span>') + '<div class="lede">' + esc(x.summary) + "</div></li>"; }).join("") + "</ul></details>";
   }
   function add(role, html) {
-    var e = log.querySelector(".empty"); if (e) e.remove();
-    var d = document.createElement("div"); d.className = "msg " + role; d.innerHTML = "<div>" + html + "</div>"; log.appendChild(d); d.scrollIntoView({ block: "end" }); return d;
+    var e = log.querySelector(".welcome"); if (e) e.remove();
+    var d = document.createElement("div"); d.className = "msg " + role;
+    d.innerHTML = (role === "assistant" ? '<div class="who" aria-hidden="true">P</div>' : "") + '<div class="body">' + html + "</div>";
+    log.appendChild(d); d.scrollIntoView({ block: "end", behavior: "smooth" }); return d.querySelector(".body");
   }
-  f.text.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); } });
-  f.addEventListener("submit", function (e) {
-    e.preventDefault(); var t = f.text.value.trim(); if (!t) return;
-    add("user", esc(t)); f.text.value = ""; var w = add("assistant", '<p class="lede">Working…</p>'); var btn = f.querySelector("button"); btn.disabled = true;
+  function grow() { f.text.style.height = "auto"; f.text.style.height = Math.min(f.text.scrollHeight, innerHeight * 0.4) + "px"; }
+  f.text.addEventListener("input", grow);
+  f.text.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey && !coarse) { e.preventDefault(); f.requestSubmit(); } });
+  log.addEventListener("click", function (e) {
+    var s = e.target.closest("[data-ask]"); if (s) { f.text.value = s.getAttribute("data-ask"); f.requestSubmit(); return; }
+    var r = e.target.closest("[data-retry]"); if (r) { var t = r.getAttribute("data-retry"); r.closest(".msg").remove(); send(t, false); }
+  });
+  function send(t, echo) {
+    if (echo) add("user", esc(t));
+    var w = add("assistant", '<div class="thinking"><i></i><i></i><i></i> Looking through ' + esc(${JSON.stringify(org).replace(/</g, "\\u003c")}) + "…</div>");
+    var btn = f.querySelector(".send"); btn.disabled = true;
+    var fail = function (why) { w.innerHTML = '<p class="err">Not done: ' + esc(why) + '</p><button type="button" class="quiet" data-retry="' + esc(t) + '">Try again</button>'; };
     fetch("/assistant/chat", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", "${PLAYGROUND_HEADER}": "1" },
       body: JSON.stringify({ thread: f.thread.value || null, text: t, scopes: f.scopes.value }) })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (x) {
-        if (!x.ok) { w.firstChild.innerHTML = "<p>Not done: " + esc(x.j.reason || x.j.error || "error") + "</p>"; return; }
-        w.firstChild.innerHTML = fmt(x.j.reply) + steps(x.j.steps); w.scrollIntoView({ block: "end" });
+        if (!x.ok) { fail(x.j.reason || x.j.error || "something went wrong"); return; }
+        w.innerHTML = fmt(x.j.reply) + steps(x.j.steps); w.scrollIntoView({ block: "end", behavior: "smooth" });
         if (!f.thread.value) { f.thread.value = x.j.thread; history.replaceState(history.state, "", "/assistant?t=" + x.j.thread); }
       })
-      .catch(function () { w.firstChild.innerHTML = "<p>Not done: the connection dropped. Try again.</p>"; })
-      .then(function () { btn.disabled = false; f.text.focus(); });
+      .catch(function () { fail("the connection dropped"); })
+      .then(function () { btn.disabled = false; if (!coarse) f.text.focus(); });
+  }
+  f.addEventListener("submit", function (e) {
+    e.preventDefault(); var t = f.text.value.trim(); if (!t) return;
+    f.text.value = ""; grow(); send(t, true);
   });
+  var last = log.lastElementChild; if (last && !log.querySelector(".welcome")) last.scrollIntoView({ block: "end" });
 })();
 </script>`;
-  const inspector = `<div class="head"><span>Conversations</span><a class="button" href="/assistant">New</a></div>
+  const inspector = `<a class="back" href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}">‹ Chat</a><h2 style="margin-top:0">Your conversations</h2>
 ${threads.length ? `<table><tbody>${threads.map((t) => `<tr data-href="/assistant?t=${esc(t.id)}"${t.id === thread?.id ? ' aria-selected="true"' : ""}><td><a href="/assistant?t=${esc(t.id)}">${esc(t.title)}</a>${t.scopes === "write" ? ' <span class="pill">can change things</span>' : ""}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">Your conversations appear here. Only you see them.</p>`}
-<h2>How it works</h2><p class="lede">It acts as you, here only, with the tools your role allows. Read-only unless you choose otherwise for a conversation. Every tool it uses is on the record, and its model use is on your AI usage.</p>`;
-  return htmlResponse(workbench(thread ? thread.title : "Assistant", { list, listKey: `assistant:${thread?.id ?? "new"}`, inspector, inspectorKey: "", focus: "list" }, shellFor(ctx, env, "playground", "assistant")!), 200, extra);
+<h2>How it works</h2><p class="lede">It acts as you, here only, with the tools your role allows. It only looks things up unless you let a conversation make changes. Every tool it uses is on the record, and its model use shows on your AI usage.</p>`;
+  const showList = new URL(request.url).searchParams.get("list") === "1";
+  return htmlResponse(workbench(thread ? thread.title : "Assistant", { list, listKey: `assistant:${thread?.id ?? "new"}`, inspector, inspectorKey: "assistant-threads", focus: showList ? "inspector" : "list" }, shellFor(ctx, env, "playground", "assistant")!), 200, extra);
 }
 
 export async function assistantChat(request: Request, env: Env): Promise<Response> {
