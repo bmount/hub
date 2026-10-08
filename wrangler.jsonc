@@ -13,6 +13,8 @@
     { "pattern": "*.pimwell.com/*", "zone_name": "pimwell.com" }
   ],
   "vars": { "HUB_DOMAIN": "pimwell.com" },
+  // Push sync from the git host every five minutes (src/code/sync.ts).
+  "triggers": { "crons": ["*/5 * * * *"] },
   "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
   "d1_databases": [
     {

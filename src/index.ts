@@ -1,3 +1,4 @@
+import { syncAll } from "./code/sync";
 import { codePage, filesPage } from "./http/codePages";
 import { searchPage } from "./http/searchPage";
 import { assistantChat, assistantPage } from "./http/assistantPages";
@@ -148,7 +149,14 @@ app.notFound(() => notFoundPage());
 // Last: a project's own page, /<project>. Every named page above wins first.
 app.get("/:project", (c) => projectPage(c.req.raw, c.env, c.req.param("project")));
 
-export default { fetch: app.fetch, email: handleEmail } satisfies ExportedHandler<Env>;
+export default {
+  fetch: app.fetch,
+  email: handleEmail,
+  // Every five minutes: push sync from the git host (src/code/sync.ts).
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(syncAll(env, Date.now()).then((r) => console.log(JSON.stringify({ msg: "push sync", ...r })), (e) => console.error(JSON.stringify({ msg: "push sync failed", error: e instanceof Error ? e.message : "error" }))));
+  },
+} satisfies ExportedHandler<Env>;
 
 /** App telemetry from pimwell-tail (src/apps/ingest.ts). An RPC entrypoint: callable only through a service binding. */
 export class Ingest extends WorkerEntrypoint<Env> {
