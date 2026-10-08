@@ -5,7 +5,7 @@
 # goes only into the request header, never argv or output.
 set -e
 WHO=${1:?agent address to attribute the usage to}
-PROJECT=${2:?project slug in that agent's organization}
+PROJECT=${2:?project slug in the organization of that agent}
 PURPOSE=${3:-fast}
 ONLY=${4:-}
 HUB=${PIMWELL_HUB:-pimwell.com}
