@@ -72,6 +72,7 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
   if (tid && !thread) return notFoundPage(extra);
   const msgs = msgsR!.results as Array<{ role: string; text: string; steps: string | null }>;
   const scopes = thread?.scopes ?? "read";
+  const askNow = thread ? "" : (new URL(request.url).searchParams.get("ask") ?? "").trim().slice(0, 2000);
   const first = (ctx.identity!.display_name.split(/\s+/)[0] ?? "").trim();
   const org = ctx.tenant!.display_name;
   const msgHtml = (role: string, body: string) => role === "user"
@@ -88,7 +89,7 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
 <div id="chatlog" class="chatlog" aria-live="polite">${log || welcome}</div>
 <form id="ask" class="composer" autocomplete="off">
 <input type="hidden" name="thread" value="${esc(thread?.id ?? "")}">
-<div class="box"><textarea data-voice name="text" rows="1" required maxlength="8000" aria-label="Your message" placeholder="Ask anything about ${esc(org)}…"></textarea><button type="submit" class="send" aria-label="Send">↑</button></div>
+<div class="box"><textarea data-voice name="text" rows="1"${askNow ? ` data-autoask="${esc(askNow)}"` : ""} required maxlength="8000" aria-label="Your message" placeholder="Ask anything about ${esc(org)}…"></textarea><button type="submit" class="send" aria-label="Send">↑</button></div>
 <div class="mode" role="radiogroup" aria-label="What the assistant may do">
 <label><input type="radio" name="scopes" value="read"${scopes === "read" ? " checked" : ""}> Only look things up</label>
 <label><input type="radio" name="scopes" value="write"${scopes === "write" ? " checked" : ""}> Can also make changes</label>
@@ -148,6 +149,7 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
     f.text.value = ""; grow(); send(t, true);
   });
   var last = log.lastElementChild; if (last && !log.querySelector(".welcome")) last.scrollIntoView({ block: "end" });
+  var auto = f.text.getAttribute("data-autoask"); if (auto) { f.text.removeAttribute("data-autoask"); f.text.value = auto; f.requestSubmit(); }
 })();
 </script>`;
   const inspector = `<a class="back" href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}">‹ Chat</a><h2 style="margin-top:0">Your conversations</h2>

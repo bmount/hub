@@ -2,6 +2,7 @@
 // Every page reads in one D1 batch: one round trip, whatever it shows.
 import type { Env } from "../env";
 import { esc, htmlResponse, onramp, page } from "../html";
+import { intentBox } from "../intent/page";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -56,6 +57,7 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   const mailRows = (mail!.results as Array<{ id: string; subject: string; from_email: string; received_at: number; project: string | null }>);
   const body = `<h1>${esc(t.display_name)}</h1>
 <p class="lede">You are ${esc(ctx.role!)} · ${counts.get("human") ?? 0} people and ${counts.get("agent") ?? 0} agents · ${totalOpen} things open · send anything to <code>${esc(t.slug)}@${esc(env.HUB_DOMAIN)}</code></p>
+${intentBox()}
 ${onramp({ connect: rank(ctx.role) >= rank("member"), invite: rank(ctx.role) >= rank("admin") })}
 <h2>Projects</h2>${projectCards}
 <h2>Open work</h2><div class="chips">${kindChips}</div>

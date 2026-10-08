@@ -202,6 +202,7 @@ export const WORKBENCH_JS = String.raw`
       clearTimeout(timer); var q = jump.value.trim();
       if (!q) { openEmpty(); return; }
       var local = matches(q).map(function (x) { return { label: x.label, hint: x.hint, href: x.href }; });
+      if (q.split(/\s+/).length >= 3) local.unshift({ label: "Do it: " + q, hint: "Pimwell finds the way", href: "/do?q=" + encodeURIComponent(q) });
       render(local);
       timer = setTimeout(function () {
         fetch("/jump?q=" + encodeURIComponent(q), { headers: { accept: "application/json" }, credentials: "same-origin" })
@@ -312,10 +313,13 @@ export const WORKBENCH_JS = String.raw`
         try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) {}
         say("Checking names…", "busy");
         post("/voice/correct", JSON.stringify({ text: text, context: ctx }), { "content-type": "application/json" }).then(function (y) {
-          if (!y.ok || !y.j.changed || ta.value !== mine) { say("", ""); return; }
-          ta.value = ta.value.slice(0, at) + y.j.text; ta.dispatchEvent(new Event("input", { bubbles: true }));
-          say("Fixed a few words", "ok"); setTimeout(function () { if (st.textContent === "Fixed a few words") say("", ""); }, 2500);
-        }, function () { say("", ""); });
+          var settled = ta.value === mine;
+          if (y.ok && y.j.changed && settled) {
+            ta.value = ta.value.slice(0, at) + y.j.text; ta.dispatchEvent(new Event("input", { bubbles: true }));
+            say("Fixed a few words", "ok"); setTimeout(function () { if (st.textContent === "Fixed a few words") say("", ""); }, 2500);
+          } else say("", "");
+          if (settled && ta.hasAttribute("data-voice-autosend") && ta.form) ta.form.requestSubmit();
+        }, function () { say("", ""); if (ta.value === mine && ta.hasAttribute("data-voice-autosend") && ta.form) ta.form.requestSubmit(); });
       }, function () { say("Not done: the connection dropped. Try again.", "err"); }).then(function () { b.disabled = false; });
     }
     b.addEventListener("pointerdown", function (e) {
@@ -352,6 +356,11 @@ export const WORKBENCH_JS = String.raw`
     else if (e.key === "c") { var b = $(".bar .file"); if (b) { e.preventDefault(); go(b.href); } }
     else if (e.key === "/") { var q = $("#list input[data-filter]") || jump; if (q) { e.preventDefault(); q.focus(); } }
     else if (e.key === "Escape") { closeRail(); var back = $("#inspector .back"); if (back && document.body.getAttribute("data-focus") === "inspector" && innerWidth <= 760) go(back.href); }
+  });
+
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && t.matches && t.matches("textarea[data-enter-submits]") && t.form) { e.preventDefault(); if (t.value.trim()) t.form.requestSubmit(); }
   });
 
   // Quick filter over the visible list.
