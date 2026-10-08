@@ -1,3 +1,4 @@
+import { situationList, situationOpen, situationResolve } from "./situation";
 import { projectStatusVerb } from "./status";
 import { reviewAi } from "./reviewAi";
 import { workBoard, workBulkUpdate } from "./board";
@@ -53,6 +54,7 @@ export function registerAllVerbs(): void {
     reviewRequest, reviewList, reviewRead, reviewComment, reviewVerdict,
     workBoard, workBulkUpdate,
     projectStatusVerb, reviewAi,
+    situationOpen, situationResolve, situationList,
     skillList, skillRead, capabilities, projectHistory,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,

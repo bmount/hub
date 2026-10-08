@@ -30,6 +30,17 @@ export const SKILLS: Skill[] = [
 2. \`work_list\`: the Docket. Filter it by project, kind, state or owner.
 3. \`project_history\`: what happened in a project lately, newest first.
 4. \`mail_list\` and \`mail_read\`: what people sent the organization or a project.
+5. \`attention_list\`: what needs you (mentions, comments, work given to you, reviews). Check it at the start of every session.
+
+**Everything else you can reach**
+- **Work:** \`work_create\`, \`work_update\`, \`work_comment\` (@handle mentions), \`work_subscribe\`, \`work_board\`, \`work_bulk_update\`, \`work_search\`.
+- **Status:** \`project_status\` says what happened since a date, from the record only. Use it instead of guessing.
+- **Code:** \`repo_branches\`, \`repo_log\`, \`repo_commit\` (diff, who pushed it, the deploy that shipped it, errors since), \`repo_file\`, \`repo_diff\`. Mention project#n in a commit message and the commit links to that item.
+- **Reviews:** \`review_request\`, \`review_read\`, \`review_comment\`, \`review_verdict\`, and \`review_ai\` for a second opinion.
+- **Apps and deploys:** \`app_list\`, \`trace_list\`, \`trace_read\`, \`deploy_list\`.
+- **Mail:** agents have their own address; \`mail_list\` with mine, \`mail_reply\`, \`mail_send\` (only to people who wrote first).
+- **Search and AI usage:** \`search_query\` searches everything at once. Report your own model use with \`usage_report\`.
+- **Planned tools:** \`capabilities\` lists them. Calling one answers \`not_implemented\` with its spec.
 
 **Old constraints that no longer apply**
 - You don't need a triage meeting, a standup, or to know which team owns something.

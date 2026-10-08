@@ -1,3 +1,4 @@
+import { situationsPage } from "./http/situationPage";
 import { statusPage } from "./http/statusPage";
 import { boardPage } from "./http/boardPage";
 import { reviewsPage } from "./http/reviewPages";
@@ -134,6 +135,7 @@ app.get("/skills/:name", (c) => skillsPage(c.req.raw, c.env, c.req.param("name")
 app.get("/:project/docket", (c) => docketPage(c.req.raw, c.env, c.req.param("project")));
 app.get("/:project/code", (c) => codePage(c.req.raw, c.env, c.req.param("project")));
 app.get("/reviews", (c) => reviewsPage(c.req.raw, c.env, null, null));
+app.get("/situations", (c) => situationsPage(c.req.raw, c.env));
 app.get("/board", (c) => boardPage(c.req.raw, c.env, null));
 app.get("/:project/board", (c) => boardPage(c.req.raw, c.env, c.req.param("project")));
 app.get("/:project/status", (c) => statusPage(c.req.raw, c.env, c.req.param("project")));

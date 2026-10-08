@@ -4,7 +4,7 @@ import type { Ctx } from "../auth/context";
 import { rank } from "../auth/context";
 import type { Shell } from "../html";
 
-export type Section = "home" | "reviews" | "apps" | "usage" | "attention" | "docket" | "mine" | "mail" | "chat" | "people" | "admin" | "account" | "hub" | "project" | "playground" | "planned" | "new";
+export type Section = "home" | "situations" | "reviews" | "apps" | "usage" | "attention" | "docket" | "mine" | "mail" | "chat" | "people" | "admin" | "account" | "hub" | "project" | "playground" | "planned" | "new";
 
 // Short reminders that the old way is not required any more. One per page, chosen by page, so it rotates.
 export const TIPS = [
@@ -41,6 +41,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
       link("/people", "People and agents", "people"),
       link("/assistant", "Assistant", "playground"),
       link("/reviews", "Reviews", "reviews"),
+      link("/situations", "Situations", "situations"),
       link("/apps", "Apps", "apps"),
       link("/usage", "AI usage", "usage"),
       ...(rank(ctx.role) >= rank("admin") ? [link("/admin/agents", "Admin", "admin")] : []),

@@ -28,7 +28,7 @@ export function instructions(ctx: Ctx, scopes: "read" | "write"): string {
 }
 
 /** One turn: the person's message in, the assistant's answer and the tool steps out; both stored. */
-export async function runTurn(ctx: Ctx, threadId: string, scopes: "read" | "write", text: string): Promise<{ reply: string; steps: Step[] }> {
+export async function runTurn(ctx: Ctx, threadId: string, scopes: "read" | "write", text: string, opts: { instructions?: string } = {}): Promise<{ reply: string; steps: Step[] }> {
   const db = ctx.db;
   const route = await resolveRoute(db, PURPOSE, ctx.tenant!.id);
   const p = providerById(route.provider);
@@ -47,7 +47,7 @@ export async function runTurn(ctx: Ctx, threadId: string, scopes: "read" | "writ
     const started = Date.now();
     let r;
     try {
-      r = await p.turn(key, route.model, items, { instructions: instructions(ctx, scopes), tools, maxOutputTokens: 4000 });
+      r = await p.turn(key, route.model, items, { instructions: opts.instructions ?? instructions(ctx, scopes), tools, maxOutputTokens: 4000 });
     } catch (e) {
       await usageStatement(db, { id: ulid(ctx.now), source: "hub", purpose: PURPOSE, provider: route.provider, model: route.model, credential_id: cred.id, tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id,
         session_id: ctx.session?.id ?? null, client: "pimwell-assistant", ok: false, ms: Date.now() - started, input_tokens: null, output_tokens: null, error: e instanceof Error ? e.message.slice(0, 300) : "error", created_at: Date.now() }).run();
