@@ -1,3 +1,4 @@
+import { repoBranches, repoCommit, repoDiff, repoFile, repoLog } from "./code";
 import { messageSearch, searchQuery, workSearch } from "./search";
 import { mailReply, mailSend, mailSending } from "./mailOut";
 import { appApprove, appList, appRegister, deployList, deployRecord, traceList, traceRead } from "./apps";
@@ -44,6 +45,7 @@ export function registerAllVerbs(): void {
     appRegister, appApprove, appList, traceList, traceRead, deployList, deployRecord,
     mailReply, mailSend, mailSending,
     workSearch, messageSearch, searchQuery,
+    repoBranches, repoLog, repoCommit, repoFile, repoDiff,
     skillList, skillRead, capabilities, projectHistory,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,

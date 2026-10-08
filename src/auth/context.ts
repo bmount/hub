@@ -33,6 +33,8 @@ export type Ctx = {
    * rules as an assistant connection holding exactly these scopes; it can only narrow the person's own authority.
    */
   playground?: { scopes: string[] };
+  /** An agent's own run token, held for this request only so the hub can read code as it (src/code/ardi.ts). Never logged. */
+  bearerToken?: string;
   /** The workbench rail's numbers, read in the same batch as the sign-in lookup (no extra round trip). Page views only. */
   rail?: RailData;
 };
@@ -150,6 +152,7 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
 
   const ctx: Ctx = { env, db, now, ip, waitUntil, host, tenant, identity, session, apiToken, role, authKind, staleCookie };
   if (pre?.rail && role && tenant) ctx.rail = pre.rail;
+  if (authKind === "bearer" && bearer && session?.kind === "agent_run") ctx.bearerToken = bearer;
   noteCtx(request, ctx);
   return ctx;
 }

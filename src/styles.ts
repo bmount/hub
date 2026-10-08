@@ -43,6 +43,9 @@ details.edit label>input,details.edit label>textarea{display:block;width:100%;ma
 .steps{margin-top:6px;font-size:var(--fs-sm)}.steps summary{cursor:pointer;color:var(--muted)}.steps li{margin:4px 0}
 .composer{position:sticky;bottom:0;background:var(--bg);padding:8px 0 4px;border-top:1px solid var(--line)}.composer textarea{display:block;width:100%;resize:vertical}
 .composer .row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px}
+table.diff{font-family:var(--mono);font-size:12px;margin:4px 0 14px}table.diff td{padding:0 6px;border:0;white-space:pre-wrap;word-break:break-all}table.diff code{background:none;padding:0;font-size:12px;font-family:var(--mono)}
+table.diff td.ln{color:var(--faint);text-align:right;width:1%;white-space:nowrap;user-select:none}table.diff tr.ins td{background:var(--add-bg)}table.diff tr.dl td{background:var(--del-bg)}
+table.diff tr.hunk td{color:var(--muted);background:var(--sunk)}.add{color:var(--add)}.del{color:var(--del)}
 .pill{display:inline-block;font-size:10.5px;font-weight:650;padding:0 5px;border-radius:var(--r-xs);background:var(--sunk);color:var(--muted);border:1px solid var(--line);vertical-align:1px;margin-left:4px}
 .planned{border:1px dashed var(--line);border-radius:var(--r);padding:6px 10px;margin:8px 0;color:var(--muted);font-size:var(--fs-md)}.planned b{color:var(--ink)}
 .meta{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;font-size:var(--fs-md);margin:6px 0}.meta dt{color:var(--muted)}.meta dd{margin:0}

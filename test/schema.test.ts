@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 const EXPECTED = [
-  "agent_chat_state", "api_token", "app_deploy", "app_error_group", "app_event", "app_source", "app_stat", "assistant_message", "assistant_thread", "attention", "auth_link", "channel", "chat_control", "consent", "conversation_member", "deleted_tenant", "event", "follow", "google_account", "identity", "inbound_mail", "invite",
+  "agent_chat_state", "api_token", "app_deploy", "app_error_group", "app_event", "app_source", "app_stat", "ardi_cred", "assistant_message", "assistant_thread", "attention", "auth_link", "channel", "chat_control", "code_event", "code_sync", "consent", "conversation_member", "deleted_tenant", "event", "follow", "google_account", "identity", "inbound_mail", "invite",
   "membership", "meta", "model_call", "model_price", "model_route", "msg_index", "msg_ref", "namespace", "oauth_grant", "oauth_redirect_allow", "outbound_mail", "project", "proof", "provider_credential", "rate_counter", "session", "signin_grant", "signin_rule", "tenant", "work_comment", "work_item", "work_link",
 ];
 

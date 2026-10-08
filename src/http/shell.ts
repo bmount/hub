@@ -69,6 +69,5 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
 /** Areas still being built, kept in plain view (src/verbs/planned.ts). */
 export const PLANNED_LINKS = [
   { href: "/planned/review", label: "Reviews", key: "review" },
-  { href: "/planned/code", label: "Code", key: "code" },
   { href: "/planned", label: "Everything coming", key: "all" },
 ];

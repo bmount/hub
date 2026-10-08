@@ -1,3 +1,4 @@
+import { codePage, filesPage } from "./http/codePages";
 import { searchPage } from "./http/searchPage";
 import { assistantChat, assistantPage } from "./http/assistantPages";
 import { onboardBody } from "./skills/onboard";
@@ -127,6 +128,8 @@ app.get("/playground", (c) => c.redirect("/assistant/tools", 301));
 app.post("/playground/call", (c) => playgroundCall(c.req.raw, c.env));
 app.get("/skills/:name", (c) => skillsPage(c.req.raw, c.env, c.req.param("name")));
 app.get("/:project/docket", (c) => docketPage(c.req.raw, c.env, c.req.param("project")));
+app.get("/:project/code", (c) => codePage(c.req.raw, c.env, c.req.param("project")));
+app.get("/:project/files", (c) => filesPage(c.req.raw, c.env, c.req.param("project")));
 app.get("/:project/w/:n", (c) => workItemPage(c.req.raw, c.env, c.req.param("project"), c.req.param("n")));
 app.post("/internal/introspect", (c) => introspect(c.req.raw, c.env));
 app.post("/internal/backlinks", (c) => internalBacklinks(c.req.raw, c.env));

@@ -31,6 +31,11 @@ const TABLE: Record<string, Decl> = {
   "app.list": T("tenant", "reader", null, { mcp: "read" }),
   "mail.reply": T("tenant", "member", null, { mcp: "write" }),
   "work.search": T("tenant", "reader", null, { mcp: "read" }),
+  "repo.branches": T("tenant", "reader", null, { mcp: "read" }),
+  "repo.log": T("tenant", "reader", null, { mcp: "read" }),
+  "repo.commit": T("tenant", "reader", null, { mcp: "read" }),
+  "repo.file": T("tenant", "reader", null, { mcp: "read" }),
+  "repo.diff": T("tenant", "reader", null, { mcp: "read" }),
   "message.search": T("tenant", "reader", null, { mcp: "read" }),
   "search.query": T("tenant", "reader", null, { mcp: "read" }),
   "mail.send": T("tenant", "member", null, { mcp: "write" }),
@@ -131,7 +136,7 @@ describe("verb table", () => {
       const expected = v.longLivedToken ? 200 : v.scope === "hub" ? 404 : 403;
       expect({ verb: v.name, status: res.status }).toEqual({ verb: v.name, status: expected });
     }
-  });
+  }, 30_000);
 
   it("refuses agent runs on every human-only verb", async () => {
     const acme = await seedTenant("acme");

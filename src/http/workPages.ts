@@ -120,7 +120,7 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
     : project ? "Nothing open. File something, or forward a thread to the project's address."
     : "Nothing open. File work with + File, or forward a thread to a project's address.";
   const where = f.org || !project ? esc(ctx.tenant!.display_name) : esc(project.display_name);
-  const scope = project && !f.org ? `<a href="/docket">All projects</a>` : "";
+  const scope = project && !f.org ? `<a href="/docket">All projects</a> · <a href="/${esc(project.slug)}/code">Code</a>` : "";
   return `<p class="crumbs"><a href="/">${esc(ctx.tenant!.display_name)}</a>${project && !f.org ? ` / <a href="/${esc(project.slug)}">${esc(project.display_name)}</a>` : ""}</p>
 <div class="head"><h1>${esc(DOCKET.name)}</h1><span>${items.length} ${f.closed ? "finished" : "open"} in ${where}</span>${scope}</div>
 <div class="chips">${kinds}</div><div class="chips">${quick}</div>

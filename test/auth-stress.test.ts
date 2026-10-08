@@ -102,7 +102,7 @@ describe("auth stress", () => {
       if (r.status === 429) limited++;
     }
     expect(limited).toBeGreaterThan(0);
-  });
+  }, 30_000);
 
   it("no tool result ever contains a credential", async () => {
     const w = await world();

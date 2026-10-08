@@ -32,8 +32,8 @@ describe("tool definitions", () => {
 
   it("follow the human's current role", async () => {
     const { ctx } = await ctxFor("reader");
-    expect(live(toolsFor(ctx).map((v) => toolDefinition(v).name))).toEqual(["app_list", "attention_list", "capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "deploy_list", "mail_list", "mail_read", "message_search", "project_history", "project_list", "ref_backlinks", "search_query", "skill_list", "skill_read", "trace_list", "trace_read", "usage_summary", "whoami", "work_list", "work_read", "work_search"]);
-    expect(live(toolsFor({ ...ctx, role: "member" }).map((v) => toolDefinition(v).name))).toEqual(["app_list", "attention_list", "capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "deploy_list", "event_list", "mail_list", "mail_propose_work", "mail_read", "message_search", "project_history", "project_list", "ref_backlinks", "search_query", "skill_list", "skill_read", "trace_list", "trace_read", "usage_summary", "whoami", "work_list", "work_read", "work_search"]);
+    expect(live(toolsFor(ctx).map((v) => toolDefinition(v).name))).toEqual(["app_list", "attention_list", "capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "deploy_list", "mail_list", "mail_read", "message_search", "project_history", "project_list", "ref_backlinks", "repo_branches", "repo_commit", "repo_diff", "repo_file", "repo_log", "search_query", "skill_list", "skill_read", "trace_list", "trace_read", "usage_summary", "whoami", "work_list", "work_read", "work_search"]);
+    expect(live(toolsFor({ ...ctx, role: "member" }).map((v) => toolDefinition(v).name))).toEqual(["app_list", "attention_list", "capabilities", "chat_catchup", "chat_inbox", "chat_read", "chat_thread", "deploy_list", "event_list", "mail_list", "mail_propose_work", "mail_read", "message_search", "project_history", "project_list", "ref_backlinks", "repo_branches", "repo_commit", "repo_diff", "repo_file", "repo_log", "search_query", "skill_list", "skill_read", "trace_list", "trace_read", "usage_summary", "whoami", "work_list", "work_read", "work_search"]);
   });
 });
 
