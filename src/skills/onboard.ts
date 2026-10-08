@@ -27,7 +27,7 @@ export function onboardBody(hub: string): string {
 Then call \`whoami\`, \`capabilities\`, and \`skill_read\` with \`start-here\`. If \`whoami\` fails, the connection isn't finished: a claimed link's token is missing from the header, or the browser approval wasn't completed.
 
 **2. Report your own AI usage**
-- After each working session, call \`usage_report\` with the calls you made: provider, model, input_tokens, output_tokens, and cached_tokens if known. Add cost_usd only if your tool reports it.
+- After each working session, call \`usage_report\` with the calls you made. Only provider and model are required. Add input_tokens, output_tokens and cached_tokens if your tool shows them, and cost_usd if it reports one; leave out anything you don't know rather than guessing.
 - Set client to your tool's name (claude-code, codex, cursor, …). Set work to the item you worked on (for example pimwell#62) when there is one.
 - Send many calls at once with \`calls\`, up to 100.
 - Never include prompts or outputs. Only numbers and names.

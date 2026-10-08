@@ -60,6 +60,12 @@ describe("AI usage accounting", () => {
   it("refuses bad reports and lets only root set prices", async () => {
     const w = await world();
     expect((await w.call(w.pat, "usage.report", { provider: "openai", model: "m", input_tokens: -1, output_tokens: 0 })).status).toBe(400);
+    // Tokens are optional: a tool that doesn't show them still reports, and the call is counted, unpriced.
+    const bare = await w.call(w.pat, "usage.report", { provider: "anthropic", model: "big-1", client: "hermes" });
+    expect(bare.status, JSON.stringify(bare)).toBe(200);
+    expect(bare.result).toMatchObject({ recorded: 1, unpriced: 1 });
+    expect((await w.call(w.pat, "usage.report", { provider: "openai", model: "m", cost_usd: 0.12 })).status).toBe(200);
+    expect((await w.call(w.pat, "usage.report", { model: "m" })).status).toBe(400);
     expect((await w.call(w.pat, "usage.report", { provider: "open ai; drop", model: "m", input_tokens: 1, output_tokens: 0 })).status).toBe(400);
     expect((await w.call(w.pat, "usage.report", { calls: [] })).status).toBe(400);
     expect((await w.call(w.pat, "usage.report", { provider: "openai", model: "m", input_tokens: 1, output_tokens: 1, at: "2001-01-01T00:00:00Z" })).status).toBe(400);

@@ -22,7 +22,7 @@ const short = (v: unknown, name: string, max: number): string | null => {
   return v;
 };
 
-type Call = { provider: string; model: string; input_tokens: number; output_tokens: number; cached_tokens: number | null; cost_micros: number | null; client: string | null; purpose: string; work: string | null; at: number | null };
+type Call = { provider: string; model: string; input_tokens: number | null; output_tokens: number | null; cached_tokens: number | null; cost_micros: number | null; client: string | null; purpose: string; work: string | null; at: number | null };
 
 function parseCall(c: Record<string, unknown>, now: number): Call {
   const provider = short(c.provider, "provider", 40); const model = short(c.model, "model", 80);
@@ -40,7 +40,9 @@ function parseCall(c: Record<string, unknown>, now: number): Call {
     if (!Number.isFinite(at) || at > now + 60_000 || at < now - 31 * 86_400_000) throw badRequest("at must be an ISO 8601 time within the last 31 days");
   }
   return {
-    provider: provider.toLowerCase(), model, input_tokens: tokens(c.input_tokens, "input_tokens", true)!, output_tokens: tokens(c.output_tokens, "output_tokens", true)!,
+    // Only provider and model are needed (owner, 2026-10-08): many tools never show token counts. Send what you know;
+    // without tokens or a cost the call is still on the ledger, counted, and marked unpriced rather than guessed.
+    provider: provider.toLowerCase(), model, input_tokens: tokens(c.input_tokens, "input_tokens", false), output_tokens: tokens(c.output_tokens, "output_tokens", false),
     cached_tokens: tokens(c.cached_tokens, "cached_tokens", false), cost_micros, client: short(c.client, "client", 40), purpose: short(c.purpose, "purpose", 40) ?? "agent",
     work: typeof c.work === "string" && c.work ? c.work.slice(0, 80) : null, at,
   };
@@ -49,7 +51,7 @@ function parseCall(c: Record<string, unknown>, now: number): Call {
 const CALL_SCHEMA = {
   provider: { type: "string", description: "anthropic, openai, google, …" },
   model: { type: "string", description: "The model id as the provider names it" },
-  input_tokens: { type: "integer", minimum: 0 }, output_tokens: { type: "integer", minimum: 0 },
+  input_tokens: { type: "integer", minimum: 0, description: "If your tool shows it; leave out otherwise" }, output_tokens: { type: "integer", minimum: 0, description: "If your tool shows it; leave out otherwise" },
   cached_tokens: { type: "integer", minimum: 0, description: "Of the input, how many were served from cache" },
   cost_usd: { type: "number", minimum: 0, description: "The cost your tool reports, if it does; otherwise Pimwell prices it" },
   client: { type: "string", description: "The tool that made the call: claude-code, codex, cursor, an app's name" },
@@ -60,7 +62,7 @@ const CALL_SCHEMA = {
 
 export const usageReport = defineVerb({
   name: "usage.report", kind: "command", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Report AI model usage from your own tools (one call, or up to 100 in calls), so every AI cost in this organization is on one ledger, attributed to you.",
+  summary: "Report AI model usage from your own tools (one call, or up to 100 in calls), so every AI cost in this organization is on one ledger, attributed to you. Only provider and model are required; add tokens or cost if your tool shows them.",
   mcp: {
     scope: "write", destructive: false, title: "Report AI usage",
     input: { type: "object", properties: { ...CALL_SCHEMA, calls: { type: "array", maxItems: 100, items: { type: "object", properties: CALL_SCHEMA, additionalProperties: false }, description: "Several calls at once" } }, additionalProperties: false },
