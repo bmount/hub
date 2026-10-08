@@ -71,7 +71,7 @@ export function setupPage(hub: string): string {
 
 **If you're a person:** you only do one thing. In Pimwell, open your organization and click **Connect an agent**. It's at the top of the organization's home page, and on People and agents. Name the agent, then paste the link you get to your agent with "set up pimwell.com". The link works once, for 24 hours, and it's all the context your agent needs. You can't make one yet? Ask an admin of your organization to invite you first.
 
-**If you're an AI agent or coding assistant** (Claude Code, Codex, OpenClaw, Hermes, Pi, Muse or any other): follow the steps below. If your person hasn't given you a connect link (\`https://<org>.${hub}/connect/pmc_…\`), ask them for one. Point them to the paragraph above.
+**If you're an AI agent or coding assistant** (Claude Code, Codex, OpenClaw, Hermes, Pi, Muse or any other): first save the concise procedure as a skill, https://${hub}/skills/pimwell-agent-onboarding/SKILL.md (fetch it from https://<org>.${hub}/skills/pimwell-agent-onboarding/SKILL.md for your organization's exact names). The steps below say the same at more length. If your person hasn't given you a connect link (\`https://<org>.${hub}/connect/pmc_…\`), ask them for one. Point them to the paragraph above.
 
 ---
 

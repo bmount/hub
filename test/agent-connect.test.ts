@@ -162,3 +162,24 @@ describe("claiming from an agent's own process", () => {
   });
 });
 
+describe("the onboarding skill", () => {
+  it("is served ready to save, with the organization's own names on its host and placeholders on the hub's", async () => {
+    const org = await (await SELF.fetch(`https://${HOST}/skills/pimwell-agent-onboarding/SKILL.md`)).text();
+    expect(org.startsWith("---\nname: pimwell-agent-onboarding\ndescription: ")).toBe(true);
+    expect(org).toContain("PIMWELL_ACME_TOKEN");
+    expect(org).toContain("https://acme.pimwell.test/agent/mcp");
+    expect(org).not.toMatch(/pm[wsc]_[A-Za-z0-9]/);
+    const hub = await (await SELF.fetch("https://pimwell.test/skills/pimwell-agent-onboarding/SKILL.md")).text();
+    expect(hub).toContain("PIMWELL_<ORG>_TOKEN");
+
+    const t = await seedTenant("acme");
+    const ann = await seedHuman("ann@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    const h = cookieHeaders(ann.token, HOST);
+    const form = await SELF.fetch(`https://${HOST}/api/agent.connect`, { method: "POST", headers: { ...h, "content-type": "application/x-www-form-urlencoded" }, body: "display_name=Helper%20one" });
+    expect(await form.text()).toContain("https://acme.pimwell.test/skills/pimwell-agent-onboarding/SKILL.md");
+    const made = await makeLink(h, { display_name: "Helper two" });
+    const j = (await (await SELF.fetch(`https://${HOST}${pathOf(made.link)}`, { method: "POST", headers: { accept: "application/json" } })).json()) as { skill: string };
+    expect(j.skill).toBe("https://acme.pimwell.test/skills/pimwell-agent-onboarding/SKILL.md");
+  });
+});
+

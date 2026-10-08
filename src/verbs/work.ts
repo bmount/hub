@@ -22,7 +22,7 @@ async function projectBySlug(ctx: Ctx, slug: string) {
   return p;
 }
 
-/** An item by id, or by project and number ("pricebench#12" or project + number). */
+/** An item by id, or by project and number ("site#12" or project + number). */
 export async function itemRef(ctx: Ctx, i: Record<string, unknown>): Promise<WorkItem> {
   const id = optString(i, "id", { max: 80 });
   if (id) {
@@ -75,7 +75,7 @@ export async function slugOf(ctx: Ctx, project_id: string): Promise<string> {
 const line = (slug: string, w: WorkItem) => `- **${ref(slug, w)}** ${KINDS[w.kind].name} (${KINDS[w.kind].plain}), ${STATES[w.state].toLowerCase()}: ${cleanText(w.title)}`;
 
 const ITEM_SCHEMA = {
-  id: { type: "string", description: "The item: its id, or project#number such as pricebench#12." },
+  id: { type: "string", description: "The item: its id, or project#number such as site#12." },
   project: { type: "string", description: "Project name, with number, instead of id." },
   number: { type: "integer", minimum: 1, description: "The item's number in its project." },
 };

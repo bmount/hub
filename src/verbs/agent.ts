@@ -79,6 +79,8 @@ export function slugFromName(name: string): string {
   return /^[a-z]/.test(s) ? s : `agent-${s || "1"}`.replace(/-+$/, "");
 }
 
+const hubOf = (mcpUrl: string) => new URL(mcpUrl).host.split(".").slice(1).join(".");
+
 type ConnectResult = { agent: ReturnType<typeof agentView>; link: string; expires_at: number; mcp_url: string };
 
 export const agentConnect = defineVerb({
@@ -129,7 +131,8 @@ export const agentConnect = defineVerb({
   },
   renderForm: (r: ConnectResult) => `<a class="back" href="/people">‹ People</a><h1>Connect ${esc(r.agent.display_name)}</h1>
 <p class="lede">Paste this to your agent. It works once, until ${esc(new Date(r.expires_at).toISOString().slice(0, 16).replace("T", " "))} UTC. Copy it now: it won't be shown again.</p>
-<pre id="connect-msg">Connect to Pimwell with this one-time link. Claim it with an HTTP POST from your own process, not a browser, and follow the answer:
+<pre id="connect-msg">Connect to Pimwell. First save this skill and follow it: https://${esc(r.agent.tenant)}.${esc(hubOf(r.mcp_url))}/skills/pimwell-agent-onboarding/SKILL.md
+Your one-time link (claim it with an HTTP POST from your own process, not a browser):
 umask 077; curl -sf -X POST -H 'accept: application/json' '${esc(r.link)}' > ${esc(connectionNames(r.agent.tenant).file)}
 Name the MCP server ${esc(connectionNames(r.agent.tenant).server)} and the secret ${esc(connectionNames(r.agent.tenant).secret)}, so nothing collides with your other keys.</pre>
 <p><button type="button" class="copy" data-copy="#connect-msg">Copy</button></p>${COPY_SCRIPT}

@@ -46,6 +46,7 @@ import { doPage } from "./intent/page";
 import { intentEvalRoute } from "./intent/evalRoute";
 import { claimConnectLink, connectInstructions } from "./auth/connect";
 import { gitHelperResponse } from "./http/gitHelper";
+import { agentOnboardingResponse } from "./skills/agentOnboarding";
 import { classifyHost } from "./tenant";
 import { channelPage, channelPost, channelsPage, inboxPage, permalinkPage, threadPage } from "./http/chatPages";
 import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sessionsPage } from "./http/pages";
@@ -135,6 +136,8 @@ app.get("/planned/:area", (c) => plannedPage(c.req.raw, c.env, c.req.param("area
 app.get("/people", (c) => peoplePage(c.req.raw, c.env));
 app.get("/people/:who", (c) => peoplePage(c.req.raw, c.env, c.req.param("who")));
 app.get("/skills", (c) => skillsPage(c.req.raw, c.env));
+// The onboarding skill, ready to save: the organization's own names on its host, placeholders on the hub's.
+app.get("/skills/pimwell-agent-onboarding/SKILL.md", (c) => { const h = classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN); return h.kind === "unknown" ? notFoundPage() : agentOnboardingResponse(c.env.HUB_DOMAIN.toLowerCase(), h.kind === "tenant" ? h.slug : null); });
 app.get("/assistant", (c) => assistantPage(c.req.raw, c.env));
 app.post("/assistant/chat", (c) => assistantChat(c.req.raw, c.env));
 app.post("/voice/transcribe", (c) => voiceTranscribe(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));

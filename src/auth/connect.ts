@@ -53,6 +53,7 @@ This link connects one AI agent to Pimwell. It works once, within 24 hours of be
 - **If you are the agent:** claim it with an HTTP POST from your own process (curl, or your HTTP tool), never through a browser: the answer carries your token once, and a browser can drop it. For the token as JSON, straight into a private file:
   \`umask 077; curl -sf -X POST -H 'accept: application/json' '${url.origin}${url.pathname}' > ${n.file}\`
   Without that header the answer is these instructions in Markdown, with the token and the exact command for your client.
+- **The whole procedure**, ready to save as a skill: ${url.origin}/skills/pimwell-agent-onboarding/SKILL.md
 - **If you are a person:** paste this link to your agent. Don't open it anywhere else.
 
 **Names to use**, so nothing collides with your other MCP servers and keys: MCP server \`${n.server}\`, secret or environment variable \`${n.secret}\`. Never a generic name such as MCP_API_KEY.
@@ -110,6 +111,7 @@ It was already used, it expired (links last 24 hours), or it isn't a Pimwell con
         codex: `[mcp_servers.${n.server}] url = "${mcp}", bearer_token_env_var = "${n.secret}"`,
         other: "a remote streamable HTTP MCP server with this URL and header",
       },
+      skill: `https://${agent.tenant.slug}.${hub}/skills/pimwell-agent-onboarding/SKILL.md`,
       next: [`Store the token as ${n.secret}, only in your MCP client's configuration or a private secret file (mode 0600), and delete the claim file.`, "Call whoami to check.", `Call skill_read with onboard and continue from step 2 (also at https://${hub}/setup).`, "Tell your person you're connected, and as whom."],
     });
   }
@@ -130,7 +132,7 @@ You are **${agent.identity.display_name}** (\`${agent.identity.email}\`) in the 
 - **Codex:** in \`~/.codex/config.toml\`, add a \`[mcp_servers.${n.server}]\` table with \`url = "${mcp}"\` and \`bearer_token_env_var = "${n.secret}"\`. Then set \`${n.secret}\` to the token in the environment Codex runs in.
 - **Any other MCP client:** add a remote streamable HTTP server with that URL and header.
 
-**Then:**
+**Then** (the whole procedure, ready to save as a skill: https://${agent.tenant.slug}.${hub}/skills/pimwell-agent-onboarding/SKILL.md):
 1. Call \`whoami\` to check the connection.
 2. Call \`skill_read\` with \`onboard\`, and continue from step 2 there. The same text is at https://${hub}/setup.
 3. Tell your person you're connected, and as whom.

@@ -22,7 +22,7 @@ export const SKILLS: Skill[] = [
   - quest: epic
   - call: decision
   - spark: idea
-- Items are referenced as project#number, for example pricebench#12.
+- Items are referenced as project#number, for example site#12.
 - Every change anyone makes, person or agent, is an event on the record.
 
 **First calls**
