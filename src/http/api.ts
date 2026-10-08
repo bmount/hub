@@ -124,7 +124,10 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
       note(request, { error: { reason: e.reason, detail: e.detail ?? null } });
       await auditRefusal(ctx, name, e);
       if (isForm && e.reason === "reproof_required") {
-        const next = ctx?.tenant ? `&next=${ctx.tenant.slug}` : "";
+        // Back to the page the form was on, once they have confirmed.
+        let path = "";
+        try { const ref = new URL(request.headers.get("referer") ?? ""); if (ref.origin === new URL(request.url).origin && ref.pathname !== "/") path = ref.pathname + ref.search; } catch { /* no referrer */ }
+        const next = ctx?.tenant ? `&next=${encodeURIComponent(ctx.tenant.slug + path)}` : "";
         return finish(ctx, env, new Response(null, { status: 303, headers: { location: `https://${env.HUB_DOMAIN}/login?reproof=1${next}`, "cache-control": "no-store" } }));
       }
       if (isForm) return finish(ctx, env, htmlResponse(page("Not done", formError(e, request)), e.status));

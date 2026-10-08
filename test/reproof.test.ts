@@ -1,3 +1,4 @@
+import { landingUrl } from "../src/auth/login";
 import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loginPostPage } from "../src/http/login";
@@ -31,6 +32,12 @@ describe("reproof", () => {
     const blocked = await formPost("acme.pimwell.test", "invite.create", { email: "new@example.com", role: "member" }, admin.token);
     expect(blocked.status).toBe(303);
     expect(blocked.headers.get("location")).toBe("https://pimwell.test/login?reproof=1&next=acme");
+    // From a page on the organization's host, confirming returns to that page.
+    const fromPage = await SELF.fetch("https://acme.pimwell.test/api/invite.create", { method: "POST", redirect: "manual",
+      headers: { cookie: `pmw_session=${admin.token}`, origin: "https://acme.pimwell.test", referer: "https://acme.pimwell.test/people?invite=1", "content-type": "application/x-www-form-urlencoded" },
+      body: "email=new2%40example.com&role=member" });
+    expect(fromPage.headers.get("location")).toBe("https://pimwell.test/login?reproof=1&next=acme%2Fpeople%3Finvite%3D1");
+    expect(await landingUrl(env, admin.identity, "acme/people?invite=1")).toBe("https://acme.pimwell.test/people?invite=1");
 
     const prompt = await (await SELF.fetch("https://pimwell.test/login?reproof=1&next=acme", { headers: { cookie: `pmw_session=${admin.token}` } })).text();
     expect(prompt).toContain('name="reproof" value="1"');

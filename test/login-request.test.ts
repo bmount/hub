@@ -104,6 +104,11 @@ describe("agents", () => {
     expect(cleanNext("login")).toBeNull();
     expect(cleanNext("")).toBeNull();
     expect(cleanNext(null)).toBeNull();
+    // A page on the organization's own host, so a confirmation returns where it started.
+    expect(cleanNext("acme/people?connect=1")).toBe("acme/people?connect=1");
+    expect(cleanNext("acme//evil.example")).toBeNull();
+    expect(cleanNext("acme/x@evil.example")).toBeNull();
+    expect(cleanNext("acme/\\evil")).toBeNull();
   });
 
   it("authUrl and linkMail", () => {

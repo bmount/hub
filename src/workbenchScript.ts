@@ -72,7 +72,7 @@ export const WORKBENCH_JS = String.raw`
         }
         swap(doc, res.url || url, opts.push !== false);
       });
-    }).catch(function () { location.href = url; }).then(function () { if (mine === busy) document.body.style.cursor = ""; });
+    }).catch(function () { if (opts.fallback) opts.fallback(); else location.href = url; }).then(function () { if (mine === busy) document.body.style.cursor = ""; });
   }
 
   function local(a) {
@@ -148,7 +148,11 @@ export const WORKBENCH_JS = String.raw`
     e.preventDefault();
     // Include the button that was pressed: forms like Approve / Ask for changes carry their choice on it.
     var data = new URLSearchParams(e.submitter ? new FormData(f, e.submitter) : new FormData(f));
-    if ((f.getAttribute("method") || "get").toLowerCase() === "post") go(u.href, { method: "POST", body: data });
+    // If the fetch fails (for example the server sends a sign-in confirmation on another host), submit the form the
+    // ordinary way so the browser follows it; never turn a post into a GET of the form's address.
+    var sub = e.submitter;
+    var native = function () { f.setAttribute("data-reload", ""); if (f.requestSubmit) f.requestSubmit(sub || undefined); else f.submit(); };
+    if ((f.getAttribute("method") || "get").toLowerCase() === "post") go(u.href, { method: "POST", body: data, fallback: native });
     else { u.search = data.toString(); go(u.href); }
   });
   window.addEventListener("popstate", function () { go(location.href, { push: false }); });

@@ -27,8 +27,12 @@ export function cleanNext(next: string | null | undefined): string | null {
   if (!next) return null;
   const raw = next.trim();
   if (CONSENT_NEXT.test(raw)) return raw;
-  const s = raw.toLowerCase();
-  return isValidTenantSlug(s) ? s : null;
+  // "<org>" or "<org>/<path>": back to that organization, at a page on its own host. The path is a plain local path:
+  // letters, digits and a few URL characters, never "//", so it can't name another host.
+  const m = /^([A-Za-z0-9-]+)(\/[A-Za-z0-9/._~%=&?-]{0,200})?$/.exec(raw);
+  const org = m ? m[1]!.toLowerCase() : "";
+  if (!m || !isValidTenantSlug(org) || (m[2] ?? "").includes("//")) return null;
+  return org + (m[2] ?? "");
 }
 
 export function authUrl(env: Env, token: string, next: string | null): string {
@@ -99,9 +103,11 @@ export async function landingUrl(env: Env, identity: Identity, next: string | nu
   const slug = cleanNext(next);
   if (!slug) return home;
   if (slug.startsWith("/")) return `https://${env.HUB_DOMAIN}${slug}`;
-  const tenant = await getTenantBySlug(env.HUB_DB, slug);
+  const cut = slug.indexOf("/");
+  const org = cut < 0 ? slug : slug.slice(0, cut);
+  const tenant = await getTenantBySlug(env.HUB_DB, org);
   if (!tenant || tenant.state !== "active") return home;
-  const there = `https://${slug}.${env.HUB_DOMAIN}/`;
+  const there = `https://${org}.${env.HUB_DOMAIN}${cut < 0 ? "/" : slug.slice(cut)}`;
   if (identity.is_root === 1) return there;
   const m = await getMembership(env.HUB_DB, identity.id, tenant.id);
   return m && m.state === "active" ? there : home;
