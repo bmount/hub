@@ -114,6 +114,34 @@ export async function takeRateAtomic(db: D1Database, bucket: RateBucket, subject
   }
 }
 
+/**
+ * Several atomic counters for one subject in a single round trip (MCP calls count per minute and per hour). The
+ * sweep of finished windows runs after the response when `defer` is given. Fails open, like takeRateAtomic.
+ */
+export async function takeRatesAtomic(db: D1Database, buckets: RateBucket[], subject: string, now: number, defer?: (p: Promise<unknown>) => void): Promise<Array<RateResult & { bucket: RateBucket }>> {
+  const hash = await sha256Hex(subject.trim().toLowerCase());
+  const plan = buckets.map((bucket) => {
+    const { limit, windowMs } = RATE_RULES[bucket];
+    const window = Math.floor(now / windowMs);
+    return { bucket, limit, window, windowMs, retryAfterS: Math.max(1, Math.ceil(((window + 1) * windowMs - now) / 1000)) };
+  });
+  try {
+    const rows = await db.batch(plan.map((x) => db.prepare(
+      `INSERT INTO rate_counter ("key", "window", count, expires_at) VALUES (?, ?, 1, ?)
+       ON CONFLICT("key", "window") DO UPDATE SET count = count + 1 RETURNING count`,
+    ).bind(`${x.bucket}:${hash}`, x.window, (x.window + 2) * x.windowMs)));
+    const counts = rows.map((r) => (r.results[0] as { count: number } | undefined)?.count ?? 1);
+    if (counts.some((c) => c === 1)) {
+      const sweep = db.prepare("DELETE FROM rate_counter WHERE expires_at < ?").bind(now).run().catch(() => undefined);
+      if (defer) defer(sweep); else await sweep;
+    }
+    return plan.map((x, i) => ({ bucket: x.bucket, ok: counts[i]! <= x.limit, first: counts[i] === x.limit + 1, retryAfterS: x.retryAfterS }));
+  } catch (e) {
+    console.log("rate counter failed", e instanceof Error ? e.name : "error");
+    return plan.map((x) => ({ bucket: x.bucket, ok: true, first: false, retryAfterS: x.retryAfterS }));
+  }
+}
+
 export async function takeRate(kv: KVNamespace, bucket: RateBucket, subject: string, now: number): Promise<boolean> {
   return (await takeRateDetail(kv, bucket, subject, now)).ok;
 }

@@ -3,7 +3,7 @@ import { credentialUsable, oauthContext, type Ctx } from "../auth/context";
 import { liveGrant } from "../db/oauthGrants";
 import { touchSession } from "../db/sessions";
 import { recordEvent } from "../db/events";
-import { takeRateAtomic, takeRateDetail } from "../rate";
+import { takeRatesAtomic, takeRateDetail } from "../rate";
 import { bearerChallenge, oauthJson } from "../http/oauthMeta";
 import { authServer, tenantResource } from "../oauth/config";
 
@@ -61,8 +61,9 @@ export async function mcpAuth(
   // Defence in depth: the token must have been issued to this grant's client and for this grant's human.
   if (validated.clientId !== live.grant.client_id || validated.userId !== live.identity.id) return refuse("invalid_token");
   if (!(await credentialUsable(env.HUB_DB, live.identity, live.session, null, live.tenant, "mcp"))) return refuse("invalid_token");
-  for (const bucket of ["mcp_grant_minute", "mcp_grant_hour"] as const) {
-    const r = await takeRateAtomic(env.HUB_DB, bucket, live.grant.id, now);
+  // Both windows in one round trip: this runs on every call an always-connected agent makes.
+  for (const r of await takeRatesAtomic(env.HUB_DB, ["mcp_grant_minute", "mcp_grant_hour"], live.grant.id, now, waitUntil)) {
+    const bucket = r.bucket;
     if (r.ok) continue;
     if (r.first) {
       await recordEvent(env.HUB_DB, {
