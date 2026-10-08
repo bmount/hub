@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { credentialUsable, roleFor } from "../auth/context";
+import { credentialUsable, rank, roleFor } from "../auth/context";
 import { getSessionByToken, touchSession } from "../db/sessions";
 import { getIdentityById } from "../db/identities";
 import { getTenantBySlug } from "../db/tenants";
@@ -45,8 +45,16 @@ export async function introspect(request: Request, env: Env, now: number = Date.
   if (!session || !tenant || tenant.state !== "active") return denied();
   const identity = await getIdentityById(db, session.identity_id);
   if (!identity || !(await credentialUsable(db, identity, session, null, tenant, "introspect"))) return denied();
-  const role = roleFor(identity, await getMembership(db, identity.id, tenant.id));
+  let role = roleFor(identity, await getMembership(db, identity.id, tenant.id));
   if (!role) return denied();
+  // Agents can do what their person can, never more, and at most a member's rights (owner, 2026-10-08).
+  if (identity.kind === "agent") {
+    const op = identity.operator_id ? await getIdentityById(db, identity.operator_id) : null;
+    const opRole = op ? roleFor(op, await getMembership(db, op.id, tenant.id)) : null;
+    if (!opRole) return denied();
+    if (rank(opRole) < rank(role)) role = opRole;
+    if (rank(role) > rank("member")) role = "member";
+  }
   // Shows on /me when a credential was last used; at most one write per hour, expiry unchanged.
   if (session.kind === "git") await touchSession(db, session, now);
   return json({

@@ -45,6 +45,7 @@ import { voiceCorrect, voiceTranscribe } from "./http/voice";
 import { doPage } from "./intent/page";
 import { intentEvalRoute } from "./intent/evalRoute";
 import { claimConnectLink, connectInstructions } from "./auth/connect";
+import { gitHelperResponse } from "./http/gitHelper";
 import { classifyHost } from "./tenant";
 import { channelPage, channelPost, channelsPage, inboxPage, permalinkPage, threadPage } from "./http/chatPages";
 import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sessionsPage } from "./http/pages";
@@ -167,6 +168,7 @@ app.post("/oauth/consent/:id", (c) => consentPost(c.req.raw, c.env, (p) => c.exe
 app.all("/mcp", (c) => handleMcp(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 // Headless agents: their own MCP endpoint, and the one-time connect link that gives them a token for it.
 app.all("/agent/mcp", (c) => handleAgentMcp(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
+app.get("/git-credential-helper", (c) => { const h = classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN); return h.kind === "tenant" ? gitHelperResponse(c.env, h.slug) : notFoundPage(); });
 app.get("/connect/:token", (c) => classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN).kind === "tenant" ? connectInstructions(c.req.raw) : notFoundPage());
 app.post("/connect/:token", (c) => {
   const host = classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN);

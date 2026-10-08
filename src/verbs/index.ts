@@ -3,7 +3,7 @@ import { projectStatusVerb } from "./status";
 import { reviewAi } from "./reviewAi";
 import { workBoard, workBulkUpdate } from "./board";
 import { reviewComment, reviewList, reviewRead, reviewRequest, reviewVerdict } from "./review";
-import { repoBranches, repoCommit, repoDiff, repoFile, repoLog } from "./code";
+import { repoBranches, repoCommit, repoConnect, repoDiff, repoFile, repoList, repoLog } from "./code";
 import { messageSearch, searchQuery, workSearch } from "./search";
 import { mailReply, mailSend, mailSending } from "./mailOut";
 import { appApprove, appList, appRegister, deployList, deployRecord, traceList, traceRead } from "./apps";
@@ -50,7 +50,7 @@ export function registerAllVerbs(): void {
     appRegister, appApprove, appList, traceList, traceRead, deployList, deployRecord,
     mailReply, mailSend, mailSending,
     workSearch, messageSearch, searchQuery,
-    repoBranches, repoLog, repoCommit, repoFile, repoDiff,
+    repoBranches, repoLog, repoCommit, repoFile, repoDiff, repoList, repoConnect,
     reviewRequest, reviewList, reviewRead, reviewComment, reviewVerdict,
     workBoard, workBulkUpdate,
     projectStatusVerb, reviewAi,

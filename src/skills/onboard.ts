@@ -26,6 +26,8 @@ export function onboardBody(hub: string): string {
 
 Then call \`whoami\`, \`capabilities\`, and \`skill_read\` with \`start-here\`. If \`whoami\` fails, the connection isn't finished: a claimed link's token is missing from the header, or the browser approval wasn't completed.
 
+**Code:** \`repo_list\` shows the repositories you can reach and their clone URLs. \`repo_connect\` sets up git once, with a helper that trades your token for one-hour git sessions, so no token goes in a URL. You can push (history is never overwritten: force pushes are refused), so work on a branch.
+
 **2. Report your own AI usage**
 - After each working session, call \`usage_report\` with the calls you made. Only provider and model are required. Add input_tokens, output_tokens and cached_tokens if your tool shows them, and cost_usd if it reports one; leave out anything you don't know rather than guessing.
 - Set client to your tool's name (claude-code, codex, cursor, …). Set work to the item you worked on (for example pimwell#62) when there is one.

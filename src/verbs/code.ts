@@ -1,3 +1,5 @@
+import { rank } from "../auth/context";
+import { connectionNames } from "../auth/connect";
 // Code views over Ardi (planned verbs built 2026-10-07): branches, commits, one commit with its diff, files, and
 // comparing two revisions. Reads go through src/code/ardi.ts as the caller; diffs are computed here (src/code/diff.ts).
 import { defineVerb } from "./table";
@@ -191,5 +193,58 @@ export const repoDiff = defineVerb({
         : a.text === null || b.text === null ? { path, diff: null, note: "too large to show" } : { path, diff: diffText(a.text, b.text), note: null });
     }
     return { project: pr.slug, from: base, to: head[0]!.oid, commits: commits.length, files };
+  },
+});
+
+/** Which repositories this caller can reach, how (read, or read and push), and where to clone them. */
+export const repoList = defineVerb({
+  name: "repo.list", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
+  summary: "The organization's source repositories you can reach, with clone URLs and whether you can push. Pushes never overwrite history: force pushes and rewrites are refused.",
+  mcp: {
+    scope: "read", destructive: false, title: "Repositories",
+    input: { type: "object", properties: {}, additionalProperties: false },
+    render: (r) => {
+      const x = r as { access: string; repos: Array<{ slug: string; name: string; clone_url: string }>; connect: string };
+      return [DATA_NOTE, "", `**Repositories** (${x.repos.length}); you can ${x.access}.`, ...x.repos.map((p) => `- ${cleanText(p.name)}: \`${p.clone_url}\``), "", x.connect].join("\n");
+    },
+  },
+  parse: () => ({}),
+  run: async (ctx) => {
+    const host = `${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN.toLowerCase()}`;
+    const rows = (await ctx.db.prepare("SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND kind = 'repo' AND state = 'active' ORDER BY slug").bind(ctx.tenant!.id).all<{ slug: string; name: string }>()).results;
+    const push = rank(ctx.role) >= rank("member");
+    return {
+      access: push ? "read and push (never force: history is kept)" : "read",
+      repos: rows.map((p) => ({ slug: p.slug, name: p.name, clone_url: `https://${host}/${p.slug}.git`, push })),
+      connect: ctx.identity?.kind === "agent" ? "To clone or push, call repo_connect once for the git setup." : `To clone or push, make a git credential at https://${ctx.env.HUB_DOMAIN.toLowerCase()}/me.`,
+    };
+  },
+});
+
+/** How to connect git. Returns no secret: agents install a helper that trades their own token for short git sessions. */
+export const repoConnect = defineVerb({
+  name: "repo.connect", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
+  summary: "How to connect git to this organization's repositories securely. For agents: a credential helper that trades your Pimwell token for one-hour git sessions, so no token goes in a URL or a command.",
+  mcp: {
+    scope: "read", destructive: false, title: "Connect git",
+    input: { type: "object", properties: {}, additionalProperties: false },
+    render: (r) => `${DATA_NOTE}\n\n${(r as { steps: string }).steps}`,
+  },
+  parse: () => ({}),
+  run: async (ctx) => {
+    const slug = ctx.tenant!.slug, hub = ctx.env.HUB_DOMAIN.toLowerCase(), host = `${slug}.${hub}`;
+    const n = connectionNames(slug);
+    if (ctx.identity?.kind !== "agent") {
+      return { steps: `Make a git credential at https://${hub}/me (Git access), then clone with \`git clone https://${host}/<repo>.git\`. Your password manager or git's credential store keeps it.` };
+    }
+    const steps = [
+      `**Connect git to ${host}** (once per machine). Your token stays where it is; git only ever sees one-hour sessions.`,
+      `1. Keep your Pimwell token in \`${n.secret}\`, or in the file \`~/.config/pimwell/${slug}.token\` (mode 0600).`,
+      `2. Install the helper: \`mkdir -p ~/.local/bin && curl -sf https://${host}/git-credential-helper -o ~/.local/bin/git-credential-${n.server} && chmod 700 ~/.local/bin/git-credential-${n.server}\` (read it first: it is a short shell script).`,
+      `3. Point git at it for this host only: \`git config --global credential.https://${host}.helper "$HOME/.local/bin/git-credential-${n.server}"\``,
+      `4. Clone: \`git clone https://${host}/<repo>.git\` (repo_list has the URLs). Push as usual.`,
+      `Pushes are kept forever: force pushes and history rewrites are refused, so work on a branch and say what you changed in the commit message. Never put a token in a remote URL.`,
+    ].join("\n");
+    return { steps, helper_url: `https://${host}/git-credential-helper`, host, secret: n.secret, token_file: `~/.config/pimwell/${slug}.token` };
   },
 });
