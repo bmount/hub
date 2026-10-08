@@ -25,43 +25,57 @@ Anyone can ask what happened and why and get an answer with evidence. Anyone can
 Pimwell itself or from their own ChatGPT or Claude session, and the change is as traceable as the
 problem.
 
-## Where it stands (2026-10-07, evening)
+## Where it stands (2026-10-08, early morning)
 
 The milestone tables below keep their original statuses. This is the current picture.
 
 **Built and live:**
-- **Workspace:** the workbench, with a rail, jump box, + File, list and inspector panes, keyboard and phone layout.
-  Docket, Mail, People, Apps, AI usage, Needs me and the Assistant all live in it.
+- **Workspace:** the workbench, with a rail, jump box, search, + File, list and inspector panes, keyboard and phone
+  layout, and theme tokens. Sections: Needs me, Docket, Board, Mail, Conversations, Reviews, Situations, Apps,
+  AI usage, People and agents, Assistant.
 - **Work (M2):**
-  - items with kinds, owners, quests, claim leases and in-place edits;
-  - comments with mentions, following, and "What needs me";
-  - links to commits, mail and URLs;
+  - items, owners, quests and claims, with comments, mentions, following and "Needs me";
+  - board and bulk changes;
+  - search across work, mail, conversations, people, projects and errors;
+  - status from records (`project_status`);
   - every verb over MCP, including write.
-- **Mail (M2, M9):**
-  - **Inbound:** organization, project and agent addresses, vetted, with "Propose work" that cites the message, and
-    agent inboxes that wake the agent.
+- **Code (M1, M3, M6 in part):**
+  - **Reading Ardi:** branches, commits with diffs computed in the hub, files and compare, through Ardi's JSON API
+    (a person's sealed git session, or an agent's own token).
+  - **Push sync:** every five minutes; commits that mention project#n link to that item.
+  - **"What came after this commit":** the deploy that shipped it, later deploys, and new errors.
+  - **Reviews:** request, comments, verdicts tied to the commit reviewed, and a reviewer agent (`review_ai`).
+- **Apps (M3, M4 in part):** `pimwell-tail` with redaction at the source, error groups, deploys from script
+  versions, #<project>-ops notices, and onboarding at /setup.
+- **Mail:**
+  - **Inbound:** organization, project and agent addresses, with "Propose work".
   - **Outbound:** replies and agent mail under the golden rule, off until an admin turns it on.
-- **Deploys and errors (M3, M4 in part):** apps in the Cloudflare account report through `pimwell-tail`, with
-  redaction at the source. Errors are grouped by cause, deploys are recorded from script versions (with the commit as
-  tag), and new problems are posted in #<project>-ops. The onboard skill at /setup tells agents how to wire an app.
-- **AI usage and cost (M5 in part):** one ledger covering Pimwell's own calls, what agents report, and app usage,
-  priced when recorded, per person, agent, model and work item.
-- **People and administration:** invites, roles, removal, root-approved app registrations, model keys and prices,
-  organization delete, request logging with who acted, and the audit trail.
-- **Assistant (M6 in part):** chat that calls Pimwell's tools as the person, read-only unless switched.
-- **Planned features stand in place:** each planned verb answers `not_implemented` with its spec, and each appears
-  under "Coming".
+- **AI usage and cost (M5 in part):** one ledger across the hub, reported usage and apps, priced when recorded.
+- **Assistant:** chat over Pimwell's own tools. **Situations (M7, first version):** a read-only diagnosis with
+  cited evidence, kept and later compared with what happened.
+- **Administration:** people, roles, invites, app approvals, model keys and prices, organization delete, request
+  logging with who acted, the audit trail. MCP calls cost 2 round trips; pages cost 4 at most.
 
-**Next, roughly in order:**
-1. **Search:** work, mail and conversations (`work.search`, `message.search`, `search.query`).
-2. **Board and bulk changes:** `work.board`, `work.bulk_update`.
-3. **Hub readiness:** rate limits and long-poll costs for always-connected agents; MCP heavy-user budgets.
-4. **Code views through Ardi:** branches, commits, files, diffs (M1), then reviews and integration (M6). These wait
-   on read APIs from Ardi, requested through docs/requests/.
-5. **Errors to code:** stack frames to lines at the deployed commit (M4), and "what came after this commit" (M3).
-6. **Project-level access, then folding Commons into its organization (M1, admin P4).**
-7. **Pi as a hosted coding agent and reviewer agents (M6).**
-8. **Situations in, the truth out (M7).**
+**Waiting on the Ardi session** (requests in docs/requests/2026-10-07-ardi-source-tracking.md):
+- service-to-service reads;
+- push notification, so pushes arrive in seconds instead of five minutes;
+- diff with merge base and renames;
+- blame, which errors-to-lines (M4) needs;
+- reflog;
+- code search (`repo_search` is still planned);
+- a merge verb (`review_integrate` is still planned);
+- `/internal/resolve`.
+
+**Waiting on owner decisions:**
+- project-level access, then folding Commons into its organization (M1, admin P4);
+- hosting the Pi coding agent in a sandbox (M6);
+- health probes, which need each app to export `PimwellProbe` and the hub to bind it;
+- outside senders to agent mail.
+
+**Next without decisions:**
+- streaming Assistant answers;
+- the Situations comparison view (diagnosis against outcome);
+- customer feedback intake beyond mail.
 
 ## The pitch, and what delivers it
 
