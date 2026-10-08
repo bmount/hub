@@ -10,7 +10,8 @@ import { usageStatement } from "./usage";
 
 export type Answer = { text: string; purpose: string; provider: string; model: string; key_fingerprint: string; ms: number };
 
-type CallOpts = { tenant_id?: string | null; identity_id?: string | null; session_id?: string | null; project_id?: string | null; work_item_id?: string | null; now?: number };
+/** `client` names the process that made the call (default pimwell), so development and evals are told apart on the ledger. */
+type CallOpts = { tenant_id?: string | null; identity_id?: string | null; session_id?: string | null; project_id?: string | null; work_item_id?: string | null; client?: string; now?: number };
 
 async function metered(
   env: Env, purposeId: string, opts: CallOpts,
@@ -30,7 +31,7 @@ async function metered(
       usageStatement(db, {
         id: ulid(now), source: "hub", purpose: purposeId, provider: route.provider, model: route.model, credential_id: cred.id, tenant_id,
         identity_id: opts.identity_id ?? null, session_id: opts.session_id ?? null, project_id: opts.project_id ?? null, work_item_id: opts.work_item_id ?? null,
-        client: "pimwell", ok, ms: Date.now() - started, input_tokens: inT, output_tokens: outT, error, created_at: now,
+        client: opts.client ?? "pimwell", ok, ms: Date.now() - started, input_tokens: inT, output_tokens: outT, error, created_at: now,
       }),
       ok
         ? db.prepare("UPDATE provider_credential SET last_used_at = ? WHERE id = ?").bind(now, cred.id)

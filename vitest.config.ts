@@ -17,6 +17,7 @@ export default defineConfig({
           GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
           GOOGLE_CLIENT_SECRET: "test-google-secret",
           HUB_SECRETS_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+          EVAL_KEY: "test-eval-key",
         },
         // Stands in for the Ardi Worker: echoes what reached it, so tests can check the forward.
         serviceBindings: {

@@ -46,8 +46,8 @@ function showHtml(what: string, result: unknown, verbName: string): string {
 export type Outcome = { kind: "go"; href: string; say: string } | { kind: "card"; html: string };
 
 const SECTION_HREF: Record<string, string> = {
-  home: "/", needs_me: "/attention", docket: "/docket", mine: "/docket?owner=me", mail: "/mail", conversations: "/c", people: "/people",
-  assistant: "/assistant", reviews: "/reviews", situations: "/situations", apps: "/apps", usage: "/usage", file_work: "/new",
+  home: "/", needs_me: "/attention", docket: "/docket", mine: "/docket?owner=me", board: "/board", mail: "/mail", conversations: "/c", people: "/people",
+  assistant: "/assistant", reviews: "/reviews", situations: "/situations", apps: "/apps", usage: "/usage", file_work: "/new", admin: "/admin/agents",
 };
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -96,6 +96,8 @@ export async function resolve(ctx: Ctx, intent: Intent): Promise<Outcome> {
   switch (intent.action.id) {
     case "go": {
       if (p.section === "account") return { kind: "go", href: `https://${ctx.env.HUB_DOMAIN}/me`, say };
+      if (p.section === "sessions") return { kind: "go", href: `https://${ctx.env.HUB_DOMAIN}/me/sessions`, say };
+      if (p.section === "models") return { kind: "go", href: `https://${ctx.env.HUB_DOMAIN}/admin/models`, say };
       return { kind: "go", href: SECTION_HREF[str("section")] ?? "/", say };
     }
     case "show": {
@@ -136,7 +138,8 @@ export async function resolve(ctx: Ctx, intent: Intent): Promise<Outcome> {
     case "open_project":
     case "open_item": {
       const m = findProject(str("project"));
-      const to = (slug: string) => (intent.action.id === "open_item" ? `/${slug}/w/${p.number}` : `/${slug}/docket`);
+      const view = str("view") || "docket";
+      const to = (slug: string) => (intent.action.id === "open_item" ? `/${slug}/w/${p.number}` : `/${slug}/${view}`);
       return m.one ? { kind: "go", href: to(m.one.slug), say } : whichProject(str("project"), m.maybe, to);
     }
     case "docket": {

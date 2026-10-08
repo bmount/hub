@@ -13,6 +13,8 @@ export type Env = {
   GOOGLE_CLIENT_SECRET?: string;
   /** AES-GCM key (32 bytes, base64) sealing provider keys at rest (admin spec 10.2). */
   HUB_SECRETS_KEY?: string;
+  /** Bearer for POST /internal/evals/intent; unset, the route does not exist. */
+  EVAL_KEY?: string;
   /** The Ardi git host (service binding); absent means git URLs answer 503. */
   ARDI?: Fetcher;
   /** One SQLite object per channel, named `<tenant_id>:<conversation_id>` (messaging spec 9.1). */

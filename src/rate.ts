@@ -30,6 +30,8 @@ export const RATE_RULES = {
   voice_identity: { limit: 240, windowMs: RATE_WINDOW_MS },
   // The "What do you want to do?" box: one small model call each, per person, per hour.
   intent_identity: { limit: 200, windowMs: RATE_WINDOW_MS },
+  // Eval runs against real models: a few an hour, whoever holds the key.
+  eval_runs: { limit: 10, windowMs: RATE_WINDOW_MS },
 } as const;
 export type RateBucket = keyof typeof RATE_RULES;
 

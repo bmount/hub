@@ -8,8 +8,10 @@ import { intentInstructions, parseIntent, type Intent } from "./catalog";
 /** One exchange: what they said, and the model's follow-up questions, in order. */
 export type Turn = { who: "person" | "pimwell"; text: string };
 
-export async function interpret(env: Env, turns: Turn[], ledger: { tenant_id: string; identity_id: string; session_id: string | null }): Promise<Intent> {
+export type Ledger = { tenant_id: string; identity_id: string; session_id: string | null; project_id?: string | null; client?: string };
+
+export async function interpret(env: Env, turns: Turn[], ledger: Ledger, purpose = "fast"): Promise<Intent> {
   const input = turns.slice(-6).map((t) => `${t.who === "person" ? "Person" : "You asked"}: ${t.text.slice(0, 1000)}`).join("\n");
-  const r = await ask(env, "fast", input, { ...ledger, instructions: intentInstructions(), maxOutputTokens: 400 });
+  const r = await ask(env, purpose, input, { ...ledger, instructions: intentInstructions(), maxOutputTokens: 400 });
   return parseIntent(r.text);
 }
