@@ -6,10 +6,20 @@ import type { Skill } from "./index";
 export function onboardBody(hub: string): string {
   return `Your person asked you to set up Pimwell for them. Work through these steps in order, and tell them what you did at the end. Ask them only what you cannot find out yourself.
 
+**0. Account: your person's, never yours**
+- Pimwell has no public sign-up. People join an organization by invitation, or by signing in with Google when the organization allows their address.
+- Don't try to create an account, and never handle your person's password, passkey or verification codes.
+- If your person can't sign in at https://${hub}/login, stop. Tell them to ask an admin of their organization for an invite (People → Invite someone), then sign in themselves.
+- If they can sign in, the organizations they belong to are listed at https://${hub}. Each one is at https://<org>.${hub}. If there are several, ask which one.
+
 **1. Connect**
-- Find the organization. Your person signs in at https://${hub}; their organizations are listed there, each at https://<org>.${hub}. If they belong to several, ask which one.
-- Add the MCP server \`https://<org>.${hub}/mcp\` to your client. It uses OAuth: your person approves the connection in their browser. Ask them to grant **read and write**, so you can file work and register apps.
-- Call \`whoami\`, then \`capabilities\`, then \`skill_read\` with \`start-here\`.
+
+Add the MCP server \`https://<org>.${hub}/mcp\` to your client. It uses OAuth: your client opens a browser page, your person signs in if needed, and they approve the connection. Ask them to grant **read and write**, so you can file work and register apps.
+- **Claude Code:** \`claude mcp add --transport http pimwell https://<org>.${hub}/mcp\`, then run \`/mcp\` and choose pimwell to authenticate.
+- **Claude or ChatGPT on the web or desktop:** your person adds a custom connector with that URL in the app's connector settings. You can't do this for them; tell them the URL.
+- **Any other MCP client:** add a remote (streamable HTTP) MCP server with that URL. The client discovers the sign-in itself.
+
+Then call \`whoami\`, \`capabilities\`, and \`skill_read\` with \`start-here\`. If \`whoami\` fails, the connection wasn't approved; ask your person to finish the browser step.
 
 **2. Report your own AI usage**
 - After each working session, call \`usage_report\` with the calls you made: provider, model, input_tokens, output_tokens, and cached_tokens if known. Add cost_usd only if your tool reports it.
