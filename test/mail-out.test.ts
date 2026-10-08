@@ -12,8 +12,8 @@ const ctx = {} as ExecutionContext;
 const HOST = "acme.pimwell.test";
 afterEach(() => setTestTransport(null));
 
-function inbound(from: string, to: string, subject: string) {
-  const raw = `From: ${from}\r\nTo: ${to}\r\nSubject: ${subject}\r\nMessage-ID: <orig-${Math.random().toString(36).slice(2)}@example.com>\r\nContent-Type: text/plain\r\n\r\nHello\r\n`;
+function inbound(from: string, to: string, subject: string, cc: string[] = []) {
+  const raw = `From: ${from}\r\nTo: ${to}\r\n${cc.length ? `Cc: ${cc.join(", ")}\r\n` : ""}Subject: ${subject}\r\nMessage-ID: <orig-${Math.random().toString(36).slice(2)}@example.com>\r\nContent-Type: text/plain\r\n\r\nHello\r\n`;
   const bytes = new TextEncoder().encode(raw);
   return {
     from, to, headers: new Headers({ "message-id": "<orig@example.com>", subject }), rawSize: bytes.length,
@@ -65,7 +65,7 @@ describe("outbound mail", () => {
     expect(w.sent[0]).toMatchObject({ from: "acme.scout@pimwell.test", to: "pat@example.com" });
   });
 
-  it("writes only to people who wrote to that address in the last 30 days", async () => {
+  it("people write only to those who wrote in the last 30 days; agents to members who wrote, at any time", async () => {
     const w = await world();
     await w.call(w.ada, "mail.sending", { on: true });
     expect((await w.call(w.bot, "mail.send", { to: "pat@example.com", subject: "Follow-up", body: "Hi" })).status).toBe(200);
@@ -75,8 +75,10 @@ describe("outbound mail", () => {
     expect((await w.call(w.pat, "mail.send", { to: "pat@example.com", subject: "Update", body: "x", from_project: "site" })).status).toBe(200);
     expect((await w.call(w.bot, "mail.send", { to: "pat@example.com", subject: "a\r\nBcc: x@y.z", body: "x" })).status).toBe(400);
     await env.HUB_DB.prepare("UPDATE inbound_mail SET received_at = received_at - 31 * 86400000").run();
-    expect((await w.call(w.bot, "mail.send", { to: "pat@example.com", subject: "Late", body: "x" })).status).toBe(403);
-    expect((await w.call(w.bot, "mail.reply", { id: w.agentMail, body: "Late" })).status).toBe(403);
+    // A member who wrote to the agent stays reachable; the 30-day window is for people writing from project addresses.
+    expect((await w.call(w.bot, "mail.send", { to: "pat@example.com", subject: "Late", body: "x" })).status).toBe(200);
+    expect((await w.call(w.bot, "mail.reply", { id: w.agentMail, body: "Late" })).status).toBe(200);
+    expect((await w.call(w.pat, "mail.send", { to: "pat@example.com", subject: "Late", body: "x", from_project: "site" })).status).toBe(403);
   });
 
   it("caps each sender at 50 a day", async () => {
@@ -93,5 +95,43 @@ describe("outbound mail", () => {
     expect(raw).toContain("Subject: =?UTF-8?B?");
     expect(() => buildMime({ from: "a@pimwell.test", to: "b@example.com", subject: "x\r\nBcc: c@d.e", text: "ok", messageId: "<x@pimwell.test>", date: new Date(0), inReplyTo: null, utf8: true })).toThrow();
     expect(() => buildMime({ from: "a@pimwell.test", to: "b@example.com", subject: "x", text: "é", messageId: "<x@pimwell.test>", date: new Date(0), inReplyTo: null })).toThrow();
+  });
+
+  it("lets agents write to members who wrote to them or were copied by a member, and to no one else", async () => {
+    const w = await world();
+    await w.call(w.ada, "mail.sending", { on: true });
+    await seedHuman("kim@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
+    await seedHuman("lee@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
+    // Pat writes to the agent, copying Kim (a member) and someone outside the organization.
+    await handleEmail(inbound("pat@example.com", "acme.scout@pimwell.test", "Launch plan", ["kim@example.com", "outside@example.org"]), env, ctx);
+    const copiedMail = (await env.HUB_DB.prepare("SELECT id, copied FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string; copied: string }>())!;
+    expect(JSON.parse(copiedMail.copied)).toEqual(["kim@example.com", "outside@example.org"]);
+
+    expect((await w.call(w.bot, "mail.send", { to: "kim@example.com", subject: "Plan", body: "Kim, here is the plan." })).status).toBe(200);
+    const outsider = await w.call(w.bot, "mail.send", { to: "outside@example.org", subject: "Plan", body: "x" });
+    expect(outsider.status).toBe(403);
+    expect(outsider.detail).toContain("not a member");
+    const lee = await w.call(w.bot, "mail.send", { to: "lee@example.com", subject: "Plan", body: "x" });
+    expect(lee.status).toBe(403);
+    expect(lee.detail).toContain("hasn't written to you");
+    // Several recipients: all must qualify; one message, every recipient in its headers.
+    expect((await w.call(w.bot, "mail.send", { to: "pat@example.com, kim@example.com", cc: "lee@example.com", subject: "x", body: "x" })).status).toBe(403);
+    w.sent.length = 0;
+    expect((await w.call(w.bot, "mail.send", { to: "pat@example.com", cc: "kim@example.com", subject: "Both of you", body: "x" })).status).toBe(200);
+    expect(w.sent.map((m) => m.to).sort()).toEqual(["kim@example.com", "pat@example.com"]);
+    expect(w.sent[0]!.raw).toContain("Cc: kim@example.com");
+    // Reply all: the members it was addressed to; the outsider is left out, and named.
+    w.sent.length = 0;
+    const all = await w.call(w.bot, "mail.reply", { id: copiedMail.id, body: "Thanks, both.", all: true });
+    expect(all.status).toBe(200);
+    expect(all.result).toMatchObject({ to: "pat@example.com, kim@example.com", left_out: ["outside@example.org"] });
+    expect(w.sent.map((m) => m.to).sort()).toEqual(["kim@example.com", "pat@example.com"]);
+    // A member who withdrew consent is never written to.
+    await env.HUB_DB.prepare("INSERT INTO consent (id, email, tenant_id, kind, granted_at, revoked_at, source_message_id, evidence) VALUES ('c-kim', 'kim@example.com', NULL, 'inbound_email', 1, 2, NULL, NULL)").run();
+    expect((await w.call(w.bot, "mail.send", { to: "kim@example.com", subject: "x", body: "x" })).status).toBe(403);
+    // Kim leaves the organization: no longer reachable.
+    await env.HUB_DB.prepare("DELETE FROM consent WHERE id = 'c-kim'").run();
+    await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = (SELECT id FROM identity WHERE email = 'kim@example.com')").run();
+    expect((await w.call(w.bot, "mail.send", { to: "kim@example.com", subject: "x", body: "x" })).status).toBe(403);
   });
 });

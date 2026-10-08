@@ -1,4 +1,4 @@
-export type MimeInput = {
+export type MimeInput = { cc?: string[];
   from: string;
   to: string;
   subject: string;
@@ -42,6 +42,7 @@ export function buildMime(m: MimeInput): string {
   const lines = [
     header("From", m.from),
     header("To", m.to),
+    ...(m.cc?.length ? [header("Cc", m.cc.join(", "))] : []),
     m.utf8 ? subjectHeader(m.subject) : header("Subject", m.subject),
     header("Date", m.date.toUTCString()),
     header("Message-ID", m.messageId),

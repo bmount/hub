@@ -54,7 +54,7 @@ export async function resolveMailAddress(db: D1Database, hubDomain: string, to: 
   return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: null, project_slug: null, project_name: null, recipient_id: a.id, recipient_name: a.display_name };
 }
 
-type Parsed = { subject: string; text: string; attachments: Array<{ filename: string | null; mime_type: string; size: number }>; forwarded: boolean; date: string | null };
+type Parsed = { subject: string; text: string; attachments: Array<{ filename: string | null; mime_type: string; size: number }>; forwarded: boolean; date: string | null; addressed: string[] };
 
 function htmlToText(html: string): string {
   return html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|h\d)>/gi, "\n")
@@ -79,7 +79,11 @@ export async function parseMail(raw: ReadableStream<Uint8Array> | ArrayBuffer | 
     } catch { /* an unreadable attachment stays listed, unread */ }
   }
   if (text.length > MAX_TEXT_CHARS) text = text.slice(0, MAX_TEXT_CHARS) + "\n\n[truncated]";
-  return { subject: (m.subject ?? "").slice(0, 300), text, attachments, forwarded: inlineFwd || rfc822.length > 0, date: m.date ?? null };
+  // Everyone in To and Cc, groups flattened, lowercased.
+  type Addr = { address?: string; group?: Addr[] };
+  const flat = (xs: Addr[] | undefined): string[] => (xs ?? []).flatMap((a) => (a.group ? flat(a.group) : a.address ? [a.address.trim().toLowerCase()] : []));
+  const addressed = [...new Set([...flat(m.to as Addr[] | undefined), ...flat(m.cc as Addr[] | undefined)])].filter((a) => a.length <= 254).slice(0, 50);
+  return { subject: (m.subject ?? "").slice(0, 300), text, attachments, forwarded: inlineFwd || rfc822.length > 0, date: m.date ?? null, addressed };
 }
 
 function receipt(target: MailTarget, subject: string): { subject: string; text: string } {
@@ -127,11 +131,12 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
   const verdict = proven ? "admitted" : "quarantined";
   const id = ulid(now);
   await env.HUB_DB.prepare(
-    `INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(id, target.tenant_id, target.project_id, target.recipient_id ?? null, identity.id, from, message.to.trim().toLowerCase(), parsed.subject, safeMessageId(message.headers.get("message-id")),
     parsed.date, now, message.rawSize, verdict, proven ? null : "sender not proven: the receipt could not be sent, so the mail may be forged",
-    parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0).run();
+    parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0,
+    JSON.stringify(parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`)))).run();
   await recordEvent(env.HUB_DB, {
     tenant_id: target.tenant_id, identity_id: identity.id, session_id: null, kind: proven ? "mail.received" : "mail.quarantined", target_kind: "inbound_mail", target_id: id,
     summary: `${proven ? "Mail received" : "Mail quarantined"} for ${target.recipient_name ? `the agent ${target.recipient_name}` : target.project_slug ?? "the organization inbox"}: ${parsed.subject || "(no subject)"}`.slice(0, 300),
