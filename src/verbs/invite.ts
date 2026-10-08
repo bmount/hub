@@ -1,4 +1,4 @@
-import { esc } from "../html";
+import { COPY_SCRIPT, esc } from "../html";
 import { defineVerb } from "./table";
 import { optString, reqEnum, reqString } from "./params";
 import { badRequest, conflict, forbidden, notFound } from "../errors";
@@ -21,7 +21,8 @@ export const inviteCreate = defineVerb({
   renderForm: (r) => {
     const x = r as { invite_url: string; expires_at: number; email?: string };
     return `<h1>Invite ready</h1><p class="lede">Send this link yourself. It works once, until ${new Date(x.expires_at).toISOString().slice(0, 10)}, and is not shown again.</p>
-<p><input readonly value="${esc(x.invite_url)}" style="width:100%" onfocus="this.select()" aria-label="Invite link"></p>
+<p><input id="invite-link" readonly value="${esc(x.invite_url)}" style="width:100%" onfocus="this.select()" aria-label="Invite link"></p>
+<p><button type="button" class="copy" data-copy="#invite-link">Copy link</button></p>${COPY_SCRIPT}
 <p>Or they can simply sign in with Google at pimwell.com using the invited address; the invite is accepted on the way in.</p>
 <p><a href="/people">Back to people</a></p>`;
   },

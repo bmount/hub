@@ -64,7 +64,7 @@ describe("voice", () => {
     expect(ledger.results.map((x) => x.purpose)).toEqual(["transcribe", "fast"]);
 
     // From the hub's own home page too, with the names from every organization they belong to.
-    const apex = await SELF.fetch("https://pimwell.test/voice/transcribe", { method: "POST", headers: { cookie: h.cookie!, origin: "https://pimwell.test", "x-pimwell-voice": "1" }, body: clip("") });
+    const apex = await SELF.fetch("https://pimwell.test/voice/transcribe", { method: "POST", headers: { cookie: (h as Record<string, string>).cookie!, origin: "https://pimwell.test", "x-pimwell-voice": "1" }, body: clip("") });
     expect(apex.status, await apex.clone().text()).toBe(200);
     expect(seen.prompt).toContain("SkyLedger");
   });

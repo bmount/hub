@@ -57,6 +57,9 @@ details.edit label>input,details.edit label>textarea{display:block;width:100%;ma
 .intent-card .say{margin:0 0 8px;font-weight:600}.intent-card .say:last-child{margin:0}.intent-card label.f{display:block;margin:0 0 10px}.intent-card label.f>span{display:block;font-size:var(--fs-sm);color:var(--muted);margin-bottom:2px}
 .intent-card label.f input,.intent-card label.f textarea,.intent-card label.f select{display:block;width:100%}.intent-card .row{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
 @media (max-width:760px){.intent-card .row{grid-template-columns:1fr}}
+.extra-check{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r);padding:12px 16px;margin:10px 0;max-width:40rem}
+.extra-check h2{margin:0 0 4px}.extra-check p{margin:4px 0 10px}.extra-check .actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.extra-check .sent{color:var(--ink);background:var(--accent-soft);padding:8px 10px;border-radius:var(--r-sm)}
+button.copy{min-width:6rem}
 .only-s{display:none}
 .assist{display:flex;flex-direction:column;min-height:100%;max-width:48rem;margin:0 auto;font-size:var(--fs-chat);line-height:1.55}
 .assist-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.assist-top .chips{margin:0}

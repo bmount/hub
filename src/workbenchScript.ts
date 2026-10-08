@@ -366,6 +366,18 @@ export const WORKBENCH_JS = String.raw`
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && t.matches && t.matches("textarea[data-enter-submits]") && t.form) { e.preventDefault(); if (t.value.trim()) t.form.requestSubmit(); }
   });
 
+  // Copy buttons (data-copy="#id"): also on panes swapped in, where inline scripts don't run.
+  if (!window.__pwCopy) {
+    window.__pwCopy = 1;
+    document.addEventListener("click", function (e) {
+      var b = e.target.closest && e.target.closest("[data-copy]"); if (!b) return;
+      var t = document.querySelector(b.getAttribute("data-copy")); if (!t) return;
+      var v = t.tagName === "INPUT" || t.tagName === "TEXTAREA" ? t.value : t.textContent;
+      var done = function () { var o = b.textContent; b.textContent = "Copied"; setTimeout(function () { b.textContent = o; }, 1600); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done, function () {});
+    });
+  }
+
   // Quick filter over the visible list.
   document.addEventListener("input", function (e) {
     var f = e.target; if (!f.matches || !f.matches("input[data-filter]")) return;

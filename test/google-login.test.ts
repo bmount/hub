@@ -35,9 +35,11 @@ afterEach(() => setGoogleFetchForTest(null));
 type Who = { email: string; sub?: string; hd?: string; email_verified?: boolean; name?: string };
 
 /** Runs the whole browser flow against a stand-in Google and returns the callback response. */
-async function signIn(who: Who, opts: { next?: string; tamperState?: boolean; noCookie?: boolean } = {}) {
+async function signIn(who: Who, opts: { next?: string; tamperState?: boolean; noCookie?: boolean; session?: string; reproof?: boolean } = {}) {
   const ip = `203.0.113.${++ipSeq % 250}`;
-  const start = await SELF.fetch(`https://${HOST}/login/google${opts.next ? `?next=${opts.next}` : ""}`, { redirect: "manual", headers: { "cf-connecting-ip": ip } });
+  const qs = [opts.reproof ? "reproof=1" : "", opts.next ? `next=${encodeURIComponent(opts.next)}` : ""].filter(Boolean).join("&");
+  const sess = opts.session ? `pmw_session=${opts.session}` : "";
+  const start = await SELF.fetch(`https://${HOST}/login/google${qs ? `?${qs}` : ""}`, { redirect: "manual", headers: { "cf-connecting-ip": ip, ...(sess ? { cookie: sess } : {}) } });
   expect(start.status).toBe(302);
   const auth = new URL(start.headers.get("location")!);
   expect(auth.origin + auth.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
@@ -61,7 +63,7 @@ async function signIn(who: Who, opts: { next?: string; tamperState?: boolean; no
   });
   const cbState = opts.tamperState ? state.slice(0, -2) + "xx" : state;
   const res = await SELF.fetch(`https://${HOST}/login/google/callback?code=c0de&state=${cbState}`, {
-    redirect: "manual", headers: opts.noCookie ? {} : { cookie: `pmw_gstate=${state}` },
+    redirect: "manual", headers: opts.noCookie ? {} : { cookie: [`pmw_gstate=${state}`, sess].filter(Boolean).join("; ") },
   });
   return { res, exchanged: exchanged as URLSearchParams | null };
 }
@@ -189,3 +191,54 @@ describe("Sign in with Google", () => {
     expect(replay.status).toBe(400);
   });
 });
+
+describe("the extra check", () => {
+  const stale = (id: string) => env.HUB_DB.prepare("UPDATE session SET last_proof_at = 0 WHERE id = ?").bind(id).run();
+
+  it("shows the check up front, confirms with Google in this session, and returns to the form", async () => {
+    const t = await seedTenant("acme");
+    const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    await stale(pat.session.id);
+    const h = cookieHeaders(pat.token, "acme.pimwell.test");
+    const page = await (await SELF.fetch("https://acme.pimwell.test/people?connect=1&name=Build%20box", { headers: h })).text();
+    expect(page).toContain("One extra check");
+    expect(page).toContain("https://pimwell.test/login/google?reproof=1&amp;next=acme%2Fpeople%3Fconnect%3D1%26name%3DBuild%2520box");
+    expect(page).not.toContain('action="/api/agent.connect"');
+
+    const { res } = await signIn({ email: "pat@example.com" }, { session: pat.token, reproof: true, next: "acme/people?connect=1&name=Build%20box" });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("https://acme.pimwell.test/people?connect=1&name=Build%20box");
+    expect(sessionSet(res)).toBe(false);
+    const after = await (await SELF.fetch("https://acme.pimwell.test/people?connect=1&name=Build%20box", { headers: h })).text();
+    expect(after).toContain('action="/api/agent.connect"');
+    expect(after).toContain('value="Build box"');
+  });
+
+  it("never switches who you are, and keeps root on email", async () => {
+    const t = await seedTenant("acme");
+    const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    await seedHuman("kim@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    const { res } = await signIn({ email: "kim@example.com" }, { session: pat.token, reproof: true, next: "acme/people?connect=1" });
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain("different account");
+    const root = await seedHuman("root@example.com", { is_root: true });
+    const r = await SELF.fetch(`https://${HOST}/login/google?reproof=1`, { redirect: "manual", headers: { cookie: `pmw_session=${root.token}`, "cf-connecting-ip": "203.0.113.77" } });
+    expect(r.status).toBe(403);
+  });
+
+  it("emails a link from the organization's page and comes straight back saying so", async () => {
+    const t = await seedTenant("acme");
+    const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    await stale(pat.session.id);
+    const post = (body: string, origin = "https://acme.pimwell.test") => SELF.fetch(`https://${HOST}/login`, { method: "POST", redirect: "manual",
+      headers: { cookie: `pmw_session=${pat.token}`, origin, "content-type": "application/x-www-form-urlencoded", "cf-connecting-ip": "203.0.113.9" }, body });
+    const r = await post("reproof=1&return=1&next=acme%2Fpeople%3Fconnect%3D1");
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe("https://acme.pimwell.test/people?connect=1&check=sent");
+    const page = await (await SELF.fetch(r.headers.get("location")!, { headers: cookieHeaders(pat.token, "acme.pimwell.test") })).text();
+    expect(page).toContain("A link is on its way");
+    expect((await post("email=pat%40example.com")).status).toBe(403);
+    expect((await post("reproof=1&return=1", "https://evil.example")).status).toBe(403);
+  });
+});
+

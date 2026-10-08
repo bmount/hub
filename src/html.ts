@@ -106,3 +106,9 @@ export function onramp(opts: { connect: boolean; invite: boolean }): string {
   if (opts.invite) a.push(`<a href="/people?invite=1"><b>Invite a person</b><span>A link to send them; they sign in with Google or email</span></a>`);
   return a.length ? `<div class="onramp">${a.join("")}</div>` : "";
 }
+
+/**
+ * Copy buttons: a button with data-copy="#id" copies that element's text (or an input's value) and says so. The
+ * workbench script handles it on swapped panes; this inline copy covers a page loaded on its own.
+ */
+export const COPY_SCRIPT = `<script>(function(){if(window.__pwCopy)return;window.__pwCopy=1;document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("[data-copy]");if(!b)return;var t=document.querySelector(b.getAttribute("data-copy"));if(!t)return;var v=t.value!==undefined&&t.tagName!=="PRE"?t.value:t.textContent;var done=function(){var o=b.textContent;b.textContent="Copied";setTimeout(function(){b.textContent=o;},1600);};if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(v).then(done,function(){});else{var a=document.createElement("textarea");a.value=v;document.body.appendChild(a);a.select();try{document.execCommand("copy");done();}catch(x){}a.remove();}});})();</script>`;

@@ -10,6 +10,7 @@ import { getVerb } from "../verbs/table";
 import { runVerb } from "../verbs/dispatch";
 import { DATA_NOTE } from "../mcp/render";
 import { format } from "../http/assistantPages";
+import { extraCheck, proofFresh } from "../http/extraCheck";
 
 /** "show": the person's own read verb, with their own rights, as they'd get from the API or MCP. The model never sees it. */
 const SHOW: Record<string, { verb: string; page: string; title: string }> = {
@@ -171,6 +172,7 @@ ${field("Details", `<textarea data-voice name="body" rows="3" maxlength="20000">
     }
     case "invite_person": {
       if (!admin) return card("Only an admin can invite people. Ask one of your organization's admins.", "");
+      if (!proofFresh(ctx)) return card(say, extraCheck(ctx.env, ctx, `/people?invite=1${(["email", "name", "role"] as const).map((k) => (str(k) ? `&${k}=${encodeURIComponent(str(k))}` : "")).join("")}`, "Invites let someone into your organization, so we confirm it's really you first.", false));
       const role = str("role") || "member";
       const roles = ["member", "reader", ...(ctx.identity!.is_root === 1 ? ["admin"] : [])];
       return card(say || "Check the address, then make the invite link.", `<form method="post" action="/api/invite.create">
@@ -181,6 +183,7 @@ ${field("Role", `<select name="role">${roles.map((r) => option(r, r, r === role)
     }
     case "connect_agent": {
       if (!member) return card("Readers can't connect agents. Ask an admin to make you a member.", "");
+      if (!proofFresh(ctx)) return card(say, extraCheck(ctx.env, ctx, `/people?connect=1${str("name") ? `&name=${encodeURIComponent(str("name"))}` : ""}`, "Agents act on your behalf, so we confirm it's really you before connecting one.", false));
       return card(say || "Name the agent, then make its one-time connect link.", `<form method="post" action="/api/agent.connect">
 ${field("Agent's name", `<input name="display_name" required maxlength="80" value="${esc(str("name"))}" placeholder="Build box">`)}
 <p><button type="submit">Make connect link</button></p></form>`);

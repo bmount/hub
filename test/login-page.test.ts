@@ -44,7 +44,7 @@ describe("GET /login", () => {
   it("offers a confirmation link to a signed-in browser when reproof=1", async () => {
     const h = await seedHuman("a@example.com");
     const html = await (await SELF.fetch("https://pimwell.test/login?reproof=1&next=acme", { headers: { cookie: `pmw_session=${h.token}` } })).text();
-    expect(html).toContain("Confirm it");
+    expect(html).toContain("One extra check");
     expect(html).toContain('name="reproof" value="1"');
     expect(html).toContain('name="next" value="acme"');
     expect(html).toContain("a@example.com");

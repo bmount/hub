@@ -1,7 +1,7 @@
 import { defineVerb } from "./table";
 import { optString, reqString } from "./params";
 import { badRequest, conflict, forbidden, HubError } from "../errors";
-import { esc } from "../html";
+import { COPY_SCRIPT, esc } from "../html";
 import { agentMcpUrl, createConnectLink } from "../auth/connect";
 import { archiveAgent, createAgent, getAgentById } from "../db/agents";
 import { getIdentityByEmail, normalizeEmail } from "../db/identities";
@@ -126,8 +126,9 @@ export const agentConnect = defineVerb({
   },
   renderForm: (r: ConnectResult) => `<a class="back" href="/people">‹ People</a><h1>Connect ${esc(r.agent.display_name)}</h1>
 <p class="lede">Paste this to your agent. It works once, until ${esc(new Date(r.expires_at).toISOString().slice(0, 16).replace("T", " "))} UTC. Copy it now: it won't be shown again.</p>
-<pre>Connect to Pimwell: claim this one-time link with an HTTP POST, then follow the instructions in the answer.
+<pre id="connect-msg">Connect to Pimwell: claim this one-time link with an HTTP POST, then follow the instructions in the answer.
 ${esc(r.link)}</pre>
+<p><button type="button" class="copy" data-copy="#connect-msg">Copy</button></p>${COPY_SCRIPT}
 <p>The agent gets its own token for <code>${esc(r.mcp_url)}</code>, as <code>${esc(r.agent.address)}</code>. It answers to you and can do what you can, up to a member's rights. If the link expires or leaks, make a new one from the agent's page; an unclaimed link simply stops working.</p>
 <p><a href="/people/${esc(encodeURIComponent(r.agent.address))}">Go to ${esc(r.agent.display_name)}</a></p>`,
 });

@@ -7,7 +7,7 @@ import { sessionCookie } from "../auth/cookie";
 import { cleanNext, landingUrl } from "../auth/login";
 import { admitGoogle } from "../auth/googleAdmit";
 import { googleJwks, pkceChallenge, randomToken, TokenError, verifyGoogleIdToken } from "../auth/googleToken";
-import { createBrowserSession } from "../db/sessions";
+import { createBrowserSession, setLastProof } from "../db/sessions";
 import { recordProof } from "../db/proofs";
 import { recordEvent } from "../db/events";
 import { takeRate } from "../rate";
@@ -23,6 +23,11 @@ const STATE_TTL_S = 600;
 let googleFetch: typeof fetch = (input, init) => fetch(input, init);
 export function setGoogleFetchForTest(f: typeof fetch | null): void {
   googleFetch = f ?? ((input, init) => fetch(input, init));
+}
+
+/** Regular people may confirm with Google; the hub's root confirms by email (owner, 2026-10-08). */
+export function googleReproofAllowed(identity: { is_root: number }): boolean {
+  return identity.is_root !== 1;
 }
 
 export function googleConfigured(env: Env): boolean {
@@ -42,7 +47,8 @@ function readStateCookie(request: Request): string | null {
   return m ? m[1]! : null;
 }
 
-type Pending = { nonce: string; verifier: string; next: string | null };
+/** `reproof`: an extra check for someone already signed in here; it refreshes their session and never switches who they are. */
+type Pending = { nonce: string; verifier: string; next: string | null; reproof?: { identity_id: string; session_id: string } };
 
 function problem(title: string, text: string, status = 200, clearState = true): Response {
   const body = `<h1>${esc(title)}</h1><p>${text}</p><p><a href="/login">Back to sign in</a></p>`;
@@ -56,11 +62,19 @@ export async function googleStartPage(request: Request, env: Env): Promise<Respo
   if (!(await takeRate(env.RATE, "ip", ctx.ip, Date.now()))) return problem("Too many attempts", "Wait a minute and try again.", 429, false);
   const state = randomToken(), nonce = randomToken(), verifier = randomToken(48);
   const pending: Pending = { nonce, verifier, next: cleanNext(new URL(request.url).searchParams.get("next")) };
+  let hint: string | null = null;
+  if (new URL(request.url).searchParams.get("reproof") === "1") {
+    if (!ctx.identity || ctx.identity.kind !== "human" || ctx.session?.kind !== "browser") return problem("Sign in first", "The extra check is for someone already signed in.", 400, false);
+    if (!googleReproofAllowed(ctx.identity)) return problem("Confirm by email", "The hub's root account confirms with an emailed link.", 403, false);
+    pending.reproof = { identity_id: ctx.identity.id, session_id: ctx.session.id };
+    hint = ctx.identity.email;
+  }
   await env.OAUTH_KV.put(`google:${state}`, JSON.stringify(pending), { expirationTtl: STATE_TTL_S });
   const q = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID!, redirect_uri: redirectUri(env), response_type: "code", scope: "openid email profile",
     state, nonce, code_challenge: await pkceChallenge(verifier), code_challenge_method: "S256", prompt: "select_account",
   });
+  if (hint) q.set("login_hint", hint);
   return new Response(null, {
     status: 302,
     headers: { location: `${AUTH_URL}?${q}`, "set-cookie": stateCookie(state, STATE_TTL_S), "cache-control": "no-store" },
@@ -122,6 +136,20 @@ export async function googleCallbackPage(request: Request, env: Env): Promise<Re
     return problem(title, esc(text), 403);
   }
   const { identity } = admitted;
+  if (pending.reproof) {
+    // The extra check confirms the person already here, in this browser's session; nobody else.
+    const here = await buildContext(request, env, now);
+    if (identity.id !== pending.reproof.identity_id) {
+      return problem("That's a different account", `That Google account is ${esc(claims.email)}. You're signed in here as ${esc(here.identity?.email ?? "someone else")}: choose that account, or confirm by email.`, 403);
+    }
+    if (here.session?.id !== pending.reproof.session_id) return problem("That check started in another sign-in", "Start the check again from the page you were on.", 400);
+    await recordProof(env.HUB_DB, { identity_id: identity.id, kind: "google", subject: claims.email }, now);
+    await setLastProof(env.HUB_DB, here.session.id, now);
+    await recordEvent(env.HUB_DB, { tenant_id: null, identity_id: identity.id, session_id: here.session.id, kind: "login.reproof", target_kind: "identity", target_id: identity.id, summary: "Confirmed with Google (extra check)" }, now);
+    const h = new Headers({ location: await landingUrl(env, identity, pending.next), "cache-control": "no-store" });
+    h.append("set-cookie", stateCookie("", 0));
+    return new Response(null, { status: 303, headers: h });
+  }
   await recordProof(env.HUB_DB, { identity_id: identity.id, kind: "google", subject: claims.email }, now);
   const { session, token } = await createBrowserSession(env.HUB_DB, identity.id, now);
   const extra = [

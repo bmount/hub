@@ -3,10 +3,10 @@ import { esc, htmlResponse, page } from "../html";
 import { classifyHost } from "../tenant";
 import { buildContext } from "../auth/context";
 import { clearSessionCookie, sessionCookie } from "../auth/cookie";
-import { NEUTRAL_LOGIN_MESSAGE, cleanNext, consumeLink, openLink, requestLink } from "../auth/login";
+import { NEUTRAL_LOGIN_MESSAGE, cleanNext, consumeLink, landingUrl, openLink, requestLink } from "../auth/login";
 import type { LinkPurpose } from "../db/types";
 import { notFoundPage } from "./pages";
-import { googleConfigured } from "./googleLogin";
+import { googleConfigured, googleReproofAllowed } from "./googleLogin";
 
 export function isApex(request: Request, env: Env): boolean {
   return classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN).kind === "apex";
@@ -47,9 +47,10 @@ export async function authLinkPage(request: Request, env: Env): Promise<Response
   const action = `/auth/${token}` + (next ? `?next=${next}` : "");
   const reproof = open.link.purpose === "reproof";
   const heading = reproof ? "Confirm it's you" : "Sign in to Pimwell";
+  const label = reproof ? (next && next.includes("/") ? "Confirm and go back" : "Confirm") : "Sign in";
   const body = `<h1>${esc(heading)}</h1>
 <p>Continue as <strong>${esc(open.identity.email)}</strong>.</p>
-<form method="post" action="${esc(action)}"><button type="submit">${reproof ? "Confirm" : "Sign in"}</button></form>`;
+<form method="post" action="${esc(action)}"><button type="submit">${esc(label)}</button></form>`;
   return htmlResponse(page(heading, body));
 }
 
@@ -95,13 +96,15 @@ ${nextInput(next)}
 ${inboundHint(env)}`;
 }
 
-function reproofBody(env: Env, email: string, next: string | null): string {
-  return `<h1>Confirm it's you</h1>
-<p>This action needs a recent proof that you control <strong>${esc(email)}</strong>.</p>
+function reproofBody(env: Env, identity: { email: string; is_root: number }, next: string | null): string {
+  const google = googleConfigured(env) && googleReproofAllowed(identity);
+  return `<h1>One extra check</h1>
+<p>This acts for you, so we confirm it's really you, <strong>${esc(identity.email)}</strong>. It takes a few seconds, and then you're back where you were.</p>
+${google ? `<p><a class="button" href="/login/google?reproof=1${next ? `&amp;next=${esc(encodeURIComponent(next))}` : ""}">Continue with Google</a></p>` : ""}
 <form method="post" action="/login">
 <input type="hidden" name="reproof" value="1">
 ${nextInput(next)}
-<button type="submit">Email me a confirmation link</button>
+<button type="submit"${google ? ' class="quiet"' : ""}>${google ? "Email me a link instead" : "Email me a confirmation link"}</button>
 </form>
 <p>If you have never written to the hub, send any message to <strong>login@${esc(env.HUB_DOMAIN)}</strong> from that address and open the link in the reply in this browser.</p>`;
 }
@@ -113,15 +116,23 @@ export async function loginPage(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const next = cleanNext(url.searchParams.get("next"));
   if (url.searchParams.get("reproof") === "1" && ctx.identity && ctx.session?.kind === "browser") {
-    return htmlResponse(page("Confirm it's you", reproofBody(env, ctx.identity.email, next)), 200, extra);
+    return htmlResponse(page("One extra check", reproofBody(env, ctx.identity, next)), 200, extra);
   }
   const note = ctx.identity ? `<p>You are signed in as <strong>${esc(ctx.identity.email)}</strong>.</p>` : "";
   return htmlResponse(page("Sign in", loginBody(env, next, note)), 200, extra);
 }
 
+/** A form on one of this hub's organization pages (same site, our own pages). Used only for the extra check's email. */
+function fromHubPage(request: Request, env: Env): boolean {
+  const origin = request.headers.get("origin") ?? "";
+  const hub = env.HUB_DOMAIN.toLowerCase();
+  return /^https:\/\/[a-z0-9-]+\./.test(origin) && origin.toLowerCase().endsWith(`.${hub}`) && origin.slice(8).split(".").length === hub.split(".").length + 1;
+}
+
 export async function loginPostPage(request: Request, env: Env, waitUntil?: (p: Promise<unknown>) => void): Promise<Response> {
   if (!isApex(request, env)) return notFoundPage();
-  if (!sameOrigin(request)) return htmlResponse(page("Forbidden", `<h1>Forbidden</h1>`), 403);
+  const crossPage = !sameOrigin(request) && fromHubPage(request, env);
+  if (!sameOrigin(request) && !crossPage) return htmlResponse(page("Forbidden", `<h1>Forbidden</h1>`), 403);
   const now = Date.now();
   const ctx = await buildContext(request, env, now);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
@@ -132,6 +143,7 @@ export async function loginPostPage(request: Request, env: Env, waitUntil?: (p: 
   };
   const next = cleanNext(field("next"));
   const reproof = field("reproof") === "1";
+  if (crossPage && !reproof) return htmlResponse(page("Forbidden", `<h1>Forbidden</h1>`), 403);
   let email: string;
   let purpose: LinkPurpose;
   let session_id: string | null = null;
@@ -149,6 +161,11 @@ export async function loginPostPage(request: Request, env: Env, waitUntil?: (p: 
     .catch((e) => console.log("login request failed", e instanceof Error ? e.name : "unknown"));
   if (waitUntil) waitUntil(work);
   else await work;
+  // From the extra check on an organization's page: straight back there, which now says the link is on its way.
+  if (reproof && field("return") === "1" && ctx.identity) {
+    const back = await landingUrl(env, ctx.identity, next);
+    return new Response(null, { status: 303, headers: { location: `${back}${back.includes("?") ? "&" : "?"}check=sent`, "cache-control": "no-store", ...extra } });
+  }
   const body = reproof
     ? `<h1>Check your email</h1><p>If ${esc(email)} has written to the hub before, a confirmation link is on its way. Open it in this browser within 15 minutes.</p><p>Otherwise, send any message to <strong>login@${esc(env.HUB_DOMAIN)}</strong> from that address and open the link in the reply here.</p>`
     : `<h1>Check your email</h1><p>${esc(NEUTRAL_LOGIN_MESSAGE)}</p>${inboundHint(env)}`;

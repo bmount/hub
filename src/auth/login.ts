@@ -44,9 +44,9 @@ export function linkMail(purpose: LinkPurpose, url: string): { subject: string; 
     return {
       subject: "Confirm it's you on Pimwell",
       text: [
-        "A browser signed in as you asked to confirm a sensitive action on Pimwell.",
+        "You asked for an extra check on Pimwell, for something that acts on your behalf (such as connecting an agent).",
         "",
-        "Open this link in that same browser within 15 minutes:",
+        "Open this link in the same browser within 15 minutes. It confirms it's you and takes you straight back to where you were:",
         url,
         "",
         "If this was not you, ignore this message.",

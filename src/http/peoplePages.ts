@@ -7,6 +7,7 @@ import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
+import { extraCheck, proofFresh } from "./extraCheck";
 
 type Person = { id: string; display_name: string; email: string; kind: string; is_root: number; role: string; created_at: number; sponsor: string | null; operator_id: string | null; last_seen: number | null; open: number };
 type Invite = { id: string; email: string; role: string; display_name: string | null; created_at: number; expires_at: number; by: string | null };
@@ -29,6 +30,9 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
   const inviting = admin && url.searchParams.get("invite") === "1";
   const canConnect = rank(ctx.role) >= rank("member");
   const connecting = canConnect && url.searchParams.get("connect") === "1";
+  const fresh = proofFresh(ctx), sent = url.searchParams.get("check") === "sent";
+  const pre = (k: string) => (url.searchParams.get(k) ?? "").slice(0, 254);
+  const AGENT_WHY = "Agents act on your behalf, so we confirm it's really you before connecting one.";
   const email = who ? decodeURIComponent(who).trim().toLowerCase() : null;
   const tid = ctx.tenant.id;
   const stmts: D1PreparedStatement[] = [
@@ -64,22 +68,23 @@ ${onramp({ connect: canConnect, invite: admin })}
 
   let inspector: string | null = null; let key = "";
   if (connecting) {
+    const back = `/people?connect=1${pre("name") ? `&name=${encodeURIComponent(pre("name"))}` : ""}`;
     inspector = `<a class="back" href="/people">‹ People</a><h1>Connect an agent</h1>
 <p class="lede">For agents on machines without a browser, such as Claude Code or Codex on a server. You get a one-time link to paste to the agent; it works for 24 hours. The agent answers to you and can do what you can here, up to a member's rights.</p>
-<form method="post" action="/api/agent.connect">
-<label style="display:block">Name <input name="display_name" required maxlength="80" style="display:block;width:100%" placeholder="Build box" autofocus></label>
-<p><button type="submit">Make connect link</button></p></form>
+${fresh ? `<form method="post" action="/api/agent.connect">
+<label style="display:block">Name <input name="display_name" required maxlength="80" style="display:block;width:100%" placeholder="Build box" value="${esc(pre("name"))}" autofocus></label>
+<p><button type="submit">Make connect link</button></p></form>` : extraCheck(env, ctx, back, AGENT_WHY, sent)}
 <p class="lede">People connect their own chat apps with the assistant connection instead: <code>https://${esc(ctx.tenant.slug)}.${esc(env.HUB_DOMAIN)}/mcp</code>.</p>`;
     key = "connect";
   } else if (inviting) {
     const root = ctx.identity.is_root === 1;
     inspector = `<a class="back" href="/people">‹ People</a><h1>Invite someone</h1>
 <p class="lede">You get a single-use link to send yourself; Pimwell never emails people who haven't written to it. They can also just sign in with Google at ${esc(env.HUB_DOMAIN)} as the invited address.</p>
-<form method="post" action="/api/invite.create"><input type="hidden" name="_back" value="/people">
-<label style="display:block">Email <input name="email" type="email" required maxlength="254" style="display:block;width:100%" autofocus></label>
-<label style="display:block">Name <input name="display_name" maxlength="100" style="display:block;width:100%" placeholder="How they appear here"></label>
-<label>Role <select name="role">${option("member", "Member: files and changes work", true)}${option("reader", "Reader: sees everything, changes nothing", false)}${root ? option("admin", "Admin: manages people and settings", false) : ""}</select></label>
-<p><button type="submit">Create invite link</button></p></form>`;
+${fresh ? `<form method="post" action="/api/invite.create">
+<label style="display:block">Email <input name="email" type="email" required maxlength="254" style="display:block;width:100%" value="${esc(pre("email"))}" autofocus></label>
+<label style="display:block">Name <input name="display_name" maxlength="100" style="display:block;width:100%" placeholder="How they appear here" value="${esc(pre("name"))}"></label>
+<label>Role <select name="role">${option("member", "Member: files and changes work", pre("role") !== "reader" && pre("role") !== "admin")}${option("reader", "Reader: sees everything, changes nothing", pre("role") === "reader")}${root ? option("admin", "Admin: manages people and settings", pre("role") === "admin") : ""}</select></label>
+<p><button type="submit">Create invite link</button></p></form>` : extraCheck(env, ctx, `/people?invite=1${["email", "name", "role"].map((k) => (pre(k) ? `&${k}=${encodeURIComponent(pre(k))}` : "")).join("")}`, "Invites let someone into your organization, so we confirm it's really you first.", sent)}`;
     key = "invite";
   } else if (person) {
     const canManage = admin && person.kind === "human" && person.id !== ctx.identity.id && !person.is_root && (ctx.identity.is_root === 1 || person.role !== "admin");
@@ -98,7 +103,7 @@ ${onramp({ connect: canConnect, invite: admin })}
 ${person.sponsor ? `<dt>Answers to</dt><dd>${esc(person.sponsor)}</dd>` : ""}<dt>Here since</dt><dd>${day(person.created_at)}</dd><dt>Last active</dt><dd>${ago(person.last_seen, ctx.now)}</dd>
 <dt>Open work</dt><dd><a href="/docket?owner=${esc(encodeURIComponent(person.email))}">${person.open} item${person.open === 1 ? "" : "s"}</a></dd></dl>
 ${person.kind === "agent" && canConnect && (admin || person.operator_id === ctx.identity.id) ? `<h2>Connect</h2><p class="lede">A new one-time link, valid 24 hours, gives the agent a fresh token. Its earlier tokens keep working until they expire or are revoked.</p>
-<form method="post" action="/api/agent.connect"><input type="hidden" name="agent_id" value="${esc(person.id)}"><button type="submit" class="quiet">Make connect link</button></form>` : ""}
+${fresh ? `<form method="post" action="/api/agent.connect"><input type="hidden" name="agent_id" value="${esc(person.id)}"><button type="submit" class="quiet">Make connect link</button></form>` : extraCheck(env, ctx, `/people/${encodeURIComponent(person.email)}`, AGENT_WHY, sent)}` : ""}
 ${sponsored.length ? `<h2>Agents who answer to them</h2><ul>${sponsored.map((s) => `<li><a href="/people/${esc(encodeURIComponent(s.email))}">${esc(s.display_name)}</a></li>`).join("")}</ul>` : ""}
 ${manage}
 <h2>Recent activity</h2>${activity.length ? `<ul class="timeline">${activity.map((a) => `<li><time>${ago(a.created_at, ctx.now)}</time><span>${esc(a.summary)}</span></li>`).join("")}</ul>` : `<p class="lede">Nothing yet.</p>`}`;
