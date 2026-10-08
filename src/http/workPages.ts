@@ -306,6 +306,7 @@ export async function jumpPage(request: Request, env: Env): Promise<Response> {
       ...Object.entries(AREAS).map(([k, a]) => [a.label, `/planned/${k}`] as [string, string])];
     for (const [label, href] of sections) if (label.toLowerCase().includes(q.toLowerCase())) results.push({ label, hint: "section", href });
   }
+  if (q.length >= 2) results.push({ label: `Search everywhere for "${q}"`, hint: "search", href: `/search?q=${encodeURIComponent(q)}` });
   const seen = new Set<string>();
   const unique = results.filter((r) => (seen.has(r.href) ? false : (seen.add(r.href), true))).slice(0, 12);
   if ((request.headers.get("accept") ?? "").includes("application/json")) {

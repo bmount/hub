@@ -209,6 +209,17 @@ export class Conversation extends DurableObject<Env> {
     this.#run("INSERT OR IGNORE INTO inbox_outbox (key, identity_id, item_json) VALUES (?, ?, ?)", full.key, identity_id, JSON.stringify(full));
   }
 
+  /** Messages whose current text contains every term (case-insensitive), newest first; retracted ones never match. */
+  async search(tenant_id: string, conversation_id: string, terms: string[], limit: number): Promise<Array<{ msg_id: string; seq: number; author_id: string; thread_root: string | null; body: string; created_at: number }>> {
+    this.#bind(tenant_id, conversation_id);
+    const ts = terms.slice(0, 6).map((t) => `%${t.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
+    if (!ts.length) return [];
+    return this.#q<{ msg_id: string; seq: number; author_id: string; thread_root: string | null; body: string; created_at: number }>(
+      `SELECT m.msg_id, m.first_seq AS seq, a.author_id, m.thread_root, a.body, a.created_at FROM msg m JOIN artifact a ON a.msg_id = m.msg_id AND a.rev = m.rev
+       WHERE m.kind = 'say' AND m.retracted = 0 AND ${ts.map(() => "a.body LIKE ? ESCAPE '\\'").join(" AND ")}
+       ORDER BY m.first_seq DESC LIMIT ?`, ...ts, Math.min(limit, 20));
+  }
+
   /** Pimwell's own notice (app telemetry on #<project>-ops): a system message; nobody is woken. */
   async notice(tenant_id: string, conversation_id: string, body: string, now: number): Promise<{ seq: number; msg_id: string }> {
     this.#bind(tenant_id, conversation_id);

@@ -30,10 +30,6 @@ const PLANS: Plan[] = [
     summary: "Quests with their progress, and items grouped by state, for one project or the organization.",
     spec: "Columns open, doing, done; quest progress bars; who is on what; stalled items (no activity in 7 days) flagged.",
     input: { project: S("Project slug; omit for the organization") } },
-  { name: "work.search", area: "work", kind: "query", minRole: "reader", title: "Search work",
-    summary: "Full-text search over titles, details, comments and source quotes.",
-    spec: "Ranked results with snippets; filters for kind, state, owner, quest; refs like site#3 jump directly.",
-    input: { q: S("Words to find"), project: S("Limit to a project") }, required: ["q"] },
   { name: "work.bulk_update", area: "work", kind: "command", minRole: "member", title: "Change many items",
     summary: "Change state, owner, kind or quest on many items at once.",
     spec: "One audited change per item; preview before applying; undo within ten minutes.",
@@ -85,15 +81,6 @@ const PLANS: Plan[] = [
     spec: "Integrates by default once approved and checks pass; refuses when the base moved and conflicts; records the merge commit on linked work.",
     input: { id: S("Review") }, required: ["id"] },
   // Messaging
-  { name: "message.search", area: "messaging", kind: "query", minRole: "reader", title: "Search conversations",
-    summary: "Search messages in the conversations you can read.",
-    spec: "Ranked results with the thread around each hit; filters for channel, person and date.",
-    input: { q: S("Words to find"), c: S("Limit to a channel") }, required: ["q"] },
-  // Traces and deploys
-  { name: "search.query", area: "search", kind: "query", minRole: "reader", title: "Search everything",
-    summary: "One search over work, mail, conversations, code and people.",
-    spec: "Grouped results; refs and names jump directly; respects every access rule of the underlying records.",
-    input: { q: S("What to find") }, required: ["q"] },
 ];
 
 /** Verbs that are planned, by name, with their area and spec. */

@@ -1,3 +1,4 @@
+import { searchPage } from "./http/searchPage";
 import { assistantChat, assistantPage } from "./http/assistantPages";
 import { onboardBody } from "./skills/onboard";
 import { adminAppsPage, appsPage } from "./http/appsPages";
@@ -113,6 +114,7 @@ app.get("/usage", (c) => usagePage(c.req.raw, c.env));
 app.get("/apps", (c) => appsPage(c.req.raw, c.env));
 app.get("/admin/apps", (c) => adminAppsPage(c.req.raw, c.env));
 app.get("/jump", (c) => jumpPage(c.req.raw, c.env));
+app.get("/search", (c) => searchPage(c.req.raw, c.env));
 app.get("/planned", (c) => plannedPage(c.req.raw, c.env, null));
 app.get("/planned/:area", (c) => plannedPage(c.req.raw, c.env, c.req.param("area")));
 app.get("/people", (c) => peoplePage(c.req.raw, c.env));

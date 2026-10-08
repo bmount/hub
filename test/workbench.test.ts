@@ -73,7 +73,7 @@ describe("the workbench", () => {
     expect((await j("sit")).map((r) => r.href)).toContain("/site/docket");
     expect((await j("checkout")).map((r) => r.href)).toContain("/site/w/1");
     expect((await j("pat@")).map((r) => r.href)).toContain("/docket?owner=pat%40example.com");
-    expect(await j("100%_")).toEqual([]);
+    expect((await j("100%_")).map((r) => r.href)).toEqual(["/search?q=100%25_"]);
     expect(await (await w.get("/jump?q=dark")).text()).toContain("Dark mode");
   });
 

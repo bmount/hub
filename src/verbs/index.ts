@@ -1,3 +1,4 @@
+import { messageSearch, searchQuery, workSearch } from "./search";
 import { mailReply, mailSend, mailSending } from "./mailOut";
 import { appApprove, appList, appRegister, deployList, deployRecord, traceList, traceRead } from "./apps";
 import { modelPriceSet, usageReport, usageSummary } from "./usage";
@@ -42,6 +43,7 @@ export function registerAllVerbs(): void {
     usageReport, usageSummary, modelPriceSet,
     appRegister, appApprove, appList, traceList, traceRead, deployList, deployRecord,
     mailReply, mailSend, mailSending,
+    workSearch, messageSearch, searchQuery,
     skillList, skillRead, capabilities, projectHistory,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,
