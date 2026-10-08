@@ -26,15 +26,20 @@ const HOUSE = ["Pimwell", "docket", "wish", "snag", "errand", "quest", "call", "
 export type Vocabulary = { org: string; slug: string; projects: Array<{ slug: string; name: string }>; people: string[]; agents: string[] };
 
 export async function vocabulary(ctx: Ctx): Promise<Vocabulary> {
-  const t = ctx.tenant!;
-  const [projR, peopleR] = await ctx.db.batch([
-    ctx.db.prepare("SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND state = 'active' AND kind <> 'channel' ORDER BY display_name LIMIT 60").bind(t.id),
-    ctx.db.prepare(`SELECT i.display_name AS name, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id
-      WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' ORDER BY i.display_name LIMIT 100`).bind(t.id),
+  // On an organization's host, its names; on the hub's home page, the names of every organization they belong to.
+  const t = ctx.tenant;
+  const scope = t ? "= ?" : "IN (SELECT tenant_id FROM membership WHERE identity_id = ? AND state = 'active')";
+  const key = t ? t.id : ctx.identity!.id;
+  const [projR, peopleR, orgR] = await ctx.db.batch([
+    ctx.db.prepare(`SELECT slug, display_name AS name FROM project WHERE tenant_id ${scope} AND state = 'active' AND kind <> 'channel' ORDER BY display_name LIMIT 60`).bind(key),
+    ctx.db.prepare(`SELECT DISTINCT i.display_name AS name, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id
+      WHERE m.tenant_id ${scope} AND m.state = 'active' AND i.state = 'active' ORDER BY i.display_name LIMIT 100`).bind(key),
+    ctx.db.prepare(`SELECT display_name AS name, slug FROM tenant WHERE id ${scope} AND state = 'active' ORDER BY display_name LIMIT 20`).bind(key),
   ]);
   const people = peopleR!.results as Array<{ name: string; kind: string }>;
+  const orgs = orgR!.results as Array<{ name: string; slug: string }>;
   return {
-    org: t.display_name, slug: t.slug, projects: projR!.results as Array<{ slug: string; name: string }>,
+    org: t ? t.display_name : orgs.map((o) => o.name).join(", "), slug: t ? t.slug : "", projects: projR!.results as Array<{ slug: string; name: string }>,
     people: people.filter((p) => p.kind === "human").map((p) => p.name), agents: people.filter((p) => p.kind !== "human").map((p) => p.name),
   };
 }
@@ -83,7 +88,8 @@ export function plausibleCorrection(original: string, corrected: string): boolea
 }
 
 function allowed(ctx: Ctx): boolean {
-  return ctx.host.kind === "tenant" && !!ctx.tenant && ctx.tenant.state === "active" && !!ctx.identity && !!ctx.role
+  const place = ctx.host.kind === "apex" || (ctx.host.kind === "tenant" && !!ctx.tenant && ctx.tenant.state === "active" && !!ctx.role);
+  return place && !!ctx.identity
     && ctx.identity.kind === "human" && ctx.authKind === "cookie" && ctx.session?.kind === "browser";
 }
 
@@ -119,7 +125,7 @@ export async function voiceTranscribe(request: Request, env: Env, waitUntil?: (p
   const context = String(form.get("context") ?? "").slice(0, MAX_CONTEXT * 2);
   const v = await vocabulary(ctx);
   try {
-    const r = await transcribe(env, audio, `speech.${ext}`, transcriptionPrompt(v, context), { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id });
+    const r = await transcribe(env, audio, `speech.${ext}`, transcriptionPrompt(v, context), { tenant_id: ctx.tenant?.id ?? null, identity_id: ctx.identity!.id, session_id: ctx.session!.id });
     return json({ text: r.text });
   } catch (e) {
     return failed(e);
@@ -143,7 +149,7 @@ export async function voiceCorrect(request: Request, env: Env, waitUntil?: (p: P
   const v = await vocabulary(ctx);
   try {
     const r = await ask(env, "fast", correctionInput(v, context, text), {
-      tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, instructions: CORRECTION_INSTRUCTIONS, maxOutputTokens: Math.min(4000, 200 + text.length),
+      tenant_id: ctx.tenant?.id ?? null, identity_id: ctx.identity!.id, session_id: ctx.session!.id, instructions: CORRECTION_INSTRUCTIONS, maxOutputTokens: Math.min(4000, 200 + text.length),
     });
     const fixed = r.text.trim().replace(/^<<<\s*|\s*>>>$/g, "").trim();
     const keep = plausibleCorrection(text, fixed) ? fixed : text;

@@ -62,6 +62,11 @@ describe("voice", () => {
 
     const ledger = await env.HUB_DB.prepare("SELECT purpose FROM model_call ORDER BY created_at").all<{ purpose: string }>();
     expect(ledger.results.map((x) => x.purpose)).toEqual(["transcribe", "fast"]);
+
+    // From the hub's own home page too, with the names from every organization they belong to.
+    const apex = await SELF.fetch("https://pimwell.test/voice/transcribe", { method: "POST", headers: { cookie: h.cookie!, origin: "https://pimwell.test", "x-pimwell-voice": "1" }, body: clip("") });
+    expect(apex.status, await apex.clone().text()).toBe(200);
+    expect(seen.prompt).toContain("SkyLedger");
   });
 
   it("keeps the transcript when a correction rewrites it", () => {
