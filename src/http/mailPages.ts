@@ -69,7 +69,7 @@ ${propose}
 ${(repliesR!.results as Array<{ text: string; created_at: number; status: string; who: string }>).map((o) => `<h2>Reply from ${esc(o.who)} <small>${when(o.created_at)}${o.status !== "sent" ? ` (${esc(o.status)})` : ""}</small></h2><pre>${esc(o.text)}</pre>`).join("")}
 ${m.verdict === "admitted" && !m.recipient_id && ctx.identity.kind === "human" && rank(ctx.role) >= rank("member")
   ? sendingOn && ctx.now - m.received_at <= 30 * 86_400_000
-    ? `<h2>Reply</h2><form method="post" action="/api/mail.reply"><input type="hidden" name="id" value="${esc(m.id)}"><input type="hidden" name="_back" value="/mail/${esc(m.id)}"><label style="display:block"><textarea name="body" rows="6" required maxlength="20000" style="display:block;width:100%" placeholder="Sent from ${esc(m.to_address)} to ${esc(m.from_email)}"></textarea></label><button type="submit">Send reply</button></form>`
+    ? `<h2>Reply</h2><form method="post" action="/api/mail.reply"><input type="hidden" name="id" value="${esc(m.id)}"><input type="hidden" name="_back" value="/mail/${esc(m.id)}"><label style="display:block"><textarea data-voice name="body" rows="6" required maxlength="20000" style="display:block;width:100%" placeholder="Sent from ${esc(m.to_address)} to ${esc(m.from_email)}"></textarea></label><button type="submit">Send reply</button></form>`
     : `<p class="lede">${sendingOn ? "More than 30 days have passed; Pimwell writes again once they do." : "Replies are off in this organization; an admin can turn them on below."}</p>` : ""}`;
     key = `mail:${m.id}:${m.verdict}:${filed.length}`;
   } else {

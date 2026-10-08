@@ -88,7 +88,7 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
 <div id="chatlog" class="chatlog" aria-live="polite">${log || welcome}</div>
 <form id="ask" class="composer" autocomplete="off">
 <input type="hidden" name="thread" value="${esc(thread?.id ?? "")}">
-<div class="box"><textarea name="text" rows="1" required maxlength="8000" aria-label="Your message" placeholder="Ask anything about ${esc(org)}…"></textarea><button type="submit" class="send" aria-label="Send">↑</button></div>
+<div class="box"><textarea data-voice name="text" rows="1" required maxlength="8000" aria-label="Your message" placeholder="Ask anything about ${esc(org)}…"></textarea><button type="submit" class="send" aria-label="Send">↑</button></div>
 <div class="mode" role="radiogroup" aria-label="What the assistant may do">
 <label><input type="radio" name="scopes" value="read"${scopes === "read" ? " checked" : ""}> Only look things up</label>
 <label><input type="radio" name="scopes" value="write"${scopes === "write" ? " checked" : ""}> Can also make changes</label>

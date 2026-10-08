@@ -40,6 +40,12 @@ details.edit label>input,details.edit label>textarea{display:block;width:100%;ma
 .onramp{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:10px;margin:10px 0 18px;max-width:46rem}
 .onramp a{display:flex;flex-direction:column;justify-content:center;gap:2px;min-height:64px;padding:12px 16px;border-radius:var(--r);background:var(--accent);border:1px solid var(--accent);color:var(--panel);text-decoration:none}
 .onramp a:hover{filter:brightness(1.08)}.onramp b{font-size:calc(var(--fs) + 2px)}.onramp b:before{content:"+ ";font-weight:800}.onramp span{font-size:var(--fs-sm);opacity:.92}
+.mic{flex:none;display:inline-grid;place-items:center;width:36px;height:36px;min-height:0;padding:0;border-radius:50%;background:var(--panel);color:var(--ink);border:1px solid var(--line);touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;--lvl:0}
+.mic svg{width:20px;height:20px;fill:currentColor}.mic:hover{background:var(--accent-soft);color:var(--ink);border-color:var(--accent)}
+.mic.live{background:var(--snag);border-color:var(--snag);color:#fff;box-shadow:0 0 0 calc(3px + var(--lvl) * 12px) color-mix(in srgb,var(--snag) 22%,transparent);transition:box-shadow .08s linear}
+.voicebar{display:flex;align-items:center;gap:10px;margin:6px 0}.voicestate{font-size:var(--fs-sm);color:var(--muted)}.voicestate:empty{display:none}
+.voicestate.live{color:var(--snag);font-weight:600}.voicestate.err{color:var(--snag)}.voicestate.ok{color:var(--accent)}.composer .voicestate{display:block;padding:6px 4px 0}
+@media (max-width:760px){.mic{width:44px;height:44px}.mic svg{width:24px;height:24px}}
 .only-s{display:none}
 .assist{display:flex;flex-direction:column;min-height:100%;max-width:48rem;margin:0 auto;font-size:var(--fs-chat);line-height:1.55}
 .assist-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.assist-top .chips{margin:0}

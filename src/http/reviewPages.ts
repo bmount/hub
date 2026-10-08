@@ -44,13 +44,13 @@ ${rows.length ? `<table><tbody>${rows.map((r) => `<tr data-href="/${esc(r.slug)}
 <dl class="meta"><dt>Author</dt><dd>${esc(r.author)}</dd><dt>Reviewers</dt><dd>${v.reviewers.length ? v.reviewers.map((x) => `${esc(x.name)}: ${x.verdict ? (x.verdict === "approve" ? "approved" : "changes asked") : "waiting"}${x.stale ? " <small>(on an older commit)</small>" : ""}`).join("<br>") : "nobody named"}</dd>
 <dt>Integrate</dt><dd><span class="pill">planned</span> waits for a merge verb in the git host</dd></dl>
 ${canWrite && r.author_id !== ctx.identity!.id && r.status !== "closed" ? `<form method="post" action="/api/review.verdict"><input type="hidden" name="id" value="${esc(r.slug)}!${r.number}"><input type="hidden" name="_back" value="/${esc(r.slug)}/reviews/${r.number}">
-<label style="display:block"><textarea name="reason" rows="2" style="display:block;width:100%" placeholder="Your reasons (needed when asking for changes)">${esc(me?.reason ?? "")}</textarea></label>
+<label style="display:block"><textarea data-voice name="reason" rows="2" style="display:block;width:100%" placeholder="Your reasons (needed when asking for changes)">${esc(me?.reason ?? "")}</textarea></label>
 <button type="submit" name="verdict" value="approve">Approve</button> <button type="submit" name="verdict" value="changes" class="quiet">Ask for changes</button></form>` : ""}
 ${canWrite ? `<form class="inline" method="post" action="/api/review.ai"><input type="hidden" name="id" value="${esc(r.slug)}!${r.number}"><input type="hidden" name="_back" value="/${esc(r.slug)}/reviews/${r.number}"><button type="submit" class="quiet">Ask the reviewer agent</button></form>` : ""}
 <h2>Comments</h2>${v.comments.length ? `<ul class="timeline">${v.comments.map((c) => `<li><time>${ago(c.created_at, ctx.now)}</time><span><b>${esc(c.author)}</b>${c.path ? ` on <code>${esc(c.path)}${c.line ? `:${c.line}` : ""}</code>` : ""}<div class="prose" style="margin-top:2px">${esc(c.body)}</div></span></li>`).join("")}</ul>` : `<p class="lede">None yet.</p>`}
 ${canWrite ? `<form method="post" action="/api/review.comment"><input type="hidden" name="id" value="${esc(r.slug)}!${r.number}"><input type="hidden" name="_back" value="/${esc(r.slug)}/reviews/${r.number}">
 <div class="row" style="display:flex;gap:6px;flex-wrap:wrap"><input name="path" placeholder="file (optional)" size="24"><input name="line" placeholder="line" size="5" inputmode="numeric"></div>
-<label style="display:block"><textarea name="body" rows="3" required style="display:block;width:100%" placeholder="Comment"></textarea></label><button type="submit" class="quiet">Comment</button></form>` : ""}
+<label style="display:block"><textarea data-voice name="body" rows="3" required style="display:block;width:100%" placeholder="Comment"></textarea></label><button type="submit" class="quiet">Comment</button></form>` : ""}
 <h2>Changes${v.diff ? ` <span class="pill">${v.diff.commits} commit${v.diff.commits === 1 ? "" : "s"}</span>` : ""}</h2>
 ${v.diff ? v.diff.files.map((f) => diffBlock(f.path, f.diff, f.note)).join("") : `<p class="lede">${esc(v.diff_error ?? "")}</p>`}`;
     key = `review:${r.id}:${r.updated_at}`;

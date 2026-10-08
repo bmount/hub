@@ -70,7 +70,7 @@ function msgHtml(slug: string, m: MsgJson, inThread: boolean): string {
 function compose(action: string, head: number, draft: string, notice: string, label: string): string {
   const note = notice ? `<p role="status"><strong>${esc(notice)}</strong></p>` : "";
   return `${note}<form method="post" action="${esc(action)}"><input type="hidden" name="after" value="${head}">`
-    + `<textarea name="body" rows="4" cols="60" maxlength="8192" required>${esc(draft)}</textarea><br><button type="submit">${esc(label)}</button></form>`;
+    + `<textarea data-voice name="body" rows="4" cols="60" maxlength="8192" required>${esc(draft)}</textarea><br><button type="submit">${esc(label)}</button></form>`;
 }
 
 export async function channelsPage(request: Request, env: Env): Promise<Response> {

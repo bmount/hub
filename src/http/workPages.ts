@@ -153,7 +153,7 @@ function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { l
   const comments = `<h2>Comments${d.comments.length ? ` <span class="pill">${d.comments.length}</span>` : ""}</h2>
 ${d.comments.length ? `<ul class="timeline">${d.comments.map((c) => `<li id="c-${esc(c.id)}"><time title="${when(c.created_at)}">${ago(c.created_at, ctx.now)}</time><span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ""}<div class="prose" style="margin-top:2px">${esc(c.body)}</div></span></li>`).join("")}</ul>` : `<p class="lede">No comments yet.</p>`}
 ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
-<label style="display:block"><textarea name="body" rows="3" required maxlength="10000" style="display:block;width:100%" placeholder="Comment. @handle mentions someone."></textarea></label><button type="submit">Comment</button></form>` : ""}`;
+<label style="display:block"><textarea data-voice name="body" rows="3" required maxlength="10000" style="display:block;width:100%" placeholder="Comment. @handle mentions someone."></textarea></label><button type="submit">Comment</button></form>` : ""}`;
   const ownerChoices = d.owner && !d.members.some((m) => m.id === d.owner!.id) ? [d.owner, ...d.members] : d.members;
   const questChoices = d.parent && !d.quests.some((q) => q.id === d.parent!.id) ? [d.parent, ...d.quests] : d.quests;
   const edit = canWrite ? `<details class="edit"><summary>Edit</summary>
@@ -278,7 +278,7 @@ export async function newWorkPage(request: Request, env: Env): Promise<Response>
 <label>Project <select name="project">${ps.map((p) => option(p.slug, p.display_name, p.slug === want)).join("")}</select></label>
 <label>Kind <select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, `${v.name} (${v.plain})`, k === kind)).join("")}</select></label><br>
 <label style="display:block">Title <input name="title" required maxlength="200" value="${esc(title)}" style="display:block;width:100%" autofocus></label>
-<label style="display:block">Details <textarea name="body" rows="8" placeholder="What, why, and how you will know it is done." style="display:block;width:100%"></textarea></label>
+<label style="display:block">Details <textarea data-voice name="body" rows="8" placeholder="What, why, and how you will know it is done." style="display:block;width:100%"></textarea></label>
 <label>Owner <select name="owner">${option("", "Nobody yet", true)}${option("me", "Me", false)}</select></label>
 <p><button type="submit">File it</button></p></form>` : `<p class="lede">Create a project first.</p>`;
   const inspector = `<a class="back" href="/docket">‹ ${esc(DOCKET.name)}</a><h1>File something</h1><p class="lede">No triage meeting needed. It opens here once filed, and agents can pick it up right away.</p>${form}`;

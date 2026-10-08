@@ -39,7 +39,7 @@ export const WORKBENCH_JS = String.raw`
     if (!cur || !next) { location.href = url; return; }
     ["list", "inspector"].forEach(function (id) {
       var a = document.getElementById(id), b = doc.getElementById(id);
-      if (a && b && (a.getAttribute("data-key") !== b.getAttribute("data-key") || id === "inspector")) { a.replaceWith(b); revive(b); }
+      if (a && b && (a.getAttribute("data-key") !== b.getAttribute("data-key") || id === "inspector")) { a.replaceWith(b); revive(b); voiceUp(b); }
     });
     cur.className = next.className;
     var rail = $("#rail"), nrail = doc.getElementById("rail");
@@ -187,6 +187,117 @@ export const WORKBENCH_JS = String.raw`
     });
     jump.addEventListener("blur", function () { setTimeout(closeJump, 120); });
   }
+
+  // Voice: a mic beside every message box marked data-voice. Hold it to talk and let go to stop, or tap once to
+  // start and tap again to stop. The words land in the box, editable; a quiet second pass then fixes misheard names,
+  // unless the person has already changed the text. Esc cancels a recording.
+  function voiceContext(ta) {
+    var pane = ta.closest(".pane") || document.body;
+    var text = (pane.innerText || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    if (text.length > 2400) text = text.slice(0, 800) + "\n...\n" + text.slice(-1600);
+    var draft = ta.value.trim();
+    return draft ? text + "\n\nDraft so far: " + draft.slice(-400) : text;
+  }
+  function voiceUp(root) {
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)) return;
+    $$("textarea[data-voice]", root).forEach(function (ta) {
+      if (ta.getAttribute("data-voice-ready")) return; ta.setAttribute("data-voice-ready", "1");
+      var b = document.createElement("button"); b.type = "button"; b.className = "mic";
+      b.setAttribute("aria-label", "Talk. Hold, or tap to start and tap again to stop"); b.title = "Hold to talk, or tap to start and tap again to stop";
+      b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-2.07A7 7 0 0 0 19 12h-2z"/></svg>';
+      var st = document.createElement("span"); st.className = "voicestate"; st.setAttribute("aria-live", "polite");
+      var box = ta.closest(".box");
+      if (box) { box.insertBefore(b, box.querySelector(".send")); box.parentNode.insertBefore(st, box.nextSibling); }
+      else { var bar = document.createElement("div"); bar.className = "voicebar"; bar.appendChild(b); bar.appendChild(st); ta.parentNode.insertBefore(bar, ta.nextSibling); }
+      wireMic(b, ta, st);
+    });
+  }
+  function wireMic(b, ta, st) {
+    var s = null;
+    function say(t, cls) { st.textContent = t; st.className = "voicestate" + (cls ? " " + cls : ""); }
+    function post(url, body, headers) {
+      headers = headers || {}; headers["x-pimwell-voice"] = "1";
+      return fetch(url, { method: "POST", credentials: "same-origin", headers: headers, body: body })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }, function () { return { ok: false, j: {} }; }); });
+    }
+    function meter(me) {
+      if (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      try {
+        var AC = window.AudioContext || window.webkitAudioContext; me.ac = new AC();
+        var an = me.ac.createAnalyser(); an.fftSize = 512; me.ac.createMediaStreamSource(me.stream).connect(an);
+        var buf = new Uint8Array(an.fftSize);
+        (function loop() {
+          an.getByteTimeDomainData(buf); var m = 0;
+          for (var i = 0; i < buf.length; i++) { var d = Math.abs(buf[i] - 128); if (d > m) m = d; }
+          b.style.setProperty("--lvl", Math.min(1, m / 50).toFixed(2)); me.raf = requestAnimationFrame(loop);
+        })();
+      } catch (e) {}
+    }
+    function clock(me) {
+      var sec = Math.floor((Date.now() - me.started) / 1000);
+      say("Listening " + Math.floor(sec / 60) + ":" + ("0" + (sec % 60)).slice(-2) + (me.hold ? " · let go to finish" : " · tap to finish"), "live");
+      if (sec >= 600) stop();
+    }
+    function start() {
+      var me = { chunks: [], started: Date.now(), downAt: Date.now() }; s = me;
+      b.classList.add("live"); say("Listening…", "live");
+      navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function (stream) {
+        if (s !== me) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+        me.stream = stream;
+        var types = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+        var type = types.filter(function (t) { return MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t); })[0];
+        me.rec = type ? new MediaRecorder(stream, { mimeType: type }) : new MediaRecorder(stream);
+        me.rec.ondataavailable = function (e) { if (e.data && e.data.size) me.chunks.push(e.data); };
+        me.rec.onstop = function () { finish(me); };
+        me.rec.start(250); me.started = Date.now();
+        meter(me); me.tick = setInterval(function () { clock(me); }, 250);
+        try { if (navigator.vibrate) navigator.vibrate(12); } catch (e) {}
+        if (me.stopWanted) stop();
+      }).catch(function () {
+        if (s === me) s = null; b.classList.remove("live");
+        say("The microphone isn't available. Allow it for this site in your browser's settings, then try again.", "err");
+      });
+    }
+    function stop() { var me = s; if (!me) return; if (!me.rec) { me.stopWanted = true; return; } if (me.rec.state !== "inactive") me.rec.stop(); }
+    function finish(me) {
+      clearInterval(me.tick); if (me.raf) cancelAnimationFrame(me.raf); if (me.ac) try { me.ac.close(); } catch (e) {}
+      me.stream.getTracks().forEach(function (t) { t.stop(); });
+      if (s === me) s = null; b.classList.remove("live"); b.style.removeProperty("--lvl");
+      var blob = new Blob(me.chunks, { type: (me.rec.mimeType || "audio/webm").split(";")[0] });
+      if (me.cancelled) { say("", ""); return; }
+      if (Date.now() - me.started < 500 || blob.size < 800) { say("That was too short. Hold the mic while you talk, or tap it, talk, and tap again.", ""); return; }
+      say("Writing it down…", "busy"); b.disabled = true;
+      var ctx = voiceContext(ta), fd = new FormData();
+      fd.append("audio", blob, "speech"); fd.append("context", ctx);
+      post("/voice/transcribe", fd).then(function (x) {
+        if (!x.ok) { say("Not done: " + (x.j.reason || x.j.error || "try again"), "err"); return; }
+        var text = (x.j.text || "").trim();
+        if (!text) { say("I didn't catch any words. Try again a little closer to the mic.", ""); return; }
+        var before = ta.value, sep = before && !/\s$/.test(before) ? " " : "";
+        ta.value = before + sep + text; var mine = ta.value, at = before.length + sep.length;
+        ta.dispatchEvent(new Event("input", { bubbles: true })); ta.focus();
+        try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) {}
+        say("Checking names…", "busy");
+        post("/voice/correct", JSON.stringify({ text: text, context: ctx }), { "content-type": "application/json" }).then(function (y) {
+          if (!y.ok || !y.j.changed || ta.value !== mine) { say("", ""); return; }
+          ta.value = ta.value.slice(0, at) + y.j.text; ta.dispatchEvent(new Event("input", { bubbles: true }));
+          say("Fixed a few words", "ok"); setTimeout(function () { if (st.textContent === "Fixed a few words") say("", ""); }, 2500);
+        }, function () { say("", ""); });
+      }, function () { say("Not done: the connection dropped. Try again.", "err"); }).then(function () { b.disabled = false; });
+    }
+    b.addEventListener("pointerdown", function (e) {
+      if (e.button !== 0 || b.disabled) return; e.preventDefault();
+      if (s) { stop(); return; }
+      start(); s.holding = true;
+      try { b.setPointerCapture(e.pointerId); } catch (x) {}
+    });
+    function up() { if (!s || !s.holding) return; s.holding = false; if (Date.now() - s.downAt > 350) { s.hold = true; stop(); } }
+    b.addEventListener("pointerup", up); b.addEventListener("pointercancel", up);
+    b.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+    b.addEventListener("click", function (e) { e.preventDefault(); if (e.detail === 0) { if (s) stop(); else start(); } });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape" && s) { s.cancelled = true; stop(); } });
+  }
+  voiceUp(document);
 
   // Keyboard.
   function rows() { return $$("#list [data-href]").filter(function (r) { return r.offsetParent !== null; }); }
