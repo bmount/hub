@@ -75,6 +75,10 @@ describe("the workbench", () => {
     expect((await j("pat@")).map((r) => r.href)).toContain("/docket?owner=pat%40example.com");
     expect((await j("100%_")).map((r) => r.href)).toEqual(["/search?q=100%25_"]);
     expect(await (await w.get("/jump?q=dark")).text()).toContain("Dark mode");
+    // Nothing typed: likely places, grouped, so most jumps are one tap.
+    const sug = ((await (await w.get("/jump?suggest=1", { accept: "application/json" })).json()) as { results: Array<{ label: string; href: string; group: string }> }).results;
+    expect(sug.filter((r) => r.group === "Go to").map((r) => r.href)).toEqual(["/attention", "/docket", "/assistant", "/mail"]);
+    expect(sug.filter((r) => r.group === "Projects").map((r) => r.href)).toContain("/site/docket");
   });
 
   it("lists what is coming, with each planned verb's spec", async () => {

@@ -291,7 +291,25 @@ export async function jumpPage(request: Request, env: Env): Promise<Response> {
   const { ctx, extra, ok } = await tenantCtx(request, env);
   if (!ok) return notFoundPage(extra);
   const q = (new URL(request.url).searchParams.get("q") ?? "").trim().slice(0, 80);
-  const results: Array<{ label: string; hint: string; href: string }> = [];
+  const results: Array<{ label: string; hint: string; href: string; group?: string }> = [];
+  // Nothing typed yet: likely places, so most jumps are one tap (owner, 2026-10-08). Recent picks are added by the
+  // browser from its own memory; these come from the record.
+  if (!q && new URL(request.url).searchParams.get("suggest") === "1") {
+    const tid = ctx.tenant!.id;
+    const [mineR, projR] = await ctx.db.batch([
+      ctx.db.prepare(`SELECT p.slug, w.number, w.title, w.kind FROM work_item w JOIN project p ON p.id = w.project_id
+        WHERE w.tenant_id = ? AND w.owner_id = ? AND w.state IN ('open', 'doing') ORDER BY w.updated_at DESC LIMIT 4`).bind(tid, ctx.identity!.id),
+      ctx.db.prepare(`SELECT p.slug, p.display_name, MAX(w.updated_at) AS last, SUM(w.state IN ('open', 'doing')) AS open FROM project p LEFT JOIN work_item w ON w.project_id = p.id
+        WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind <> 'channel' GROUP BY p.id ORDER BY last IS NULL, last DESC, p.display_name LIMIT 5`).bind(tid),
+    ]);
+    const needs = ctx.rail?.needs ?? 0;
+    for (const [label, hint, href] of [
+      ["Needs me", needs ? `${needs} waiting` : "section", "/attention"], ["Docket", "all open work", "/docket"], ["Assistant", "ask anything", "/assistant"], ["Mail", "section", "/mail"],
+    ] as Array<[string, string, string]>) results.push({ label, hint, href, group: "Go to" });
+    for (const x of mineR!.results as Array<{ slug: string; number: number; title: string; kind: WorkKind }>) results.push({ label: x.title, hint: `${x.slug}#${x.number}`, href: `/${x.slug}/w/${x.number}`, group: "Your work" });
+    for (const x of projR!.results as Array<{ slug: string; display_name: string; open: number | null }>) results.push({ label: x.display_name, hint: x.open ? `${x.open} open` : "project", href: `/${x.slug}/docket`, group: "Projects" });
+    return new Response(JSON.stringify({ results }), { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...extra } });
+  }
   if (q) {
     const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const ref = /^([a-z0-9][a-z0-9-]*)?#(\d{1,8})$/i.exec(q);

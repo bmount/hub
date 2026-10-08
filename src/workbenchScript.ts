@@ -157,35 +157,68 @@ export const WORKBENCH_JS = String.raw`
   });
   window.addEventListener("popstate", function () { go(location.href, { push: false }); });
 
-  // Jump palette.
-  var jump = $(".jump input"), list = null, picks = [], at = -1, timer = 0;
+  // Jump palette. Focus opens likely places at once (recent picks from this browser, then the record's suggestions:
+  // sections, your open work, active projects), so most jumps are one tap. Typing narrows them instantly, word by
+  // word, and the full search fills in behind.
+  var jump = $(".jump input"), list = null, picks = [], at = -1, timer = 0, sugg = null, suggAt = 0;
+  var RECENT = "pimwell.jump.recent." + location.host;
+  function recent() { try { return JSON.parse(localStorage.getItem(RECENT) || "[]"); } catch (e) { return []; } }
+  function remember(it) {
+    try {
+      var r = recent().filter(function (x) { return x.href !== it.href; });
+      r.unshift({ label: it.label, hint: it.hint || "", href: it.href, group: "Recent" });
+      localStorage.setItem(RECENT, JSON.stringify(r.slice(0, 6)));
+    } catch (e) {}
+  }
   function closeJump() { if (list) { list.remove(); list = null; } picks = []; at = -1; }
+  function choose(it) { remember(it); closeJump(); jump.value = ""; jump.blur(); go(it.href); }
   function render(items) {
     closeJump(); if (!items.length) return;
     list = document.createElement("ul"); list.setAttribute("role", "listbox");
-    items.forEach(function (it, i) {
+    var group = null;
+    items.forEach(function (it) {
+      if (it.group && it.group !== group) { group = it.group; var h = document.createElement("li"); h.className = "group"; h.setAttribute("role", "presentation"); h.textContent = group; list.appendChild(h); }
       var li = document.createElement("li"), a = document.createElement("a"), s = document.createElement("small");
-      a.href = it.href; a.textContent = it.label; s.textContent = it.hint || ""; a.appendChild(s); li.appendChild(a); list.appendChild(li); picks.push(li);
-      li.addEventListener("mousedown", function (ev) { ev.preventDefault(); closeJump(); jump.blur(); go(it.href); });
+      li.setAttribute("role", "option"); a.href = it.href; a.textContent = it.label; s.textContent = it.hint || ""; a.appendChild(s); li.appendChild(a); list.appendChild(li); picks.push({ li: li, it: it });
+      li.addEventListener("mousedown", function (ev) { ev.preventDefault(); choose(it); });
     });
     jump.parentNode.appendChild(list);
   }
-  function pick(d) { if (!picks.length) return; at = (at + d + picks.length) % picks.length; picks.forEach(function (p, i) { p.setAttribute("aria-selected", i === at ? "true" : "false"); }); }
+  function pick(d) { if (!picks.length) return; at = (at + d + picks.length) % picks.length; picks.forEach(function (p, i) { p.li.setAttribute("aria-selected", i === at ? "true" : "false"); if (i === at) p.li.scrollIntoView({ block: "nearest" }); }); }
+  function base() { var seen = {}; return recent().concat(sugg || []).filter(function (x) { if (seen[x.href]) return false; seen[x.href] = 1; return true; }); }
+  function matches(q) {
+    var words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    return base().filter(function (x) { var t = (x.label + " " + (x.hint || "")).toLowerCase(); return words.every(function (w) { return t.indexOf(w) >= 0; }); });
+  }
+  function loadSuggestions() {
+    if (sugg && Date.now() - suggAt < 60000) return Promise.resolve();
+    return fetch("/jump?suggest=1", { headers: { accept: "application/json" }, credentials: "same-origin" })
+      .then(function (r) { return r.json(); }).then(function (j) { sugg = j.results || []; suggAt = Date.now(); }).catch(function () {});
+  }
+  function openEmpty() { render(base()); loadSuggestions().then(function () { if (document.activeElement === jump && !jump.value.trim()) render(base()); }); }
   if (jump) {
+    jump.addEventListener("focus", function () { if (!jump.value.trim()) openEmpty(); });
     jump.addEventListener("input", function () {
-      clearTimeout(timer); var q = jump.value.trim(); if (!q) { closeJump(); return; }
+      clearTimeout(timer); var q = jump.value.trim();
+      if (!q) { openEmpty(); return; }
+      var local = matches(q).map(function (x) { return { label: x.label, hint: x.hint, href: x.href }; });
+      render(local);
       timer = setTimeout(function () {
         fetch("/jump?q=" + encodeURIComponent(q), { headers: { accept: "application/json" }, credentials: "same-origin" })
-          .then(function (r) { return r.json(); }).then(function (j) { if (jump.value.trim() === q) render(j.results || []); }).catch(function () {});
+          .then(function (r) { return r.json(); }).then(function (j) {
+            if (jump.value.trim() !== q) return;
+            var seen = {}; local.forEach(function (x) { seen[x.href] = 1; });
+            render(local.concat((j.results || []).filter(function (x) { return !seen[x.href]; })).slice(0, 14));
+          }).catch(function () {});
       }, 90);
     });
     jump.addEventListener("keydown", function (e) {
-      if (e.key === "ArrowDown") { e.preventDefault(); pick(1); }
+      if (e.key === "ArrowDown") { e.preventDefault(); if (!list) openEmpty(); else pick(1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); pick(-1); }
       else if (e.key === "Escape") { closeJump(); jump.blur(); }
-      else if (e.key === "Enter" && picks.length) { e.preventDefault(); var a = $("a", picks[Math.max(at, 0)]); closeJump(); jump.value = ""; jump.blur(); go(a.href); }
+      else if (e.key === "Enter" && picks.length) { e.preventDefault(); choose(picks[Math.max(at, 0)].it); }
     });
-    jump.addEventListener("blur", function () { setTimeout(closeJump, 120); });
+    jump.addEventListener("blur", function () { setTimeout(closeJump, 150); });
   }
 
   // Voice: a mic beside every message box marked data-voice. Hold it to talk and let go to stop, or tap once to

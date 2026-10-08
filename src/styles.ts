@@ -96,6 +96,7 @@ body.wb{height:100vh;height:100dvh;display:grid;grid-template-columns:var(--rail
 .jump ul{position:absolute;left:0;right:0;top:30px;margin:0;padding:4px;list-style:none;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);z-index:30}
 .jump li a{display:flex;justify-content:space-between;gap:8px;padding:4px 8px;border-radius:var(--r-sm);color:var(--ink);text-decoration:none}.jump li a small{color:var(--muted)}
 .jump li[aria-selected=true] a,.jump li a:hover{background:var(--accent-soft)}
+.jump ul{max-height:min(70vh,520px);overflow:auto;overscroll-behavior:contain}.jump li.group{padding:8px 8px 2px;font-size:var(--fs-xs);font-weight:650;color:var(--faint)}.jump li.group:first-child{padding-top:2px}
 .rail{grid-area:rail;overflow:auto;background:var(--sunk);border-right:1px solid var(--line);padding:8px 6px 16px;font-size:var(--fs-md)}
 .rail ul{list-style:none;margin:0 0 6px;padding:0}.rail li{display:flex;align-items:center;border-radius:var(--r-sm)}
 .rail li a{flex:1;padding:3px 8px;color:var(--ink);text-decoration:none;border-radius:var(--r-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
