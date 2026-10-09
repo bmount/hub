@@ -168,6 +168,9 @@ describe("the onboarding skill", () => {
     expect(org.startsWith("---\nname: pimwell-agent-onboarding\ndescription: ")).toBe(true);
     expect(org).toContain("PIMWELL_ACME_TOKEN");
     expect(org).toContain("https://acme.pimwell.test/agent/mcp");
+    // Early work goes to main; branches stay short (owner, 2026-10-08).
+    expect(org).toContain("Small changes can go straight to main");
+    expect(org).not.toContain("Work on a branch");
     expect(org).not.toMatch(/pm[wsc]_[A-Za-z0-9]/);
     const hub = await (await SELF.fetch("https://pimwell.test/skills/pimwell-agent-onboarding/SKILL.md")).text();
     expect(hub).toContain("PIMWELL_<ORG>_TOKEN");

@@ -243,7 +243,7 @@ export const repoConnect = defineVerb({
       `2. Install the helper: \`mkdir -p ~/.local/bin && curl -sf https://${host}/git-credential-helper -o ~/.local/bin/git-credential-${n.server} && chmod 700 ~/.local/bin/git-credential-${n.server}\` (read it first: it is a short shell script).`,
       `3. Point git at it for this host only: \`git config --global credential.https://${host}.helper "$HOME/.local/bin/git-credential-${n.server}"\``,
       `4. Clone: \`git clone https://${host}/<repo>.git\` (repo_list has the URLs). Push as usual.`,
-      `Pushes are kept forever: force pushes and history rewrites are refused, so work on a branch and say what you changed in the commit message. Never put a token in a remote URL.`,
+      `Pushes are kept forever: force pushes and history rewrites are refused. Small changes can go straight to main (fetch first); keep feature branches short and easy to merge. Say what you changed in the commit message. Never put a token in a remote URL.`,
     ].join("\n");
     return { steps, helper_url: `https://${host}/git-credential-helper`, host, secret: n.secret, token_file: `~/.config/pimwell/${slug}.token` };
   },

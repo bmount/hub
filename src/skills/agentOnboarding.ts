@@ -62,7 +62,8 @@ ${org ? `This copy is for the organization **${org}** (${host}).` : `Replace <or
 ## 6. Git, only when you need it
 - \`repo_list\` gives the repositories and clone URLs, and \`repo_connect\` the setup.
 - Read the credential helper (https://${host}/git-credential-helper) before installing it, and scope it to ${host} only.
-- Check access with \`git ls-remote\`, never a test push. Work on a branch: history is never overwritten, force pushes are refused.
+- Check access with \`git ls-remote\`, never a test push.
+- History is never overwritten: force pushes are refused. Small changes can go straight to main; fetch before you push. Keep feature branches short and easy to merge.
 - Git gets one-hour sessions; your token never goes in a URL, a remote or a command line.
 
 ## Always

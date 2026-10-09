@@ -33,6 +33,7 @@ describe("agents and git", () => {
     expect(text).toContain("https://acme.pimwell.test/git-credential-helper");
     expect(text).toContain("PIMWELL_ACME_TOKEN");
     expect(text).toContain("credential.https://acme.pimwell.test.helper");
+    expect(text).toContain("keep feature branches short and easy to merge");
     expect(text).not.toMatch(/pm[ws]_[A-Za-z0-9]/);
     const script = await (await SELF.fetch(`https://${HOST}/git-credential-helper`)).text();
     expect(script).toContain("PIMWELL_ACME_TOKEN");
