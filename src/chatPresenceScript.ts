@@ -9,7 +9,13 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
   const list = box.querySelector('[data-presence-list]');
   const toggle = box.querySelector('[data-presence-toggle]');
   let opted = false, pending = false, queued = false, nextStatus = null, stopped = false;
-  let entries = [], snapshotAt = 0, observedAt = 0, timer, expiryTimer;
+  let entries = [], snapshotAt = null, participationAt = null, observedAt = 0, timer, expiryTimer;
+  function clock() { return { monotonic: performance.now(), wall: Date.now() }; }
+  function age(since) {
+    // Some platforms pause performance.now() during system sleep. Either clock may
+    // expire state early; wall-clock rollback must never extend monotonic freshness.
+    return Math.max(0, performance.now() - since.monotonic, Date.now() - since.wall);
+  }
   let generation = 0, snapshotValid = false, frozen = false;
   const requests = new Set();
   function unknown(message) {
@@ -22,10 +28,16 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     for (const controller of requests) controller.abort();
     unknown(message);
   }
+  function expireParticipation() {
+    if (stopped || !participationAt || (!opted && !nextStatus) || age(participationAt) < 90000) return;
+    pauseSharing();
+    invalidate('Sharing interval expired. Current status is unknown until refreshed.');
+  }
   function draw() {
+    expireParticipation();
     list.replaceChildren();
     if (!snapshotValid) return;
-    const elapsed = Math.max(0, performance.now() - snapshotAt);
+    const elapsed = age(snapshotAt);
     // Even explicit offline is only a bounded snapshot, not a permanent directory.
     if (elapsed >= 90000) {
       unknown('Presence snapshot expired. Current status is unknown; refresh will retry.');
@@ -63,12 +75,14 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     } finally { requests.delete(controller); clearTimeout(timeout); }
   }
   function pauseSharing() {
-    opted = false; nextStatus = null;
+    opted = false; nextStatus = null; participationAt = null;
     toggle.textContent = 'Share presence in this channel';
     sharing.textContent = 'Not sharing. Delivery is uncertain; any accepted heartbeat expires within 90 seconds. Share explicitly again after connection recovers.';
   }
   async function refresh() {
     if (stopped) return;
+    // Check before a renewal, not only in the expiry timer: both timers can be delayed.
+    expireParticipation();
     if (pending) { queued = true; return; }
     pending = true;
     const startedGeneration = generation;
@@ -80,12 +94,13 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       nextStatus = null;
       if (status) {
         attemptedHeartbeat = true;
+        participationAt = clock(); // Query-only refreshes never prolong participation.
         await api('chat.heartbeat', { c: channel, status });
       }
       if (!current()) return;
       // Charge the whole round trip against freshness, conservatively: client clock skew or
       // slow transport must never extend the server's expiry window.
-      const requestedAt = performance.now();
+      const requestedAt = clock();
       const result = await api('chat.presence', { c: channel });
       if (!current()) return;
       entries = result.entries; observedAt = result.observed_at; snapshotAt = requestedAt; snapshotValid = true;
@@ -112,6 +127,7 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
   toggle.addEventListener('click', () => {
     if (stopped || toggle.disabled) return;
     opted = !opted; nextStatus = opted ? (document.hidden ? 'away' : 'online') : 'offline';
+    participationAt = clock(); // A new explicit action is fresh consent, not a timer retry.
     toggle.textContent = opted ? 'Stop sharing presence' : 'Share presence in this channel';
     sharing.textContent = opted ? 'Sharing while this channel is visible; hidden pages stop renewing online status.' : 'Not sharing. If the offline update cannot be delivered, the previous heartbeat expires within 90 seconds.';
     refresh();
@@ -173,7 +189,7 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
   function restore() {
     // Freeze and history restoration are not evidence of uninterrupted participation.
     invalidate('Page restored. Current status is unknown until refreshed.');
-    stopped = false; opted = false; nextStatus = null;
+    stopped = false; opted = false; nextStatus = null; participationAt = null;
     toggle.textContent = 'Share presence in this channel';
     sharing.textContent = 'Not sharing. Share explicitly again after returning to this page.';
     startTimers(); refresh();

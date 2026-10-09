@@ -19,7 +19,8 @@ function client() {
   const docEvents = new Element(), winEvents = new Element();
   const document = { hidden: false, querySelector: () => ({ dataset: { chatPresence: "general" }, querySelector: (s: string) => selectors[s] }), createElement: () => new Element(), addEventListener: docEvents.addEventListener.bind(docEvents), removeEventListener: docEvents.removeEventListener.bind(docEvents) };
   const navigator = { onLine: true };
-  let time = 0, denied = false;
+  let time = 0, wall = 0, denied = false;
+  class ClockDate extends Date { static now() { return wall; } }
   const calls: Array<{ name: string; status?: string; signal: AbortSignal }> = [];
   let delayed: Promise<void> | null = null;
   let failNext = false;
@@ -37,15 +38,16 @@ function client() {
     return response;
   };
   // Execute the exact shipped asset with small DOM/transport fakes, not a second implementation.
-  const start = new Function("document", "window", "navigator", "fetch", "performance", "setInterval", "clearInterval", "setTimeout", "clearTimeout", CHAT_PRESENCE_JS);
+  const start = new Function("document", "window", "navigator", "fetch", "performance", "setInterval", "clearInterval", "setTimeout", "clearTimeout", "Date", CHAT_PRESENCE_JS);
   start(document, { addEventListener: winEvents.addEventListener.bind(winEvents), removeEventListener: winEvents.removeEventListener.bind(winEvents) }, navigator, fetch, { now: () => time },
-    (fn: () => void, ms: number) => { intervals.set(ms, fn); return ms; }, (id: number) => intervals.delete(id), () => 1, () => {});
+    (fn: () => void, ms: number) => { intervals.set(ms, fn); return ms; }, (id: number) => intervals.delete(id), () => 1, () => {}, ClockDate);
   return { connection, sharing, freshness, list, toggle, document, navigator, calls, docEvents, winEvents,
     delayNext: () => { let release!: () => void; delayed = new Promise<void>((resolve) => { release = resolve; }); return release; },
     failNext: () => { failNext = true; },
     allow: () => { denied = false; },
     state: (state: string, expires_at = 91000) => { entries = [{ ...entries[0]!, state, expires_at }]; },
-    elapsed: (ms: number) => { time = ms; intervals.get(1000)?.(); },
+    elapsed: (ms: number) => { time = ms; wall = ms; intervals.get(1000)?.(); },
+    clocks: (monotonic: number, wallTime: number, draw = true) => { time = monotonic; wall = wallTime; if (draw) intervals.get(1000)?.(); },
     poll: () => intervals.get(30000)?.(), deny: () => { denied = true; },
     empty: () => { entries = []; },
     assistant: () => { entries = [{ ...entries[0]!, kind: "human", via_assistant: true }]; },
@@ -55,6 +57,81 @@ function client() {
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 describe("presence browser asset", () => {
+  it("expires consent before a throttled timer can renew it, even when the monotonic clock pauses during sleep", async () => {
+    const c = client(); await settle(); c.toggle.fire("click"); await settle();
+    const count = c.calls.length;
+    c.clocks(0, 90000, false); // No expiry callback ran while asleep.
+    c.poll(); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence"]);
+    expect(c.toggle.textContent).toBe("Share presence in this channel");
+    expect(c.sharing.textContent).toContain("Share explicitly again");
+    c.toggle.fire("click"); await settle();
+    expect(c.calls.at(-2)!.status).toBe("online");
+  });
+
+  it("expires all cached states on wall-clock sleep without manufacturing offline", async () => {
+    for (const state of ["online", "away", "offline", "empty"]) {
+      const c = client(); await settle();
+      if (state === "empty") c.empty(); else c.state(state);
+      c.poll(); await settle();
+      c.clocks(0, 89999); expect(c.list.children).toHaveLength(1);
+      c.clocks(0, 90000);
+      expect(c.list.children).toEqual([]);
+      expect(c.connection.textContent).toContain("snapshot expired");
+      expect(c.calls.some(x => x.status)).toBe(false);
+    }
+  });
+
+  it("invalidates a stalled sharing interval's late transport before query-only recovery", async () => {
+    const c = client(); await settle(); c.toggle.fire("click"); await settle();
+    c.clocks(30000, 30000, false);
+    const release = c.delayNext(); c.poll(); await settle();
+    const request = c.calls.at(-1)!;
+    c.clocks(30000, 120000);
+    expect(request.signal.aborted).toBe(true);
+    expect(c.list.children).toEqual([]);
+    const count = c.calls.length;
+    release(); await settle();
+    expect(c.calls).toHaveLength(count); // Late write cannot continue into a snapshot.
+    c.poll(); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence"]);
+    expect(c.toggle.textContent).toBe("Share presence in this channel");
+  });
+
+  it("uses monotonic age despite wall-clock rollback and does not extend consent via queries", async () => {
+    const c = client(); await settle(); c.toggle.fire("click"); await settle();
+    c.document.hidden = true; c.docEvents.fire("visibilitychange"); await settle();
+    c.clocks(89999, -500000, false); c.poll(); await settle();
+    expect(c.toggle.textContent).toBe("Stop sharing presence");
+    const count = c.calls.length;
+    c.clocks(90000, -500000, false);
+    c.document.hidden = false; c.docEvents.fire("visibilitychange"); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence"]);
+    expect(c.toggle.textContent).toBe("Share presence in this channel");
+  });
+
+  it("preserves fresh explicit consent after an expired interval's late denial", async () => {
+    const c = client(); await settle(); c.toggle.fire("click"); await settle();
+    c.deny(); const release = c.delayNext(); c.poll(); await settle();
+    c.clocks(90000, 90000);
+    c.allow(); c.toggle.fire("click"); release(); await settle();
+    expect(c.toggle.disabled).toBe(false);
+    expect(c.toggle.textContent).toBe("Stop sharing presence");
+    expect(c.calls.filter(x => x.status === "online")).toHaveLength(3);
+    expect(c.list.children).toHaveLength(1);
+  });
+
+  it("does not use clock expiry or renewed clicks to bypass current access denial", async () => {
+    const c = client(); await settle(); c.toggle.fire("click"); await settle();
+    c.deny(); c.poll(); await settle();
+    expect(c.toggle.disabled).toBe(true);
+    const count = c.calls.length;
+    c.clocks(120000, 120000); c.toggle.fire("click"); c.poll(); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence"]);
+    expect(c.list.children).toEqual([]);
+    expect(c.toggle.disabled).toBe(true);
+  });
+
   it("requires renewed consent after ambiguous heartbeat delivery, polls query-only and does not claim offline", async () => {
     const c = client(); await settle();
     c.failNext(); c.toggle.fire("click"); await settle();

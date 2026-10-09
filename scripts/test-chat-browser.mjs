@@ -205,10 +205,22 @@ try {
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(reconcileStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
+    // Advance over a stalled interval, firing each due timer at most once. This is
+    // a controlled browser-clock regression, not native OS sleep/freeze acceptance.
+    const gapStart = presenceCalls.length;
+    await page.clock.fastForward(90001);
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+    await expect(page.locator('[data-presence-sharing]')).toContainText('Share explicitly again');
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(gapStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(gapStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
     expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(beforeCursor);
     await noOverflow(page);
     await ctx.close();
-    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery recovery, cursor unchanged`);
+    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/timer-gap recovery, cursor unchanged`);
   }
   // Playwright routing and its default Chromium flag disable native BFCache.
   // Use an actual loopback HTTP bridge and omit ONLY that flag for this pass.
