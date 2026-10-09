@@ -7,14 +7,30 @@ import type { Identity, Invite, Role } from "./types";
 export const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
 const ROLES: Role[] = ["root", "admin", "member", "reader"];
 
+/** Conservative supported mailbox syntax, not a deliverability or ownership proof. */
+export function normalizeInviteEmail(input: string): string {
+  // Check before trim/case folding: control bytes must not disappear into normalization.
+  if (input.length > 254 || /[^\x20-\x7e]/.test(input)) throw badRequest("invalid email");
+  const email = normalizeEmail(input);
+  const parts = email.split("@");
+  if (parts.length !== 2) throw badRequest("invalid email");
+  const [local, domain] = parts as [string, string];
+  if (local.length > 64 || !/^[a-z0-9!#$%&'*+\-/=?^_`{|}~]+(?:\.[a-z0-9!#$%&'*+\-/=?^_`{|}~]+)*$/.test(local)) {
+    throw badRequest("invalid email");
+  }
+  const labels = domain.split(".");
+  if (labels.length < 2 || labels.some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) {
+    throw badRequest("invalid email");
+  }
+  return email;
+}
+
 export async function createInvite(
   db: D1Database,
   input: { tenant_id: string | null; email: string; role: Role; display_name: string | null; created_by: string | null },
   now: number,
 ): Promise<{ invite: Invite; token: string }> {
-  const email = normalizeEmail(input.email);
-  if (!email.includes("@")) throw badRequest("invalid email");
-  if (email.startsWith("@")) throw badRequest("invalid email");
+  const email = normalizeInviteEmail(input.email);
   const display_name = input.display_name === null ? null : input.display_name.trim();
   if (display_name === "") throw badRequest("display_name must not be empty");
   if (!ROLES.includes(input.role)) throw badRequest("invalid role");

@@ -5,7 +5,7 @@ import { badRequest, conflict, forbidden, notFound } from "../errors";
 import { isAgentDomainAddress } from "../db/agents";
 import { getIdentityByEmail } from "../db/identities";
 import { getMembership } from "../db/memberships";
-import { createInvite, inviteIsOpen, listInvites, revokeInvite } from "../db/invites";
+import { createInvite, inviteIsOpen, listInvites, normalizeInviteEmail, revokeInvite } from "../db/invites";
 import { recordEvent } from "../db/events";
 import type { Invite } from "../db/types";
 
@@ -19,8 +19,8 @@ function status(i: Invite, now: number): "open" | "accepted" | "revoked" | "expi
 export const inviteCreate = defineVerb({
   name: "invite.create", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60,
   renderForm: (r) => {
-    const x = r as { invite_url: string; expires_at: number; email?: string };
-    return `<h1>Invite ready</h1><p class="lede">Send this link yourself. It works once, until ${new Date(x.expires_at).toISOString().slice(0, 10)}, and is not shown again.</p>
+    const x = r as { invite_url: string; expires_at: number; email: string };
+    return `<h1>Invite ready</h1><p>Invited address: <strong>${esc(x.email)}</strong>. Check the complete address before sharing. Format checks do not verify mailbox ownership.</p><p class="lede">Send this link yourself. It works once, until ${new Date(x.expires_at).toISOString().slice(0, 10)}, and is not shown again.</p>
 <p><input id="invite-link" readonly value="${esc(x.invite_url)}" style="width:100%" onfocus="this.select()" aria-label="Invite link"></p>
 <p><button type="button" class="copy" data-copy="#invite-link">Copy link</button></p>${COPY_SCRIPT}
 <p>Or they can simply sign in with Google at pimwell.com using the invited address; the invite is accepted on the way in.</p>
@@ -28,7 +28,7 @@ export const inviteCreate = defineVerb({
   },
   summary: "Create a single-use invite link for an email. The link is returned once and never emailed.",
   parse: (i) => ({
-    email: reqString(i, "email", { max: 254 }),
+    email: normalizeInviteEmail(reqString(i, "email", { max: 254 })),
     role: reqEnum(i, "role", ["admin", "member", "reader"] as const),
     display_name: optString(i, "display_name", { max: 80 }),
   }),
@@ -42,7 +42,7 @@ export const inviteCreate = defineVerb({
     }
     const { invite, token } = await createInvite(ctx.db, { tenant_id: ctx.tenant!.id, email: p.email, role: p.role, display_name: p.display_name, created_by: ctx.identity!.id }, ctx.now);
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "invite.create", target_kind: "invite", target_id: invite.id, summary: `Invited ${invite.email} as ${invite.role}` }, ctx.now);
-    return { invite_id: invite.id, invite_url: `https://${ctx.env.HUB_DOMAIN}/invite/${token}`, expires_at: invite.expires_at };
+    return { invite_id: invite.id, email: invite.email, invite_url: `https://${ctx.env.HUB_DOMAIN}/invite/${token}`, expires_at: invite.expires_at };
   },
 });
 

@@ -82,6 +82,7 @@ ${fresh ? `<form method="post" action="/api/agent.connect">
     const root = ctx.identity.is_root === 1;
     inspector = `<a class="back" href="/people">‹ People</a><h1>Invite someone</h1>
 <p class="lede">You get a single-use link to send yourself; Pimwell never emails people who haven't written to it. They can also just sign in with Google at ${esc(env.HUB_DOMAIN)} as the invited address.</p>
+<p>Check the complete address, including the domain. Format checks do not verify mailbox ownership or catch plausible typos.</p>
 ${fresh ? `<form method="post" action="/api/invite.create">
 <label style="display:block">Email <input name="email" type="email" required maxlength="254" style="display:block;width:100%" value="${esc(pre("email"))}" autofocus></label>
 <label style="display:block">Name <input name="display_name" maxlength="100" style="display:block;width:100%" placeholder="How they appear here" value="${esc(pre("name"))}"></label>
