@@ -52,6 +52,7 @@ export function header(m: MsgView, tag: NameTag, channel?: string): string {
   if (tag.session_kind === "unknown") parts.push("unknown-session");
   if (tag.via_assistant) parts.push("via-assistant");
   if (m.root_seq !== null) parts.push(`in:#${m.root_seq}`);
+  if (m.response_to) parts.push(`response-slot:${m.response_to.stage}`, `to:#${m.response_to.seq}:r${m.response_to.rev}`);
   if (m.retracted) parts.push("retracted");
   else if (m.edited) parts.push(`edited:r${m.rev}`);
   if (m.hop_limited && m.mentions.length > 0) parts.push("hop-limit");

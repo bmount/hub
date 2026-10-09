@@ -8,7 +8,7 @@ import { getControls } from "../db/chat";
 import { LIMITS, computeHop, gateRefuses, nextAgentRun, pairTrip, wakesAllowed } from "./rules";
 import type {
   AuthorKind, ChatSessionKind, Digest, DigestQuery, MsgView, PostInput, PostOk, PostOutcome, ReadPage, ReadQuery, StoredRef, Suppressed,
-  ResponseIntent, ResponseSlot, ResponseStatus, Version, VersionInput, WakeItem, WakeKind,
+  ResponseAttribution, ResponseIntent, ResponseSlot, ResponseStatus, Version, VersionInput, WakeItem, WakeKind,
 } from "./types";
 
 const SCHEMA = [
@@ -50,7 +50,7 @@ type ArtifactRow = {
   seq: number; msg_id: string; rev: number; kind: string; author_id: string; session_id: string | null; session_kind: string;
   thread_root: string | null; body: string; meta_json: string; hop: number; created_at: number;
 };
-type Meta = { mentions?: string[]; hop_limited?: boolean; retracted?: boolean; loop?: string[]; gate?: boolean };
+type Meta = { mentions?: string[]; hop_limited?: boolean; retracted?: boolean; loop?: string[]; gate?: boolean; response_to?: ResponseAttribution };
 type NewMessage = {
   kind: "say" | "system"; author_id: string; author_kind: AuthorKind; session_id: string | null; session_kind: ChatSessionKind;
   thread_root: string | null; body: string; body_sha256: string; meta: Meta; hop: number; cause_seq: number | null; now: number;
@@ -113,7 +113,7 @@ export class Conversation extends DurableObject<Env> {
       author_id: r.author_id, author_kind: r.author_kind as AuthorKind, session_id: r.current_session_id, session_kind: r.current_session_kind as ChatSessionKind,
       hop: r.hop, body: r.body, edited: r.rev > 1 && r.retracted === 0, retracted: r.retracted === 1, reply_count: r.reply_count,
       last_reply_seq: r.last_reply_seq, refs, mentions: meta.mentions ?? [], hop_limited: meta.hop_limited === true,
-      created_at: r.created_at, updated_at: r.updated_at,
+      created_at: r.created_at, updated_at: r.updated_at, response_to: meta.response_to ?? null,
     };
   }
 
@@ -380,7 +380,13 @@ export class Conversation extends DurableObject<Env> {
     const hop = computeHop(me.kind, target ? target.hop : null, scopeWake);
     const { seq, msg_id } = this.#newMessage({
       kind: "say", author_id: me.id, author_kind: me.kind, session_id: me.session_id, session_kind: me.session_kind, thread_root: root,
-      body: p.body, body_sha256: p.body_sha256, meta: { mentions: p.mentions.map((m) => m.identity_id), hop_limited: !wakesAllowed(hop) },
+      body: p.body, body_sha256: p.body_sha256, meta: {
+        mentions: p.mentions.map((m) => m.identity_id), hop_limited: !wakesAllowed(hop),
+        // Source evidence was checked in this transaction. Publish only exact source/stage attribution,
+        // never the private fingerprint, replay key, recipients or a claim that work ran.
+        ...(p.response ? { response_to: { msg_id: p.response.source.msg_id, author_id: p.response.source.author_id,
+          rev: p.response.source.rev, seq: target!.first_seq, stage: p.response.stage ?? "result" } } : {}),
+      },
       hop, cause_seq: target ? target.last_seq : null, now: p.now,
     });
     this.#storeRefs(seq, msg_id, 1, p.refs);
@@ -479,10 +485,15 @@ export class Conversation extends DurableObject<Env> {
       if (stale) return stale;
     }
     const rev = m.rev + 1;
+    const response_to = (JSON.parse(m.meta_json) as Meta).response_to;
     const seq = this.#append({
       msg_id: m.msg_id, rev, kind: "say", author_id: me.id, session_id: me.session_id, session_kind: me.session_kind, thread_root: m.thread_root,
       body: retract ? "" : v.body!, body_sha256: retract ? "" : v.body_sha256,
-      meta: retract ? { retracted: true } : { mentions: v.mentions.map((x) => x.identity_id), hop_limited: !wakesAllowed(m.hop) },
+      meta: {
+        ...(retract ? { retracted: true } : { mentions: v.mentions.map((x) => x.identity_id), hop_limited: !wakesAllowed(m.hop) }),
+        // Text revisions (including operator retractions) cannot rebind the original committed reply.
+        ...(response_to ? { response_to } : {}),
+      },
       hop: m.hop, cause_seq: m.last_seq, now: v.now,
     });
     if (!retract) this.#storeRefs(seq, m.msg_id, rev, v.refs);
@@ -556,14 +567,15 @@ export class Conversation extends DurableObject<Env> {
     const counts = this.#q<{ n: number; agents: number }>(
       "SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN author_kind = 'agent' THEN 1 ELSE 0 END), 0) AS agents FROM msg WHERE kind = 'say' AND retracted = 0 AND first_seq > ?", since,
     )[0]!;
-    // Identity ids are ULIDs, so a quoted id inside meta_json is an exact match.
+    // Match only the mentions array, not other metadata such as response source author ids.
     // Mentions are current-revision evidence: an edit after the cursor may add or revise a mention
     // on an older message. Use activity order, not creation order; removed mentions and retractions
     // are not current requests. The new-message counts above still count only newly created text.
     // One row past the cap says the list was cut, so the caller does not move its cursor over what it never saw.
     const mentionRows = this.#q<MsgRow>(
-      `${MSG_SELECT} WHERE m.kind = 'say' AND m.last_seq > ? AND m.author_id <> ? AND m.retracted = 0 AND a.meta_json LIKE ? ORDER BY m.last_seq LIMIT ?`,
-      since, q.me, `%"${q.me}"%`, q.max_items + 1,
+      `${MSG_SELECT} WHERE m.kind = 'say' AND m.last_seq > ? AND m.author_id <> ? AND m.retracted = 0
+       AND EXISTS (SELECT 1 FROM json_each(a.meta_json, '$.mentions') WHERE value = ?) ORDER BY m.last_seq LIMIT ?`,
+      since, q.me, q.me, q.max_items + 1,
     );
     const mentions_truncated = mentionRows.length > q.max_items;
     const mentions_me = mentionRows.slice(0, q.max_items).map((r) => this.#view(r));

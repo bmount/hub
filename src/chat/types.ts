@@ -19,6 +19,8 @@ export type Audience = { agent_members: string[]; operators: Record<string, stri
 export type ResponseSource = { msg_id: string; rev: number; author_id: string };
 export type ResponseStage = "progress" | "result";
 export type ResponseTarget = ResponseSource & { stage?: ResponseStage };
+/** Public message attribution, not the caller-private ledger or a task execution status. */
+export type ResponseAttribution = ResponseSource & { seq: number; stage: ResponseStage };
 export type ResponseIntent = { source: ResponseSource; fingerprint: string; stage?: ResponseStage };
 /** A recorded chat post, not a task/execution status. No body, fingerprint, wake recipients or other callers' records. */
 export type ResponseSlot = {
@@ -57,6 +59,8 @@ export type MsgView = {
   author_id: string; author_kind: AuthorKind; session_id: string | null; session_kind: ChatSessionKind; hop: number;
   body: string; edited: boolean; retracted: boolean; reply_count: number; last_reply_seq: number | null;
   refs: StoredRef[]; mentions: string[]; hop_limited: boolean; created_at: number; updated_at: number;
+  /** Server-recorded original response binding; absent on older/untracked messages. */
+  response_to?: ResponseAttribution | null;
 };
 
 export type Version = {
