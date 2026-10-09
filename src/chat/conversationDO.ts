@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { ulid } from "../ids";
+import { postIntentFingerprint } from "./postIntent";
 import { bindOnce, storedBinding } from "./bound";
 import { PRESENCE_TTL_MS, retainedPresence, type PresenceRow, type PresenceStatus } from "./presence";
 import { inboxStub } from "./stubs";
@@ -153,18 +154,35 @@ export class Conversation extends DurableObject<Env> {
   }
 
   /** Keys are namespaced by operation (a post key never replays an edit) and expire after 24 h. */
-  #replay(identity_id: string, op: Op, key: string | null, now: number): PostOk | null {
+  #replayRecord(identity_id: string, op: Op, key: string | null, now: number): { result: PostOk; fingerprint?: string } | null {
     if (!key) return null;
     const r = this.#q<{ result_json: string }>(
       "SELECT result_json FROM idem WHERE identity_id = ? AND key = ? AND created_at > ?", identity_id, `${op}:${key}`, now - LIMITS.IDEM_TTL_MS,
     )[0];
-    return r ? { ...(JSON.parse(r.result_json) as PostOk), replayed: true } : null;
+    if (!r) return null;
+    const stored = JSON.parse(r.result_json) as PostOk | { result: PostOk; fingerprint: string };
+    // Old records and version operations retain their original result-only shape.
+    return "result" in stored ? stored : { result: stored };
   }
 
-  #remember(identity_id: string, op: Op, key: string | null, result: PostOk, now: number): void {
+  #replay(identity_id: string, op: Op, key: string | null, now: number): PostOk | null {
+    const prior = this.#replayRecord(identity_id, op, key, now);
+    return prior ? { ...prior.result, replayed: true } : null;
+  }
+
+  #postReplay(identity_id: string, key: string | null, fingerprint: string, now: number): PostOutcome | null {
+    const prior = this.#replayRecord(identity_id, "post", key, now);
+    if (!prior) return null;
+    if (!prior.fingerprint || prior.fingerprint !== fingerprint) {
+      return { refused: "conflict", detail: "post intent differs or was not recorded for this key; reconcile authorized history before sending" };
+    }
+    return { ...prior.result, replayed: true };
+  }
+
+  #remember(identity_id: string, op: Op, key: string | null, result: PostOk, now: number, fingerprint?: string): void {
     if (!key) return;
     this.#run("DELETE FROM idem WHERE created_at <= ?", now - LIMITS.IDEM_TTL_MS);
-    this.#run("INSERT OR REPLACE INTO idem (identity_id, key, result_json, created_at) VALUES (?, ?, ?, ?)", identity_id, `${op}:${key}`, JSON.stringify(result), now);
+    this.#run("INSERT OR REPLACE INTO idem (identity_id, key, result_json, created_at) VALUES (?, ?, ?, ?)", identity_id, `${op}:${key}`, JSON.stringify(fingerprint ? { result, fingerprint } : result), now);
   }
 
   #responseKey(identity_id: string, intent: Pick<ResponseIntent, "source" | "stage">): string {
@@ -313,14 +331,21 @@ export class Conversation extends DurableObject<Env> {
     return this.#replay(identity_id, op, key, Date.now());
   }
 
+  /** Read-only payload-bound preflight; post repeats it atomically before committing artifacts/outboxes. */
+  async postReplay(tenant_id: string, conversation_id: string, identity_id: string, key: string, fingerprint: string): Promise<PostOutcome | null> {
+    this.#bind(tenant_id, conversation_id);
+    return this.#postReplay(identity_id, key, fingerprint, Date.now());
+  }
+
   async post(input: PostInput): Promise<PostOutcome> {
     this.#bind(input.tenant_id, input.conversation_id);
-    const outcome = this.ctx.storage.transactionSync(() => this.#post(input));
+    const intent_fingerprint = input.intent_fingerprint ?? await postIntentFingerprint(input);
+    const outcome = this.ctx.storage.transactionSync(() => this.#post({ ...input, intent_fingerprint }));
     await this.#drain();
     return outcome;
   }
 
-  #post(p: PostInput): PostOutcome {
+  #post(p: PostInput & { intent_fingerprint: string }): PostOutcome {
     const me = p.author;
     // The Worker checks these from D1 first; repeat supplied controls even for cached successes.
     // Replay is reconciliation, not permission to bypass a mute or kill switch.
@@ -331,7 +356,7 @@ export class Conversation extends DurableObject<Env> {
     }
     // Durable responses must never replay an unrelated ordinary idempotency key.
     if (!p.response) {
-      const prior = this.#replay(me.id, "post", p.idempotency_key, p.now);
+      const prior = this.#postReplay(me.id, p.idempotency_key, p.intent_fingerprint, p.now);
       if (prior) return prior;
     }
     if (p.response) {
@@ -450,7 +475,7 @@ export class Conversation extends DurableObject<Env> {
     if (p.response) {
       this.#run("INSERT INTO meta (key, value) VALUES (?, ?)", this.#responseKey(me.id, p.response), JSON.stringify({ intent: p.response, result }));
     } else {
-      this.#remember(me.id, "post", p.idempotency_key, result, p.now);
+      this.#remember(me.id, "post", p.idempotency_key, result, p.now, p.intent_fingerprint);
     }
     return result;
   }

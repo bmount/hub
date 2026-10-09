@@ -4,6 +4,7 @@ import { recordEvent } from "../db/events";
 import { listAgentsForOperator } from "../db/agents";
 import { MUTE_FOREVER, getControls, listAgentMembers, setAgentMute, type ChannelRow } from "../db/chat";
 import { sha256Hex } from "../ids";
+import { postIntentFingerprint } from "./postIntent";
 import { readableChannel } from "./access";
 import { parseBody, parseRefText, type ParsedBody, type ParsedRef } from "./grammar";
 import { people } from "./handles";
@@ -177,9 +178,13 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
   // A cached success is reconciliation, not authority to bypass current posting controls.
   // Keep this before both replay paths, but before any rate reservation or new post effects.
   const { audience, policy } = await gate(ctx, ch, author);
+  const intent_fingerprint = response ? undefined : await postIntentFingerprint(p);
   if (!response && p.idempotency_key) {
-    const prior = (await conv.replay(ch.tenant_id, ch.project_id, author.id, "post", p.idempotency_key)) as PostOk | null;
-    if (prior) return result(ch, prior, [], 0);
+    const prior = (await conv.postReplay(ch.tenant_id, ch.project_id, author.id, p.idempotency_key, intent_fingerprint!)) as PostOutcome | null;
+    if (prior) {
+      if (prior.refused !== null) throw await refusalError(ctx, author, ch, prior);
+      return result(ch, prior, [], 0);
+    }
   }
   if (response) {
     const prior = (await conv.responseReplay(ch.tenant_id, ch.project_id, author.id, response)) as PostOutcome | null;
@@ -198,7 +203,7 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
   }
   const o = (await conv.post({
     tenant_id: ch.tenant_id, conversation_id: ch.project_id, now: ctx.now, author, policy, body: p.body, body_sha256: await sha256Hex(p.body),
-    after: p.after, reply_to: p.reply_to, refs: x.resolved, mentions: x.mentions, wake_hop: reserve.wake_hop, thread_wake_hops: reserve.thread_wake_hops, idempotency_key: p.idempotency_key, audience, response,
+    after: p.after, reply_to: p.reply_to, refs: x.resolved, mentions: x.mentions, wake_hop: reserve.wake_hop, thread_wake_hops: reserve.thread_wake_hops, idempotency_key: p.idempotency_key, audience, response, intent_fingerprint,
   })) as PostOutcome;
   if (o.refused !== null) throw await refusalError(ctx, author, ch, o);
   if (!o.replayed) await safeEvents(ctx, ch, author, o, "chat.post");
