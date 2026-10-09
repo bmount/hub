@@ -37,7 +37,7 @@ export async function present(ctx: Ctx, msgs: MsgView[]): Promise<{ tagOf: TagOf
   return { tagOf, refs };
 }
 
-export type ReadResult = { tenant_id: string; conversation_id: string; channel: string; head: number; messages: MsgJson[]; next_after: number | null; next_before: number | null; text: string };
+export type ReadResult = { tenant_id: string; identity_id: string; conversation_id: string; channel: string; head: number; messages: MsgJson[]; next_after: number | null; next_before: number | null; text: string };
 
 /** Compact text within the budget, and JSON for exactly the messages the text shows. */
 export async function readResult(
@@ -47,7 +47,7 @@ export async function readResult(
   const r = renderMessages({ title: o.title, c: ch.slug, messages: msgs, tagOf, refs, budget: o.budget, keep: o.keep, has_more: o.has_more, full: o.full ?? null, context: o.context, cursors: o.cursors });
   const shown = new Set(r.shown);
   return {
-    tenant_id: ch.tenant_id, conversation_id: ch.project_id, channel: ch.slug, head: o.head,
+    tenant_id: ch.tenant_id, identity_id: viewerOf(ctx).identity.id, conversation_id: ch.project_id, channel: ch.slug, head: o.head,
     messages: msgs.filter((m) => shown.has(m.seq)).map((m) => msgJson(m, tagOf(m.author_id, m.session_id, m.session_kind), refs.get(m.seq) ?? [])),
     next_after: r.next_after, next_before: r.next_before, text: r.text,
   };
