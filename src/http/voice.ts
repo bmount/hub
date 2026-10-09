@@ -12,9 +12,9 @@ import { takeRateDetail } from "../rate";
 import { note } from "../log";
 import { HubError } from "../errors";
 import { ask, transcribe } from "../models/ask";
+import { MAX_VOICE_AUDIO_BYTES, MAX_VOICE_RECORDING_BODY_BYTES, MAX_VOICE_CORRECTION_BODY_BYTES, readRequestBytes, readRequestForm } from "./body";
 
 export const VOICE_HEADER = "x-pimwell-voice";
-const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
 const MAX_CONTEXT = 2400;
 const AUDIO_TYPES: Record<string, string> = { "audio/webm": "webm", "audio/mp4": "mp4", "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/wav": "wav", "audio/x-m4a": "m4a", "audio/aac": "m4a" };
 
@@ -113,12 +113,17 @@ export async function voiceTranscribe(request: Request, env: Env, waitUntil?: (p
   const g = await guard(request, env, waitUntil);
   if (g instanceof Response) return g;
   const ctx = g;
-  if (Number(request.headers.get("content-length") ?? "0") > MAX_AUDIO_BYTES) return json({ error: "too_large", reason: "that recording is too long; keep it under about ten minutes" }, 413);
-  let form: FormData;
-  try { form = await request.formData(); } catch { return json({ error: "bad_request", reason: "expected a recording" }, 400); }
+  let form: FormData | null;
+  try { form = await readRequestForm(request, MAX_VOICE_RECORDING_BODY_BYTES); } catch (e) {
+    if (!(e instanceof HubError)) throw e;
+    return e.status === 413
+      ? json({ error: "too_large", reason: "that recording request is too large; keep audio under 15 MiB" }, 413)
+      : json({ error: "bad_request", reason: "expected a recording" }, 400);
+  }
+  if (!form) return json({ error: "bad_request", reason: "expected a recording" }, 400);
   const audio = form.get("audio");
   if (!(audio instanceof File) || audio.size === 0) return json({ error: "bad_request", reason: "no recording arrived" }, 400);
-  if (audio.size > MAX_AUDIO_BYTES) return json({ error: "too_large", reason: "that recording is too long" }, 413);
+  if (audio.size > MAX_VOICE_AUDIO_BYTES) return json({ error: "too_large", reason: "that recording is too long" }, 413);
   const type = audio.type.split(";")[0]!.trim().toLowerCase();
   const ext = AUDIO_TYPES[type];
   if (!ext) return json({ error: "bad_request", reason: `recordings of type ${type || "unknown"} aren't supported` }, 415);
@@ -139,10 +144,18 @@ export async function voiceCorrect(request: Request, env: Env, waitUntil?: (p: P
   if (g instanceof Response) return g;
   const ctx = g;
   if (!(request.headers.get("content-type") ?? "").startsWith("application/json")) return json({ error: "bad_request" }, 400);
-  const raw = await request.text();
+  let raw: string;
+  try { raw = new TextDecoder().decode(await readRequestBytes(request, MAX_VOICE_CORRECTION_BODY_BYTES)); } catch (e) {
+    if (!(e instanceof HubError)) throw e;
+    return json({ error: e.status === 413 ? "too_large" : "bad_request" }, e.status);
+  }
   if (raw.length > 40_000) return json({ error: "too_large" }, 413);
   let b: { text?: unknown; context?: unknown };
-  try { b = JSON.parse(raw); } catch { return json({ error: "bad_request", reason: "invalid JSON" }, 400); }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("expected object");
+    b = parsed;
+  } catch { return json({ error: "bad_request", reason: "invalid JSON object" }, 400); }
   const text = typeof b.text === "string" ? b.text.trim() : "";
   if (!text || text.length > 10_000) return json({ error: "bad_request", reason: "a transcript of up to 10000 characters" }, 400);
   const context = typeof b.context === "string" ? b.context.slice(0, MAX_CONTEXT * 2) : "";

@@ -86,6 +86,26 @@ and multipart framing, not decoded character counts or just uploaded file size.
   named active-agent attribution, tenant-bound project lookup and model audit.
   The existing KV run gate is eventually consistent, not an atomic hard quota.
 
+- `POST /voice/transcribe`: 15 MiB + 64 KiB actual bytes before multipart
+  parsing. The separate **audio file** limit remains 15 MiB; the additional
+  allowance bounds multipart headers, context and ignored fields without
+  excluding a full-size recording. It is not an increased audio allowance.
+  Own human browser, active tenant membership (on a tenant host), same-Origin,
+  voice custom-header and identity-rate denials precede reading. Overflow
+  returns inert 413; read errors/aborts or malformed forms return safe 400.
+  Refused requests perform no vocabulary lookup, transcription, model usage
+  write or audio/transcript storage. Existing audio format checks remain.
+- `POST /voice/correct`: 128 KiB actual bytes before JSON parsing, after the
+  same voice guards and JSON-media check. This accommodates the existing
+  40,000 UTF-16-unit envelope in UTF-8; the original 40,000-unit envelope and
+  10,000-unit transcript limits remain. Context is still clipped as before.
+  Overflow returns inert 413; read errors/aborts and malformed input return
+  safe 400. JSON must be an object (null, scalars and arrays no longer reach
+  property access). Refused requests perform no vocabulary lookup, model
+  correction or usage/storage effects. Voice rate controls remain eventually
+  consistent, not an atomic hard quota. Neither endpoint stores recordings
+  or transcripts; these caps do not authorize sending a message.
+
 Oversized requests return 413 without running verbs, creating clients or
 executing tools. API form refusals render an inert readable page. Stream errors
 or request cancellation return safe 400 errors without reflecting arbitrary
@@ -97,11 +117,11 @@ headers are removed. Original requests remain the authentication/logging source.
 
 ## Remaining work and limits
 
-This increment does **not** complete #102 across every route. The voice
-recording/transcript parsers still need suitable endpoint budgets.
-Do not apply a 1 MiB global
-middleware cap to Git smart HTTP forwarded to Ardi or voice uploads with their
-separate recording allowance. Incoming mail uses its separate original-byte cap.
+This increment does **not** complete every #102 abuse/deadline requirement.
+The identified API/MCP, browser, OAuth, internal and voice parsers now have
+endpoint budgets. Do not apply a 1 MiB global middleware cap to Git smart HTTP
+forwarded to Ardi or voice uploads with their separate recording allowance.
+Incoming mail uses its separate original-byte cap.
 
 No body deadline is introduced here: an under-limit stalled stream can still
 wait until client/platform cancellation. Whole-request read deadlines and
@@ -131,5 +151,13 @@ UTF-8 overflow, stalled cancellation, safe read/abort errors, malformed
 objects, pre-read service-secret/public-IP and eval host/key/rate denials.
 Refused bodies perform no D1 credential/principal lookups or activity/model
 writes; valid capped eval input still records attributed model usage and audit.
-The full suite guards existing
-tenant, mailbox, grant, cookie and login-proof boundaries.
+Voice ingress tests additionally cover actual production overflow routing,
+full 15 MiB audio at the exact envelope cap, oversized files inside bounded
+multipart, ignored fields, full Unicode transcripts at the original decoded
+limit, exact byte limits, malformed JSON objects/forms, no-pull auth/tenant/
+Origin/header/media/rate denials, forged/absent framing, UTF-8, read errors/
+aborts and stalled cancellation. Refusals leave model calls, usage ledger,
+conversation storage and events untouched. Valid calls still record usage;
+no real provider invocation is needed for these native-Workers fixtures.
+The full suite guards existing tenant, mailbox, grant, cookie and login-proof
+boundaries.

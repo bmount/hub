@@ -15,6 +15,12 @@ export const MAX_PLAYGROUND_BODY_BYTES = 64 * 1024;
 // to 60 cases. These limits do not apply to Git bodies forwarded to Ardi.
 export const MAX_INTERNAL_BODY_BYTES = 16 * 1024;
 export const MAX_INTENT_EVAL_BODY_BYTES = 64 * 1024;
+// Retain the voice clip allowance separately from multipart framing/context.
+export const MAX_VOICE_AUDIO_BYTES = 15 * 1024 * 1024;
+export const MAX_VOICE_RECORDING_BODY_BYTES = MAX_VOICE_AUDIO_BYTES + 64 * 1024;
+// Accommodate the existing 40,000 UTF-16-unit envelope in UTF-8, without
+// increasing the decoded transcript/context limits.
+export const MAX_VOICE_CORRECTION_BODY_BYTES = 128 * 1024;
 
 /** Content-Length is only an early rejection hint. Bound actual bytes before
  * JSON/form parsers or SDK classification. Do not retain source-owned chunks or
