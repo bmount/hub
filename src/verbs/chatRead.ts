@@ -23,11 +23,11 @@ const schema = (properties: McpInputSchema["properties"], required: string[] = [
 
 export const chatRead = defineVerb({
   name: "chat.read", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Read a channel: newest messages, or current changes after an activity cursor at most the authorized channel head. Future cursors are refused, not an empty evidence range. Replies are collapsed; use chat_thread. Reads do not acknowledge or prove processing.",
+  summary: "Read a channel: newest messages, or current changes after an activity cursor at most the authorized channel head. Future cursors are refused, not an empty evidence range. Reply edits/retractions count as root activity, but replies remain collapsed; use chat_thread for original evidence. Reads do not acknowledge or prove processing.",
   mcp: {
     scope: "read", destructive: false, title: "Read a channel", render: chatText,
     input: schema({
-      c: C, after: { type: "integer", minimum: 0, description: "Only current changes after this activity seq, at most the authorized channel head. Continue with next_after, not a guessed future cursor." },
+      c: C, after: { type: "integer", minimum: 0, description: "Only current root/thread changes after this activity seq, at most the authorized channel head. Includes reply edits/retractions; fetch chat_thread before processing. Continue with next_after, not a guessed future cursor." },
       before: { type: "integer", minimum: 1, description: "Page back: messages numbered below this." },
       limit: { type: "integer", minimum: 1, maximum: 200, description: "Messages to fetch, default 50." }, budget: BUDGET,
     }, ["c"]),

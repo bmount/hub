@@ -572,8 +572,12 @@ export class Conversation extends DurableObject<Env> {
     }
     const cond = [root ? "m.thread_root = ?" : "m.thread_root IS NULL"];
     const args: SqlStorageValue[] = root ? [root.msg_id] : [];
-    // A top-level message changed when it was edited or got a reply.
-    const touched = root ? "m.last_seq" : "MAX(m.last_seq, COALESCE(m.last_reply_seq, 0))";
+    // Collapsed roots changed when either the root OR any reply was created/revised/retracted.
+    // last_reply_seq is a reply's creation number (used by presentation), not its latest activity.
+    // Derive forward activity from persisted current rows, including retractions; no cached/backfilled counter.
+    // Newest/backward pages still use creation order and need no whole-thread activity scan.
+    const touched = root || q.after === null ? "m.last_seq"
+      : "MAX(m.last_seq, COALESCE((SELECT MAX(r.last_seq) FROM msg r WHERE r.thread_root = m.msg_id), 0))";
     let order = "DESC";
     if (q.after !== null) {
       cond.push(`${touched} > ?`);
