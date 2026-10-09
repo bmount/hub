@@ -215,17 +215,21 @@ describe("receipt-free independently authenticated ingress", () => {
       .toMatchObject({ identity_id: w.human.identity.id, forwarded: 1, text: expect.stringContaining("stranger@example.com") });
   });
 
-  it("production email entry point uses bounded trusted DoH, not reply or transport auth headers", async () => {
+  it.each([false, true])("production email entry point uses bounded trusted DoH (delegated=%s), not reply or transport auth headers", async (delegated) => {
     const w = await world();
     const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
       const u = new URL(String(url));
       expect(u.origin).toBe("https://cloudflare-dns.com");
       const name = u.searchParams.get("name");
-      return new Response(JSON.stringify({ Status: 0, Question: [{ name, type: 16 }], Answer: [{ name, type: 16, data: `"${fixtures.record}"` }] }), { headers: { "content-type": "application/dns-json" } });
+      const target = "selector1.example-com._domainkey.provider.example";
+      const data = fixtures.record.match(/.{1,200}/g)!.map((s) => `"${s}"`).join(" ").replace("v=DKIM1", "v=\\068KIM1");
+      const Answer = delegated && name !== target ? [{ name, type: 5, data: target + "." }]
+        : [{ name, type: 16, data }];
+      return Response.json({ Status: 0, Question: [{ name, type: 16 }], Answer }, { headers: { "content-type": "application/dns-json" } });
     });
     const m = message(fixtures.first, w.bot.agent.identity.email);
     await handleEmail(m, env, {} as ExecutionContext);
-    expect(fetcher).toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(delegated ? 2 : 1);
     expect(m.reply).not.toHaveBeenCalled();
     expect((await page(w)).items).toHaveLength(1);
     expect(w.sent).toHaveLength(1);

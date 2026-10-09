@@ -78,7 +78,7 @@ describe("independent strict DKIM proof in Workers", () => {
   });
 });
 
-function dnsResponse(name: string, data = `"${fixtures.record}"`) {
+function dnsResponse(name: string, data = fixtures.record.match(/.{1,200}/g)!.map((s) => `"${s}"`).join(" ")) {
   return Response.json({ Status: 0, TC: false, Question: [{ name, type: 16 }],
     Answer: [{ name, type: 16, TTL: 300, data }] }, { headers: { "content-type": "application/dns-json" } });
 }
@@ -110,7 +110,7 @@ describe("bounded trusted DKIM DoH", () => {
   });
   it("fails closed on lookup errors, mismatched answers and oversized responses", async () => {
     for (const response of [new Response("denied", { status: 503 }), dnsResponse("other._domainkey.example.com"),
-      dnsResponse(name, '"unsupported\\escape"'),
+      dnsResponse(name, '"unsupported\\999"'),
       Response.json({ Status: 3 }, { headers: { "content-type": "application/dns-json" } }),
       new Response("x".repeat(16385), { headers: { "content-type": "application/dns-json" } })]) {
       await expect(createDkimResolver(async () => response)(name, "TXT")).rejects.toThrow();

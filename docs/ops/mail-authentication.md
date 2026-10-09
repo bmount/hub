@@ -59,13 +59,31 @@ content, copied-mail permissions, reply targets or threading must be covered
 by the **same** passing signature. Duplicate semantic headers are refused.
 Unsigned Authentication-Results/ARC headers do not supply authority.
 
-Key resolution uses only `https://cloudflare-dns.com/dns-query`, with redirects
-refused, TXT/name validation, matching DNS questions/answers, a 16 KiB response
-limit, at most six lookups, a two-second per-query timeout and five-second total
-lookup budget. Trust is the fixed HTTPS resolver; DNSSEC validation is not
-claimed. CNAME key indirection and escaped TXT records are currently unsupported
-and fail closed. Header bytes are capped at 64 KiB, signatures at six and raw
-mail at 10 MiB. No sender-controlled URLs or native DNS fallback are used.
+Key resolution in `src/mail/dkim-dns.ts` uses only
+`https://cloudflare-dns.com/dns-query`, with redirects refused, validated DNS
+names, matching TXT questions and a 16 KiB response limit. At most six actual
+network queries (including CNAME followups) share a five-second per-message
+budget and two-second per-query timeout. Trust is the fixed HTTPS resolver;
+DNSSEC validation is not claimed. No sender-controlled URLs or native DNS
+fallback are used.
+
+Provider-style CNAME key delegation is supported: up to four connected aliases,
+with case/trailing-dot normalization, whether bundled in one recursive response
+or requiring followup TXT queries. Every answer must belong to that chain.
+Cycles, conflicting/duplicate aliases, CNAME+TXT at the same owner, unrelated
+answers and unsupported record types fail closed. Additional sections cannot
+supply a key. Exactly one final TXT record is required: the pinned verifier reads
+only the first record, so multiple records are refused rather than letting answer
+order choose authority. Delegation never changes the required original signing
+`d=`/From/envelope domain alignment.
+
+Split quoted TXT strings support RFC 1035 decimal-byte and printable literal
+escapes. Malformed, non-printable/non-ASCII strings, segments over 255 bytes,
+more than 32 segments or presentation data over 8 KiB are refused. Escaped DNS
+*names* remain unsupported. Tests exercise real RSA/Ed25519 signed bytes and the
+production email entry point with provider-style delegated/escaped keys; these
+are synthetic trusted-resolver responses, not evidence of real provider delivery.
+Header bytes are capped at 64 KiB, signatures at six and raw mail at 10 MiB.
 
 The handler bounds **actual** raw stream bytes before parsing, verification or
 consent and records actual size. The verifier is connected only through atomic
@@ -86,9 +104,10 @@ automatically released or relabeled. No D1 migration, real tenant/membership or
 credential changes are performed by deployment. The inbox adds a non-destructive
 DO-local mail dedup table through its existing initialization path.
 
-Proof remains deliberately limited: no universal DMARC, SPF/ARC forwarding,
-CNAME/escaped-TXT DKIM key support or fresh-delivery guarantee. Unsupported proof
-is accurately unknown and fail-closed. Real provider compatibility and external
+Proof remains deliberately limited: no universal DMARC, SPF/ARC forwarding or
+fresh-delivery guarantee. DNS chains beyond the bounded limits, escaped DNS names,
+non-ASCII TXT data and other unsupported proof remain accurately unknown and
+fail-closed. Real provider compatibility and external
 mail delivery require separate observations; public deployment smoke tests do
 not prove them. Interrupted effects can require administrator reconciliation if
 there is no independently verified redelivery; this release adds no recovery

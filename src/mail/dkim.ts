@@ -4,7 +4,9 @@ import type { DNSResolver } from "mailauth";
 import { envelopeMatchesFrom } from "./proof";
 import { safeMessageId } from "./mime";
 
-import { MAX_RAW_MAIL_BYTES, readBoundedMail } from "./raw";
+import { MAX_RAW_MAIL_BYTES } from "./raw";
+import { createDkimResolver } from "./dkim-dns";
+export { createDkimResolver } from "./dkim-dns";
 export const MAX_DKIM_BYTES = MAX_RAW_MAIL_BYTES;
 const MAX_HEADER_BYTES = 64 * 1024;
 const MAX_SIGNATURES = 6;
@@ -17,43 +19,6 @@ export type DkimProof =
   | { authentication: "unknown"; source: null; reason: string };
 const unknown = (reason: string): DkimProof => ({ authentication: "unknown", source: null,
   reason: `authentication unknown: independent DKIM ${reason}` });
-
-/** Fixed HTTPS authority, per-message budget and no fallback to native DNS or mail headers.
- * DNSSEC AD is not required: trust is the configured HTTPS resolver, not sender input.
- * CNAME answers and escaped TXT records are deliberately unsupported (fail closed).
- */
-export function createDkimResolver(fetcher: typeof fetch = fetch): DNSResolver {
-  let lookups = 0;
-  const deadline = Date.now() + 5000;
-  return async (name, type) => {
-    if (type !== "TXT" || ++lookups > MAX_SIGNATURES || name.length > 253
-      || !/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\._domainkey\.[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(name)) throw new Error("key query refused");
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error("key lookup deadline");
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.min(2000, remaining));
-    try {
-      const url = new URL("https://cloudflare-dns.com/dns-query");
-      url.searchParams.set("name", name); url.searchParams.set("type", "TXT");
-      const response = await fetcher(url, { headers: { accept: "application/dns-json" },
-        signal: controller.signal, redirect: "error" });
-      if (!response.ok || !response.headers.get("content-type")?.includes("application/dns-json")) throw new Error("key lookup refused");
-      const bytes = await readBoundedMail(response.body!, 16 * 1024);
-      const data = JSON.parse(new TextDecoder().decode(bytes));
-      if (data.Status !== 0 || data.TC === true || !Array.isArray(data.Question) || data.Question.length !== 1
-        || data.Question[0].type !== 16 || data.Question[0].name.replace(/\.$/, "").toLowerCase() !== name.toLowerCase()
-        || !Array.isArray(data.Answer) || data.Answer.length > 16) throw new Error("key lookup unavailable");
-      const records: string[][] = [];
-      for (const answer of data.Answer) {
-        if (answer.type !== 16 || answer.name.replace(/\.$/, "").toLowerCase() !== name.toLowerCase()
-          || typeof answer.data !== "string" || !/^"[^"\\]*"(?:\s+"[^"\\]*")*$/.test(answer.data)) throw new Error("unsupported key answer");
-        records.push([...answer.data.matchAll(/"([^"\\]*)"/g)].map((m) => m[1]!));
-      }
-      if (!records.length) throw new Error("key absent");
-      return records;
-    } finally { clearTimeout(timer); }
-  };
-}
 
 /** Cryptographic proof candidate only: callers MUST enforce membership, consent and
  * atomic replay deduplication before admission. Not SPF, ARC or universal DMARC.
