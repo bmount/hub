@@ -33,16 +33,19 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     pauseSharing();
     invalidate('Sharing interval expired. Current status is unknown until refreshed.');
   }
+  function expireSnapshot() {
+    // Expiring the directory must also retire its participation interval BEFORE a
+    // renewal. A recent heartbeat cannot make an old/replayed snapshot current.
+    if (!snapshotValid || age(snapshotAt) < 90000) return;
+    if (opted || nextStatus) pauseSharing();
+    invalidate('Presence snapshot expired. Current status is unknown; refresh will retry.');
+  }
   function draw() {
     expireParticipation();
+    expireSnapshot();
     list.replaceChildren();
     if (!snapshotValid) return;
     const elapsed = age(snapshotAt);
-    // Even explicit offline is only a bounded snapshot, not a permanent directory.
-    if (elapsed >= 90000) {
-      unknown('Presence snapshot expired. Current status is unknown; refresh will retry.');
-      return;
-    }
     freshness.textContent = 'Snapshot observed at ' + new Date(observedAt).toISOString() + ' · at least ' + Math.floor(elapsed / 1000) + ' seconds old (including request time).';
     for (const entry of entries) {
       const li = document.createElement('li');
@@ -61,6 +64,16 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     const controller = new AbortController();
     requests.add(controller);
     const requestedAt = clock();
+    const maxResponseBytes = 262144;
+    let reader = null, bodyComplete = false;
+    function closeBody() {
+      if (!reader) return;
+      if (!bodyComplete) {
+        try { Promise.resolve(reader.cancel()).catch(() => {}); } catch (_) {}
+      }
+      try { reader.releaseLock(); } catch (_) {}
+      reader = null;
+    }
     let rejectAbort;
     const aborted = new Promise((_, reject) => { rejectAbort = reject; });
     function onAbort() { rejectAbort(new Error('presence request aborted')); }
@@ -81,6 +94,8 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       return await Promise.race([aborted, (async () => {
         const res = await fetch('/api/' + name, { method: 'POST', credentials: 'same-origin', redirect: 'error',
           headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: controller.signal });
+        // Own the body even for denied/obsolete headers so cleanup can cancel it.
+        reader = res.body ? res.body.getReader() : null;
         // An overdue denial is an obsolete transport result, not a current access
         // verdict. Enforce the budget before interpreting status, just as for body.
         timely();
@@ -89,12 +104,36 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
           error.denied = [401, 403, 404].includes(res.status);
           throw error;
         }
-        const body = await res.json();
+        const declared = res.headers.get('content-length');
+        if (!reader || (declared && /^\d+$/.test(declared) && Number(declared) > maxResponseBytes)) {
+          throw new Error('presence response too large or missing');
+        }
+        // Bound actual Fetch body bytes, not an untrusted Content-Length or
+        // entry count checked only after unbounded JSON parsing. The same deadline
+        // covers every chunk; abort releases refresh even if read/cancel never settles.
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        const parts = [];
+        let bytes = 0;
+        while (true) {
+          const chunk = await reader.read();
+          timely();
+          if (chunk.done) { bodyComplete = true; break; }
+          bytes += chunk.value.byteLength;
+          if (bytes > maxResponseBytes) throw new Error('presence response too large');
+          const text = decoder.decode(chunk.value, { stream: true });
+          if (text) parts.push(text);
+        }
+        parts.push(decoder.decode());
         timely();
-        if (!body.ok) throw new Error('unavailable');
+        const body = JSON.parse(parts.join(''));
+        timely();
+        if (!body || !body.ok) throw new Error('unavailable');
         return body.result;
-      })()]);
+      })().finally(closeBody)]); // Also cleans up headers delivered after abandonment.
     } finally {
+      // Cleanup is best effort, never a dependency for query-only recovery. Observe
+      // rejected cancellation promises without awaiting an abort-ignoring transport.
+      closeBody();
       requests.delete(controller); clearTimeout(timeout);
       controller.signal.removeEventListener('abort', onAbort);
     }
@@ -133,6 +172,7 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     if (stopped) return;
     // Check before a renewal, not only in the expiry timer: both timers can be delayed.
     expireParticipation();
+    expireSnapshot();
     if (pending) { queued = true; return; }
     pending = true;
     const startedGeneration = generation;
@@ -189,7 +229,11 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
   }
   toggle.addEventListener('click', () => {
     if (stopped || toggle.disabled) return;
-    opted = !opted; nextStatus = opted ? (document.hidden ? 'away' : 'online') : 'offline';
+    // Retire stale state before installing new consent, but preserve the button's
+    // displayed intent: a Stop click must never turn into renewed online sharing.
+    const startSharing = !opted;
+    expireSnapshot();
+    opted = startSharing; nextStatus = opted ? (document.hidden ? 'away' : 'online') : 'offline';
     participationAt = clock(); // A new explicit action is fresh consent, not a timer retry.
     toggle.textContent = opted ? 'Stop sharing presence' : 'Share presence in this channel';
     sharing.textContent = opted ? 'Sharing while this channel is visible; hidden pages stop renewing online status.' : 'Not sharing. If the offline update cannot be delivered, the previous heartbeat expires within 90 seconds.';
