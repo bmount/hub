@@ -65,6 +65,72 @@ function client() {
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 describe("presence browser asset", () => {
+  it("does not refresh the age of repeated online, offline or empty observations", async () => {
+    for (const state of ['online', 'offline', 'empty']) {
+      const c = client(); await settle();
+      if (state === 'empty') c.empty();
+      else c.state(state, state === 'offline' ? 1000 : 91000);
+      c.toggle.fire('click'); await settle();
+      c.elapsed(30000); c.poll(); await settle();
+      expect(c.freshness.textContent).toContain('at least 30 seconds old');
+      c.elapsed(60000); c.poll(); await settle();
+      expect(c.freshness.textContent).toContain('at least 60 seconds old');
+      c.elapsed(90000); c.poll(); await settle();
+      expect(c.list.children).toEqual([]);
+      expect(c.freshness.textContent).toBe('No current presence snapshot.');
+      expect(c.toggle.textContent).toBe('Share presence in this channel');
+      const count = c.calls.length; c.poll(); await settle();
+      expect(c.calls.slice(count).map(x => x.name)).toEqual(['/api/chat.presence']);
+      expect(c.list.children).toEqual([]);
+      c.snapshot({ observed_at: 91000, entries: [] }); c.poll(); await settle();
+      expect(c.freshness.textContent).toContain('at least 0 seconds old');
+      expect(c.toggle.textContent).toBe('Share presence in this channel');
+      c.toggle.fire('click'); await settle();
+      expect(c.calls.at(-2)!.status).toBe('online');
+    }
+  });
+
+  it("rejects backwards observations atomically and preserves the accepted observation age through recovery", async () => {
+    const c = client(); await settle(); c.toggle.fire('click'); await settle();
+    c.clocks(30000, 30000);
+    c.snapshot({ observed_at: 11000 }); c.poll(); await settle();
+    expect(c.freshness.textContent).toContain('at least 0 seconds old');
+    c.clocks(60000, 60000);
+    c.snapshot({ observed_at: 21000 }); c.poll(); await settle();
+    expect(c.freshness.textContent).toContain('at least 0 seconds old');
+    c.snapshot({ observed_at: 20000 }); c.poll(); await settle();
+    expect(c.list.children).toEqual([]);
+    expect(c.toggle.textContent).toBe('Share presence in this channel');
+    c.clocks(70000, 70000);
+    c.snapshot({ observed_at: 21000 }); const count = c.calls.length; c.poll(); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(['/api/chat.presence']);
+    expect(c.freshness.textContent).toContain('at least 10 seconds old');
+    // A genuinely advancing authoritative observation can recover without opt-in.
+    c.snapshot({ observed_at: 71000 }); c.poll(); await settle();
+    expect(c.freshness.textContent).toContain('at least 0 seconds old');
+    expect(c.toggle.textContent).toBe('Share presence in this channel');
+  });
+
+  it("retains replay freshness through lifecycle restoration, disconnect and wall rollback", async () => {
+    for (const lifecycle of ['history', 'freeze', 'offline']) {
+      const c = client(); await settle();
+      c.clocks(30000, -1000);
+      if (lifecycle === 'history') c.winEvents.fire('pagehide');
+      else if (lifecycle === 'freeze') c.docEvents.fire('freeze');
+      else { c.navigator.onLine = false; c.winEvents.fire('offline'); }
+      c.clocks(90000, -2000);
+      if (lifecycle === 'history') c.winEvents.fire('pageshow', { persisted: true });
+      else if (lifecycle === 'freeze') c.docEvents.fire('resume');
+      else { c.navigator.onLine = true; c.winEvents.fire('online'); }
+      await settle();
+      expect(c.list.children).toEqual([]);
+      expect(c.toggle.textContent).toBe('Share presence in this channel');
+      expect(c.calls.every(x => !x.status)).toBe(true);
+      c.snapshot({ observed_at: 91000, entries: [] }); c.poll(); await settle();
+      expect(c.freshness.textContent).toContain('at least 0 seconds old');
+    }
+  });
+
   it("rejects an entire malformed or wrong-channel snapshot before painting and recovers query-only", async () => {
     const entry = { identity_id: 'agent-1', display_name: 'Agent', handle: 'agent', kind: 'agent', via_assistant: false,
       state: 'online', last_seen: 1000, expires_at: 91000 };
@@ -106,7 +172,7 @@ describe("presence browser asset", () => {
       expect(c.list.children[0]!.textContent).toContain('@<b>agent</b>');
       expect(c.list.children[0]!.textContent).toContain('via-assistant');
     }
-    c.snapshot({ entries: [] }); c.poll(); await settle();
+    c.snapshot({ observed_at: 91000, entries: [] }); c.poll(); await settle();
     expect(c.list.children[0]!.textContent).toContain('Presence is unknown');
     expect(c.calls.every(x => !x.status)).toBe(true);
   });
@@ -284,7 +350,10 @@ describe("presence browser asset", () => {
     const c = client(); await settle(); c.toggle.fire("click"); await settle();
     c.deny(); const release = c.delayNext(); c.poll(); await settle();
     c.clocks(90000, 90000);
-    c.allow(); c.toggle.fire("click"); release(); await settle();
+    c.allow();
+    c.snapshot({ observed_at: 91000, entries: [{ identity_id: 'agent-1', display_name: 'Agent', handle: 'agent',
+      kind: 'agent', via_assistant: false, state: 'online', last_seen: 91000, expires_at: 181000 }] });
+    c.toggle.fire("click"); release(); await settle();
     expect(c.toggle.disabled).toBe(false);
     expect(c.toggle.textContent).toBe("Stop sharing presence");
     expect(c.calls.filter(x => x.status === "online")).toHaveLength(3);
@@ -462,6 +531,8 @@ describe("presence browser asset", () => {
     c.elapsed(90000);
     expect(c.list.children).toEqual([]);
     expect(c.connection.textContent).toContain("snapshot expired");
+    c.snapshot({ observed_at: 91000, entries: [{ identity_id: 'agent-1', display_name: 'Agent', handle: '<img src=x onerror=alert(1)>',
+      kind: 'agent', via_assistant: false, state: 'online', last_seen: 91000, expires_at: 181000 }] });
     c.toggle.fire("click"); await settle();
     expect(c.calls.find((x) => x.status === "online")?.name).toBe("/api/chat.heartbeat");
     c.document.hidden = true; c.docEvents.fire("visibilitychange"); await settle();
@@ -490,7 +561,7 @@ describe("presence browser asset", () => {
     c.elapsed(89999); expect(c.list.children[0]!.textContent).toContain(" · offline · ");
     c.elapsed(90000); expect(c.list.children).toEqual([]);
     expect(c.freshness.textContent).toBe("No current presence snapshot.");
-    c.empty(); c.poll(); await settle();
+    c.empty(); c.snapshot({ observed_at: 91000 }); c.poll(); await settle();
     expect(c.list.children[0]!.textContent).toContain("No recent explicit heartbeats");
     c.elapsed(180000); expect(c.list.children).toEqual([]);
     c.deny(); c.poll(); await settle(); c.elapsed(181000);

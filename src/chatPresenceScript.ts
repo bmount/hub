@@ -16,7 +16,7 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     // expire state early; wall-clock rollback must never extend monotonic freshness.
     return Math.max(0, performance.now() - since.monotonic, Date.now() - since.wall);
   }
-  let generation = 0, snapshotValid = false, frozen = false;
+  let generation = 0, snapshotValid = false, frozen = false, observationAnchor = null;
   const requests = new Set();
   function unknown(message) {
     snapshotValid = false; entries = []; list.replaceChildren();
@@ -152,7 +152,19 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       const result = await api('chat.presence', { c: channel });
       if (!current()) return;
       validateSnapshot(result);
-      entries = result.entries; observedAt = result.observed_at; snapshotAt = requestedAt; snapshotValid = true;
+      // A repeated observation cannot restart freshness. Keep this anchor through
+      // unknown/suspension/recovery; only a newer authoritative observation gets a
+      // new age. Server clock rollback fails conservatively, not green.
+      if (observationAnchor && result.observed_at < observationAnchor.observed) {
+        throw new Error('regressed presence observation');
+      }
+      const elapsed = Math.max(age(requestedAt), observationAnchor &&
+        result.observed_at === observationAnchor.observed ? age(observationAnchor.at) : 0);
+      if (elapsed >= 90000) throw new Error('expired presence observation');
+      const acceptedAt = clock();
+      acceptedAt.monotonic -= elapsed; acceptedAt.wall -= elapsed;
+      observationAnchor = { observed: result.observed_at, at: acceptedAt };
+      entries = result.entries; observedAt = result.observed_at; snapshotAt = acceptedAt; snapshotValid = true;
       connection.textContent = 'Presence snapshot refreshed. Heartbeats expire after 90 seconds; they do not prove reading or work.';
       draw();
     } catch (error) {
