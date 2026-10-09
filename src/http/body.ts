@@ -11,6 +11,10 @@ export const MAX_OAUTH_TOKEN_BODY_BYTES = 16 * 1024;
 export const MAX_CHANNEL_FORM_BODY_BYTES = 64 * 1024;
 export const MAX_ASSISTANT_BODY_BYTES = 64 * 1024;
 export const MAX_PLAYGROUND_BODY_BYTES = 64 * 1024;
+// Small service-binding credential/reference envelopes; eval runs may name up
+// to 60 cases. These limits do not apply to Git bodies forwarded to Ardi.
+export const MAX_INTERNAL_BODY_BYTES = 16 * 1024;
+export const MAX_INTENT_EVAL_BODY_BYTES = 64 * 1024;
 
 /** Content-Length is only an early rejection hint. Bound actual bytes before
  * JSON/form parsers or SDK classification. Do not retain source-owned chunks or

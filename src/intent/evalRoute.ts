@@ -11,6 +11,8 @@ import { takeRateDetail } from "../rate";
 import { recordEvent } from "../db/events";
 import { note } from "../log";
 import { runIntentEvals } from "./evals";
+import { HubError } from "../errors";
+import { MAX_INTENT_EVAL_BODY_BYTES, readRequestBytes } from "../http/body";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body, null, 1), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 
@@ -22,8 +24,18 @@ export async function intentEvalRoute(request: Request, env: Env, waitUntil?: (p
   if (!bearer || (await sha256Hex(bearer)) !== (await sha256Hex(env.EVAL_KEY))) return json({ error: "unauthorized" }, 401);
   const rate = await takeRateDetail(env.RATE, "eval_runs", "intent", Date.now(), waitUntil);
   if (!rate.ok) return json({ error: "too_many_requests" }, 429);
+  let bytes: Uint8Array<ArrayBuffer>;
+  try { bytes = await readRequestBytes(request, MAX_INTENT_EVAL_BODY_BYTES); }
+  catch (e) {
+    if (e instanceof HubError) return json({ error: e.reason, detail: e.detail }, e.status);
+    throw e;
+  }
   let b: { attribute_to?: unknown; project?: unknown; purpose?: unknown; only?: unknown; max?: unknown };
-  try { b = (await request.json()) as typeof b; } catch { return json({ error: "bad_request", detail: "JSON body" }, 400); }
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return json({ error: "bad_request", detail: "JSON object" }, 400);
+    b = parsed as typeof b;
+  } catch { return json({ error: "bad_request", detail: "JSON body" }, 400); }
   const purpose = typeof b.purpose === "string" && ["fast", "reasoning", "assistant", "deep"].includes(b.purpose) ? b.purpose : "fast";
   const who = typeof b.attribute_to === "string" ? b.attribute_to.trim().toLowerCase() : "";
   const agent = await env.HUB_DB.prepare(`SELECT i.id, m.tenant_id FROM identity i JOIN membership m ON m.identity_id = i.id AND m.state = 'active'

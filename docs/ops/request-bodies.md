@@ -68,6 +68,24 @@ and multipart framing, not decoded character counts or just uploaded file size.
   role, grant and tool exposure checks are unchanged. These existing rate
   gates are eventually consistent, not atomic hard quotas.
 
+- `POST /internal/introspect` and `/internal/backlinks`: 16 KiB actual bytes
+  before JSON parsing. The existing service-binding secret check and public
+  `cf-connecting-ip` disqualification precede reading, regardless of declared
+  length. Overflow returns an inert, non-echoing `{ ok: false }` with 413;
+  read errors/aborts return the same body with 400. Malformed bounded JSON
+  preserves the existing neutral 200/`ok: false` behavior. Refused bodies do not
+  look up sessions/principals, touch Git session activity or query backlinks.
+  Tenant, principal, operator and credential policy remains unchanged. This
+  cap applies to the small hub envelopes, **not** Ardi Git pack bodies.
+- `POST /internal/evals/intent`: 64 KiB actual bytes before JSON parsing,
+  after the existing apex/configured-key/bearer and 10/hour run-rate gates.
+  Overflow returns safe 413; read errors/aborts return safe 400, without
+  attribution lookup, model calls, usage or `eval.run` audit. Bounded JSON
+  must be an object (null/arrays/scalars now receive 400 instead of permitting
+  a null property-access exception). Valid input keeps the 60-case limit,
+  named active-agent attribution, tenant-bound project lookup and model audit.
+  The existing KV run gate is eventually consistent, not an atomic hard quota.
+
 Oversized requests return 413 without running verbs, creating clients or
 executing tools. API form refusals render an inert readable page. Stream errors
 or request cancellation return safe 400 errors without reflecting arbitrary
@@ -79,9 +97,9 @@ headers are removed. Original requests remain the authentication/logging source.
 
 ## Remaining work and limits
 
-This increment does **not** complete #102 across every route. Separate browser,
-internal parsers still need this utility with suitable endpoint
-budgets: voice and internal introspection/backlinks/evals. Do not apply a 1 MiB global
+This increment does **not** complete #102 across every route. The voice
+recording/transcript parsers still need suitable endpoint budgets.
+Do not apply a 1 MiB global
 middleware cap to Git smart HTTP forwarded to Ardi or voice uploads with their
 separate recording allowance. Incoming mail uses its separate original-byte cap.
 
@@ -107,5 +125,11 @@ malformed input, ignored field overflow, multipart framing, stalled cancel,
 read errors/aborts and pre-read auth/Origin/header/media/role/rate denials.
 Refused Assistant scope changes leave the existing thread unchanged; refused
 Playground write intents create no work, tool audit or model calls; refused
-channel/thread drafts leave the head unchanged. The full suite guards existing
+channel/thread drafts leave the head unchanged. Internal ingress tests cover
+actual production entry routes, exact valid byte caps, forged/absent length,
+UTF-8 overflow, stalled cancellation, safe read/abort errors, malformed
+objects, pre-read service-secret/public-IP and eval host/key/rate denials.
+Refused bodies perform no D1 credential/principal lookups or activity/model
+writes; valid capped eval input still records attributed model usage and audit.
+The full suite guards existing
 tenant, mailbox, grant, cookie and login-proof boundaries.

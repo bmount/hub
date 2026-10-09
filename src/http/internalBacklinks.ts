@@ -8,8 +8,10 @@ import { backlinks } from "../chat/backlinks";
 import { backlinkTarget } from "../chat/refs";
 import { isInternalCall } from "./internal";
 import { notFoundPage } from "./pages";
+import { HubError } from "../errors";
+import { MAX_INTERNAL_BODY_BYTES, readRequestBytes } from "./body";
 
-const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 
 /**
  * Messaging spec 5.3: "Discussed in" for Ardi pages over the HUB service binding, filtered to what the principal
@@ -17,9 +19,15 @@ const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200
  */
 export async function internalBacklinks(request: Request, env: Env): Promise<Response> {
   if (!(await isInternalCall(request, env))) return notFoundPage();
+  let bytes: Uint8Array<ArrayBuffer>;
+  try { bytes = await readRequestBytes(request, MAX_INTERNAL_BODY_BYTES); }
+  catch (e) {
+    if (e instanceof HubError) return json({ ok: false }, e.status);
+    throw e;
+  }
   let input: Record<string, unknown>;
   try {
-    const parsed: unknown = await request.json();
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return json({ ok: false });
     input = parsed as Record<string, unknown>;
   } catch {

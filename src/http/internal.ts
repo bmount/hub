@@ -7,9 +7,11 @@ import { getMembership } from "../db/memberships";
 import { isValidTenantSlug } from "../tenant";
 import { sha256Hex, timingSafeEqual } from "../ids";
 import { notFoundPage } from "./pages";
+import { HubError } from "../errors";
+import { MAX_INTERNAL_BODY_BYTES, readRequestBytes } from "./body";
 
-function json(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 }
 const denied = () => json({ ok: false });
 
@@ -28,9 +30,15 @@ export async function isInternalCall(request: Request, env: Env): Promise<boolea
 
 export async function introspect(request: Request, env: Env, now: number = Date.now()): Promise<Response> {
   if (!(await isInternalCall(request, env))) return notFoundPage();
+  let bytes: Uint8Array<ArrayBuffer>;
+  try { bytes = await readRequestBytes(request, MAX_INTERNAL_BODY_BYTES); }
+  catch (e) {
+    if (e instanceof HubError) return json({ ok: false }, e.status);
+    throw e;
+  }
   let input: Record<string, unknown>;
   try {
-    const parsed: unknown = await request.json();
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return denied();
     input = parsed as Record<string, unknown>;
   } catch {
