@@ -215,7 +215,10 @@ try {
   });
   await new Promise(resolve => cacheServer.listen(0, '127.0.0.1', resolve));
   const cacheBase = `http://127.0.0.1:${cacheServer.address().port}`;
-  cacheBrowser = await chromium.launch({ channel: 'chromium', headless: true,
+  // A headed desktop session is required for native background-tab freezing.
+  // Headless Chromium keeps pages visible and silently ignores the freeze command.
+  const nativeFreeze = process.env.CHAT_BROWSER_NATIVE_FREEZE === '1';
+  cacheBrowser = await chromium.launch({ channel: 'chromium', headless: !nativeFreeze,
     ignoreDefaultArgs: ['--disable-back-forward-cache'],
     args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'],
   });
@@ -266,6 +269,53 @@ try {
     await cachePage.locator('[data-presence-toggle]').click();
     await expect.poll(() => cacheCalls.slice(restoreStart).filter(c => c.name.endsWith('heartbeat') && c.status === 'online').length).toBe(1);
     await expect(cachePage.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
+    await expect(cachePage.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    if (nativeFreeze) {
+    // A real Chromium lifecycle transition without navigation/pagehide. Record
+    // trusted document events after the product listeners, never dispatch fakes.
+    const freezeDocument = await cachePage.evaluate(() => {
+      window.__freezeLifecycle = [];
+      for (const name of ['freeze', 'resume']) document.addEventListener(name, event => {
+        window.__freezeLifecycle.push({ name, trusted: event.isTrusted,
+          entries: document.querySelector('[data-presence-list]').children.length,
+          connection: document.querySelector('[data-presence-connection]').textContent });
+      });
+      return window.__cacheDocument;
+    });
+    // Chromium only freezes background pages. A real foreground sibling tab
+    // makes this document hidden; forcing the state on a visible page is a no-op.
+    const hideStart = cacheCalls.length;
+    const foreground = await cacheCtx.newPage();
+    await foreground.goto(`${cacheBase}/cache-away`);
+    await foreground.bringToFront();
+    await expect.poll(() => cachePage.evaluate(() => document.visibilityState)).toBe('hidden');
+    await expect.poll(() => cacheCalls.slice(hideStart).some(c => c.status === 'away')).toBe(true);
+    await expect.poll(() => cacheCalls.slice(hideStart).at(-1)?.name).toBe('/api/chat.presence');
+    await expect(cachePage.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    const freezeStart = cacheCalls.length;
+    await cacheDiagnostics.send('Page.setWebLifecycleState', { state: 'frozen' });
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    expect(cacheCalls.slice(freezeStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(0);
+    await cacheDiagnostics.send('Page.setWebLifecycleState', { state: 'active' });
+    await expect.poll(() => cachePage.evaluate(() => window.__freezeLifecycle.length)).toBe(2);
+    await cachePage.bringToFront();
+    await foreground.close();
+    const lifecycle = await cachePage.evaluate(() => window.__freezeLifecycle);
+    expect(lifecycle.map(e => ({ name: e.name, trusted: e.trusted }))).toEqual([
+      { name: 'freeze', trusted: true }, { name: 'resume', trusted: true },
+    ]);
+    expect(lifecycle[0].entries).toBe(0);
+    expect(lifecycle[0].connection).toContain('Page suspended');
+    expect(await cachePage.evaluate(() => window.__cacheDocument)).toBe(freezeDocument);
+    await expect(cachePage.locator('[data-presence-sharing]')).toContainText('Share explicitly again');
+    await expect(cachePage.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+    await expect(cachePage.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    await expect.poll(() => cacheCalls.slice(freezeStart).filter(c => c.name.endsWith('presence')).length, { timeout: 40000 }).toBeGreaterThan(1);
+    expect(cacheCalls.slice(freezeStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(0);
+    await cachePage.locator('[data-presence-toggle]').click();
+    await expect.poll(() => cacheCalls.slice(freezeStart).filter(c => c.name.endsWith('heartbeat') && c.status === 'online').length).toBe(1);
+    console.log(`PASS ${label}: trusted native freeze/resume, same document, immediate unknown, real 30s query-only renewal until new consent`);
+    }
     await cacheCtx.close();
     console.log(`PASS ${label}: native history ${restored ? 'persisted BFCache restore' : 'no-store cache refusal and fresh-document return'}; renewed explicit opt-in, real 30s query-only timer`);
   }

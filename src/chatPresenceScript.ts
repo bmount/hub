@@ -10,7 +10,7 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
   const toggle = box.querySelector('[data-presence-toggle]');
   let opted = false, pending = false, queued = false, nextStatus = null, stopped = false;
   let entries = [], snapshotAt = 0, observedAt = 0, timer, expiryTimer;
-  let generation = 0, snapshotValid = false;
+  let generation = 0, snapshotValid = false, frozen = false;
   const requests = new Set();
   function unknown(message) {
     snapshotValid = false; entries = []; list.replaceChildren();
@@ -97,6 +97,7 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     }
   }
   toggle.addEventListener('click', () => {
+    if (stopped || toggle.disabled) return;
     opted = !opted; nextStatus = opted ? (document.hidden ? 'away' : 'online') : 'offline';
     toggle.textContent = opted ? 'Stop sharing presence' : 'Share presence in this channel';
     sharing.textContent = opted ? 'Sharing while this channel is visible; hidden pages stop renewing online status.' : 'Not sharing. If the offline update cannot be delivered, the previous heartbeat expires within 90 seconds.';
@@ -109,10 +110,24 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
   function offline() {
     invalidate('Disconnected or presence unavailable. Current status is unknown; refresh will retry.');
   }
-  function pagehide() {
+  function suspend() {
     stopped = true;
     invalidate('Page suspended. Current status is unknown.');
     clearInterval(timer); clearInterval(expiryTimer);
+  }
+  function pagehide() {
+    frozen = false; // Only persisted pageshow may reactivate a history-suspended page.
+    suspend();
+  }
+  function freeze() {
+    if (stopped) return;
+    frozen = true;
+    suspend();
+  }
+  function resume() {
+    if (!frozen) return;
+    frozen = false;
+    restore();
   }
   function dispose(event) {
     if (!event.detail || !event.detail.contains(box)) return;
@@ -120,6 +135,8 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     // abort is ambiguous delivery, so do not claim/send offline or auto-retry a heartbeat.
     pagehide(); opted = false;
     document.removeEventListener('visibilitychange', visibilityChanged);
+    document.removeEventListener('freeze', freeze);
+    document.removeEventListener('resume', resume);
     document.removeEventListener('wb:before-replace', dispose);
     window.removeEventListener('online', refresh);
     window.removeEventListener('offline', offline);
@@ -127,6 +144,8 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     window.removeEventListener('pageshow', pageshow);
   }
   document.addEventListener('visibilitychange', visibilityChanged);
+  document.addEventListener('freeze', freeze);
+  document.addEventListener('resume', resume);
   document.addEventListener('wb:before-replace', dispose);
   window.addEventListener('online', refresh);
   window.addEventListener('offline', offline);
@@ -136,14 +155,18 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     timer = setInterval(refresh, 30000);
     expiryTimer = setInterval(draw, 1000);
   }
-  function pageshow(event) {
-    if (!event.persisted) return;
-    // A back/forward-cache restore is a new view, not evidence of uninterrupted presence.
+  function restore() {
+    // Freeze and history restoration are not evidence of uninterrupted participation.
     invalidate('Page restored. Current status is unknown until refreshed.');
     stopped = false; opted = false; nextStatus = null;
     toggle.textContent = 'Share presence in this channel';
     sharing.textContent = 'Not sharing. Share explicitly again after returning to this page.';
     startTimers(); refresh();
+  }
+  function pageshow(event) {
+    if (!event.persisted) return;
+    frozen = false;
+    restore();
   }
   window.addEventListener('pageshow', pageshow);
   startTimers();

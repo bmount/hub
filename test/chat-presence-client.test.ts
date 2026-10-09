@@ -73,6 +73,60 @@ describe("presence browser asset", () => {
     expect(c.docEvents.listeners.size).toBe(0);
     expect(c.winEvents.listeners.size).toBe(0);
   });
+  it("freezes without pagehide, aborts late transport and resumes query-only until renewed opt-in", async () => {
+    const c = client(); await settle();
+    c.toggle.fire("click"); await settle();
+    const release = c.delayNext(); c.poll(); await settle();
+    const request = c.calls.at(-1)!;
+    c.docEvents.fire("freeze");
+    expect(request.signal.aborted).toBe(true);
+    expect(c.list.children).toEqual([]);
+    expect(c.connection.textContent).toContain("Page suspended");
+    const count = c.calls.length;
+    c.toggle.fire("click"); c.poll(); c.winEvents.fire("online"); await settle();
+    expect(c.calls).toHaveLength(count);
+    c.docEvents.fire("resume");
+    release(); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence"]);
+    expect(c.sharing.textContent).toContain("Share explicitly again");
+    c.poll(); await settle();
+    expect(c.calls.slice(count).some(x => x.name.endsWith("heartbeat"))).toBe(false);
+    c.toggle.fire("click"); await settle();
+    expect(c.calls.at(-2)!.status).toBe("online");
+  });
+
+  it("does not let resume bypass pagehide or disposed-pane suspension", async () => {
+    for (const dispose of [false, true]) {
+      const c = client(); await settle();
+      c.toggle.fire("click"); await settle();
+      c.docEvents.fire("freeze");
+      if (dispose) c.dispose(); else c.winEvents.fire("pagehide");
+      const count = c.calls.length;
+      c.docEvents.fire("resume"); c.toggle.fire("click"); c.poll(); await settle();
+      expect(c.calls).toHaveLength(count);
+      expect(c.list.children).toEqual([]);
+      if (!dispose) {
+        c.winEvents.fire("pageshow", { persisted: true }); await settle();
+        expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence"]);
+      }
+    }
+  });
+
+  it("ignores a frozen generation's late denial while applying current access loss on resume", async () => {
+    const c = client(); await settle();
+    c.deny(); const release = c.delayNext(); c.poll(); await settle();
+    c.docEvents.fire("freeze"); c.allow(); c.docEvents.fire("resume");
+    release(); await settle();
+    expect(c.toggle.disabled).toBe(false);
+    expect(c.list.children).toHaveLength(1);
+    c.deny(); c.poll(); await settle();
+    expect(c.toggle.disabled).toBe(true);
+    c.docEvents.fire("freeze"); c.docEvents.fire("resume"); await settle();
+    c.toggle.fire("click"); await settle();
+    expect(c.calls.some(x => x.name.endsWith("heartbeat"))).toBe(false);
+    expect(c.list.children).toEqual([]);
+  });
+
   it("only reads until explicit opt-in, renders names as text and expires cached online status with a monotonic clock", async () => {
     const c = client(); await settle();
     expect(c.calls.map((x) => x.name)).toEqual(["/api/chat.presence"]);
