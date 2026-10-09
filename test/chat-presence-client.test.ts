@@ -22,14 +22,18 @@ function client() {
   let time = 0, wall = 0, denied = false;
   class ClockDate extends Date { static now() { return wall; } }
   const calls: Array<{ name: string; status?: string; signal: AbortSignal }> = [];
-  let delayed: Promise<void> | null = null;
-  let failNext = false;
-  const intervals = new Map<number, () => void>();
+  let delayed: Promise<void> | null = null, delayedBody: Promise<void> | null = null;
+  let failNext = false, timeoutId = 0;
+  const intervals = new Map<number, () => void>(), timeouts = new Map<number, () => void>();
   let entries = [{ handle: '<img src=x onerror=alert(1)>', kind: "agent", via_assistant: false, state: "online", last_seen: 1000, expires_at: 91000 }];
   const fetch = async (url: string, init: { body: string; signal: AbortSignal }) => {
     const input = JSON.parse(init.body); calls.push({ name: url, status: input.status, signal: init.signal });
     const result = { entries, observed_at: 1000 };
-    const response = { ok: !denied, status: denied ? 404 : 200, json: async () => ({ ok: true, result }) };
+    const bodyWait = delayedBody; delayedBody = null;
+    const response = { ok: !denied, status: denied ? 404 : 200, json: async () => {
+      if (bodyWait) await bodyWait;
+      return { ok: true, result };
+    } };
     const wait = delayed; delayed = null;
     const fail = failNext; failNext = false;
     // Deliberately allow late delivery even after abort: generation guards must also work.
@@ -40,9 +44,11 @@ function client() {
   // Execute the exact shipped asset with small DOM/transport fakes, not a second implementation.
   const start = new Function("document", "window", "navigator", "fetch", "performance", "setInterval", "clearInterval", "setTimeout", "clearTimeout", "Date", CHAT_PRESENCE_JS);
   start(document, { addEventListener: winEvents.addEventListener.bind(winEvents), removeEventListener: winEvents.removeEventListener.bind(winEvents) }, navigator, fetch, { now: () => time },
-    (fn: () => void, ms: number) => { intervals.set(ms, fn); return ms; }, (id: number) => intervals.delete(id), () => 1, () => {}, ClockDate);
+    (fn: () => void, ms: number) => { intervals.set(ms, fn); return ms; }, (id: number) => intervals.delete(id), (fn: () => void) => { timeouts.set(++timeoutId, fn); return timeoutId; }, (id: number) => timeouts.delete(id), ClockDate);
   return { connection, sharing, freshness, list, toggle, document, navigator, calls, docEvents, winEvents,
     delayNext: () => { let release!: () => void; delayed = new Promise<void>((resolve) => { release = resolve; }); return release; },
+    delayBodyNext: () => { let release!: () => void; delayedBody = new Promise<void>((resolve) => { release = resolve; }); return release; },
+    deadline: () => { for (const fn of timeouts.values()) fn(); },
     failNext: () => { failNext = true; },
     allow: () => { denied = false; },
     state: (state: string, expires_at = 91000) => { entries = [{ ...entries[0]!, state, expires_at }]; },
@@ -57,6 +63,68 @@ function client() {
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 describe("presence browser asset", () => {
+  it("rejects a late heartbeat at the exact deadline even when the abort timer did not run, without replaying queued changes", async () => {
+    const c = client(); await settle();
+    const release = c.delayNext(); c.toggle.fire("click"); await settle();
+    c.toggle.fire("click"); // Queue explicit offline behind the pending online write.
+    const count = c.calls.length;
+    c.clocks(0, 8000, false); release(); await settle();
+    expect(c.list.children).toEqual([]);
+    expect(c.sharing.textContent).toContain("Delivery is uncertain");
+    expect(c.calls).toHaveLength(count); // No continuation into a query or queued offline.
+    c.poll(); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence"]);
+    expect(c.toggle.textContent).toBe("Share presence in this channel");
+    c.toggle.fire("click"); await settle();
+    expect(c.calls.at(-2)!.status).toBe("online");
+  });
+
+  it("rejects a late read response at the exact deadline despite wall-clock rollback", async () => {
+    const c = client(); await settle();
+    const release = c.delayNext(); c.poll(); await settle();
+    c.clocks(8000, -10000, false); release(); await settle();
+    expect(c.list.children).toEqual([]);
+    expect(c.connection.textContent).toContain("Current status is unknown");
+    expect(c.calls.some(x => x.status)).toBe(false);
+    c.poll(); await settle(); expect(c.list.children).toHaveLength(1);
+  });
+
+  it("bounds body decoding by the same deadline and cancels consent queued behind a late read", async () => {
+    const c = client(); await settle();
+    const release = c.delayBodyNext(); c.poll(); await settle();
+    c.toggle.fire("click"); // New consent queued while read body is pending.
+    const count = c.calls.length;
+    c.clocks(8000, 8000, false); release(); await settle();
+    expect(c.list.children).toEqual([]);
+    expect(c.sharing.textContent).toContain("Share explicitly again");
+    expect(c.calls.slice(count).some(x => x.status)).toBe(false);
+    c.poll(); await settle();
+    expect(c.toggle.textContent).toBe("Share presence in this channel");
+  });
+
+  it("does not accept success after timeout abortion, even if transport ignores the signal", async () => {
+    for (const body of [false, true]) {
+      const c = client(); await settle();
+      const release = body ? c.delayBodyNext() : c.delayNext();
+      c.toggle.fire("click"); await settle();
+      const request = c.calls.at(-1)!;
+      c.deadline(); expect(request.signal.aborted).toBe(true);
+      release(); await settle();
+      expect(c.list.children).toEqual([]);
+      expect(c.toggle.textContent).toBe("Share presence in this channel");
+      expect(c.calls.at(-1)!.name).toBe("/api/chat.heartbeat");
+    }
+  });
+
+  it("accepts sub-deadline responses and charges their time against snapshot freshness", async () => {
+    const c = client(); await settle();
+    const release = c.delayBodyNext(); c.poll(); await settle();
+    c.clocks(7999, 7999, false); release(); await settle();
+    expect(c.list.children).toHaveLength(1);
+    expect(c.freshness.textContent).toContain("7 seconds old");
+    expect(c.connection.textContent).toContain("snapshot refreshed");
+  });
+
   it("expires consent before a throttled timer can renew it, even when the monotonic clock pauses during sleep", async () => {
     const c = client(); await settle(); c.toggle.fire("click"); await settle();
     const count = c.calls.length;
@@ -375,15 +443,15 @@ describe("presence browser asset", () => {
 
   it("charges slow transport against both snapshot age and heartbeat expiry", async () => {
     const c = client(); await settle();
-    c.state("online", 61000);
+    c.state("online", 7000);
     const release = c.delayNext(); c.poll(); await settle();
-    c.elapsed(60000); release(); await settle();
-    expect(c.freshness.textContent).toContain("60 seconds old");
+    c.elapsed(7000); release(); await settle();
+    expect(c.freshness.textContent).toContain("7 seconds old");
     expect(c.list.children[0]!.textContent).toContain(" · stale · ");
     const late = c.delayNext(); c.poll(); await settle();
-    c.elapsed(150000); late(); await settle();
+    c.elapsed(15000); late(); await settle();
     expect(c.list.children).toEqual([]);
-    expect(c.connection.textContent).toContain("snapshot expired");
+    expect(c.connection.textContent).toContain("Current status is unknown");
   });
 
   it("clears cached activity on disconnect or denied access and never implies the server received an offline update", async () => {

@@ -94,6 +94,7 @@ try {
   const presenceCalls = [];
   const disconnected = new WeakSet();
   const dropHeartbeatResponse = new WeakSet();
+  const overdueHeartbeatResponse = new WeakSet();
   async function context(token, viewport) {
     const ctx = await browser.newContext({ viewport, serviceWorkers: 'block' });
     if (token) await ctx.addCookies([{ name: 'pmw_session', value: token, domain: '.pimwell.test', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
@@ -113,6 +114,14 @@ try {
         expect(res.status).toBe(200); // Write accepted, but the browser cannot know its outcome.
         await res.arrayBuffer();
         return route.abort('failed');
+      }
+      if (url.pathname === '/api/chat.heartbeat' && overdueHeartbeatResponse.has(ctx)) {
+        overdueHeartbeatResponse.delete(ctx);
+        expect(res.status).toBe(200); // Accepted write; client budget expires before success is delivered.
+        const page = ctx.pages()[0];
+        // Advance wall time without running timeout callbacks. This tests the absolute
+        // response guard in a real browser, not native sleep or a real network delay.
+        await page.clock.setSystemTime((await page.evaluate(() => Date.now())) + 8000);
       }
       await route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) });
     });
@@ -205,6 +214,23 @@ try {
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(reconcileStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
+    // An accepted heartbeat's otherwise successful response must be rejected after
+    // its absolute 8s budget, even without an abort timer callback. Never auto-replay it.
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-list]')).toContainText('offline');
+    overdueHeartbeatResponse.add(ctx);
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-sharing]')).toContainText('Delivery is uncertain');
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+    await expect(page.locator('[data-presence-list] li')).toHaveCount(0);
+    expect((await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev').state).toBe('online');
+    const deadlineStart = presenceCalls.length;
+    await page.clock.fastForward(30001);
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(deadlineStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(deadlineStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
     // Advance over a stalled interval, firing each due timer at most once. This is
     // a controlled browser-clock regression, not native OS sleep/freeze acceptance.
     const gapStart = presenceCalls.length;
@@ -220,7 +246,7 @@ try {
     expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(beforeCursor);
     await noOverflow(page);
     await ctx.close();
-    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/timer-gap recovery, cursor unchanged`);
+    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/absolute-deadline/timer-gap recovery, cursor unchanged`);
   }
   // Playwright routing and its default Chromium flag disable native BFCache.
   // Use an actual loopback HTTP bridge and omit ONLY that flag for this pass.

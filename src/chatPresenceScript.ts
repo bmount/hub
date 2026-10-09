@@ -60,7 +60,16 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
   async function api(name, input) {
     const controller = new AbortController();
     requests.add(controller);
+    const requestedAt = clock();
     const timeout = setTimeout(() => controller.abort(), 8000);
+    function timely() {
+      // Timers/abort delivery can be delayed by sleep or an event-loop stall. Check
+      // the absolute budget after headers AND body, not just the timeout callback.
+      if (controller.signal.aborted || age(requestedAt) >= 8000) {
+        controller.abort();
+        throw new Error('presence request deadline exceeded');
+      }
+    }
     try {
       const res = await fetch('/api/' + name, { method: 'POST', credentials: 'same-origin', redirect: 'error',
         headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: controller.signal });
@@ -69,13 +78,15 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
         error.denied = [401, 403, 404].includes(res.status);
         throw error;
       }
+      timely();
       const body = await res.json();
+      timely();
       if (!body.ok) throw new Error('unavailable');
       return body.result;
     } finally { requests.delete(controller); clearTimeout(timeout); }
   }
   function pauseSharing() {
-    opted = false; nextStatus = null; participationAt = null;
+    opted = false; queued = false; nextStatus = null; participationAt = null;
     toggle.textContent = 'Share presence in this channel';
     sharing.textContent = 'Not sharing. Delivery is uncertain; any accepted heartbeat expires within 90 seconds. Share explicitly again after connection recovers.';
   }
