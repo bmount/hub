@@ -47,7 +47,12 @@ describe("durable source-bound chat responses", () => {
       progress: { source: revised, committed: { msg_id: progress.msg_id, seq: progress.seq, rev: 1 }, current: { rev: 2, retracted: true } },
       result: { source: response.source, committed: { msg_id: result.msg_id, seq: result.seq, rev: 1 }, current: { rev: 2, retracted: false } },
     });
-    expect(await conv().responseStatus(tenant, channel, "B", source.msg_id)).toMatchObject({ progress: null, result: null });
+    const original = await inDO(conv(), async (_object, state) => new Conversation(state, env).responseStatus(tenant, channel, "A", String(source.seq), response));
+    expect(original).toMatchObject({ head: 7, source: { rev: 2 }, intent_check: { stage: "result", matches: true } });
+    expect(JSON.stringify(original)).not.toMatch(/fingerprint|sha:answer/);
+    expect(await conv().responseStatus(tenant, channel, "A", source.msg_id, { ...response, source: revised })).toMatchObject({ intent_check: { stage: "result", matches: false } });
+    expect(await conv().responseStatus(tenant, channel, "A", source.msg_id, { source: revised, stage: "progress", fingerprint: "different" })).toMatchObject({ intent_check: { stage: "progress", matches: true } });
+    expect(await conv().responseStatus(tenant, channel, "B", source.msg_id, response)).toMatchObject({ progress: null, result: null, intent_check: { stage: "result", matches: null } });
     const other = conversationStub(env, tenant, "C2");
     expect(await other.responseStatus(tenant, "C2", "A", source.msg_id)).toBeNull();
     await inDO(conv(), async (object) => {

@@ -5,6 +5,7 @@ import { listAgentsForOperator } from "../db/agents";
 import { MUTE_FOREVER, getControls, listAgentMembers, setAgentMute, type ChannelRow } from "../db/chat";
 import { sha256Hex } from "../ids";
 import { postIntentFingerprint } from "./postIntent";
+import { responseIntent } from "./responseIntent";
 import { versionIntentFingerprint } from "./versionIntent";
 import { readableChannel } from "./access";
 import { parseBody, parseRefText, type ParsedBody, type ParsedRef } from "./grammar";
@@ -171,10 +172,7 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
   const shape = structure(p.body, p.refs);
   const ch = await readableChannel(ctx, p.c);
   const conv = conversationStub(ctx.env, ch.tenant_id, ch.project_id);
-  const response: ResponseIntent | undefined = p.response_to ? {
-    source: { msg_id: p.response_to.msg_id, rev: p.response_to.rev, author_id: p.response_to.author_id },
-    stage: p.response_to.stage ?? "result", fingerprint: await sha256Hex(JSON.stringify({ body: p.body, refs: p.refs })),
-  } : undefined;
+  const response: ResponseIntent | undefined = p.response_to ? await responseIntent(p.body, p.refs, p.response_to) : undefined;
   if (response && p.reply_to !== response.source.msg_id) throw badRequest("response_to must be the exact reply target");
   // A cached success is reconciliation, not authority to bypass current posting controls.
   // Keep this before both replay paths, but before any rate reservation or new post effects.

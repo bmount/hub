@@ -116,13 +116,88 @@ describe("read-only source-bound response reconciliation", () => {
     expect(posted.isError).toBeUndefined();
     const readConnection = await connectWithTokens(w.lead.token);
     const read = readConnection.tokens.access_token;
-    const status = (await rpcBody(await mcpPost("acme", read, "tools/call", { name: "chat_response_status", arguments: { c: "general", msg: source.msg_id, identity_id: w.scout.agent.identity.id } }))).result;
+    const query = { c: "general", msg: source.msg_id, identity_id: w.scout.agent.identity.id, intent: { body: "assistant-authored evidence", response_to: evidence } };
+    const status = (await rpcBody(await mcpPost("acme", read, "tools/call", { name: "chat_response_status", arguments: query }))).result;
     expect(status.isError).toBeUndefined();
-    expect(status.structuredContent).toMatchObject({ identity_id: w.lead.identity.id, result: { committed: { msg_id: posted.structuredContent.msg_id } } });
+    expect(status.structuredContent).toMatchObject({ identity_id: w.lead.identity.id, result: { committed: { msg_id: posted.structuredContent.msg_id } }, intent_check: { stage: "result", matches: true } });
+    const mismatch = (await rpcBody(await mcpPost("acme", read, "tools/call", { name: "chat_response_status", arguments: { ...query, intent: { body: args.body, response_to: evidence } } }))).result;
+    expect(mismatch.structuredContent.intent_check.matches).toBe(false);
     const denied = (await rpcBody(await mcpPost("acme", read, "tools/call", { name: "chat_post", arguments: args }))).result;
     expect(denied.isError).toBe(true);
     await env.HUB_DB.prepare("UPDATE oauth_grant SET revoked_at = ? WHERE client_id = ?").bind(Date.now(), readConnection.client_id).run();
-    expect((await mcpPost("acme", read, "tools/call", { name: "chat_response_status", arguments: { c: "general", msg: source.msg_id } })).status).toBe(401);
+    expect((await mcpPost("acme", read, "tools/call", { name: "chat_response_status", arguments: query })).status).toBe(401);
+  });
+
+  it("compares the exact persisted intent read-only, without treating missing slots or current text as a match", async () => {
+    const { w, source, args, evidence } = await setup();
+    const refs = [{ kind: "ticket", key: "missing#abcd" }, { kind: "commit", key: "missing@abc1234" }];
+    const intent = { body: args.body, refs, response_to: evidence };
+    const query = { c: "general", msg: source.seq, intent };
+    expect((await tool(w.scout.longLived, "chat_response_status", query)).structuredContent.intent_check).toEqual({ stage: "result", matches: null });
+    const postResult = await tool(w.scout.longLived, "chat_post", { ...args, refs });
+    expect(postResult.isError, JSON.stringify(postResult)).toBeUndefined();
+    const posted = postResult.structuredContent;
+    for (const changed of [
+      { ...intent, body: `${args.body} ` }, { ...intent, refs: [...refs].reverse() }, { ...intent, refs: [] },
+      { ...intent, response_to: { ...evidence, rev: 2 } },
+      { ...intent, response_to: { ...evidence, author_id: w.tidy.agent.identity.id } },
+      { ...intent, response_to: { ...evidence, msg_id: posted.msg_id } },
+    ]) {
+      expect((await tool(w.scout.longLived, "chat_response_status", { ...query, intent: changed })).structuredContent.intent_check).toEqual({ stage: "result", matches: false });
+    }
+    const original = await tool(w.scout.longLived, "chat_response_status", query);
+    expect(original.structuredContent.intent_check).toEqual({ stage: "result", matches: true });
+    expect(original.content[0].text).toContain("not current-source validation or permission to resend");
+    expect(JSON.stringify(original)).not.toMatch(/private tested|missing#abcd|fingerprint|persisted-intent/);
+    expect((await tool(w.scout.longLived, "chat_response_status", { ...query, intent: { ...intent, response_to: { ...evidence, stage: "progress" } } })).structuredContent.intent_check).toEqual({ stage: "progress", matches: null });
+    expect((await tool(w.tidy.longLived, "chat_response_status", { ...query, identity_id: w.scout.agent.identity.id })).structuredContent.intent_check.matches).toBeNull();
+    expect((await tool(w.scout.longLived, "chat_response_status", { ...query, c: "inaccessible" })).content[0].text).toContain("not_found");
+    expect((await tool(w.scout.longLived, "chat_response_status", { c: "general", msg: source.seq })).structuredContent).not.toHaveProperty("intent_check");
+    const progressIntent = { body: "bounded testing checkpoint", response_to: { ...evidence, stage: "progress" } };
+    const progress = await tool(w.scout.longLived, "chat_post", { ...args, ...progressIntent, after: posted.head });
+    expect(progress.isError).toBeUndefined();
+    expect((await tool(w.scout.longLived, "chat_response_status", { ...query, intent: progressIntent })).structuredContent.intent_check).toEqual({ stage: "progress", matches: true });
+    expect((await tool(w.scout.longLived, "chat_response_status", { ...query, intent: { ...intent, response_to: { ...evidence, stage: "result" } } })).structuredContent.intent_check).toEqual({ stage: "result", matches: true });
+  });
+
+  it("compares original evidence after source/response retraction and under posting controls without side effects", async () => {
+    const { w, source, args, evidence } = await setup();
+    const intent = { body: args.body, response_to: { ...evidence, stage: "result" } };
+    const posted = (await tool(w.scout.longLived, "chat_post", args)).structuredContent;
+    await ok(w.lead.token, "chat.retract", { c: "general", msg: posted.msg_id });
+    await ok(w.lead.token, "chat.retract", { c: "general", msg: source.msg_id });
+    await ok(w.lead.token, "channel.set_agent_policy", { c: "general", policy: "muted" });
+    await ok(w.lead.token, "chat.agents_disable");
+    await ok(w.lead.token, "channel.archive", { c: "general" });
+    const ch = (await getChannelBySlug(env.HUB_DB, w.acme.id, "general"))!;
+    const box = inboxStub(env, w.acme.id, w.tidy.agent.identity.id);
+    const before = await box.list(w.acme.id, w.tidy.agent.identity.id, { after: 0, limit: 100, include_acked: true });
+    for (let i = 0; i < 35; i++) {
+      const r = await tool(w.scout.longLived, "chat_response_status", { c: "general", msg: source.msg_id, intent });
+      expect(r.structuredContent).toMatchObject({ head: 4, source: { rev: 2, retracted: true }, result: { current: { retracted: true } }, intent_check: { stage: "result", matches: true } });
+    }
+    expect(await box.list(w.acme.id, w.tidy.agent.identity.id, { after: 0, limit: 100, include_acked: true })).toEqual(before);
+    expect(await inboxStub(env, w.acme.id, w.scout.agent.identity.id).cursors(w.acme.id, w.scout.agent.identity.id)).toEqual({});
+    expect(await conversationStub(env, w.acme.id, ch.project_id).head(w.acme.id, ch.project_id)).toBe(4);
+    expect((await tool(w.scout.longLived, "chat_post", args)).isError).toBe(true);
+    const events = await env.HUB_DB.prepare("SELECT kind, summary FROM event WHERE tenant_id = ? AND identity_id = ?").bind(w.acme.id, w.scout.agent.identity.id).all<{ kind: string; summary: string }>();
+    expect(events.results.filter((r) => r.kind === "chat.post")).toHaveLength(1);
+    expect(events.results.filter((r) => r.kind === "mcp.call" && r.summary.includes("chat.response_status")).map((r) => r.summary).join("\n")).not.toMatch(/private tested|persisted-intent|fingerprint/);
+    await ok(w.lead.token, "channel.remove_agent", { c: "general", agent: "scout" });
+    expect((await tool(w.scout.longLived, "chat_response_status", { c: "general", msg: source.msg_id, intent })).content[0].text).toContain("not_found");
+  }, 20_000);
+
+  it("validates bounded comparison input and never accepts a caller-selected digest", async () => {
+    const { w, source, args, evidence } = await setup();
+    const intent = { body: args.body, response_to: evidence };
+    const tools = (await rpcBody(await agentRpc(w.scout.longLived, "tools/list", {}))).result.tools;
+    expect(tools.find((t: { name: string }) => t.name === "chat_response_status").inputSchema.properties.intent.required).toEqual(["body", "response_to"]);
+    for (const invalid of [null, [], {}, { ...intent, body: " " }, { ...intent, body: "é".repeat(4097) },
+      { ...intent, response_to: { ...evidence, stage: "new-slot" } }, { ...intent, refs: Array(51).fill({ kind: "msg", key: "general/1" }) },
+      { ...intent, fingerprint: "chosen" }, { ...intent, idempotency_key: "new" }, { ...intent, response_to: undefined }]) {
+      expect((await tool(w.scout.longLived, "chat_response_status", { c: "general", msg: source.msg_id, intent: invalid })).content[0].text).toContain("bad_request");
+    }
+    expect((await tool(w.scout.longLived, "chat_response_status", { c: "general", msg: source.msg_id, intent, fingerprint: "ignored" })).structuredContent.intent_check.matches).toBeNull();
   });
 
   it("rejects malformed/missing source identifiers and system sources without ledger disclosure", async () => {

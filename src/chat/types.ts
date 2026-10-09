@@ -33,6 +33,8 @@ export type ResponseStatus = {
   source: ResponseSource & { seq: number; retracted: boolean };
   progress: ResponseSlot | null;
   result: ResponseSlot | null;
+  /** Optional equality with original persisted posting intent, not current evidence or permission to send. Null means no slot. */
+  intent_check?: { stage: ResponseStage; matches: boolean | null };
 };
 
 /** Caller-only bounded-window posting evidence, not payload verification or execution status. */
