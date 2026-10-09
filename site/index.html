@@ -34,6 +34,10 @@ body{background:var(--paper);color:var(--ink);font:17px/1.6 var(--body);overflow
 h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;letter-spacing:-.01em}
 p{margin:0}
 :focus-visible{outline:3px solid var(--violet);outline-offset:3px}
+.landing-auth{position:fixed;top:max(16px,env(safe-area-inset-top));right:max(16px,env(safe-area-inset-right));z-index:100}
+.landing-sign-in{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 22px;border:2px solid var(--ink);border-radius:999px;background:var(--ink);color:#fff;font-weight:600;text-decoration:none;box-shadow:0 3px 12px #1f2a4426}
+.landing-sign-in:hover{background:#354463}
+.landing-sign-in:focus-visible{outline:3px solid #fff;outline-offset:3px;box-shadow:0 0 0 7px var(--ink)}
 
 /* ================= the street (horizontal) ================= */
 .street{position:relative}
@@ -198,6 +202,7 @@ p{margin:0}
 </style>
 </head>
 <body>
+<nav class="landing-auth" aria-label="Account"><a class="landing-sign-in" href="/login">Sign in</a></nav>
 
 <section class="street" id="street" aria-label="A walk down Pimwell's street">
   <div class="pin" id="pin">
