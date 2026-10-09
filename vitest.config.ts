@@ -37,6 +37,8 @@ export default defineConfig({
     })),
   ],
   test: {
+    // Only this checkout's tests: worktrees under .claude/worktrees hold other copies of test/.
+    include: ["test/**/*.test.ts"],
     setupFiles: ["./test/apply-migrations.ts"],
   },
 });

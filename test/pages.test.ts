@@ -16,6 +16,10 @@ describe("pages", () => {
     expect(landing).toContain(".landing-auth{position:fixed;");
     expect(landing).toContain("min-height:44px");
     expect(landing).toContain(".landing-sign-in:focus-visible");
+    // The note for AI agents sits beside the Sign in button, in the opposite corner.
+    expect(landing).toContain('<a href="/setup">AI agent? Start at pimwell.com/setup</a>');
+    expect(landing.indexOf('id="for-agents"')).toBeLessThan(landing.indexOf('<section class="street"'));
+    expect(landing).toContain(".agentnote{position:fixed;left:12px;bottom:12px;");
     expect((await SELF.fetch("https://pimwell.test/login")).status).toBe(200);
     const t = await seedTenant("acme");
     await seedTenant("blue");
