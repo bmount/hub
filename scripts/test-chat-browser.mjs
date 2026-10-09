@@ -95,6 +95,7 @@ try {
   const disconnected = new WeakSet();
   const dropHeartbeatResponse = new WeakSet();
   const overdueHeartbeatResponse = new WeakSet();
+  const overdueDeniedHeartbeatResponse = new WeakSet();
   const wrongChannelSnapshot = new WeakSet();
   const repeatedSnapshot = new WeakMap();
   async function context(token, viewport) {
@@ -110,7 +111,16 @@ try {
       if (/\/api\/chat\.(heartbeat|presence)$/.test(url.pathname)) {
         presenceCalls.push({ name: url.pathname, ...JSON.parse(req.postData() || '{}') });
       }
-      const res = await mf.dispatchFetch(req.url(), { method: req.method(), headers: { ...await req.allHeaders(), 'x-local-browser-host': url.host }, body: req.postDataBuffer() || undefined });
+      const lateDenied = url.pathname === '/api/chat.heartbeat' && overdueDeniedHeartbeatResponse.has(ctx);
+      const headers = { ...await req.allHeaders(), 'x-local-browser-host': url.host };
+      if (lateDenied) delete headers.cookie; // Real local Worker denial; no session/grant mutations.
+      const res = await mf.dispatchFetch(req.url(), { method: req.method(), headers, body: req.postDataBuffer() || undefined });
+      if (lateDenied) {
+        overdueDeniedHeartbeatResponse.delete(ctx);
+        expect(res.status).toBe(404);
+        const page = ctx.pages()[0];
+        await page.clock.setSystemTime((await page.evaluate(() => Date.now())) + 8000);
+      }
       if (url.pathname === '/api/chat.heartbeat' && dropHeartbeatResponse.has(ctx)) {
         dropHeartbeatResponse.delete(ctx);
         expect(res.status).toBe(200); // Write accepted, but the browser cannot know its outcome.
@@ -248,6 +258,28 @@ try {
     await page.locator('[data-presence-toggle]').click();
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(deadlineStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
+    // A real Worker-denied heartbeat delivered outside the response budget cannot
+    // permanently disable current controls. Recovery queries only; new consent
+    // alone sends a fresh, normally authenticated/server-authorized report.
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-list]')).toContainText('offline');
+    const beforeDenied = (await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev');
+    overdueDeniedHeartbeatResponse.add(ctx);
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-connection]')).toContainText('Current status is unknown');
+    await expect(page.locator('[data-presence-toggle]')).toBeEnabled();
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+    await expect(page.locator('[data-presence-list] li')).toHaveCount(0);
+    expect((await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev')).toEqual(beforeDenied);
+    const deniedStart = presenceCalls.length;
+    await page.clock.fastForward(30001);
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(deniedStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+    const deniedRecovery = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
+    await page.locator('[data-presence-toggle]').click();
+    await (await deniedRecovery).finished();
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
+    expect(presenceCalls.slice(deniedStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
     // Model an abort-ignoring transport after a real Worker-accepted write. Keep
     // the response unsettled through deadline/recovery, then deliver it late.
     await page.locator('[data-presence-toggle]').click();
@@ -348,7 +380,7 @@ try {
     expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(beforeCursor);
     await noOverflow(page);
     await ctx.close();
-    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/absolute-deadline/abort-ignoring-transport/timer-gap/wrong-channel/replayed-snapshot recovery, cursor unchanged`);
+    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/absolute-deadline/overdue-denial/abort-ignoring-transport/timer-gap/wrong-channel/replayed-snapshot recovery, cursor unchanged`);
   }
   // Playwright routing and its default Chromium flag disable native BFCache.
   // Use an actual loopback HTTP bridge and omit ONLY that flag for this pass.

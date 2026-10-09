@@ -15,11 +15,12 @@ class Element {
 
 function client() {
   const connection = new Element(), sharing = new Element(), freshness = new Element(), list = new Element(), toggle = new Element();
+  toggle.textContent = 'Share presence in this channel'; // Initial server-rendered markup.
   const selectors: Record<string, Element> = { "[data-presence-connection]": connection, "[data-presence-sharing]": sharing, "[data-presence-freshness]": freshness, "[data-presence-list]": list, "[data-presence-toggle]": toggle };
   const docEvents = new Element(), winEvents = new Element();
   const document = { hidden: false, querySelector: () => ({ dataset: { chatPresence: "general" }, querySelector: (s: string) => selectors[s] }), createElement: () => new Element(), addEventListener: docEvents.addEventListener.bind(docEvents), removeEventListener: docEvents.removeEventListener.bind(docEvents) };
   const navigator = { onLine: true };
-  let time = 0, wall = 0, denied = false;
+  let time = 0, wall = 0, denied = false, denialStatus = 404;
   class ClockDate extends Date { static now() { return wall; } }
   const calls: Array<{ name: string; status?: string; signal: AbortSignal }> = [];
   let delayed: Promise<void> | null = null, delayedBody: Promise<void> | null = null;
@@ -31,7 +32,7 @@ function client() {
     const input = JSON.parse(init.body); calls.push({ name: url, status: input.status, signal: init.signal });
     const result = { channel: 'general', missing: 'unknown', ttl_ms: 90000, entries, observed_at: 1000, ...snapshotOverride };
     const bodyWait = delayedBody; delayedBody = null;
-    const response = { ok: !denied, status: denied ? 404 : 200, json: async () => {
+    const response = { ok: !denied, status: denied ? denialStatus : 200, json: async () => {
       if (bodyWait) await bodyWait;
       return { ok: true, result };
     } };
@@ -56,7 +57,7 @@ function client() {
     state: (state: string, expires_at = 91000) => { entries = [{ ...entries[0]!, state, expires_at }]; },
     elapsed: (ms: number) => { time = ms; wall = ms; intervals.get(1000)?.(); },
     clocks: (monotonic: number, wallTime: number, draw = true) => { time = monotonic; wall = wallTime; if (draw) intervals.get(1000)?.(); },
-    poll: () => intervals.get(30000)?.(), deny: () => { denied = true; },
+    poll: () => intervals.get(30000)?.(), deny: (status = 404) => { denied = true; denialStatus = status; },
     empty: () => { entries = []; },
     assistant: () => { entries = [{ ...entries[0]!, kind: "human", via_assistant: true }]; },
     dispose: () => docEvents.fire("wb:before-replace", { detail: { contains: () => true } }),
@@ -65,6 +66,49 @@ function client() {
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 describe("presence browser asset", () => {
+  it("treats overdue denied headers as uncertain delivery, not a permanent current access verdict", async () => {
+    for (const status of [401, 403, 404]) {
+      for (const heartbeat of [false, true]) {
+        for (const wallOnly of [false, true]) {
+          const c = client(); await settle();
+          c.deny(status); const release = c.delayNext();
+          if (heartbeat) c.toggle.fire('click'); else c.poll();
+          await settle();
+          // Deliberately do not deliver the abort timer. The headers themselves
+          // arrive exactly at the absolute deadline on either supported clock.
+          c.clocks(wallOnly ? 0 : 8000, 8000, false);
+          release(); await settle();
+          expect(c.calls.at(-1)!.signal.aborted).toBe(true);
+          expect(c.toggle.disabled).toBe(false);
+          expect(c.list.children).toEqual([]);
+          expect(c.connection.textContent).toContain('Current status is unknown');
+          expect(c.toggle.textContent).toBe('Share presence in this channel');
+          c.allow(); const count = c.calls.length; c.poll(); await settle();
+          expect(c.calls.slice(count).map(x => x.name)).toEqual(['/api/chat.presence']);
+          expect(c.list.children).toHaveLength(1);
+          c.toggle.fire('click'); await settle();
+          expect(c.calls.at(-2)!.status).toBe('online');
+          expect(c.toggle.textContent).toBe('Stop sharing presence');
+        }
+      }
+    }
+  });
+
+  it("retains fail-closed access denial immediately below the absolute header deadline", async () => {
+    for (const status of [401, 403, 404]) {
+      const c = client(); await settle();
+      c.deny(status); const release = c.delayNext(); c.toggle.fire('click'); await settle();
+      c.clocks(7999, 7999, false); release(); await settle();
+      expect(c.calls.at(-1)!.signal.aborted).toBe(false);
+      expect(c.toggle.disabled).toBe(true);
+      expect(c.list.children).toEqual([]);
+      expect(c.sharing.textContent).toContain('channel access is unavailable');
+      c.allow(); c.poll(); await settle();
+      const count = c.calls.length; c.toggle.fire('click'); await settle();
+      expect(c.calls).toHaveLength(count);
+    }
+  });
+
   it("does not refresh the age of repeated online, offline or empty observations", async () => {
     for (const state of ['online', 'offline', 'empty']) {
       const c = client(); await settle();

@@ -81,12 +81,14 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       return await Promise.race([aborted, (async () => {
         const res = await fetch('/api/' + name, { method: 'POST', credentials: 'same-origin', redirect: 'error',
           headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: controller.signal });
+        // An overdue denial is an obsolete transport result, not a current access
+        // verdict. Enforce the budget before interpreting status, just as for body.
+        timely();
         if (!res.ok) {
           const error = new Error('unavailable');
           error.denied = [401, 403, 404].includes(res.status);
           throw error;
         }
-        timely();
         const body = await res.json();
         timely();
         if (!body.ok) throw new Error('unavailable');
