@@ -39,7 +39,8 @@ async function world() {
     const tid = r.id === "FOREIGN" ? foreign.id : t.id;
     const subject = r.id === "PRIVATE-B" ? secret : `mailbound-${r.id}`;
     await env.HUB_DB.prepare(`INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, received_at, size, verdict, text, attachments, forwarded)
-      VALUES (?, ?, ?, ?, ?, 'pat@example.com', 'acme@pimwell.test', ?, ?, 100, ?, ?, '[]', 0)`).bind(r.id, tid, r.project, r.recipient, pat.identity.id, subject, Date.now() + index, r.verdict, `${subject} body`).run();
+      VALUES (?, ?, ?, ?, ?, 'pat@example.com', 'acme@pimwell.test', ?, ?, 100, ?, ?, ?, 0)`).bind(r.id, tid, r.project, r.recipient, pat.identity.id, subject, Date.now() + index, r.verdict, `${subject} body`,
+        JSON.stringify([{ filename: "audit.md", mime_type: "text/markdown", size: 10, text: `${subject} attachment evidence`, text_encoding: "utf-8", text_status: "complete" }])).run();
     await recordEvent(env.HUB_DB, { tenant_id: tid, identity_id: b.agent.identity.id, session_id: null, kind: "mail.received", target_kind: "inbound_mail", target_id: r.id, summary: subject }, Date.now() + index);
   }
   await env.HUB_DB.prepare(`INSERT INTO outbound_mail (id, tenant_id, from_address, to_address, subject, text, in_reply_to, sent_by, session_id, status, created_at)
@@ -117,7 +118,11 @@ describe("addressed mailbox access", () => {
         expect(r.isError, `${tool}: ${JSON.stringify(r)}`).toBeUndefined();
         expect(JSON.stringify(r)).not.toContain(secret);
       }
-      expect((await callTool(ctx, "mail_read", { id: "PRIVATE-A" })).isError).toBeUndefined();
+      const allowed = await callTool(ctx, "mail_read", { id: "PRIVATE-A" });
+      expect(allowed.isError).toBeUndefined();
+      expect(JSON.stringify(allowed)).toContain("mailbound-PRIVATE-A attachment evidence");
+      const listed = await callTool(ctx, "mail_list", {});
+      expect(JSON.stringify(listed)).not.toContain("attachment evidence");
     }
   });
   it("hides private subjects/body/replies on mail/home/search/people/project pages", async () => {

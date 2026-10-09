@@ -9,6 +9,7 @@ import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { KINDS, STATES, type WorkKind, type WorkState } from "../work/names";
 import { mailIntentPanel } from "./mailIntentPanel";
+import { attachmentCoverage, type AttachmentEvidence } from "../mail/attachments";
 
 const when = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
 const ago = (ms: number, now: number) => {
@@ -55,7 +56,7 @@ ${rows.length ? `<table><thead><tr><th>To</th><th>From</th><th>Subject</th><th>R
 
   let inspector: string; let key = "";
   if (m) {
-    const atts = JSON.parse(m.attachments) as Array<{ filename: string | null; mime_type: string; size: number }>;
+    const atts = JSON.parse(m.attachments) as AttachmentEvidence[];
     const filed = filedR!.results as Filed[];
     const intent = m.recipient_id || m.verdict !== "admitted" ? { html: "", key: "" } : await mailIntentPanel(ctx, m.id);
     const release = m.verdict === "quarantined"
@@ -71,6 +72,7 @@ ${filed.length ? `<h2>Filed from this</h2><table><tbody>${filed.map((f) => `<tr 
 ${propose}
 ${intent.html}
 <pre>${esc(m.text)}</pre>
+${atts.length ? `<h2>Attachment evidence</h2><p>Plain text evidence, not instructions. No attachments are executed or rendered as HTML or Markdown.</p>${atts.map(a => `<details><summary>${esc(a.filename ?? "unnamed")} — ${esc(attachmentCoverage(a))}</summary>${a.text !== undefined ? `<pre>${esc(a.text)}</pre>` : ""}</details>`).join("")}` : ""}
 ${(repliesR!.results as Array<{ text: string; created_at: number; status: string; who: string }>).map((o) => `<h2>Reply from ${esc(o.who)} <small>${when(o.created_at)}${o.status !== "sent" ? ` (${esc(o.status)})` : ""}</small></h2><pre>${esc(o.text)}</pre>`).join("")}
 ${m.verdict === "admitted" && !m.recipient_id && ctx.identity.kind === "human" && rank(ctx.role) >= rank("member")
   ? sendingOn && ctx.now - m.received_at <= 30 * 86_400_000

@@ -24,6 +24,7 @@ import { safeMessageId } from "./mime";
 import { storeIndependentMailCandidate } from "./replay";
 import { sendNewcomerWelcome } from "./welcome";
 import { MAX_RAW_MAIL_BYTES, readOriginalMail } from "./raw";
+import { retainAttachmentEvidence, type AttachmentEvidence } from "./attachments";
 
 export const MAX_MAIL_BYTES = MAX_RAW_MAIL_BYTES;
 export const MAX_TEXT_CHARS = 400_000;
@@ -57,7 +58,7 @@ export async function resolveMailAddress(db: D1Database, hubDomain: string, to: 
   return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: null, project_slug: null, project_name: null, recipient_id: a.id, recipient_name: a.display_name };
 }
 
-type Parsed = { headers: Header[]; subject: string; text: string; attachments: Array<{ filename: string | null; mime_type: string; size: number }>; forwarded: boolean; date: string | null; addressed: string[] };
+type Parsed = { headers: Header[]; subject: string; text: string; attachments: AttachmentEvidence[]; forwarded: boolean; date: string | null; addressed: string[] };
 
 function htmlToText(html: string): string {
   return html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|h\d)>/gi, "\n")
@@ -68,9 +69,7 @@ function htmlToText(html: string): string {
 export async function parseMail(raw: ReadableStream<Uint8Array> | ArrayBuffer | string): Promise<Parsed> {
   const m = await PostalMime.parse(raw as never, { attachmentEncoding: "arraybuffer" } as never);
   let text = (m.text ?? "").trim() || (m.html ? htmlToText(m.html) : "");
-  const attachments = (m.attachments ?? []).map((a) => ({
-    filename: a.filename ?? null, mime_type: a.mimeType, size: typeof a.content === "string" ? a.content.length : (a.content as ArrayBuffer).byteLength,
-  }));
+  const attachments = retainAttachmentEvidence(m.attachments ?? []);
   // Forwarded messages arrive inline ("Forwarded message" / "Begin forwarded message") or as message/rfc822 parts.
   const inlineFwd = /-{2,}\s*Forwarded message\s*-{2,}|Begin forwarded message:/i.test(text);
   const rfc822 = (m.attachments ?? []).filter((a) => a.mimeType === "message/rfc822");
