@@ -289,10 +289,13 @@ export const workLink = defineVerb({
   run: async (ctx, i) => {
     const item = await itemRef(ctx, i);
     const project = await slugOf(ctx, item.project_id);
-    const link = await linkWork(ctx.db, item, {
+    const { link, created } = await linkWork(ctx.db, item, {
       target_kind: reqString(i, "target_kind", { max: 20 }), target_ref: reqString(i, "target_ref", { max: 500 }), note: optString(i, "note", { max: 500 }), created_by: ctx.identity!.id,
-    }, ctx.now);
-    await audit(ctx, item, "work.link", `Linked ${ref(project, item)} to ${link.target_kind} ${link.target_ref}`);
-    return { link, ref: ref(project, item) };
+    }, ctx.now, (row) => ({
+      tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null,
+      kind: "work.link", target_kind: "work_item", target_id: item.id,
+      summary: `Linked ${ref(project, item)} to ${row.target_kind} ${row.target_ref}`.slice(0, 300),
+    }));
+    return { link, ref: ref(project, item), created };
   },
 });

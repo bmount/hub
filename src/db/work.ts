@@ -1,5 +1,7 @@
 // Work items and their links (overnight plan task 2).
 import { ulid } from "../ids";
+import { creationEventStatement } from "./events";
+import type { EventRow } from "./types";
 import { safeExternalUrl } from "../security/urls";
 import { badRequest, conflict, notFound } from "../errors";
 import type { WorkKind, WorkState } from "../work/names";
@@ -101,17 +103,27 @@ export async function claimWork(db: D1Database, item: WorkItem, identity_id: str
   return { ...item, owner_id: identity_id, state: "doing", lease_until: now + LEASE_MS, updated_at: now };
 }
 
-export async function linkWork(db: D1Database, item: WorkItem, input: { target_kind: string; target_ref: string; note: string | null; created_by: string }, now: number): Promise<WorkLink> {
+export async function linkWork(
+  db: D1Database, item: WorkItem,
+  input: { target_kind: string; target_ref: string; note: string | null; created_by: string }, now: number,
+  event?: (link: WorkLink) => Omit<EventRow, "id" | "created_at">,
+): Promise<{ link: WorkLink; created: boolean }> {
   if (!["commit", "mail", "message", "event", "item", "url"].includes(input.target_kind)) throw badRequest("unknown link kind");
   const ref = input.target_kind === "url" ? safeExternalUrl(input.target_ref) : input.target_ref.trim();
   if (!ref) throw badRequest(input.target_kind === "url" ? "URL links must be absolute HTTPS URLs without credentials, whitespace or control characters" : "a link target is required");
   const row: WorkLink = { id: ulid(now), item_id: item.id, target_kind: input.target_kind, target_ref: ref, note: input.note, created_by: input.created_by, created_at: now };
-  await db.batch([
-    db.prepare("INSERT OR IGNORE INTO work_link (id, item_id, target_kind, target_ref, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+  const statements = [
+    db.prepare(`INSERT INTO work_link (id, item_id, target_kind, target_ref, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (item_id, target_kind, target_ref) DO NOTHING RETURNING *`)
       .bind(row.id, row.item_id, row.target_kind, row.target_ref, row.note, row.created_by, row.created_at),
-    db.prepare("UPDATE work_item SET updated_at = ? WHERE id = ?").bind(now, item.id),
-  ]);
-  return row;
+    db.prepare("UPDATE work_item SET updated_at = ? WHERE id = ? AND EXISTS (SELECT 1 FROM work_link WHERE id = ?)").bind(now, item.id, row.id),
+  ];
+  if (event) statements.push(creationEventStatement(db, event(row), now, { table: "work_link", id: row.id }));
+  statements.push(db.prepare("SELECT * FROM work_link WHERE item_id = ? AND target_kind = ? AND target_ref = ?").bind(item.id, row.target_kind, row.target_ref));
+  const results = await db.batch<WorkLink>(statements);
+  const link = results[results.length - 1]!.results[0];
+  if (!link) throw conflict("link creation could not be reconciled");
+  return { link, created: results[0]!.results.length === 1 };
 }
 
 export function listLinksStatement(db: D1Database, item_id: string): D1PreparedStatement {

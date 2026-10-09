@@ -14,6 +14,16 @@ export async function recordEvent(
   return row;
 }
 
+/** Batch alongside a create-if-absent insert. Only the attempt's fresh internal ID may authorize an event. */
+export function creationEventStatement(
+  db: D1Database, e: Omit<EventRow, "id" | "created_at">, now: number,
+  source: { table: "work_link" | "app_deploy"; id: string },
+): D1PreparedStatement {
+  return db.prepare(`INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM ${source.table} WHERE id = ?)`)
+    .bind(ulid(now), e.tenant_id, e.identity_id, e.session_id, e.kind, e.target_kind, e.target_id, e.summary, now, source.id);
+}
+
 /**
  * One page of a tenant's events, newest first. Event ids are ULIDs minted from the same clock as
  * `created_at`, so id order is time order and the last id on a page is the cursor for the next.

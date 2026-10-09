@@ -3,7 +3,7 @@
 import { defineVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
 import { badRequest, conflict, forbidden, notFound } from "../errors";
-import { recordEvent } from "../db/events";
+import { creationEventStatement, recordEvent } from "../db/events";
 import { ulid } from "../ids";
 import { DATA_NOTE, cleanText } from "../mcp/render";
 import type { Ctx } from "../auth/context";
@@ -156,10 +156,25 @@ export const deployRecord = defineVerb({
   run: async (ctx, p) => {
     if (ctx.identity!.kind !== "human" && ctx.identity!.kind !== "agent") throw forbidden();
     const pr = await project(ctx, p.project);
-    await ctx.db.prepare("INSERT OR IGNORE INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(ulid(ctx.now), ctx.tenant!.id, pr.id, `${pr.slug}:${p.environment}`, p.commit, p.commit.slice(0, 12), p.message, ctx.now).run();
-    await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "deploy.record", target_kind: "project", target_id: pr.id,
-      summary: `Deployed ${pr.slug} ${p.commit.slice(0, 12)} to ${p.environment}${p.message ? `: ${p.message}` : ""}` }, ctx.now);
-    return { project: pr.slug, commit: p.commit, environment: p.environment };
+    const id = ulid(ctx.now), script = `${pr.slug}:${p.environment}`;
+    const results = await ctx.db.batch<{
+      id: string; tenant_id: string; project_id: string; script_name: string; version_id: string;
+      tag: string | null; message: string | null; seen_at: number;
+    }>([
+      ctx.db.prepare(`INSERT INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (script_name, version_id) DO NOTHING RETURNING *`)
+        .bind(id, ctx.tenant!.id, pr.id, script, p.commit, p.commit.slice(0, 12), p.message, ctx.now),
+      creationEventStatement(ctx.db, {
+        tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null,
+        kind: "deploy.record", target_kind: "project", target_id: pr.id,
+        summary: `Deployed ${pr.slug} ${p.commit.slice(0, 12)} to ${p.environment}${p.message ? `: ${p.message}` : ""}`,
+      }, ctx.now, { table: "app_deploy", id }),
+      ctx.db.prepare("SELECT * FROM app_deploy WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ?")
+        .bind(script, p.commit, ctx.tenant!.id, pr.id),
+    ]);
+    const deploy = results[2]!.results[0];
+    // The legacy global script/version key can collide between tenants. Never return or audit a foreign row.
+    if (!deploy) throw conflict("deploy record key is unavailable");
+    return { project: pr.slug, commit: deploy.version_id, environment: p.environment, deploy, created: results[0]!.results.length === 1 };
   },
 });
