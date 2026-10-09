@@ -10,7 +10,7 @@ import { getControls } from "../db/chat";
 import { LIMITS, computeHop, gateRefuses, nextAgentRun, pairTrip, wakesAllowed } from "./rules";
 import type {
   AuthorKind, ChatSessionKind, Digest, DigestQuery, MsgView, PostInput, PostOk, PostOutcome, ReadPage, ReadQuery, StoredRef, Suppressed,
-  ResponseAttribution, ResponseIntent, ResponseSlot, ResponseStatus, Version, VersionInput, WakeItem, WakeKind,
+  ResponseAttribution, ResponseIntent, ResponseSlot, ResponseStatus, PostStatus, Version, VersionInput, WakeItem, WakeKind,
 } from "./types";
 
 const SCHEMA = [
@@ -155,15 +155,15 @@ export class Conversation extends DurableObject<Env> {
   }
 
   /** Keys are namespaced by operation (a post key never replays an edit) and expire after 24 h. */
-  #replayRecord(identity_id: string, op: Op, key: string | null, now: number): { result: PostOk; fingerprint?: string } | null {
+  #replayRecord(identity_id: string, op: Op, key: string | null, now: number): { result: PostOk; fingerprint?: string; created_at: number } | null {
     if (!key) return null;
-    const r = this.#q<{ result_json: string }>(
-      "SELECT result_json FROM idem WHERE identity_id = ? AND key = ? AND created_at > ?", identity_id, `${op}:${key}`, now - LIMITS.IDEM_TTL_MS,
+    const r = this.#q<{ result_json: string; created_at: number }>(
+      "SELECT result_json, created_at FROM idem WHERE identity_id = ? AND key = ? AND created_at > ?", identity_id, `${op}:${key}`, now - LIMITS.IDEM_TTL_MS,
     )[0];
     if (!r) return null;
     const stored = JSON.parse(r.result_json) as PostOk | { result: PostOk; fingerprint: string };
     // Legacy records have no verified intent; bound replay must refuse them.
-    return "result" in stored ? stored : { result: stored };
+    return { ...("result" in stored ? stored : { result: stored }), created_at: r.created_at };
   }
 
   #replay(identity_id: string, op: Op, key: string | null, now: number): PostOk | null {
@@ -330,6 +330,20 @@ export class Conversation extends DurableObject<Env> {
   async replay(tenant_id: string, conversation_id: string, identity_id: string, op: Op, key: string): Promise<PostOk | null> {
     this.#bind(tenant_id, conversation_id);
     return this.#replay(identity_id, op, key, Date.now());
+  }
+
+  /** Read-only caller/key reconciliation. Missing includes expired/untracked sends; never authorizes a resend. */
+  async postStatus(tenant_id: string, conversation_id: string, identity_id: string, key: string): Promise<PostStatus> {
+    this.#bind(tenant_id, conversation_id);
+    const now = Date.now();
+    const prior = this.#replayRecord(identity_id, "post", key, now);
+    const current = prior ? this.#msg(prior.result.msg_id) : null;
+    // Synchronous SQL snapshot, with no drain, pruning, rate reservation or cursor writes.
+    return { head: this.#head(), observed_at: now, record: prior ? {
+      committed: { msg_id: prior.result.msg_id, seq: prior.result.seq, rev: prior.result.rev },
+      current: current ? { rev: current.rev, retracted: current.retracted === 1 } : null,
+      expires_at: prior.created_at + LIMITS.IDEM_TTL_MS, intent_bound: !!prior.fingerprint,
+    } : null };
   }
 
   /** Read-only payload-bound preflight; post repeats it atomically before committing artifacts/outboxes. */

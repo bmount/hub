@@ -35,6 +35,16 @@ export type ResponseStatus = {
   result: ResponseSlot | null;
 };
 
+/** Caller-only bounded-window posting evidence, not payload verification or execution status. */
+export type PostStatus = {
+  head: number; observed_at: number;
+  record: {
+    committed: { msg_id: string; seq: number; rev: number };
+    current: { rev: number; retracted: boolean } | null;
+    expires_at: number; intent_bound: boolean;
+  } | null;
+};
+
 export type PostInput = {
   tenant_id: string; conversation_id: string; now: number; author: Author; policy: AgentPolicy;
   body: string; body_sha256: string; after: number | null; reply_to: string | null;
