@@ -64,6 +64,26 @@ describe("Inbox object", () => {
     expect((await box().wait(T, "I1", { after: 0, limit: 1_000_000, wait_ms: 0 })).items.length).toBe(100);
   });
 
+  it("reports bounded scan snapshots across ack gaps, exact caps and pruning without moving an empty cursor to head", async () => {
+    await box().deliver(T, "I1", Array.from({ length: 101 }, (_, n) => item(n + 1)));
+    const first = await box().list(T, "I1", { after: 0, limit: 1_000_000, include_acked: false });
+    expect([first.items.length, first.head, first.next_after, first.has_more]).toEqual([100, 101, 100, true]);
+    expect(await box().wait(T, "I1", { after: 100, limit: 1, wait_ms: 0 })).toMatchObject({ head: 101, next_after: 101, has_more: false });
+    await box().ack(T, "I1", 100, Date.now() - 31 * 86_400_000);
+    const gap = await box().list(T, "I1", { after: 0, limit: 1, include_acked: false });
+    expect([gap.items[0]!.item_seq, gap.next_after, gap.has_more]).toEqual([101, 101, false]);
+    const acked = await box().list(T, "I1", { after: 0, limit: 1, include_acked: true });
+    expect([acked.items[0]!.item_seq, acked.next_after, acked.has_more]).toEqual([1, 1, true]);
+    await box().ack(T, "I1", 101, Date.now() - 31 * 86_400_000);
+    expect(await box().list(T, "I1", { after: 7, limit: 1, include_acked: false })).toEqual({ head: 101, items: [], next_after: 7, has_more: false });
+    // Delivery prunes all acknowledged rows; MAX(item_seq) is not a durable scan watermark.
+    await box().deliver(T, "I1", []);
+    expect(await box().wait(T, "I1", { after: 101, limit: 1, wait_ms: 0 })).toEqual({ head: 0, items: [], next_after: 101, has_more: false });
+    await box().deliver(T, "I1", [item(102)]);
+    const later = await box().list(T, "I1", { after: 101, limit: 1, include_acked: false });
+    expect([later.items[0]!.item_seq, later.next_after, later.has_more]).toEqual([102, 102, false]);
+  });
+
   it("caps concurrent waiters: the ninth poll answers at once, and every waiter cleans up", async () => {
     const parked = Array.from({ length: 8 }, () => box().wait(T, "I1", { after: 0, limit: 10, wait_ms: 3000 }));
     await until(async () => (await box().waiting(T, "I1")) === 8, "eight polls to park");

@@ -90,6 +90,8 @@ export type WakeItem = {
   hop: number; author_id: string; wake: boolean; created_at: number;
 };
 export type InboxItem = WakeItem & { item_seq: number; acked_at: number | null };
+/** Bounded open-item scan, before viewer filtering. `next_after` is not an acknowledgement or processing proof. */
+export type InboxPage = { head: number; items: InboxItem[]; next_after: number; has_more: boolean };
 
 export type Suppressed = { identity_id: string; reason: "hop_limit" | "pair_block" | "not_member" | "muted" };
 export type PostOk = {
