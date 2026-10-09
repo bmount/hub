@@ -65,7 +65,7 @@ function workspace(channels: Conversation[], active: string, content: string): s
 function presencePanel(slug: string, channels: Conversation[]): string {
   // Archived channels still have readable history, but must not publish or display live presence.
   if (!channels.some((c) => c.channel === slug)) return "";
-  return `<section data-chat-presence="${esc(slug)}" aria-label="Channel presence"><h2>Presence</h2><p data-presence-connection role="status">Presence not connected. Current status is unknown.</p><p data-presence-sharing>Not sharing. Loading or reading this page does not publish a heartbeat.</p><button type="button" data-presence-toggle>Share presence in this channel</button><ul data-presence-list></ul><noscript>Live presence needs JavaScript; no heartbeat is published without it.</noscript></section><script defer src="${ASSETS.presence.path}"></script>`;
+  return `<section data-chat-presence="${esc(slug)}" aria-label="Channel presence"><h2>Presence</h2><p data-presence-connection role="status">Presence not connected. Current status is unknown.</p><p data-presence-freshness>No current presence snapshot.</p><p data-presence-sharing>Not sharing. Loading or reading this page does not publish a heartbeat.</p><button type="button" data-presence-toggle>Share presence in this channel</button><ul data-presence-list></ul><noscript>Live presence needs JavaScript; no heartbeat is published without it.</noscript></section><script defer src="${ASSETS.presence.path}"></script>`;
 }
 
 function markRead(slug: string, head: number, back: string): string {

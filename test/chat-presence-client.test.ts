@@ -13,24 +13,33 @@ class Element {
 }
 
 function client() {
-  const connection = new Element(), sharing = new Element(), list = new Element(), toggle = new Element();
-  const selectors: Record<string, Element> = { "[data-presence-connection]": connection, "[data-presence-sharing]": sharing, "[data-presence-list]": list, "[data-presence-toggle]": toggle };
+  const connection = new Element(), sharing = new Element(), freshness = new Element(), list = new Element(), toggle = new Element();
+  const selectors: Record<string, Element> = { "[data-presence-connection]": connection, "[data-presence-sharing]": sharing, "[data-presence-freshness]": freshness, "[data-presence-list]": list, "[data-presence-toggle]": toggle };
   const docEvents = new Element(), winEvents = new Element();
   const document = { hidden: false, querySelector: () => ({ dataset: { chatPresence: "general" }, querySelector: (s: string) => selectors[s] }), createElement: () => new Element(), addEventListener: docEvents.addEventListener.bind(docEvents) };
   const navigator = { onLine: true };
   let time = 0, denied = false;
-  const calls: Array<{ name: string; status?: string }> = [];
+  const calls: Array<{ name: string; status?: string; signal: AbortSignal }> = [];
+  let delayed: Promise<void> | null = null;
   const intervals = new Map<number, () => void>();
   let entries = [{ handle: '<img src=x onerror=alert(1)>', kind: "agent", state: "online", last_seen: 1000, expires_at: 91000 }];
-  const fetch = async (url: string, init: { body: string }) => {
-    const input = JSON.parse(init.body); calls.push({ name: url, status: input.status });
-    return { ok: !denied, status: denied ? 404 : 200, json: async () => ({ ok: true, result: { entries, observed_at: 1000 } }) };
+  const fetch = async (url: string, init: { body: string; signal: AbortSignal }) => {
+    const input = JSON.parse(init.body); calls.push({ name: url, status: input.status, signal: init.signal });
+    const result = { entries, observed_at: 1000 };
+    const response = { ok: !denied, status: denied ? 404 : 200, json: async () => ({ ok: true, result }) };
+    const wait = delayed; delayed = null;
+    // Deliberately allow late delivery even after abort: generation guards must also work.
+    if (wait) await wait;
+    return response;
   };
   // Execute the exact shipped asset with small DOM/transport fakes, not a second implementation.
   const start = new Function("document", "window", "navigator", "fetch", "performance", "setInterval", "clearInterval", "setTimeout", "clearTimeout", CHAT_PRESENCE_JS);
   start(document, { addEventListener: winEvents.addEventListener.bind(winEvents) }, navigator, fetch, { now: () => time },
     (fn: () => void, ms: number) => { intervals.set(ms, fn); return ms; }, (id: number) => intervals.delete(id), () => 1, () => {});
-  return { connection, sharing, list, toggle, document, navigator, calls, docEvents, winEvents,
+  return { connection, sharing, freshness, list, toggle, document, navigator, calls, docEvents, winEvents,
+    delayNext: () => { let release!: () => void; delayed = new Promise<void>((resolve) => { release = resolve; }); return release; },
+    allow: () => { denied = false; },
+    state: (state: string, expires_at = 91000) => { entries = [{ ...entries[0]!, state, expires_at }]; },
     elapsed: (ms: number) => { time = ms; intervals.get(1000)?.(); },
     poll: () => intervals.get(30000)?.(), deny: () => { denied = true; },
     empty: () => { entries = []; },
@@ -44,8 +53,13 @@ describe("presence browser asset", () => {
     expect(c.calls.map((x) => x.name)).toEqual(["/api/chat.presence"]);
     expect(c.list.children[0]!.textContent).toContain("<img src=x onerror=alert(1)>");
     expect(c.list.children[0]!.textContent).toContain(" · online · ");
-    c.elapsed(90000);
+    c.state("online", 61000); c.poll(); await settle();
+    c.elapsed(60000);
     expect(c.list.children[0]!.textContent).toContain(" · stale · ");
+    expect(c.freshness.textContent).toContain("60 seconds old");
+    c.elapsed(90000);
+    expect(c.list.children).toEqual([]);
+    expect(c.connection.textContent).toContain("snapshot expired");
     c.toggle.fire("click"); await settle();
     expect(c.calls.find((x) => x.status === "online")?.name).toBe("/api/chat.heartbeat");
     c.document.hidden = true; c.docEvents.fire("visibilitychange"); await settle();
@@ -66,6 +80,78 @@ describe("presence browser asset", () => {
     expect(heartbeats().at(-1)?.status).toBe("offline");
     const stopped = heartbeats().length;
     c.poll(); await settle(); expect(heartbeats()).toHaveLength(stopped);
+  });
+
+  it("bounds cached offline and empty snapshots and never presents a failed refresh as an empty current directory", async () => {
+    const c = client(); await settle();
+    c.state("offline"); c.poll(); await settle();
+    c.elapsed(89999); expect(c.list.children[0]!.textContent).toContain(" · offline · ");
+    c.elapsed(90000); expect(c.list.children).toEqual([]);
+    expect(c.freshness.textContent).toBe("No current presence snapshot.");
+    c.empty(); c.poll(); await settle();
+    expect(c.list.children[0]!.textContent).toContain("No recent explicit heartbeats");
+    c.elapsed(180000); expect(c.list.children).toEqual([]);
+    c.deny(); c.poll(); await settle(); c.elapsed(181000);
+    expect(c.list.children).toEqual([]);
+    expect(c.connection.textContent).toContain("Current status is unknown");
+  });
+
+  it("immediately clears and aborts a pending query on disconnect and ignores its late success", async () => {
+    const c = client(); await settle();
+    const release = c.delayNext(); c.poll(); await settle();
+    const request = c.calls.at(-1)!;
+    c.navigator.onLine = false; c.winEvents.fire("offline");
+    expect(request.signal.aborted).toBe(true);
+    expect(c.list.children).toEqual([]);
+    release(); await settle();
+    expect(c.list.children).toEqual([]);
+    c.elapsed(1000); expect(c.list.children).toEqual([]);
+    c.navigator.onLine = true; c.winEvents.fire("online"); await settle();
+    expect(c.list.children).toHaveLength(1);
+    expect(c.calls.some((x) => x.name === "/api/chat.heartbeat")).toBe(false);
+  });
+
+  it("does not continue an old heartbeat into a restored page or resume publishing without new opt-in", async () => {
+    const c = client(); await settle();
+    const release = c.delayNext(); c.toggle.fire("click"); await settle();
+    expect(c.calls.at(-1)!.status).toBe("online");
+    c.winEvents.fire("pagehide");
+    expect(c.list.children).toEqual([]);
+    expect(c.calls.at(-1)!.signal.aborted).toBe(true);
+    c.winEvents.fire("pageshow", { persisted: true });
+    release(); await settle();
+    expect(c.calls.filter((x) => x.name === "/api/chat.heartbeat")).toHaveLength(1);
+    // Only the fresh generation reads: no query continues the suspended heartbeat.
+    expect(c.calls.filter((x) => x.name === "/api/chat.presence")).toHaveLength(2);
+    expect(c.sharing.textContent).toContain("Share explicitly again");
+    c.poll(); await settle();
+    expect(c.calls.filter((x) => x.name === "/api/chat.heartbeat")).toHaveLength(1);
+  });
+
+  it("ignores late access denial from a suspended generation but applies denial to the current view", async () => {
+    const c = client(); await settle();
+    c.deny(); const release = c.delayNext(); c.poll(); await settle();
+    c.winEvents.fire("pagehide"); c.allow();
+    c.winEvents.fire("pageshow", { persisted: true });
+    release(); await settle();
+    expect(c.toggle.disabled).toBe(false);
+    expect(c.list.children).toHaveLength(1);
+    c.deny(); c.poll(); await settle();
+    expect(c.toggle.disabled).toBe(true);
+    expect(c.list.children).toEqual([]);
+  });
+
+  it("charges slow transport against both snapshot age and heartbeat expiry", async () => {
+    const c = client(); await settle();
+    c.state("online", 61000);
+    const release = c.delayNext(); c.poll(); await settle();
+    c.elapsed(60000); release(); await settle();
+    expect(c.freshness.textContent).toContain("60 seconds old");
+    expect(c.list.children[0]!.textContent).toContain(" · stale · ");
+    const late = c.delayNext(); c.poll(); await settle();
+    c.elapsed(150000); late(); await settle();
+    expect(c.list.children).toEqual([]);
+    expect(c.connection.textContent).toContain("snapshot expired");
   });
 
   it("clears cached activity on disconnect or denied access and never implies the server received an offline update", async () => {

@@ -5,13 +5,33 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
   const channel = box.dataset.chatPresence;
   const connection = box.querySelector('[data-presence-connection]');
   const sharing = box.querySelector('[data-presence-sharing]');
+  const freshness = box.querySelector('[data-presence-freshness]');
   const list = box.querySelector('[data-presence-list]');
   const toggle = box.querySelector('[data-presence-toggle]');
   let opted = false, pending = false, queued = false, nextStatus = null, stopped = false;
   let entries = [], snapshotAt = 0, observedAt = 0, timer, expiryTimer;
+  let generation = 0, snapshotValid = false;
+  const requests = new Set();
+  function unknown(message) {
+    snapshotValid = false; entries = []; list.replaceChildren();
+    freshness.textContent = 'No current presence snapshot.';
+    connection.textContent = message;
+  }
+  function invalidate(message) {
+    generation++; queued = false; nextStatus = null;
+    for (const controller of requests) controller.abort();
+    unknown(message);
+  }
   function draw() {
     list.replaceChildren();
-    const elapsed = performance.now() - snapshotAt;
+    if (!snapshotValid) return;
+    const elapsed = Math.max(0, performance.now() - snapshotAt);
+    // Even explicit offline is only a bounded snapshot, not a permanent directory.
+    if (elapsed >= 90000) {
+      unknown('Presence snapshot expired. Current status is unknown; refresh will retry.');
+      return;
+    }
+    freshness.textContent = 'Snapshot observed at ' + new Date(observedAt).toISOString() + ' · at least ' + Math.floor(elapsed / 1000) + ' seconds old (including request time).';
     for (const entry of entries) {
       const li = document.createElement('li');
       const expired = elapsed >= Math.max(0, entry.expires_at - observedAt);
@@ -27,42 +47,50 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
   }
   async function api(name, input) {
     const controller = new AbortController();
+    requests.add(controller);
     const timeout = setTimeout(() => controller.abort(), 8000);
     try {
       const res = await fetch('/api/' + name, { method: 'POST', credentials: 'same-origin', redirect: 'error',
         headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: controller.signal });
       if (!res.ok) {
-        if ([401, 403, 404].includes(res.status)) {
-          opted = false; nextStatus = null; toggle.disabled = true;
-          sharing.textContent = 'Sharing stopped: sign-in or channel access is unavailable.';
-        }
-        throw new Error('unavailable');
+        const error = new Error('unavailable');
+        error.denied = [401, 403, 404].includes(res.status);
+        throw error;
       }
       const body = await res.json();
       if (!body.ok) throw new Error('unavailable');
       return body.result;
-    } finally { clearTimeout(timeout); }
+    } finally { requests.delete(controller); clearTimeout(timeout); }
   }
   async function refresh() {
     if (stopped) return;
     if (pending) { queued = true; return; }
     pending = true;
+    const startedGeneration = generation;
+    const current = () => !stopped && navigator.onLine && startedGeneration === generation;
     try {
       if (!navigator.onLine) throw new Error('disconnected');
       const status = nextStatus || (opted && !document.hidden ? 'online' : null);
       nextStatus = null;
       if (status) await api('chat.heartbeat', { c: channel, status });
+      if (!current()) return;
       // Charge the whole round trip against freshness, conservatively: client clock skew or
       // slow transport must never extend the server's expiry window.
       const requestedAt = performance.now();
       const result = await api('chat.presence', { c: channel });
-      entries = result.entries; observedAt = result.observed_at; snapshotAt = requestedAt;
+      if (!current()) return;
+      entries = result.entries; observedAt = result.observed_at; snapshotAt = requestedAt; snapshotValid = true;
       connection.textContent = 'Presence snapshot refreshed. Heartbeats expire after 90 seconds; they do not prove reading or work.';
       draw();
-    } catch (_) {
-      // Never keep green-looking cached entries or names after disconnection/access denial.
-      entries = []; list.replaceChildren();
-      connection.textContent = 'Disconnected or presence unavailable. Current status is unknown; refresh will retry.';
+    } catch (error) {
+      // Stale responses cannot alter a new view, including its sharing/access controls.
+      if (stopped || startedGeneration !== generation) return;
+      if (error.denied) {
+        opted = false; nextStatus = null; toggle.disabled = true;
+        toggle.textContent = 'Share presence in this channel';
+        sharing.textContent = 'Sharing stopped: sign-in or channel access is unavailable.';
+      }
+      unknown('Disconnected or presence unavailable. Current status is unknown; refresh will retry.');
     } finally {
       pending = false;
       if (queued) { queued = false; refresh(); }
@@ -79,16 +107,24 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     refresh();
   });
   window.addEventListener('online', refresh);
-  window.addEventListener('offline', refresh);
-  window.addEventListener('pagehide', () => { stopped = true; clearInterval(timer); clearInterval(expiryTimer); });
+  window.addEventListener('offline', () => {
+    invalidate('Disconnected or presence unavailable. Current status is unknown; refresh will retry.');
+  });
+  window.addEventListener('pagehide', () => {
+    stopped = true;
+    invalidate('Page suspended. Current status is unknown.');
+    clearInterval(timer); clearInterval(expiryTimer);
+  });
   function startTimers() {
+    clearInterval(timer); clearInterval(expiryTimer);
     timer = setInterval(refresh, 30000);
     expiryTimer = setInterval(draw, 1000);
   }
   window.addEventListener('pageshow', (event) => {
     if (!event.persisted) return;
     // A back/forward-cache restore is a new view, not evidence of uninterrupted presence.
-    stopped = false; opted = false; nextStatus = null; entries = []; list.replaceChildren();
+    invalidate('Page restored. Current status is unknown until refreshed.');
+    stopped = false; opted = false; nextStatus = null;
     toggle.textContent = 'Share presence in this channel';
     sharing.textContent = 'Not sharing. Share explicitly again after returning to this page.';
     startTimers(); refresh();
