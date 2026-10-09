@@ -23,8 +23,9 @@ import { takeRateDetail } from "../rate";
 import { sendMail } from "./send";
 import { safeMessageId } from "./mime";
 import { envelopeMatchesFrom, proofFromReply, type SenderProof } from "./proof";
+import { MAX_RAW_MAIL_BYTES, readBoundedMail } from "./raw";
 
-export const MAX_MAIL_BYTES = 10 * 1024 * 1024;
+export const MAX_MAIL_BYTES = MAX_RAW_MAIL_BYTES;
 export const MAX_TEXT_CHARS = 400_000;
 export const STRANGER_REASON = "This address only accepts mail from members of its organization.";
 
@@ -116,7 +117,10 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
     return "limited";
   }
 
-  const parsed = await parseMail(message.raw);
+  let bytes: Uint8Array<ArrayBuffer>;
+  try { bytes = await readBoundedMail(message.raw); }
+  catch { message.setReject("Message too large or unreadable"); return "rejected"; }
+  const parsed = await parseMail(bytes.buffer);
   // A successful reply authenticates the header From domain, not arbitrary
   // envelope identities. Bind both before granting consent or trying a reply.
   // This temporary proof path still requires a receipt; independent verified
@@ -150,7 +154,7 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
     `INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(id, target.tenant_id, target.project_id, target.recipient_id ?? null, identity.id, from, message.to.trim().toLowerCase(), parsed.subject, safeMessageId(message.headers.get("message-id")),
-    parsed.date, now, message.rawSize, verdict, proof.reason,
+    parsed.date, now, bytes.byteLength, verdict, proof.reason,
     parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0,
     JSON.stringify(parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`)))).run();
   await recordEvent(env.HUB_DB, {

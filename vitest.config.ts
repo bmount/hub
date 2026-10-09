@@ -40,6 +40,10 @@ export default defineConfig({
     })),
   ],
   test: {
+    // mailauth's transitive tldts uses extensionless ES imports. Bundle the
+    // verifier entry point as in a Wrangler release, keeping native crypto.
+    deps: { optimizer: { ssr: { enabled: true, include: ["mailauth/lib/dkim/dkim-verifier.js"],
+      rolldownOptions: { external: [/^node:/, "buffer", "string_decoder"] } } } },
     // Only this checkout's tests: worktrees under .claude/worktrees hold other copies of test/.
     include: ["test/**/*.test.ts"],
     setupFiles: ["./test/apply-migrations.ts"],

@@ -170,6 +170,24 @@ describe("mail to organizations and projects", () => {
     expect(f.calls.rejects).toEqual(["Message too large"]);
   });
 
+  it("bounds actual raw bytes before parsing, consent or a receipt even if rawSize lies", async () => {
+    await world();
+    const f = fake("pat@example.com", `acme.site@${HUB}`, "x".repeat(10 * 1024 * 1024 + 1), { rawSize: 1 });
+    await handleEmail(f.message, env, ctx);
+    expect(f.calls.rejects).toEqual(["Message too large or unreadable"]);
+    expect(f.calls.replies).toBe(0);
+    expect(await stored()).toHaveLength(0);
+    expect(await listConsent(env.HUB_DB, "pat@example.com")).toHaveLength(0);
+  });
+
+  it("records actual raw byte size rather than a mismatched declaration", async () => {
+    await world();
+    const raw = mime({ from: "pat@example.com", to: `acme@${HUB}`, body: "hi" });
+    const f = fake("pat@example.com", `acme@${HUB}`, raw, { rawSize: 1 });
+    await handleEmail(f.message, env, ctx);
+    expect(await env.HUB_DB.prepare("SELECT size FROM inbound_mail").first("size")).toBe(new TextEncoder().encode(raw).length);
+  });
+
   it("shows admitted mail to members, quarantine only to admins, and lets an admin release it", async () => {
     const w = await world();
     await handleEmail(fake("pat@example.com", `acme.site@${HUB}`, mime({ from: "pat@example.com", to: `acme.site@${HUB}`, subject: "ok one", body: "a" })).message, env, ctx);

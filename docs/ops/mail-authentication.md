@@ -37,6 +37,43 @@ explicit request to `login@`/`signup@` can establish new consent only through
 the existing successful reply path. This limitation must remain visible
 until provenance of revocation can be recorded independently.
 
+## #134 independent verifier increment (not yet an admission path)
+
+`src/mail/dkim.ts` now produces an independent **DKIM proof candidate** from
+original bytes using pinned `mailauth@7.1.1` in strict mode. Tests run inside
+the existing Workers pool, not just Node. Native RSA-SHA256 and Ed25519-SHA256
+fixtures pass. A narrow version-pinned adapter translates Node's `rsa-sha256`
+digest alias to Workers' `sha256` spelling; mailauth still owns all parsing,
+canonicalization, key validation and native cryptographic verification. There
+is no global crypto patch or hand-written verifier. Changing this dependency
+requires rechecking that private adapter interface and signed fixtures.
+
+Policy requires exact signing-domain alignment (not relaxed organizational
+alignment), exactly one outer From bound to the expected envelope, agreement
+between address parsers, an unambiguous Message-ID, non-testing keys, RSA keys
+of at least 2048 bits, valid signature time and no `l=` body limit—even one
+covering the currently complete body. Each present semantic header affecting
+content, copied-mail permissions, reply targets or threading must be covered
+by the **same** passing signature. Duplicate semantic headers are refused.
+Unsigned Authentication-Results/ARC headers do not supply authority.
+
+Key resolution uses only `https://cloudflare-dns.com/dns-query`, with redirects
+refused, TXT/name validation, matching DNS questions/answers, a 16 KiB response
+limit, at most six lookups, a two-second per-query timeout and five-second total
+lookup budget. Trust is the fixed HTTPS resolver; DNSSEC validation is not
+claimed. CNAME key indirection and escaped TXT records are currently unsupported
+and fail closed. Header bytes are capped at 64 KiB, signatures at six and raw
+mail at 10 MiB. No sender-controlled URLs or native DNS fallback are used.
+
+The active inbound handler now bounds **actual** raw stream bytes before MIME
+parsing/consent/reply and records actual byte size. The verifier is deliberately
+not connected to admission yet: a valid signature can be replayed. Tests make
+that limitation explicit. Receipt-based admission and consent withdrawal
+behavior remain unchanged by this increment.
+
+This is limited domain-aligned DKIM coverage, **not universal DMARC**, SPF or
+ARC forwarding support. Failure/absence/unsupported formats remain unknown.
+
 ## Not completed / next increment
 
 Routine receipt suppression, one-time verified-user welcome (#130), explicit
@@ -44,14 +81,14 @@ response-recipient configuration, and scheduled-response state are **not**
 implemented by this increment. Configured recipients must never be presented
 as a promise that a response will be sent.
 
-To remove the receipt proof dependency safely, obtain a documented,
-non-forgeable per-message Cloudflare ingress authentication contract, or
-integrate an established cryptographic DKIM verifier over the original raw
-bytes with trusted DNS, strict From/envelope binding and aligned signing
-domain checks. Verify body/header coverage, duplicate From, altered bodies,
-unaligned signatures, DNS errors/timeouts, and forwarded messages in the
-Workers runtime. Missing proof must stay unknown, not fall back to prior
-consent or an attacker-supplied Authentication-Results header.
+Next: connect the verified candidate only after atomic, tenant/mailbox-bound
+Message-ID replay reservation/deduplication is implemented and tested, then
+remove routine Received replies. Verify that admission does not depend on an
+optional welcome's delivery, that repeated delivery neither grants consent
+again nor wakes an agent twice, and that revoked consent is never reinstated.
+Finish one-time welcome/context under #130 separately. Missing proof must
+stay unknown, not fall back to prior consent or an attacker-supplied
+Authentication-Results header. No held mail may be automatically released.
 
 No schema, tenant, membership, credential, or infrastructure changes are
 required or performed by this increment. Existing held mail is not released
