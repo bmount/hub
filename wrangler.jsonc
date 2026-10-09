@@ -12,7 +12,8 @@
     { "pattern": "pimwell.com", "custom_domain": true },
     { "pattern": "*.pimwell.com/*", "zone_name": "pimwell.com" }
   ],
-  "vars": { "HUB_DOMAIN": "pimwell.com" },
+  // Making a repo project creates its repository (src/code/ardi.ts createRepo); Ardi accepts repo_create since 2026-10-08.
+  "vars": { "HUB_DOMAIN": "pimwell.com", "ARDI_REPO_CREATE": "on" },
   // Push sync from the git host every five minutes (src/code/sync.ts).
   "triggers": { "crons": ["*/5 * * * *"] },
   "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
