@@ -13,6 +13,7 @@ import { refShort, type ItemView } from "../chat/compact";
 import type { AuthorJson, MsgJson, ReadResult } from "../chat/present";
 import type { ViewRef } from "../chat/types";
 import { notFoundPage } from "./pages";
+import { MAX_CHANNEL_FORM_BODY_BYTES, readRequestForm } from "./body";
 
 type Extra = Record<string, string>;
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -186,7 +187,10 @@ export async function channelPost(request: Request, env: Env, slug: string, thre
   const pc = await pageCtx(request, env);
   if (pc instanceof Response) return pc;
   if (!sameOrigin(request)) return htmlResponse(page("Forbidden", "<h1>Forbidden</h1>"), 403, pc.extra);
-  const form = await request.formData().catch(() => null);
+  if (rank(pc.ctx.role) < rank("member")) return htmlResponse(page("Forbidden", "<h1>Forbidden</h1>"), 403, pc.extra);
+  let form: FormData | null;
+  try { form = await readRequestForm(request, MAX_CHANNEL_FORM_BODY_BYTES); }
+  catch (e) { return errorPage(e, pc.extra); }
   if (!form) return htmlResponse(page("Bad request", "<h1>Bad request</h1>"), 400, pc.extra);
   const body = String(form.get("body") ?? "");
   const after = String(form.get("after") ?? "");

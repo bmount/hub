@@ -15,10 +15,11 @@ import { shellFor } from "./shell";
 import { callTool, toolDefinition, toolsFor } from "../mcp/tools";
 import { takeRateDetail } from "../rate";
 import { note } from "../log";
+import { HubError } from "../errors";
+import { MAX_PLAYGROUND_BODY_BYTES, readRequestBytes } from "./body";
 
 export const PLAYGROUND_HEADER = "x-pimwell-playground";
 const SCOPE_SETS: Record<string, string[]> = { read: ["read"], write: ["read", "write"] };
-const MAX_BODY = 64 * 1024;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body, null, 2), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
@@ -79,8 +80,12 @@ export async function playgroundCall(request: Request, env: Env): Promise<Respon
   }
   const rate = await takeRateDetail(env.RATE, "playground_session", ctx.session!.id, ctx.now);
   if (!rate.ok) return json({ error: "too_many_requests" }, 429);
-  const raw = await request.text();
-  if (raw.length > MAX_BODY) return json({ error: "too_large" }, 413);
+  let raw: string;
+  try { raw = new TextDecoder().decode(await readRequestBytes(request, MAX_PLAYGROUND_BODY_BYTES)); }
+  catch (e) {
+    if (e instanceof HubError) return json({ error: e.reason }, e.status);
+    throw e;
+  }
   let body: unknown;
   try { body = JSON.parse(raw); } catch { return json({ error: "bad_request", reason: "invalid JSON" }, 400); }
   const b = body as { tool?: unknown; arguments?: unknown; scopes?: unknown };

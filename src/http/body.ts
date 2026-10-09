@@ -6,6 +6,11 @@ export const MAX_MCP_BODY_BYTES = MAX_API_BODY_BYTES;
 // allowance for voice uploads or forwarded Git bodies.
 export const MAX_AUTH_FORM_BODY_BYTES = 16 * 1024;
 export const MAX_OAUTH_TOKEN_BODY_BYTES = 16 * 1024;
+// URL-encoding can triple the channel's existing 8 KiB message allowance;
+// allow that plus form framing. JSON budgets include UTF-8 bytes.
+export const MAX_CHANNEL_FORM_BODY_BYTES = 64 * 1024;
+export const MAX_ASSISTANT_BODY_BYTES = 64 * 1024;
+export const MAX_PLAYGROUND_BODY_BYTES = 64 * 1024;
 
 /** Content-Length is only an early rejection hint. Bound actual bytes before
  * JSON/form parsers or SDK classification. Do not retain source-owned chunks or

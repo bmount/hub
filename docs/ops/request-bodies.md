@@ -45,6 +45,29 @@ and multipart framing, not decoded character counts or just uploaded file size.
   membership, single-use and redirect controls remain in the original decision
   path. A body refusal is not authorization to approve or release anything.
 
+- `POST /c/:slug` and `/c/:slug/t/:seq`: 64 KiB for channel compose forms,
+  including URL-encoded/multipart framing and ignored fields. Tenant browser
+  authentication, same-Origin and minimum member role denials precede reads.
+  Overflow/read refusal returns inert 413/400, without posting, changing a
+  channel head or sending a reply. The original verb's channel membership,
+  stale-view and 8 KiB **message byte** checks still apply after parsing. The
+  envelope cap accommodates a full URL-encoded Unicode message; it is not a
+  larger message allowance. Channel per-verb rate checks remain downstream.
+- `POST /assistant/chat`: 64 KiB actual bytes before JSON parsing, after the
+  existing own-browser/session, tenant, Origin, custom-header/media and
+  identity rate gates. The original 20,000 decoded envelope-character and
+  8,000 message-character checks still apply. Overflow/read refusal returns
+  safe 413/400 before thread creation, scope switching, model calls, tool
+  dispatch or conversation storage. A full 8,000-character Unicode message
+  remains supported.
+- `POST /playground/call`: 64 KiB actual bytes before JSON parsing, after the
+  existing own-browser, tenant, Origin, custom-header/media and session rate
+  gates. Unlike the previous decoded-character cap, this counts UTF-8 bytes:
+  multi-byte tool envelopes may now be refused sooner. Overflow/read refusal
+  returns safe 413/400 with no tool execution or `playground.call` audit. Scope,
+  role, grant and tool exposure checks are unchanged. These existing rate
+  gates are eventually consistent, not atomic hard quotas.
+
 Oversized requests return 413 without running verbs, creating clients or
 executing tools. API form refusals render an inert readable page. Stream errors
 or request cancellation return safe 400 errors without reflecting arbitrary
@@ -57,9 +80,8 @@ headers are removed. Original requests remain the authentication/logging source.
 ## Remaining work and limits
 
 This increment does **not** complete #102 across every route. Separate browser,
-internal and OAuth-token parsers still need this utility with suitable endpoint
-budgets: channel forms, assistant/playground/voice and internal
-introspection/backlinks/evals. Do not apply a 1 MiB global
+internal parsers still need this utility with suitable endpoint
+budgets: voice and internal introspection/backlinks/evals. Do not apply a 1 MiB global
 middleware cap to Git smart HTTP forwarded to Ardi or voice uploads with their
 separate recording allowance. Incoming mail uses its separate original-byte cap.
 
@@ -79,5 +101,11 @@ oversize genuine code/refresh/revoke requests leave grants untouched, a refused
 code remains exchangeable, bounded forwarding works with forged framing,
 oversize consent cannot approve/deny or consume pending requests, and oversize
 login cannot create links or send mail. IP/client ordering, neutral anonymous
-consent, exact byte caps, multipart entry routes and safe error text are covered. The full suite guards existing tenant,
-mailbox, grant, cookie and login-proof boundaries.
+consent, exact byte caps, multipart entry routes and safe error text are covered. Browser chat tests additionally cover chunked/forged framing across all three
+handlers and production entry routes, full Unicode messages, exact byte caps,
+malformed input, ignored field overflow, multipart framing, stalled cancel,
+read errors/aborts and pre-read auth/Origin/header/media/role/rate denials.
+Refused Assistant scope changes leave the existing thread unchanged; refused
+Playground write intents create no work, tool audit or model calls; refused
+channel/thread drafts leave the head unchanged. The full suite guards existing
+tenant, mailbox, grant, cookie and login-proof boundaries.

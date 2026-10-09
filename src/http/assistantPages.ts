@@ -14,6 +14,7 @@ import { note } from "../log";
 import { HubError } from "../errors";
 import { runTurn, type Step } from "../assistant/run";
 import { PLAYGROUND_HEADER } from "./playground";
+import { MAX_ASSISTANT_BODY_BYTES, readRequestBytes } from "./body";
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 
@@ -169,7 +170,12 @@ export async function assistantChat(request: Request, env: Env): Promise<Respons
   }
   const rate = await takeRateDetail(env.RATE, "assistant_turn", ctx.identity!.id, ctx.now);
   if (!rate.ok) return json({ error: "too_many_requests", reason: "that's a lot of questions this hour; try again soon" }, 429);
-  const raw = await request.text();
+  let raw: string;
+  try { raw = new TextDecoder().decode(await readRequestBytes(request, MAX_ASSISTANT_BODY_BYTES)); }
+  catch (e) {
+    if (e instanceof HubError) return json({ error: e.reason }, e.status);
+    throw e;
+  }
   if (raw.length > 20_000) return json({ error: "too_large" }, 413);
   let b: { thread?: unknown; text?: unknown; scopes?: unknown };
   try { b = JSON.parse(raw); } catch { return json({ error: "bad_request", reason: "invalid JSON" }, 400); }
