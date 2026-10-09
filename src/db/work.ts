@@ -77,6 +77,16 @@ export async function listWork(db: D1Database, tenant_id: string, f: WorkFilter)
   return (await listWorkStatement(db, tenant_id, f).all<WorkItem>()).results;
 }
 
+/** Match everything a write derives from, including nullable fields. This also detects
+ * writers (e.g. membership removal) that do not advance updated_at. No schema rollout. */
+function snapshotPredicate(item: WorkItem): { sql: string; args: Array<string | number | null> } {
+  const fields = ["title", "body", "kind", "state", "owner_id", "parent_id", "lease_until", "closed_at", "updated_at"] as const;
+  return {
+    sql: "id = ? AND tenant_id = ? AND project_id = ? AND " + fields.map((field) => `${field} IS ?`).join(" AND "),
+    args: [item.id, item.tenant_id, item.project_id, ...fields.map((field) => item[field])],
+  };
+}
+
 export async function updateWork(
   db: D1Database, item: WorkItem,
   ch: { title?: string; body?: string; kind?: WorkKind; state?: WorkState; owner_id?: string | null; parent_id?: string | null },
@@ -87,20 +97,27 @@ export async function updateWork(
   const closing = (next.state === "done" || next.state === "dropped") && !(item.state === "done" || item.state === "dropped");
   const reopening = (next.state === "open" || next.state === "doing") && (item.state === "done" || item.state === "dropped");
   const closed_at = closing ? now : reopening ? null : item.closed_at;
-  const lease = next.state === "doing" ? item.lease_until : null;
-  await db.prepare("UPDATE work_item SET title = ?, body = ?, kind = ?, state = ?, owner_id = ?, parent_id = ?, lease_until = ?, closed_at = ?, updated_at = ? WHERE id = ?")
-    .bind(next.title.trim(), next.body, next.kind, next.state, next.owner_id, next.parent_id, lease, closed_at, now, item.id).run();
-  return { ...next, lease_until: lease, closed_at, updated_at: now };
+  // A new owner must claim their own lease; reassignment must not inherit the old one.
+  const lease = next.state === "doing" && next.owner_id === item.owner_id ? item.lease_until : null;
+  const updated_at = Math.max(now, item.updated_at + 1);
+  const snapshot = snapshotPredicate(item);
+  const r = await db.prepare(`UPDATE work_item SET title = ?, body = ?, kind = ?, state = ?, owner_id = ?, parent_id = ?, lease_until = ?, closed_at = ?, updated_at = ? WHERE ${snapshot.sql}`)
+    .bind(next.title.trim(), next.body, next.kind, next.state, next.owner_id, next.parent_id, lease, closed_at, updated_at, ...snapshot.args).run();
+  if (r.meta.changes !== 1) throw conflict("that item changed; read it again before retrying your edit");
+  return { ...next, title: next.title.trim(), lease_until: lease, closed_at, updated_at };
 }
 
 /** Claim an item: owner and "under way" with a one-hour lease. Refused while someone else's lease is live. */
 export async function claimWork(db: D1Database, item: WorkItem, identity_id: string, now: number): Promise<WorkItem> {
   if (item.state === "done" || item.state === "dropped") throw conflict("that item is closed");
+  const snapshot = snapshotPredicate(item);
+  const updated_at = Math.max(now, item.updated_at + 1);
   const r = await db.prepare(
-    "UPDATE work_item SET owner_id = ?, state = 'doing', lease_until = ?, updated_at = ? WHERE id = ? AND (owner_id IS NULL OR owner_id = ? OR lease_until IS NULL OR lease_until < ?)",
-  ).bind(identity_id, now + LEASE_MS, now, item.id, identity_id, now).run();
-  if (r.meta.changes !== 1) throw conflict("someone else is working on it; their claim runs out at " + new Date(item.lease_until ?? now).toISOString());
-  return { ...item, owner_id: identity_id, state: "doing", lease_until: now + LEASE_MS, updated_at: now };
+    `UPDATE work_item SET owner_id = ?, state = 'doing', lease_until = ?, closed_at = NULL, updated_at = ? WHERE ${snapshot.sql}
+     AND state IN ('open', 'doing') AND (owner_id IS NULL OR owner_id = ? OR lease_until IS NULL OR lease_until < ?)`,
+  ).bind(identity_id, now + LEASE_MS, updated_at, ...snapshot.args, identity_id, now).run();
+  if (r.meta.changes !== 1) throw conflict("that item changed or has another live claim; read it again before retrying your claim");
+  return { ...item, owner_id: identity_id, state: "doing", lease_until: now + LEASE_MS, closed_at: null, updated_at };
 }
 
 export async function linkWork(

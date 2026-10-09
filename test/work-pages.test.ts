@@ -29,6 +29,28 @@ async function world() {
 }
 
 describe("work item editing", () => {
+  it("posts the rendered revision from every edit/state/claim form and refuses a stale page without overwriting", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "snag", title: "Original", body: "Original details" });
+    const html = await (await w.get(`/site/w/${item.number}`)).text();
+    const forms = [...html.matchAll(/<form\b[^>]*action="\/api\/work\.(update|claim)"[^>]*>([\s\S]*?)<\/form>/g)];
+    expect(forms.length).toBeGreaterThanOrEqual(4);
+    const revisions = forms.map((form) => form[2]!.match(/name="expected_updated_at" value="(\d+)"/)?.[1]);
+    expect(revisions.every((rev) => rev && rev === revisions[0])).toBe(true);
+    const revision = revisions[0]!;
+    expect((await w.form("work.update", { id: item.id, expected_updated_at: revision, title: "Concurrent winner" })).status).toBe(303);
+    const staleEdits: Array<Record<string, string>> = [{ title: "Stale form", body: "Stale details" }, { state: "done" }];
+    for (const fields of staleEdits) {
+      const response = await w.form("work.update", { id: item.id, expected_updated_at: revision, ...fields });
+      expect(response.status).toBe(409);
+      expect(await response.text()).toContain("read it again");
+    }
+    expect((await w.form("work.claim", { id: item.id, expected_updated_at: revision })).status).toBe(409);
+    expect(await w.read(item.id)).toMatchObject({ title: "Concurrent winner", body: "Original details", state: "open", owner_id: null });
+    const refreshed = await (await w.get(`/site/w/${item.number}`)).text();
+    expect(refreshed).not.toContain(`name="expected_updated_at" value="${revision}"`);
+  });
+
   it("edits title, kind, owner, quest and details from the page's form, and can clear each", async () => {
     const w = await world();
     const quest = await w.create({ kind: "quest", title: "Launch" });

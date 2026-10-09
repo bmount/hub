@@ -2,7 +2,7 @@
 import { afterChange } from "../work/collab";
 import { defineVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
-import { badRequest, notFound } from "../errors";
+import { badRequest, conflict, notFound } from "../errors";
 import { recordEvent } from "../db/events";
 import { getIdentityByEmail } from "../db/identities";
 import { getMembership } from "../db/memberships";
@@ -200,6 +200,15 @@ export const workRead = defineVerb({
   },
 });
 
+const EXPECTED_UPDATE_SCHEMA = {
+  expected_updated_at: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Optional updated_at from work_read. Refuse a stale edit/claim with a conflict; read and reconcile before retrying." },
+};
+
+function checkExpectedUpdate(item: WorkItem, i: Record<string, unknown>): void {
+  const expected = optInt(i, "expected_updated_at", { min: 0, max: Number.MAX_SAFE_INTEGER });
+  if (expected !== null && expected !== item.updated_at) throw conflict("that item changed; read it again and reconcile before retrying");
+}
+
 export const workUpdate = defineVerb({
   name: "work.update", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
   summary: "Change a work item: title, body, kind, state (open, doing, done, dropped), owner, or quest.",
@@ -208,7 +217,7 @@ export const workUpdate = defineVerb({
     input: {
       type: "object",
       properties: {
-        ...ITEM_SCHEMA,
+        ...ITEM_SCHEMA, ...EXPECTED_UPDATE_SCHEMA,
         title: { type: "string" }, body: { type: "string" },
         kind: { type: "string", description: kindWords },
         state: { type: "string", enum: ["open", "doing", "done", "dropped"] },
@@ -222,6 +231,7 @@ export const workUpdate = defineVerb({
   parse: (i) => i,
   run: async (ctx, i) => {
     const item = await itemRef(ctx, i);
+    checkExpectedUpdate(item, i);
     const project = await slugOf(ctx, item.project_id);
     const kindRaw = optString(i, "kind", { max: 40 });
     const kind = kindRaw ? kindOf(kindRaw) : undefined;
@@ -255,12 +265,13 @@ export const workClaim = defineVerb({
   summary: "Take a work item: you become its owner and it is under way for an hour; claim again to renew.",
   mcp: {
     scope: "write", destructive: false, title: "Claim work",
-    input: { type: "object", properties: ITEM_SCHEMA, additionalProperties: false },
+    input: { type: "object", properties: { ...ITEM_SCHEMA, ...EXPECTED_UPDATE_SCHEMA }, additionalProperties: false },
     render: (r) => { const x = r as { item: WorkItem; ref: string }; return `${DATA_NOTE}\n\nClaimed **${x.ref}** until ${new Date(x.item.lease_until ?? 0).toISOString()}: ${cleanText(x.item.title)}`; },
   },
   parse: (i) => i,
   run: async (ctx, i) => {
     const item = await itemRef(ctx, i);
+    checkExpectedUpdate(item, i);
     const project = await slugOf(ctx, item.project_id);
     const claimed = await claimWork(ctx.db, item, ctx.identity!.id, ctx.now);
     await audit(ctx, claimed, "work.claim", `Claimed ${ref(project, claimed)}: ${claimed.title}`);
