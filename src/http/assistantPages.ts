@@ -196,7 +196,7 @@ export async function assistantChat(request: Request, env: Env): Promise<Respons
   }
   note(request, { verb: "assistant.turn", via: "assistant" });
   try {
-    const r = await runTurn(ctx, threadId, scopes, text);
+    const r = await runTurn(ctx, threadId, scopes, text, { signal: request.signal });
     return json({ thread: threadId, reply: r.reply, steps: r.steps });
   } catch (e) {
     if (e instanceof HubError) return json({ error: e.reason, reason: e.detail ?? null, thread: threadId }, e.status);

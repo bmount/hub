@@ -131,7 +131,7 @@ export async function voiceTranscribe(request: Request, env: Env, waitUntil?: (p
   const context = String(form.get("context") ?? "").slice(0, MAX_CONTEXT * 2);
   const v = await vocabulary(ctx);
   try {
-    const r = await transcribe(env, audio, `speech.${ext}`, transcriptionPrompt(v, context), { tenant_id: ctx.tenant?.id ?? null, identity_id: ctx.identity!.id, session_id: ctx.session!.id });
+    const r = await transcribe(env, audio, `speech.${ext}`, transcriptionPrompt(v, context), { signal: request.signal, tenant_id: ctx.tenant?.id ?? null, identity_id: ctx.identity!.id, session_id: ctx.session!.id });
     return json({ text: r.text });
   } catch (e) {
     return failed(e);
@@ -163,7 +163,7 @@ export async function voiceCorrect(request: Request, env: Env, waitUntil?: (p: P
   const v = await vocabulary(ctx);
   try {
     const r = await ask(env, "fast", correctionInput(v, context, text), {
-      tenant_id: ctx.tenant?.id ?? null, identity_id: ctx.identity!.id, session_id: ctx.session!.id, instructions: CORRECTION_INSTRUCTIONS, maxOutputTokens: Math.min(4000, 200 + text.length),
+      signal: request.signal, tenant_id: ctx.tenant?.id ?? null, identity_id: ctx.identity!.id, session_id: ctx.session!.id, instructions: CORRECTION_INSTRUCTIONS, maxOutputTokens: Math.min(4000, 200 + text.length),
     });
     const fixed = r.text.trim().replace(/^<<<\s*|\s*>>>$/g, "").trim();
     const keep = plausibleCorrection(text, fixed) ? fixed : text;
