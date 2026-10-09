@@ -74,6 +74,12 @@ export class Inbox extends DurableObject<Env> {
     return this.#head();
   }
 
+  /** Allocated item sequence, retained by SQLite even when acknowledged rows are pruned. */
+  async highWater(tenant_id: string, identity_id: string): Promise<number> {
+    bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
+    return this.#q<{ seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'item'")[0]?.seq ?? 0;
+  }
+
   async deliver(tenant_id: string, identity_id: string, items: WakeItem[]): Promise<number> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
     // Acked items are kept 30 days (they show with include_acked), then pruned.

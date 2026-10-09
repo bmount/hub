@@ -106,31 +106,41 @@ async function inboxView(ctx: Ctx, page: InboxPage) {
     text: plainText(`inbox head=${head} (${views.length} shown)`, lines) };
 }
 
+/** Authorize/select only the authenticated owner's inbox; never use the prunable retained-row head. */
+async function validatedInbox(ctx: Ctx, after: number) {
+  const v = viewerOf(ctx);
+  const box = inboxStub(ctx.env, v.tenant.id, v.identity.id);
+  const high_water = await box.highWater(v.tenant.id, v.identity.id);
+  // Separate snapshot/read RPCs are safe under normal monotonic allocation. Refuse, don't clamp or repair.
+  if (after > high_water) throw new HubError(409, "conflict", "after exceeds the allocated inbox sequence; reconcile the scan checkpoint before reading or waiting", { high_water });
+  return { box, v };
+}
+
 export const chatInbox = defineVerb({
   name: "chat.inbox", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Your open inbox items, in bounded pages. Continue with next_after even when a permission-filtered page is empty; has_more describes the scan snapshot. Read originals with chat_thread/mail_read before processing. The global head is not a processed cursor.",
+  summary: "Your open inbox items, in bounded pages. Continue with next_after even when a permission-filtered page is empty; has_more describes the scan snapshot. Read originals with chat_thread/mail_read before processing. The global head is not a processed cursor. Future after values beyond allocated items are refused.",
   mcp: {
     scope: "read", destructive: false, title: "Inbox", render: chatText,
-    input: schema({ after: { type: "integer", minimum: 0, description: "Only items after this item number; continue with next_after from the last scanned page, not the global head." }, limit: { type: "integer", minimum: 1, maximum: 100, description: "Items to scan before permission filtering, default 50." } }),
+    input: schema({ after: { type: "integer", minimum: 0, description: "Only items after this item number; continue with next_after from the last scanned page, not the global head. Must not exceed the inbox's allocated sequence (retained head can decrease after pruning)." }, limit: { type: "integer", minimum: 1, maximum: 100, description: "Items to scan before permission filtering, default 50." } }),
   },
   parse: (i) => ({ after: optInt(i, "after", { min: 0, max: Number.MAX_SAFE_INTEGER }) ?? 0, limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 50 }),
   run: async (ctx, p) => {
-    const v = viewerOf(ctx);
-    const r = (await inboxStub(ctx.env, v.tenant.id, v.identity.id).list(v.tenant.id, v.identity.id, { after: p.after, limit: p.limit, include_acked: false })) as InboxPage;
+    const { box, v } = await validatedInbox(ctx, p.after);
+    const r = (await box.list(v.tenant.id, v.identity.id, { after: p.after, limit: p.limit, include_acked: false })) as InboxPage;
     return inboxView(ctx, r);
   },
 });
 
 export const inboxWait = defineVerb({
   name: "inbox.wait", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Wait up to wait_s seconds (at most 20) for an inbox item after the given one, for runners that cannot hold a socket.",
+  summary: "Wait up to wait_s seconds (at most 20) for an inbox item after the given one, for runners that cannot hold a socket. Future after values beyond allocated items are refused before parking.",
   parse: (i) => ({
     after: optInt(i, "after", { min: 0, max: Number.MAX_SAFE_INTEGER }) ?? 0, limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 50,
     wait_s: optInt(i, "wait_s", { min: 0, max: LIMITS.INBOX_WAIT_MAX_S }) ?? LIMITS.INBOX_WAIT_MAX_S,
   }),
   run: async (ctx, p) => {
-    const v = viewerOf(ctx);
-    const r = (await inboxStub(ctx.env, v.tenant.id, v.identity.id).wait(v.tenant.id, v.identity.id, { after: p.after, limit: p.limit, wait_ms: p.wait_s * 1000 })) as InboxPage;
+    const { box, v } = await validatedInbox(ctx, p.after);
+    const r = (await box.wait(v.tenant.id, v.identity.id, { after: p.after, limit: p.limit, wait_ms: p.wait_s * 1000 })) as InboxPage;
     return inboxView(ctx, r);
   },
 });

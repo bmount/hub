@@ -3,7 +3,7 @@ import { inDO } from "./do-helper";
 import { beforeEach, describe, expect, it } from "vitest";
 import { inboxStub } from "../src/chat/stubs";
 import type { WakeItem } from "../src/chat/types";
-import type { Inbox } from "../src/chat/inboxDO";
+import { Inbox } from "../src/chat/inboxDO";
 import { until } from "./chat-helpers";
 
 // A fresh tenant id per test: the pool isolates storage per file, so objects must not be shared between tests.
@@ -32,6 +32,35 @@ describe("Inbox object", () => {
     expect((await box().list(T, "I1", { after: 0, limit: 10, include_acked: false })).items.map((i) => i.seq)).toEqual([3]);
     const all = await box().list(T, "I1", { after: 0, limit: 10, include_acked: true });
     expect(all.items.map((i) => i.acked_at !== null)).toEqual([true, true, false]);
+  });
+
+  it("retains the allocated sequence across pruning and fresh object instances without exposing another binding", async () => {
+    expect(await box().highWater(T, "I1")).toBe(0);
+    await box().deliver(T, "I1", [item(1), item(2)]);
+    expect(await box().highWater(T, "I1")).toBe(2);
+    await box().ack(T, "I1", 2, Date.now() - 31 * 86_400_000);
+    await box().deliver(T, "I1", []);
+    expect(await box().head(T, "I1")).toBe(0);
+    expect(await inDO(box(), async (_obj, state) => new Inbox(state, env).highWater(T, "I1"))).toBe(2);
+    await inDO(box(), async (obj: Inbox) => {
+      await expect(obj.highWater("T2", "I1")).rejects.toThrow(/another tenant/);
+      await expect(obj.highWater(T, "I2")).rejects.toThrow(/another tenant or owner/);
+    });
+    await box().deliver(T, "I1", [item(3)]);
+    expect(await box().highWater(T, "I1")).toBe(3);
+    expect(await box("I2").highWater(T, "I2")).toBe(0);
+  });
+
+  it("does not allocate high-water for duplicates or rolled-back failed delivery", async () => {
+    await box().deliver(T, "I1", [item(1)]);
+    await box().deliver(T, "I1", [item(1)]);
+    expect(await box().highWater(T, "I1")).toBe(1);
+    await inDO(box(), async (obj: Inbox) => {
+      await expect(obj.deliver(T, "I1", [item(2, { kind: "mail", author_id: null as unknown as string })])).rejects.toThrow();
+      expect(await obj.highWater(T, "I1")).toBe(1);
+    });
+    expect(await box().deliver(T, "I1", [item(2, { kind: "mail" })])).toBe(1);
+    expect(await box().highWater(T, "I1")).toBe(2);
   });
 
   it("long-polls: answers as soon as an item lands, or empty at the deadline", async () => {
