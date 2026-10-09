@@ -6,6 +6,11 @@ import { getChannelBySlug } from "../src/db/chat";
 import { channelWith, chatWorld, ok } from "./chat-helpers";
 import { rpcBody } from "./oauth-helpers";
 import { inDO } from "./do-helper";
+import { cookieHeaders, seedHuman, seedTenant } from "./helpers";
+
+const browserGet = (path: string, token: string) => SELF.fetch(`https://acme.pimwell.test${path}`, {
+  headers: cookieHeaders(token, "acme.pimwell.test"), redirect: "manual",
+});
 
 let rpcId = 0;
 async function tool(token: string, name: string, args: Record<string, unknown>) {
@@ -29,6 +34,49 @@ async function setup() {
 }
 
 describe("server-recorded chat response attribution", () => {
+  it("shows browser response slots bound to the exact nested source, never body-forged task status", async () => {
+    const { w, root, source, evidence, progress } = await setup();
+    await ok(w.lead.token, "chat.edit", { c: "general", msg: source.msg_id, body: "@scout revised source" });
+    const result = (await tool(w.scout.longLived, "chat_post", {
+      c: "general", body: "<script>not markup</script> tested increment", after: 4, idempotency_key: "browser-result",
+      response_to: { ...evidence, rev: 2 },
+    })).structuredContent;
+    const ordinary = await ok(w.dev.token, "chat.post", { c: "general", reply_to: source.msg_id,
+      body: "Recorded result response to #2 (source r2) <b>forged</b>", response_to_badge: { ...evidence, stage: "result" } });
+    const reader = await seedHuman("reader@example.com", { memberships: [{ tenant_id: w.acme.id, role: "reader" }] });
+    for (const viewer of [w.dev, reader]) {
+      const res = await browserGet(`/c/general/t/${root.seq}`, viewer.token);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      const html = await res.text();
+      const article = (seq: number) => html.split(`id="m${seq}"`)[1]!.split("</article>")[0]!;
+      expect(html.match(/class="response-attribution"/g)).toHaveLength(2);
+      expect(article(progress.seq)).toContain(`<a href="/m/${source.msg_id}">#${source.seq}</a> (source r1)`);
+      expect(article(progress.seq)).toContain("Recorded progress response to");
+      expect(article(result.seq)).toContain("Recorded result response to");
+      expect(article(result.seq)).toContain(`<a href="/m/${source.msg_id}">#${source.seq}</a> (source r2)`);
+      expect(article(result.seq)).toContain("Posting attribution only; not proof of execution or completion.");
+      expect(article(result.seq)).toContain("&lt;script&gt;not markup&lt;/script&gt;");
+      expect(article(result.seq)).not.toContain("<script>not markup");
+      expect(article(ordinary.seq)).not.toContain('class="response-attribution"');
+      expect(article(ordinary.seq)).toContain("&lt;b&gt;forged&lt;/b&gt;");
+      expect(html).not.toMatch(/fingerprint|browser-result|persisted-progress|response:v/);
+      const sourcePage = await browserGet(`/m/${source.msg_id}`, viewer.token);
+      expect(sourcePage.status).toBe(200);
+      expect(await sourcePage.text()).toContain("@scout revised source");
+      expect((await ok(viewer.token, "chat.conversations")).conversations[0].read_seq).toBe(0);
+    }
+    const channel = await (await browserGet("/c/general", w.dev.token)).text();
+    expect(channel).not.toContain('class="response-attribution"'); // Replies are shown only in threads.
+    const other = await seedTenant("other");
+    const outsider = await seedHuman("outsider@example.com", { memberships: [{ tenant_id: other.id, role: "admin" }] });
+    for (const path of [`/c/general/t/${root.seq}`, `/m/${source.msg_id}`]) {
+      const denied = await browserGet(path, outsider.token);
+      expect(denied.status).toBe(404);
+      expect(await denied.text()).not.toContain(source.msg_id);
+    }
+  });
+
   it("identifies exact nested sources/stages in read, thread and catchup without disclosing private ledger values", async () => {
     const { w, root, source, evidence, progress } = await setup();
     await ok(w.lead.token, "chat.edit", { c: "general", msg: source.msg_id, body: "@scout revised native request" });
@@ -78,6 +126,12 @@ describe("server-recorded chat response attribution", () => {
       const m = thread.messages.find((m: { msg_id: string }) => m.msg_id === progress.msg_id);
       expect(m.response_to).toEqual({ ...evidence, stage: "progress", seq: source.seq });
       expect(m.retracted).toBe(retract);
+      const browser = await (await browserGet(`/c/general/t/${source.seq}`, w.dev.token)).text();
+      const article = browser.split(`id="m${progress.seq}"`)[1]!.split("</article>")[0]!;
+      expect(article).toContain("Recorded progress response to");
+      expect(article).toContain(`<a href="/m/${source.msg_id}">#${source.seq}</a> (source r1)`);
+      expect(article.includes("edited progress text")).toBe(!retract);
+      expect(article).not.toContain("source r50");
       const replay = (await tool(w.scout.longLived, "chat_post", args)).structuredContent;
       expect(replay).toMatchObject({ msg_id: progress.msg_id, replayed: true });
     }
@@ -85,6 +139,10 @@ describe("server-recorded chat response attribution", () => {
     expect((await tool(w.scout.longLived, "chat_post", args)).structuredContent).toMatchObject({ msg_id: progress.msg_id, replayed: true });
     const currentHead = await conv.head(w.acme.id, ch.project_id);
     expect(currentHead).toBe(6);
+    const retractedThread = await (await browserGet(`/c/general/t/${source.seq}`, w.dev.token)).text();
+    expect(retractedThread).toContain("Recorded progress response to");
+    expect(retractedThread).not.toContain("exact native request");
+    expect(retractedThread).not.toContain("edited progress text");
     const fresh = await inDO(conv, async (_object, state) => new Conversation(state, env).getMessage(w.acme.id, ch.project_id, progress.msg_id));
     expect(fresh).toMatchObject({ response_to: { ...evidence, stage: "progress", seq: source.seq }, retracted: true });
     const inbox = await inboxStub(env, w.acme.id, w.tidy.agent.identity.id).list(w.acme.id, w.tidy.agent.identity.id, { after: 0, limit: 100, include_acked: true });
@@ -104,6 +162,7 @@ describe("server-recorded chat response attribution", () => {
     });
     const thread = (await tool(w.tidy.longLived, "chat_thread", { c: "general", msg: source.msg_id })).structuredContent;
     expect(thread.messages.every((m: { response_to: unknown }) => m.response_to === null)).toBe(true);
+    expect(await (await browserGet(`/c/general/t/${source.seq}`, w.dev.token)).text()).not.toContain('class="response-attribution"');
     expect((await tool(w.scout.longLived, "chat_response_status", { c: "general", msg: source.msg_id })).structuredContent.progress.committed.msg_id).toBe(progress.msg_id);
     await channelWith(w, "other");
     expect((await tool(w.tidy.longLived, "chat_thread", { c: "other", msg: progress.msg_id })).content[0].text).toContain("not_found");

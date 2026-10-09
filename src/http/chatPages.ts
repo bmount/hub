@@ -88,6 +88,13 @@ function refHtml(r: ViewRef): string {
   return `<code>${esc(refShort(r))}</code>${r.title ? ` ${esc(r.title)}` : ""}`;
 }
 
+/** Original server-recorded posting evidence, not task status or execution authority. */
+function responseHtml(m: MsgJson): string {
+  const source = m.response_to;
+  if (!source) return ""; // Ordinary/legacy replies have no public attribution; never infer it from text.
+  return `<p class="response-attribution"><small>Recorded ${esc(source.stage)} response to <a href="/m/${esc(source.msg_id)}">#${source.seq}</a> (source r${source.rev}). Posting attribution only; not proof of execution or completion.</small></p>`;
+}
+
 function msgHtml(slug: string, m: MsgJson, inThread: boolean, readSeq?: number): string {
   const marks = m.retracted ? " <em>retracted</em>" : m.edited ? ` <em>edited r${m.rev}</em>` : "";
   const who = m.system ? "<strong>hub</strong>" : tagHtml(m.author);
@@ -96,7 +103,7 @@ function msgHtml(slug: string, m: MsgJson, inThread: boolean, readSeq?: number):
   const newThreadActivity = readSeq !== undefined && m.last_reply_seq !== null && m.last_reply_seq > readSeq
     ? ` · <a href="/c/${esc(slug)}/t/${m.seq}?after=${readSeq}">New thread activity</a>` : "";
   const thread = inThread || m.system ? "" : `<p><small><a href="/c/${esc(slug)}/t/${m.seq}">${m.reply_count > 0 ? `${m.reply_count} ${m.reply_count === 1 ? "reply" : "replies"}` : "reply"}</a>${newThreadActivity}</small></p>`;
-  return `<article class="channel-message" id="m${m.seq}"><p><a href="/m/${esc(m.msg_id)}">#${m.seq}</a> ${when(m.created_at)} ${who}${marks}</p>${body}${refs}${thread}</article>`;
+  return `<article class="channel-message" id="m${m.seq}"><p><a href="/m/${esc(m.msg_id)}">#${m.seq}</a> ${when(m.created_at)} ${who}${marks}</p>${responseHtml(m)}${body}${refs}${thread}</article>`;
 }
 
 /** A read cursor is an activity watermark, not an unread count. Mark only new message sequences. */
