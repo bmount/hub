@@ -10,15 +10,15 @@ import { conversationStub, inboxStub } from "./stubs";
 import type { Digest, MsgView } from "./types";
 
 export type CatchupParams = { since: string | null; budget: number; scope: string | null; advance: boolean };
-type ConvSummary = { channel: string; head: number; since: number; new: number; agent: number; threads: Array<{ seq: number; replies: number }>; authors: string[]; refs: string[] };
+type ConvSummary = { channel: string; conversation_id: string; head: number; since: number; new: number; agent: number; threads: Array<{ seq: number; replies: number }>; authors: string[]; refs: string[] };
 export type CatchupResult = {
-  tenant_id: string;
+  tenant_id: string; identity_id: string;
   budget: number; used_tokens: number; omitted: number; next: string; advanced: boolean;
-  for_you: Array<MsgJson & { channel: string }>;
+  for_you: Array<MsgJson & { channel: string; conversation_id: string }>;
   threads: Array<{ channel: string; conversation_id: string; root_seq: number; replies: number; edited_replies: number; retracted_replies: number; root_edited: boolean; root_retracted: boolean;
     latest_seq: number; latest_activity_seq: number; latest_author: string; latest: MsgJson }>;
   conversations: ConvSummary[];
-  quiet: Array<{ channel: string; head: number; new: number; agent: number }>;
+  quiet: Array<{ channel: string; conversation_id: string; head: number; new: number; agent: number }>;
   text: string;
 };
 
@@ -116,7 +116,7 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   for (const { ch, m } of mentions) {
     const refs = await refsForViewer(ctx.db, v, m.refs);
     const tag = tagOf(m.author_id, m.session_id, m.session_kind);
-    if (fits(messageBlock(m, tag, { c: ch.slug, channel: true, cut: 400, refs }))) out.for_you.push({ ...msgJson(m, tag, refs), channel: ch.slug });
+    if (fits(messageBlock(m, tag, { c: ch.slug, channel: true, cut: 400, refs }))) out.for_you.push({ ...msgJson(m, tag, refs), channel: ch.slug, conversation_id: ch.project_id });
     else {
       omitted++;
       incomplete.add(ch.project_id);
@@ -156,14 +156,14 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
     if (d.authors.length > 0) detail.push(`  by: ${d.authors.map((a) => `@${handle(a)}`).join(" ")}`);
     if (d.refs.length > 0) detail.push(`  refs: ${d.refs.map(refShort).join(" ")}`);
     const summary: ConvSummary = {
-      channel: ch.slug, head: d.head, since: d.since, new: d.new_messages, agent: d.agent_messages,
+      channel: ch.slug, conversation_id: ch.project_id, head: d.head, since: d.since, new: d.new_messages, agent: d.agent_messages,
       threads: d.threads.map((t) => ({ seq: t.root.seq, replies: t.replies })), authors: d.authors.map(handle), refs: d.refs.map(refShort),
     };
     if (fits(detail)) {
       out.conversations.push(summary);
       covered.add(ch.project_id);
     } else if (fits([line])) {
-      out.quiet.push({ channel: ch.slug, head: d.head, new: d.new_messages, agent: d.agent_messages });
+      out.quiet.push({ channel: ch.slug, conversation_id: ch.project_id, head: d.head, new: d.new_messages, agent: d.agent_messages });
       covered.add(ch.project_id);
     } else {
       omitted++;
@@ -178,5 +178,6 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   if (p.advance) for (const { ch, d } of done) await box.markRead(v.tenant.id, v.identity.id, ch.project_id, d.head);
   const next = encodeCursors(nextCursors);
   lines.push("", `omitted: ${omitted}`, `next: since=${next}`);
-  return { tenant_id: v.tenant.id, budget: p.budget, used_tokens: Math.ceil(used / 4), omitted, next, advanced: p.advance, ...out, text: lines.join("\n") };
+  // Bind even empty/budget-limited checkpoints to the authenticated reader, never input/body fields.
+  return { tenant_id: v.tenant.id, identity_id: v.identity.id, budget: p.budget, used_tokens: Math.ceil(used / 4), omitted, next, advanced: p.advance, ...out, text: lines.join("\n") };
 }
