@@ -1,4 +1,6 @@
 import { note, noteCtx } from "../log";
+import { HubError } from "../errors";
+import { MAX_MCP_BODY_BYTES, readRequestBytes, requestWithBytes } from "../http/body";
 import { Server, createMcpHandler, type McpHttpHandler } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import type { Env } from "../env";
@@ -47,17 +49,8 @@ function mcpHandler(): McpHttpHandler {
     const ctx = rc.authInfo?.extra?.hub as Ctx | undefined;
     if (!ctx) throw new Error("MCP request without hub authentication");
     return serverFor(ctx);
-  }, { legacy: "stateless", onerror: (e) => console.error(JSON.stringify({ msg: "mcp error", error: `${e.name}: ${e.message}`, stack: e.stack ?? null })) });
+  }, { legacy: "stateless", maxRequestBodySize: MAX_MCP_BODY_BYTES, onerror: (e) => console.error(JSON.stringify({ msg: "mcp error", error: `${e.name}: ${e.message}`, stack: e.stack ?? null })) });
   return mcp;
-}
-
-/** True when the body parses as a JSON array. Anything else, including a body that is not JSON, is left to the SDK. */
-async function isBatch(request: Request): Promise<boolean> {
-  try {
-    return Array.isArray(JSON.parse(await request.clone().text()));
-  } catch {
-    return false;
-  }
 }
 
 export async function handleMcp(request: Request, env: Env, waitUntil?: (p: Promise<unknown>) => void, now: number = Date.now()): Promise<Response> {
@@ -86,15 +79,25 @@ type Auth = { token: string; clientId: string; scopes: string[]; expiresAt: numb
 
 async function serve(request: Request, ctx: Ctx, via: string, auth: Auth): Promise<Response> {
   noteCtx(request, ctx, via);
+  let parsedBody: unknown;
+  let forwarded = request;
   if (request.method === "POST") {
-    try {
-      const m = JSON.parse(await request.clone().text()) as { method?: unknown; params?: { name?: unknown } };
-      if (m && typeof m.method === "string") note(request, { verb: m.method === "tools/call" && typeof m.params?.name === "string" ? `tool:${m.params.name.slice(0, 64)}` : m.method.slice(0, 64) });
-    } catch { /* not JSON: the SDK answers it */ }
+    let bytes: Uint8Array<ArrayBuffer>;
+    try { bytes = await readRequestBytes(request, MAX_MCP_BODY_BYTES); }
+    catch (e) {
+      if (!(e instanceof HubError)) throw e;
+      return oauthJson({ error: e.reason, error_description: e.detail }, e.status);
+    }
+    forwarded = requestWithBytes(request, bytes);
+    try { parsedBody = JSON.parse(new TextDecoder().decode(bytes)); }
+    catch { /* Only malformed JSON uses the bounded SDK parse-error path. */ }
+    const m = parsedBody as { method?: unknown; params?: { name?: unknown } } | null | undefined;
+    if (m && typeof m.method === "string") note(request, { verb: m.method === "tools/call" && typeof m.params?.name === "string" ? `tool:${m.params.name.slice(0, 64)}` : m.method.slice(0, 64) });
+    // Never run many calls under one rate-limit charge. Reuse this parse for
+    // metadata, batch denial and SDK classification/dispatch (parsedBody API).
+    if (Array.isArray(parsedBody)) {
+      return oauthJson({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "JSON-RPC batch requests are not supported" } }, 400);
+    }
   }
-  // A batch array would run many calls under one rate-limit charge; the 2025-06-18 spec dropped batching anyway.
-  if (request.method === "POST" && (await isBatch(request))) {
-    return oauthJson({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "JSON-RPC batch requests are not supported" } }, 400);
-  }
-  return mcpHandler().fetch(request, { authInfo: { ...auth, extra: { hub: ctx } } });
+  return mcpHandler().fetch(forwarded, { parsedBody, authInfo: { ...auth, extra: { hub: ctx } } });
 }

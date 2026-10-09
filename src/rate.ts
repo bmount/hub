@@ -14,6 +14,7 @@ export const RATE_RULES = {
   oauth_token_client: { limit: 60, windowMs: MINUTE_MS },
   oauth_token_ip: { limit: 120, windowMs: MINUTE_MS },
   mcp_anon_ip: { limit: 60, windowMs: MINUTE_MS },
+  api_anon_ip: { limit: 60, windowMs: MINUTE_MS },
   mcp_grant_minute: { limit: 120, windowMs: MINUTE_MS },
   mcp_grant_hour: { limit: 2000, windowMs: RATE_WINDOW_MS },
   // Headless agents on /agent/mcp, per long-lived token: the same allowance as one assistant connection.

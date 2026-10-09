@@ -1,4 +1,6 @@
 import type { Env } from "../env";
+import { HubError } from "../errors";
+import { readRequestBytes } from "./body";
 import { authServer, issuer } from "../oauth/config";
 import { loadRedirectPatterns, matchRedirect } from "../oauth/redirects";
 import { recordEvent } from "../db/events";
@@ -21,9 +23,13 @@ export async function registerEndpoint(request: Request, env: Env, ectx: Executi
     const r = await takeRateDetail(env.RATE, bucket, subject, now);
     if (!r.ok) return oauthJson({ error: "too_many_requests" }, 429, { "retry-after": String(r.retryAfterS) });
   }
-  if (Number(request.headers.get("content-length") ?? "0") > REGISTER_BODY_MAX) return tooLarge();
-  const text = await request.text();
-  if (new TextEncoder().encode(text).length > REGISTER_BODY_MAX) return tooLarge();
+  let text: string;
+  try { text = new TextDecoder().decode(await readRequestBytes(request, REGISTER_BODY_MAX)); }
+  catch (e) {
+    if (e instanceof HubError && e.status === 413) return tooLarge();
+    if (e instanceof HubError) return oauthJson({ error: "invalid_client_metadata", error_description: "body could not be read" }, 400);
+    throw e;
+  }
   let meta: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(text);

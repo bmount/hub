@@ -1,4 +1,6 @@
 import { sameOrigin } from "./login";
+import { MAX_API_BODY_BYTES, readRequestBytes, requestWithBytes } from "./body";
+import { takeRateDetail } from "../rate";
 import type { Env } from "../env";
 import { buildContext, type Ctx } from "../auth/context";
 import { checkAccess, checkScope } from "../verbs/dispatch";
@@ -12,14 +14,15 @@ import { esc } from "../html";
 
 async function readBody(request: Request): Promise<{ input: Record<string, unknown>; isForm: boolean }> {
   const ct = request.headers.get("content-type") ?? "";
+  const bytes = await readRequestBytes(request, MAX_API_BODY_BYTES);
   if (ct.startsWith("application/x-www-form-urlencoded") || ct.startsWith("multipart/form-data")) {
-    const fd = await request.formData();
+    const fd = await requestWithBytes(request, bytes).formData();
     const input: Record<string, unknown> = {};
     for (const [k, v] of fd.entries()) input[k] = typeof v === "string" ? v : "";
     return { input, isForm: true };
   }
   if (ct.startsWith("application/json")) {
-    const text = await request.text();
+    const text = new TextDecoder().decode(bytes);
     const parsed: unknown = text ? JSON.parse(text) : {};
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new HubError(400, "bad_request", "body must be a JSON object");
     return { input: parsed as Record<string, unknown>, isForm: false };
@@ -41,6 +44,7 @@ const REASONS: Record<string, string> = {
   not_found: "That doesn't exist, or you can't see it.",
   bad_origin: "The form came from another site, so it was refused. Reload the page and try again.",
   bad_request: "Something in the form isn't right.",
+  too_large: "That request is too large. Please send a smaller one.",
   conflict: "That clashes with the current state.",
   rate_limited: "Too many tries. Wait a minute and try again.",
   unauthorized: "Sign in first.",
@@ -77,11 +81,9 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
   const name = url.pathname.slice("/api/".length);
   note(request, { verb: name.slice(0, 64), via: "api" });
   let ctx: Ctx | null = null;
-  let isForm = false;
+  const ct = request.headers.get("content-type") ?? "";
+  const isForm = ct.startsWith("application/x-www-form-urlencoded") || ct.startsWith("multipart/form-data");
   try {
-    const body = await readBody(request);
-    isForm = body.isForm;
-    if (isForm && name === "login.verify") throw new HubError(400, "bad_request", "login.verify does not accept form bodies");
     const verb = getVerb(name);
     if (!verb) throw new HubError(404, "unknown_verb");
     ctx = await buildContext(request, env, Date.now(), waitUntil, { longLivedToken: true });
@@ -95,6 +97,18 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
 
     checkAccess(ctx, verb);
 
+    // Public/anonymous verbs have no authenticated caller bucket. Charge before
+    // reading their body; invalid credentials do not exempt an anonymous caller.
+    if (!ctx.identity) {
+      const rate = await takeRateDetail(env.RATE, "api_anon_ip", ctx.ip, ctx.now);
+      if (!rate.ok) {
+        const res = json({ ok: false, error: "rate_limited" }, 429);
+        res.headers.set("retry-after", String(rate.retryAfterS));
+        return finish(ctx, env, res);
+      }
+    }
+    const body = await readBody(request);
+    if (isForm && name === "login.verify") throw new HubError(400, "bad_request", "login.verify does not accept form bodies");
     const params = verb.parse(body.input);
     const result = await verb.run(ctx, params);
     if (isForm && verb.renderForm) return finish(ctx, env, htmlResponse(page(verb.name, verb.renderForm(result))));
