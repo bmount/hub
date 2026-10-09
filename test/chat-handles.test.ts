@@ -75,7 +75,8 @@ describe("name tags", () => {
     const scout = await seedAgent(acme, lead.identity, "scout");
     const { session: oauthSession } = await seedGrant(acme, lead);
     const tagOf = await nameTags(env.HUB_DB, acme.id, [
-      { author_id: scout.agent.identity.id, session_id: scout.session.id }, { author_id: lead.identity.id, session_id: oauthSession.id },
+      { author_id: scout.agent.identity.id, session_id: scout.session.id, session_kind: "agent_run" },
+      { author_id: lead.identity.id, session_id: oauthSession.id, session_kind: "oauth" },
     ]);
     expect(tagOf(scout.agent.identity.id, scout.session.id)).toEqual({
       identity_id: scout.agent.identity.id, handle: "scout", display_name: "scout", kind: "agent", operator_handle: "lead",

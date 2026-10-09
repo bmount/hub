@@ -96,32 +96,40 @@ export function safeLabel(label: string | null): string | null {
 }
 
 /**
- * `session_kind` is the kind stored with the message when it was written; it wins over the session row's current
- * kind for `via assistant`. The session row is looked up only within the tenant (or a tenantless session).
+ * Only immutable per-artifact `session_kind` supplies provenance. Missing or conflicting evidence is unknown,
+ * never inferred from a mutable session row. Tenant-scoped session lookup supplies display labels only.
  */
 export async function nameTags(
   db: D1Database, tenant_id: string, pairs: Array<{ author_id: string; session_id: string | null; session_kind?: string | null }>,
 ): Promise<TagOf> {
   const dir = await people(db, tenant_id);
   const ids = [...new Set(pairs.map((p) => p.session_id).filter((x): x is string => typeof x === "string" && x.length > 0))];
-  const sessions = new Map<string, { kind: string; label: string | null }>();
+  const sessions = new Map<string, { label: string | null }>();
   for (let i = 0; i < ids.length; i += 90) {
     const chunk = ids.slice(i, i + 90);
-    const r = await db.prepare(`SELECT id, kind, label FROM session WHERE id IN (${chunk.map(() => "?").join(", ")}) AND (tenant_id IS NULL OR tenant_id = ?)`)
-      .bind(...chunk, tenant_id).all<{ id: string; kind: string; label: string | null }>();
+    const r = await db.prepare(`SELECT id, label FROM session WHERE id IN (${chunk.map(() => "?").join(", ")}) AND (tenant_id IS NULL OR tenant_id = ?)`)
+      .bind(...chunk, tenant_id).all<{ id: string; label: string | null }>();
     for (const s of r.results) sessions.set(s.id, s);
   }
-  const stored = new Map<string, string>();
+  const known = (kind: string | null | undefined): NameTag["session_kind"] =>
+    kind === "browser" || kind === "oauth" || kind === "agent_run" || kind === "hub" ? kind : "unknown";
+  const stored = new Map<string, NameTag["session_kind"]>();
   const pairKey = (author: string, session: string) => JSON.stringify([author, session]);
-  for (const p of pairs) if (p.session_id && p.session_kind && !stored.has(pairKey(p.author_id, p.session_id))) stored.set(pairKey(p.author_id, p.session_id), p.session_kind);
+  // Two-argument display callers may use a pair only when every supplied artifact agrees.
+  // A missing kind or mixed revision must not borrow proof from another artifact.
+  for (const p of pairs) {
+    if (!p.session_id) continue;
+    const key = pairKey(p.author_id, p.session_id);
+    const kind = known(p.session_kind);
+    stored.set(key, !stored.has(key) || stored.get(key) === kind ? kind : "unknown");
+  }
   return (author_id, session_id, session_kind) => {
     if (author_id === "hub") return HUB_TAG;
     const p = dir.get(author_id);
     const s = session_id ? sessions.get(session_id) : undefined;
-    // Per-artifact evidence wins even for a missing session id, or mixed revisions using the same
-    // session. Callers presenting messages pass it explicitly; directory fallback is display only.
-    const kind = session_kind ?? (session_id ? stored.get(pairKey(author_id, session_id)) : undefined) ?? s?.kind;
-    const knownKind = kind === "browser" || kind === "oauth" || kind === "agent_run" || kind === "hub" ? kind : "unknown";
+    // Explicit null is absent artifact evidence, not permission to fall back to a pair/session row.
+    // Message presenters pass the current artifact kind; legacy two-argument callers use consensus only.
+    const knownKind = known(session_kind !== undefined ? session_kind : session_id ? stored.get(pairKey(author_id, session_id)) : undefined);
     return {
       identity_id: author_id, handle: p?.handle ?? "unknown", display_name: p?.display_name ?? "unknown", kind: p?.kind ?? "unknown",
       operator_handle: p?.operator_id ? dir.get(p.operator_id)?.handle ?? null : null, session_id, session_kind: knownKind,

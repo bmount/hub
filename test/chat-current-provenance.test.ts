@@ -80,6 +80,46 @@ describe("current chat text provenance for request routing", () => {
     expect(history.versions[1].author.identity_id).toBe(w.lead.identity.id);
   });
 
+  it("never promotes absent artifact evidence using live or changed session rows", async () => {
+    const w = await chatWorld();
+    const { session } = await seedGrant(w.acme, w.lead);
+    const tags = await nameTags(env.HUB_DB, w.acme.id, [
+      { author_id: w.lead.identity.id, session_id: w.lead.session.id },
+      { author_id: w.lead.identity.id, session_id: session.id, session_kind: null },
+      { author_id: w.scout.agent.identity.id, session_id: w.scout.session.id },
+    ]);
+    for (const id of [w.lead.session.id, session.id]) {
+      expect(tags(w.lead.identity.id, id)).toMatchObject({ session_kind: "unknown", via_assistant: false });
+      expect(tags(w.lead.identity.id, id, null)).toMatchObject({ session_kind: "unknown", via_assistant: false });
+    }
+    expect(tags(w.scout.agent.identity.id, w.scout.session.id)).toMatchObject({ session_kind: "unknown", session_label: null });
+    await env.HUB_DB.prepare("UPDATE session SET kind = 'browser' WHERE id = ?").bind(session.id).run();
+    const after = await nameTags(env.HUB_DB, w.acme.id, [{ author_id: w.lead.identity.id, session_id: session.id }]);
+    expect(after(w.lead.identity.id, session.id)).toMatchObject({ session_kind: "unknown", via_assistant: false });
+    // Explicit artifact evidence remains valid independently of the live row.
+    expect(after(w.lead.identity.id, session.id, "oauth")).toMatchObject({ session_kind: "oauth", via_assistant: true });
+  });
+
+  it("requires unanimous stored evidence for two-argument tags, independent of revision order", async () => {
+    const w = await chatWorld();
+    for (const kinds of [["browser", "oauth"], ["oauth", "browser"], [null, "browser"], ["browser", null], ["browser", "oauth", "browser"]]) {
+      const tags = await nameTags(env.HUB_DB, w.acme.id, kinds.map((session_kind) => ({
+        author_id: w.lead.identity.id, session_id: w.lead.session.id, session_kind,
+      })));
+      expect(tags(w.lead.identity.id, w.lead.session.id)).toMatchObject({ session_kind: "unknown", via_assistant: false });
+      expect(tags(w.lead.identity.id, w.lead.session.id, null).session_kind).toBe("unknown");
+      expect(tags(w.lead.identity.id, w.lead.session.id, "browser").session_kind).toBe("browser");
+      expect(tags(w.lead.identity.id, w.lead.session.id, "oauth").via_assistant).toBe(true);
+    }
+    const unanimous = await nameTags(env.HUB_DB, w.acme.id, [
+      { author_id: w.lead.identity.id, session_id: w.lead.session.id, session_kind: "browser" },
+      { author_id: w.lead.identity.id, session_id: w.lead.session.id, session_kind: "browser" },
+    ]);
+    expect(unanimous(w.lead.identity.id, w.lead.session.id).session_kind).toBe("browser");
+    expect(unanimous(w.lead.identity.id, w.lead.session.id, null).session_kind).toBe("unknown");
+    expect(unanimous(w.scout.agent.identity.id, w.lead.session.id).session_kind).toBe("unknown");
+  });
+
   it("does not guess human/browser provenance and honors per-artifact kinds even without session rows", async () => {
     const w = await chatWorld();
     const tags = await nameTags(env.HUB_DB, w.acme.id, [
