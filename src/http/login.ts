@@ -7,6 +7,9 @@ import { NEUTRAL_LOGIN_MESSAGE, cleanNext, consumeLink, landingUrl, openLink, re
 import type { LinkPurpose } from "../db/types";
 import { notFoundPage } from "./pages";
 import { googleConfigured, googleReproofAllowed } from "./googleLogin";
+import { HubError } from "../errors";
+import { takeRateDetail } from "../rate";
+import { MAX_AUTH_FORM_BODY_BYTES, readRequestForm } from "./body";
 
 export function isApex(request: Request, env: Env): boolean {
   return classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN).kind === "apex";
@@ -134,9 +137,16 @@ export async function loginPostPage(request: Request, env: Env, waitUntil?: (p: 
   const crossPage = !sameOrigin(request) && fromHubPage(request, env);
   if (!sameOrigin(request) && !crossPage) return htmlResponse(page("Forbidden", `<h1>Forbidden</h1>`), 403);
   const now = Date.now();
+  const rate = await takeRateDetail(env.RATE, "login_form_ip", request.headers.get("cf-connecting-ip") ?? "unknown", now);
+  if (!rate.ok) return htmlResponse(page("Too many requests", "<h1>Too many requests</h1><p>Please try again later.</p>"), 429, { "retry-after": String(rate.retryAfterS) });
   const ctx = await buildContext(request, env, now);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
-  const form = await request.formData().catch(() => null);
+  let form: FormData | null;
+  try { form = await readRequestForm(request, MAX_AUTH_FORM_BODY_BYTES); }
+  catch (e) {
+    if (e instanceof HubError) return htmlResponse(page("Invalid request", `<h1>Invalid request</h1><p>${esc(e.detail ?? "Request body could not be read.")}</p>`), e.status, extra);
+    throw e;
+  }
   const field = (k: string): string => {
     const v = form?.get(k);
     return typeof v === "string" ? v : "";

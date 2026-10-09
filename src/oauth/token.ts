@@ -5,6 +5,8 @@ import { getGrantByLibraryId, liveGrant, rotateRefreshHash } from "../db/oauthGr
 import type { OAuthGrant } from "../db/types";
 import { takeRateDetail } from "../rate";
 import { oauthJson } from "../http/oauthMeta";
+import { HubError } from "../errors";
+import { MAX_OAUTH_TOKEN_BODY_BYTES, readRequestBytes } from "../http/body";
 import { isApex } from "../http/login";
 import { notFoundPage } from "../http/pages";
 import { authServer, issuer, libraryGrantIdOf } from "./config";
@@ -17,7 +19,10 @@ const oauthError = (error: string, status = 400) => oauthJson({ error }, status)
 
 /** The library serves token and revocation on one endpoint; the hub decides first, then forwards the same body. */
 function forward(env: Env, request: Request, body: string): Request {
-  return new Request(`${issuer(env)}/oauth/token`, { method: "POST", headers: request.headers, body });
+  const headers = new Headers(request.headers);
+  headers.delete("content-length");
+  headers.delete("transfer-encoding");
+  return new Request(`${issuer(env)}/oauth/token`, { method: "POST", headers, body });
 }
 
 async function grantOf(env: Env, token: string): Promise<OAuthGrant | null> {
@@ -149,12 +154,19 @@ async function revokeToken(env: Env, request: Request, body: string, form: URLSe
 export async function tokenEndpoint(request: Request, env: Env, ectx: ExecutionContext, now: number = Date.now()): Promise<Response> {
   if (!isApex(request, env)) return notFoundPage();
   if (!(request.headers.get("content-type") ?? "").startsWith("application/x-www-form-urlencoded")) return oauthError("invalid_request");
-  const body = await request.text();
-  const form = new URLSearchParams(body);
-  for (const [bucket, subject] of [["oauth_token_ip", request.headers.get("cf-connecting-ip") ?? "unknown"], ["oauth_token_client", form.get("client_id") ?? "none"]] as const) {
-    const rate = await takeRateDetail(env.RATE, bucket, subject, now);
-    if (!rate.ok) return oauthJson({ error: "too_many_requests" }, 429, { "retry-after": String(rate.retryAfterS) });
+  // The IP gate needs no body fields. Refuse before allocation/parsing, then
+  // apply the client gate only after bounded bytes have supplied its identity.
+  const ipRate = await takeRateDetail(env.RATE, "oauth_token_ip", request.headers.get("cf-connecting-ip") ?? "unknown", now);
+  if (!ipRate.ok) return oauthJson({ error: "too_many_requests" }, 429, { "retry-after": String(ipRate.retryAfterS) });
+  let body: string;
+  try { body = new TextDecoder().decode(await readRequestBytes(request, MAX_OAUTH_TOKEN_BODY_BYTES)); }
+  catch (e) {
+    if (e instanceof HubError) return oauthError("invalid_request", e.status);
+    throw e;
   }
+  const form = new URLSearchParams(body);
+  const clientRate = await takeRateDetail(env.RATE, "oauth_token_client", form.get("client_id") ?? "none", now);
+  if (!clientRate.ok) return oauthJson({ error: "too_many_requests" }, 429, { "retry-after": String(clientRate.retryAfterS) });
   const grantType = form.get("grant_type");
   if (grantType === null && form.get("token") !== null) return revokeToken(env, request, body, form, ectx, now);
   if (new URL(request.url).pathname === "/oauth/revoke") return oauthError("invalid_request");

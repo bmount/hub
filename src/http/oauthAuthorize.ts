@@ -18,6 +18,7 @@ import { getVerb } from "../verbs/table";
 import type { Identity, Role, Tenant } from "../db/types";
 import { isApex, sameOrigin } from "./login";
 import { notFoundPage } from "./pages";
+import { MAX_AUTH_FORM_BODY_BYTES, readRequestForm } from "./body";
 
 const SCOPE_TEXT: Record<string, (tenant: string) => string> = {
   read: (t) => `See projects, work, mail, conversations, and activity in ${t}.`,
@@ -126,13 +127,21 @@ export async function consentPost(request: Request, env: Env, waitUntil?: (p: Pr
   const ctx = await buildContext(request, env, now, waitUntil);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   const id = pendingIdFrom(request);
-  const form = await request.formData().catch(() => null);
+  // Anonymous or non-browser callers cannot approve or deny consent. Do not
+  // consume their bodies, even when they supply a syntactically valid id.
+  if (!id || !ctx.identity || !ctx.session || ctx.session.kind !== "browser") return neutralPage(extra);
+  let form: FormData | null;
+  try { form = await readRequestForm(request, MAX_AUTH_FORM_BODY_BYTES); }
+  catch (e) {
+    if (e instanceof HubError) return errorPage(e.status, "Invalid request", e.detail ?? "Request body could not be read.", extra);
+    throw e;
+  }
   const field = (k: string): string => {
     const v = form?.get(k);
     return typeof v === "string" ? v : "";
   };
   const formToken = field("form_token");
-  if (!id || !ctx.identity || !ctx.session || ctx.session.kind !== "browser" || !formToken) return neutralPage(extra);
+  if (!formToken) return neutralPage(extra);
   if (field("decision") === "deny") {
     const p = await loadPending(env, id, now);
     if (!p || p.session_id !== ctx.session.id || !p.form_token || !timingSafeEqual(p.form_token, formToken)) return neutralPage(extra);

@@ -15,6 +15,9 @@ export const RATE_RULES = {
   oauth_token_ip: { limit: 120, windowMs: MINUTE_MS },
   mcp_anon_ip: { limit: 60, windowMs: MINUTE_MS },
   api_anon_ip: { limit: 60, windowMs: MINUTE_MS },
+  // Browser login ingress before form parsing; independent of the fail-closed
+  // email address/IP quotas in requestLink (no additional send allowance).
+  login_form_ip: { limit: 60, windowMs: MINUTE_MS },
   mcp_grant_minute: { limit: 120, windowMs: MINUTE_MS },
   mcp_grant_hour: { limit: 2000, windowMs: RATE_WINDOW_MS },
   // Headless agents on /agent/mcp, per long-lived token: the same allowance as one assistant connection.

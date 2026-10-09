@@ -2,6 +2,10 @@ import { HubError } from "../errors";
 
 export const MAX_API_BODY_BYTES = 1024 * 1024;
 export const MAX_MCP_BODY_BYTES = MAX_API_BODY_BYTES;
+// Small credential/consent forms, including multipart framing. Never use this
+// allowance for voice uploads or forwarded Git bodies.
+export const MAX_AUTH_FORM_BODY_BYTES = 16 * 1024;
+export const MAX_OAUTH_TOKEN_BODY_BYTES = 16 * 1024;
 
 /** Content-Length is only an early rejection hint. Bound actual bytes before
  * JSON/form parsers or SDK classification. Do not retain source-owned chunks or
@@ -52,6 +56,15 @@ export async function readRequestBytes(request: Request, maximum: number): Promi
     signal.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
+}
+
+/** Keep malformed-form behavior separate from streamed overflow/abort errors:
+ * callers may preserve their neutral form handling, but must return 413/400 for
+ * a refused body rather than silently proceeding with an empty form.
+ */
+export async function readRequestForm(request: Request, maximum: number): Promise<FormData | null> {
+  const bytes = await readRequestBytes(request, maximum);
+  return requestWithBytes(request, bytes).formData().catch(() => null);
 }
 
 /** Rebuild only from bounded bytes. Authentication/logging use the original

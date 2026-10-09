@@ -1,6 +1,6 @@
 # Request body bounds (#102)
 
-## Implemented first increment
+## Implemented bounds
 
 `src/http/body.ts` caps **actual streamed bytes before parsing**. Content-Length
 can reject an obviously oversized request early, but a missing, malformed, zero
@@ -22,6 +22,28 @@ and multipart framing, not decoded character counts or just uploaded file size.
 - `/oauth/register`: the existing 8 KiB cap is now applied while streaming,
   after the existing IP/global registration rate checks. Redirect allowlists,
   public-client policy, OAuth library behavior and audit remain unchanged.
+- `/oauth/token` and `/oauth/revoke`: 16 KiB for URL-encoded credential forms.
+  Apex/media checks and the existing hashed-IP 120/minute gate precede all body
+  reads. The existing 60/minute client gate follows bounded parsing, before any
+  code exchange, refresh rotation or revocation. Overflow returns OAuth
+  `invalid_request` with 413; read errors/aborts return the same safe error with
+  400. Forwarded bounded form text drops untrusted length/transfer framing. No
+  token/grant mutation occurs on a body refusal.
+- `POST /login`: 16 KiB including multipart framing. Apex/Origin checks and a
+  separate hashed-IP 60/minute ingress gate precede parsing. It does not increase
+  the existing fail-closed email address/IP send quotas, restore withdrawn
+  consent, or change neutral address-known/unknown responses. Ingress throttling
+  is address-independent and returns an inert 429 with Retry-After; oversized
+  forms return inert 413 and stream errors/aborts return 400, with no sign-in
+  link creation or send. This new KV gate is eventually consistent, not an
+  atomic hard quota; rate-storage read failure cannot proceed to a send.
+- `POST /oauth/consent/:id`: 16 KiB including multipart framing. Apex/Origin,
+  syntactic pending-id and browser authentication denials precede reading.
+  Overflow/read refusal returns inert 413/400 without approving, denying,
+  deleting the pending request or recording a consent decision. Bounded forms
+  still require the exact session-bound form token; fresh-proof, tenant
+  membership, single-use and redirect controls remain in the original decision
+  path. A body refusal is not authorization to approve or release anything.
 
 Oversized requests return 413 without running verbs, creating clients or
 executing tools. API form refusals render an inert readable page. Stream errors
@@ -36,8 +58,8 @@ headers are removed. Original requests remain the authentication/logging source.
 
 This increment does **not** complete #102 across every route. Separate browser,
 internal and OAuth-token parsers still need this utility with suitable endpoint
-budgets: login/consent/channel forms, assistant/playground/voice, internal
-introspection/backlinks/evals, and OAuth token/revoke. Do not apply a 1 MiB global
+budgets: channel forms, assistant/playground/voice and internal
+introspection/backlinks/evals. Do not apply a 1 MiB global
 middleware cap to Git smart HTTP forwarded to Ardi or voice uploads with their
 separate recording allowance. Incoming mail uses its separate original-byte cap.
 
@@ -52,5 +74,10 @@ Native-Workers tests cover chunked absent/forged lengths, exact limits, UTF-8,
 URL-encoded/multipart forms, source-owned chunk mutation, tiny chunks, aborted or
 erroring streams, stalled cancellation, actual Worker routing, MCP valid parse
 reuse/malformed JSON/batches/media validation, both authenticated MCP endpoints,
-and pre-read auth/Origin/rate refusals. The full suite guards existing tenant,
+and pre-read auth/Origin/rate refusals. Authentication-form tests also prove
+oversize genuine code/refresh/revoke requests leave grants untouched, a refused
+code remains exchangeable, bounded forwarding works with forged framing,
+oversize consent cannot approve/deny or consume pending requests, and oversize
+login cannot create links or send mail. IP/client ordering, neutral anonymous
+consent, exact byte caps, multipart entry routes and safe error text are covered. The full suite guards existing tenant,
 mailbox, grant, cookie and login-proof boundaries.
