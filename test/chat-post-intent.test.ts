@@ -50,7 +50,7 @@ describe("ordinary post intent-bound replay", () => {
     expect(events.results.filter((e) => e.kind === "chat.post")).toHaveLength(1);
     for (const e of events.results) expect(e.summary).not.toMatch(/private|forged|fingerprint/);
     expect((await tool(w.scout.longLived, { ...args, body: "fresh checkpoint", after: first.head, idempotency_key: "fresh" })).isError).toBeUndefined();
-  });
+  }, 20_000); // 35 sequential real endpoint retries can exceed 5s under full-suite contention.
 
   it("binds browser API and OAuth retries to their own principals and preserves current controls", async () => {
     const { w, args } = await setup();
