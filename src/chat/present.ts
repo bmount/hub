@@ -1,7 +1,7 @@
 import type { Ctx } from "../auth/context";
 import type { ChannelRow } from "../db/chat";
 import { viewerOf } from "./access";
-import { renderMessages } from "./compact";
+import { messageBlock, renderMessages } from "./compact";
 import { nameTags, type NameTag, type TagOf } from "./handles";
 import { refsForViewer } from "./refs";
 import type { MsgView, ResponseAttribution, ViewRef } from "./types";
@@ -37,18 +37,24 @@ export async function present(ctx: Ctx, msgs: MsgView[]): Promise<{ tagOf: TagOf
   return { tagOf, refs };
 }
 
-export type ReadResult = { tenant_id: string; identity_id: string; conversation_id: string; channel: string; head: number; messages: MsgJson[]; next_after: number | null; next_before: number | null; text: string };
+export type ReadResult = { tenant_id: string; identity_id: string; conversation_id: string; channel: string; head: number; messages: MsgJson[]; next_after: number | null; next_before: number | null; text: string; target?: MsgJson };
 
-/** Compact text within the budget, and JSON for exactly the messages the text shows. */
+/** Bounded activity text/JSON, plus optional exact named evidence that never affects paging. */
 export async function readResult(
-  ctx: Ctx, ch: ChannelRow, msgs: MsgView[], o: { title: string; head: number; budget: number; keep: "oldest" | "newest"; has_more: boolean; full?: number | null; context?: number; cursors?: Record<number, number> },
+  ctx: Ctx, ch: ChannelRow, msgs: MsgView[], o: { title: string; head: number; budget: number; keep: "oldest" | "newest"; has_more: boolean; full?: number | null; context?: number; cursors?: Record<number, number>; target?: MsgView },
 ): Promise<ReadResult> {
-  const { tagOf, refs } = await present(ctx, msgs);
+  const evidence = o.target && !msgs.some((m) => m.msg_id === o.target!.msg_id) ? [...msgs, o.target] : msgs;
+  const { tagOf, refs } = await present(ctx, evidence);
   const r = renderMessages({ title: o.title, c: ch.slug, messages: msgs, tagOf, refs, budget: o.budget, keep: o.keep, has_more: o.has_more, full: o.full ?? null, context: o.context, cursors: o.cursors });
   const shown = new Set(r.shown);
+  const target = o.target ? msgJson(o.target, tagOf(o.target.author_id, o.target.session_id, o.target.session_kind), refs.get(o.target.seq) ?? []) : undefined;
+  const targetText = o.target ? [
+    "", `Exact named target: #${o.target.seq} r${o.target.rev}; full body in structured target. Snapshot evidence, not page progress or execution authority.`,
+    ...(!shown.has(o.target.seq) ? messageBlock(o.target, tagOf(o.target.author_id, o.target.session_id, o.target.session_kind), { c: ch.slug, refs: refs.get(o.target.seq) }) : []),
+  ].join("\n") : "";
   return {
     tenant_id: ch.tenant_id, identity_id: viewerOf(ctx).identity.id, conversation_id: ch.project_id, channel: ch.slug, head: o.head,
     messages: msgs.filter((m) => shown.has(m.seq)).map((m) => msgJson(m, tagOf(m.author_id, m.session_id, m.session_kind), refs.get(m.seq) ?? [])),
-    next_after: r.next_after, next_before: r.next_before, text: r.text,
+    next_after: r.next_after, next_before: r.next_before, text: r.text + targetText, ...(target ? { target } : {}),
   };
 }

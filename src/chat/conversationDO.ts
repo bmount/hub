@@ -565,8 +565,10 @@ export class Conversation extends DurableObject<Env> {
     this.#bind(q.tenant_id, q.conversation_id);
     const head = this.#head();
     let root: MsgRow | null = null;
+    let target: MsgRow | null = null;
     if (q.thread !== null) {
-      root = this.#msg(q.thread);
+      target = this.#msg(q.thread);
+      root = target;
       if (root && root.thread_root) root = this.#msg(root.thread_root);
       if (!root) return { head, found: false, root: null, messages: [], has_more: false, cursors: {} };
     }
@@ -600,7 +602,10 @@ export class Conversation extends DurableObject<Env> {
     if (order === "DESC") page.reverse();
     const cursors: Record<number, number> = {};
     if (q.after !== null) for (const r of page) cursors[r.first_seq] = r.touched;
-    return { head, found: true, root: root ? this.#view(root) : null, messages: page.map((r) => this.#view(r)), has_more, cursors };
+    // Exact named evidence shares this synchronous snapshot with head/root/page. It is not
+    // paged activity: naming an old/off-page reply must neither skip replies nor advance a cursor.
+    return { head, found: true, root: root ? this.#view(root) : null, messages: page.map((r) => this.#view(r)), has_more, cursors,
+      ...(target ? { target: this.#view(target) } : {}) };
   }
 
   async getMessage(tenant_id: string, conversation_id: string, ref: string): Promise<MsgView | null> {
