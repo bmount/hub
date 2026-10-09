@@ -34,6 +34,32 @@ describe("Inbox object", () => {
     expect(all.items.map((i) => i.acked_at !== null)).toEqual([true, true, false]);
   });
 
+  it("selectively acknowledges exact existing items atomically, persisting across fresh instances without a future watermark", async () => {
+    await box().deliver(T, "I1", [item(1), item(2), item(3)]);
+    const at = Date.now();
+    expect(await box().ackItems(T, "I1", [3, 1, 3, 999], at)).toBe(2);
+    await inDO(box(), async (_obj, state) => {
+      const fresh = new Inbox(state, env);
+      expect(await fresh.ackItems(T, "I1", [1, 3], at + 1)).toBe(0);
+      expect((await fresh.list(T, "I1", { after: 0, limit: 10, include_acked: true })).items.map(x => x.acked_at)).toEqual([at, null, at]);
+      for (const invalid of [[], [2, 0], [2, NaN], [2, 1.5], Array(101).fill(2)]) {
+        await expect(fresh.ackItems(T, "I1", invalid, at)).rejects.toThrow("invalid inbox item numbers");
+      }
+      await expect(fresh.ackItems("other", "I1", [2], at)).rejects.toThrow(/another tenant/);
+      await expect(fresh.ackItems(T, "other", [2], at)).rejects.toThrow(/another tenant or owner/);
+      expect((await fresh.list(T, "I1", { after: 0, limit: 10, include_acked: false })).items.map(x => x.item_seq)).toEqual([2]);
+      expect(await fresh.highWater(T, "I1")).toBe(3);
+      expect(await fresh.cursors(T, "I1")).toEqual({});
+    });
+    await box().deliver(T, "I1", [item(4)]);
+    await inDO(box(), async (obj: Inbox, state) => {
+      state.storage.sql.exec("CREATE TRIGGER fail_ack BEFORE UPDATE ON item WHEN NEW.item_seq = 4 BEGIN SELECT RAISE(ABORT, 'fixture ack failure'); END");
+      await expect(obj.ackItems(T, "I1", [2, 4], at)).rejects.toThrow("fixture ack failure");
+      state.storage.sql.exec("DROP TRIGGER fail_ack");
+    });
+    expect((await box().list(T, "I1", { after: 0, limit: 10, include_acked: false })).items.map(x => x.item_seq)).toEqual([2, 4]);
+  });
+
   it("retains the allocated sequence across pruning and fresh object instances without exposing another binding", async () => {
     expect(await box().highWater(T, "I1")).toBe(0);
     await box().deliver(T, "I1", [item(1), item(2)]);

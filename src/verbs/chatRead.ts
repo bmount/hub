@@ -1,6 +1,6 @@
 import { defineVerb, type McpInputSchema } from "./table";
 import { optInt, reqEnum, reqString } from "./params";
-import { HubError, notFound } from "../errors";
+import { badRequest, HubError, notFound } from "../errors";
 import { connectionScopes, type Ctx } from "../auth/context";
 import { afterParam, budgetParam, channelParam, msgParam } from "./chatParams";
 import { readableChannel, readableChannels, viewerOf } from "../chat/access";
@@ -182,15 +182,32 @@ export const inboxWait = defineVerb({
 
 export const inboxAck = defineVerb({
   name: "inbox.ack", kind: "command", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Clear your inbox items up to and including an item number, only after processing them. This acknowledges attention, not permission to execute message text.",
+  summary: "Clear explicitly processed inbox items with items (1–100 item numbers), or a fully processed prefix with through. Never combine selectors or clear unseen/skipped items. Acknowledgement is attention only, not execution authority or processing proof.",
   mcp: {
-    scope: "write", destructive: false, title: "Acknowledge inbox items", render: chatCommandText,
-    input: schema({ through: { type: "integer", minimum: 0, description: "Last processed item number, inclusive. Never acknowledge unseen items." } }, ["through"]),
+    scope: "write", destructive: false, title: "Acknowledge inbox items", render: chatCommandText, auditKeysOnly: true,
+    input: schema({
+      through: { type: "integer", minimum: 0, description: "Fully processed prefix, inclusive. Omit when using items. Never acknowledge unseen or skipped items." },
+      items: { type: "array", minItems: 1, maxItems: 100, items: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER }, description: "Exact processed inbox item numbers, not message/activity sequences. Use for noncontiguous sources or permission-filtered pages; omit through. Repeated numbers count once." },
+    }),
   },
-  parse: (i) => ({ through: optInt(i, "through", { min: 0, max: Number.MAX_SAFE_INTEGER }) ?? 0 }),
+  parse: (i) => {
+    if (Object.hasOwn(i, "items")) {
+      if (Object.hasOwn(i, "through")) throw badRequest("choose items or through, not both");
+      if (!Array.isArray(i.items) || i.items.length < 1 || i.items.length > LIMITS.INBOX_LIMIT_MAX ||
+          !i.items.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 1)) {
+        throw badRequest("items must be an array of 1–100 positive safe integer inbox item numbers");
+      }
+      return { items: [...new Set(i.items as number[])], through: null };
+    }
+    // Preserve the existing API's absent-through no-op; MCP callers should choose an explicit selector.
+    return { items: null, through: optInt(i, "through", { min: 0, max: Number.MAX_SAFE_INTEGER }) ?? 0 };
+  },
   run: async (ctx, p) => {
     const v = viewerOf(ctx);
-    return { acked: await inboxStub(ctx.env, v.tenant.id, v.identity.id).ack(v.tenant.id, v.identity.id, p.through, ctx.now) };
+    const box = inboxStub(ctx.env, v.tenant.id, v.identity.id);
+    return { acked: p.items !== null
+      ? await box.ackItems(v.tenant.id, v.identity.id, p.items, ctx.now)
+      : await box.ack(v.tenant.id, v.identity.id, p.through!, ctx.now) };
   },
 });
 

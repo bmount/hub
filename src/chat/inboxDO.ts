@@ -142,6 +142,21 @@ export class Inbox extends DurableObject<Env> {
     return n;
   }
 
+  /** One synchronous update of exact existing items; no prefix or future acknowledgement watermark. */
+  async ackItems(tenant_id: string, identity_id: string, items: number[], now: number): Promise<number> {
+    bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
+    if (!Array.isArray(items) || items.length < 1 || items.length > LIMITS.INBOX_LIMIT_MAX ||
+        !items.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 1)) {
+      throw new Error("invalid inbox item numbers");
+    }
+    const selected = [...new Set(items)];
+    return this.#q<{ item_seq: number }>(
+      // JSON keeps the full 100-item public bound below the DO's 100 SQL-variable limit.
+      "UPDATE item SET acked_at = ? WHERE acked_at IS NULL AND item_seq IN (SELECT value FROM json_each(?)) RETURNING item_seq",
+      now, JSON.stringify(selected),
+    ).length;
+  }
+
   async cursors(tenant_id: string, identity_id: string): Promise<Record<string, number>> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
     return Object.fromEntries(this.#q<{ conversation_id: string; read_seq: number }>("SELECT conversation_id, read_seq FROM cursor").map((r) => [r.conversation_id, r.read_seq]));
