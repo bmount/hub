@@ -12,9 +12,9 @@ import { resolveRefs, type Unresolved } from "./refs";
 import { LIMITS } from "./rules";
 import { conversationStub, inboxStub } from "./stubs";
 import type { ReserveResult } from "./inboxDO";
-import type { AgentPolicy, Audience, Author, ChatSessionKind, Mention, PostOk, PostOutcome, Refusal, StoredRef } from "./types";
+import type { AgentPolicy, Audience, Author, ChatSessionKind, Mention, PostOk, PostOutcome, Refusal, ResponseIntent, ResponseSource, StoredRef } from "./types";
 
-export type PostParams = { c: string; body: string; after: number | null; reply_to: string | null; refs: Array<{ kind: string; key: string }>; idempotency_key: string | null };
+export type PostParams = { c: string; body: string; after: number | null; reply_to: string | null; refs: Array<{ kind: string; key: string }>; idempotency_key: string | null; response_to?: ResponseSource };
 export type VersionParams = { c: string; msg: string; body: string | null; after: number | null; idempotency_key: string | null };
 export type PostResult = {
   channel: string; seq: number; msg_id: string; rev: number; hop: number; head: number; woke: number; unresolved: Unresolved[];
@@ -165,15 +165,26 @@ async function safeEvents(ctx: Ctx, ch: ChannelRow, author: Author, o: PostOk, k
 
 export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> {
   const author = authorOf(ctx);
-  if (p.after === null && needsAfter(author)) throw badRequest("after is required: pass the head from chat.read or chat.catchup");
+  if (p.after === null && (needsAfter(author) || p.response_to)) throw badRequest("after is required: pass the head from chat.read or chat.catchup");
   const shape = structure(p.body, p.refs);
   const ch = await readableChannel(ctx, p.c);
   const conv = conversationStub(ctx.env, ch.tenant_id, ch.project_id);
-  if (p.idempotency_key) {
+  const response: ResponseIntent | undefined = p.response_to ? {
+    source: p.response_to, fingerprint: await sha256Hex(JSON.stringify({ body: p.body, refs: p.refs })),
+  } : undefined;
+  if (response && p.reply_to !== response.source.msg_id) throw badRequest("response_to must be the exact reply target");
+  if (!response && p.idempotency_key) {
     const prior = (await conv.replay(ch.tenant_id, ch.project_id, author.id, "post", p.idempotency_key)) as PostOk | null;
     if (prior) return result(ch, prior, [], 0);
   }
   const { audience, policy } = await gate(ctx, ch, author);
+  if (response) {
+    const prior = (await conv.responseReplay(ch.tenant_id, ch.project_id, author.id, response)) as PostOutcome | null;
+    if (prior) {
+      if (prior.refused !== null) throw await refusalError(ctx, author, ch, prior);
+      return result(ch, prior, [], 0);
+    }
+  }
   const x = await extract(ctx, shape, author.id);
   const reserve = (await inboxStub(ctx.env, ch.tenant_id, author.id).reserve(ch.tenant_id, author.id, {
     session_id: author.session_id, is_agent: author.kind === "agent", conversation_id: ch.project_id, now: ctx.now,
@@ -184,10 +195,10 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
   }
   const o = (await conv.post({
     tenant_id: ch.tenant_id, conversation_id: ch.project_id, now: ctx.now, author, policy, body: p.body, body_sha256: await sha256Hex(p.body),
-    after: p.after, reply_to: p.reply_to, refs: x.resolved, mentions: x.mentions, wake_hop: reserve.wake_hop, thread_wake_hops: reserve.thread_wake_hops, idempotency_key: p.idempotency_key, audience,
+    after: p.after, reply_to: p.reply_to, refs: x.resolved, mentions: x.mentions, wake_hop: reserve.wake_hop, thread_wake_hops: reserve.thread_wake_hops, idempotency_key: p.idempotency_key, audience, response,
   })) as PostOutcome;
   if (o.refused !== null) throw await refusalError(ctx, author, ch, o);
-  await safeEvents(ctx, ch, author, o, "chat.post");
+  if (!o.replayed) await safeEvents(ctx, ch, author, o, "chat.post");
   return result(ch, o, x.unresolved, x.not_waking);
 }
 

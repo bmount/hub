@@ -170,7 +170,14 @@ describe("verb table", () => {
       expect({ verb: v.name, keys: Object.keys(v.mcp?.input.properties ?? {}).filter((k) => AUTHORISH.test(k)) }).toEqual({ verb: v.name, keys: [] });
     }
     const p = getVerb("chat.post")!.parse({ c: "general", body: "hi", author_id: "x", display_name: "x", avatar: "x", handle: "x", session_id: "x" }) as Record<string, unknown>;
-    expect(Object.keys(p).sort()).toEqual(["after", "body", "c", "idempotency_key", "refs", "reply_to"]);
+    expect(Object.keys(p).sort()).toEqual(["after", "body", "c", "idempotency_key", "refs", "reply_to", "response_to"]);
+    expect(p.response_to).toBeUndefined();
+    const source = { msg_id: "01M4FAKTZN5K8R70YEK82B5S8S", rev: 1, author_id: "01M4AF980SG4A68Q7VNA21WX92" };
+    const bound = getVerb("chat.post")!.parse({ c: "general", body: "hi", after: 1, response_to: source, author_id: "forged", session_id: "forged" }) as Record<string, unknown>;
+    expect(bound.response_to).toEqual(source); // source evidence is later verified, never used as the posting actor
+    expect(bound.reply_to).toBe(source.msg_id);
+    expect(bound.author_id).toBeUndefined();
+    expect(bound.session_id).toBeUndefined();
   });
 
   // Table-driven: every chat., channel., inbox. and ref. verb is parsed with a valid input for its own parameters

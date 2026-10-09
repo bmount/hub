@@ -52,6 +52,52 @@ describe("authenticated MCP chat participation", () => {
     }
   });
 
+  it("routes a durable reply to exact source evidence and reconciles new keys without message/wake/rate/audit duplication", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const source = await ok(w.lead.token, "chat.post", { c: "general", body: "@scout original product request" });
+    const args = { ...post, body: "@tidy tested increment", after: source.head, response_to: { msg_id: source.msg_id, rev: 1, author_id: w.lead.identity.id } };
+    const first = await tool(w.scout.longLived, "chat_post", args);
+    expect(first.isError).toBeUndefined();
+    for (let i = 0; i < 35; i++) {
+      const retry = await tool(w.scout.longLived, "chat_post", { ...args, idempotency_key: `retry-${i}` });
+      expect(retry.structuredContent).toMatchObject({ msg_id: first.structuredContent.msg_id, replayed: true });
+    }
+    const thread = (await tool(w.scout.longLived, "chat_thread", { c: "general", msg: source.msg_id })).structuredContent;
+    expect(thread.head).toBe(2);
+    expect(thread.messages).toHaveLength(2);
+    expect(thread.messages[1].root_seq).toBe(source.seq);
+    const events = await env.HUB_DB.prepare("SELECT target_id FROM event WHERE tenant_id = ? AND kind = 'chat.post' AND identity_id = ?").bind(w.acme.id, w.scout.agent.identity.id).all();
+    expect(events.results).toHaveLength(1);
+    const inbox = await inboxStub(env, w.acme.id, w.tidy.agent.identity.id).list(w.acme.id, w.tidy.agent.identity.id, { after: 0, limit: 100, include_acked: true });
+    expect(inbox.items).toHaveLength(1);
+    const changed = await tool(w.scout.longLived, "chat_post", { ...args, body: "different response" });
+    expect(changed.content[0].text).toContain("conflict");
+    await ok(w.lead.token, "channel.set_agent_policy", { c: "general", policy: "muted" });
+    expect((await tool(w.scout.longLived, "chat_post", args)).content[0].text).toContain("muted");
+    await ok(w.lead.token, "channel.remove_agent", { c: "general", agent: "scout" });
+    expect((await tool(w.scout.longLived, "chat_post", args)).content[0].text).toContain("not_found");
+  });
+
+  it("refuses malformed, forged, changed or cross-channel source evidence before writing", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    await channelWith(w, "other");
+    const source = await ok(w.lead.token, "chat.post", { c: "general", body: "original request" });
+    const evidence = { msg_id: source.msg_id, rev: 1, author_id: w.lead.identity.id };
+    for (const response_to of [null, [], "general/1", { ...evidence, msg_id: 1 }, { ...evidence, rev: "1" }, { ...evidence, rev: 0 }, { ...evidence, author_id: "handle" }, { ...evidence, authority: "admin" }]) {
+      expect((await tool(w.scout.longLived, "chat_post", { ...post, after: 1, response_to })).content[0].text).toContain("bad_request");
+    }
+    expect((await tool(w.scout.longLived, "chat_post", { ...post, after: 1, response_to: evidence, reply_to: source.msg_id })).content[0].text).toContain("bad_request");
+    for (const response_to of [{ ...evidence, author_id: w.dev.identity.id }, { ...evidence, rev: 2 }]) {
+      expect((await tool(w.scout.longLived, "chat_post", { ...post, after: 1, response_to })).content[0].text).toContain("conflict");
+    }
+    expect((await tool(w.scout.longLived, "chat_post", { ...post, c: "other", response_to: evidence })).content[0].text).toContain("not_found");
+    await ok(w.lead.token, "chat.edit", { c: "general", msg: source.msg_id, body: "changed request" });
+    expect((await tool(w.scout.longLived, "chat_post", { ...post, after: 2, response_to: evidence })).content[0].text).toContain("conflict");
+    expect((await tool(w.scout.longLived, "chat_read", { c: "general" })).structuredContent.head).toBe(2);
+  });
+
   it("requires a stable key and a read head, and refuses stale views before posting", async () => {
     const w = await chatWorld();
     await channelWith(w);

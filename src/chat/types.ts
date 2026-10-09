@@ -15,10 +15,16 @@ export type Mention = { identity_id: string; kind: "human" | "agent" };
 /** What the Worker read from D1 for this command; the Conversation trusts it (spec 9.3: D1 is the truth). */
 export type Audience = { agent_members: string[]; operators: Record<string, string>; muted_agents: string[]; agents_enabled: boolean };
 
+/** Exact source evidence, not a grant of execution authority. */
+export type ResponseSource = { msg_id: string; rev: number; author_id: string };
+export type ResponseIntent = { source: ResponseSource; fingerprint: string };
+
 export type PostInput = {
   tenant_id: string; conversation_id: string; now: number; author: Author; policy: AgentPolicy;
   body: string; body_sha256: string; after: number | null; reply_to: string | null;
   refs: StoredRef[]; mentions: Mention[];
+  /** One durable response per authenticated caller/source, atomically committed with the message. */
+  response?: ResponseIntent;
   /** Hop of the author's newest open top-level wake here, and of the newest open wake per thread (ruling C-4), from the author's Inbox. */
   wake_hop: number | null; thread_wake_hops: Record<string, number>;
   idempotency_key: string | null; audience: Audience;

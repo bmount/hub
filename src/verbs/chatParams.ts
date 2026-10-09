@@ -1,6 +1,7 @@
 import { badRequest } from "../errors";
 import { optInt, reqString } from "./params";
 import { LIMITS } from "../chat/rules";
+import type { ResponseSource } from "../chat/types";
 
 type Input = Record<string, unknown>;
 
@@ -30,6 +31,22 @@ export function msgParam(i: Input, key: string, required: boolean): string | nul
   const t = v.trim().replace(/^#/, "");
   if (!/^\d{1,12}$/.test(t) && !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(t)) throw badRequest(`${key} must be a message number or id`);
   return t;
+}
+
+/** Durable replies bind exact source evidence, never a handle or caller-claimed execution authority. */
+export function responseParam(i: Input): ResponseSource | undefined {
+  const v = i.response_to;
+  if (v === undefined) return undefined;
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw badRequest("response_to must be {msg_id, rev, author_id}");
+  const s = v as Input;
+  if (Object.keys(s).some((k) => !["msg_id", "rev", "author_id"].includes(k)) ||
+      typeof s.msg_id !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(s.msg_id) ||
+      typeof s.author_id !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(s.author_id) ||
+      typeof s.rev !== "number" || !Number.isSafeInteger(s.rev) || s.rev < 1 || s.rev > LIMITS.VERSIONS_MAX) {
+    throw badRequest("response_to requires exact msg_id, author_id and integer rev from the original message");
+  }
+  if (i.reply_to !== undefined && i.reply_to !== null && i.reply_to !== "") throw badRequest("response_to sets the reply target; omit reply_to");
+  return { msg_id: s.msg_id, rev: s.rev, author_id: s.author_id };
 }
 
 /** Spec 5.1: explicit refs, `[{kind, key}]`, key in body syntax. */

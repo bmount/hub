@@ -8,7 +8,7 @@ import { getControls } from "../db/chat";
 import { LIMITS, computeHop, gateRefuses, nextAgentRun, pairTrip, wakesAllowed } from "./rules";
 import type {
   AuthorKind, ChatSessionKind, Digest, DigestQuery, MsgView, PostInput, PostOk, PostOutcome, ReadPage, ReadQuery, StoredRef, Suppressed,
-  Version, VersionInput, WakeItem, WakeKind,
+  ResponseIntent, Version, VersionInput, WakeItem, WakeKind,
 } from "./types";
 
 const SCHEMA = [
@@ -164,6 +164,35 @@ export class Conversation extends DurableObject<Env> {
     this.#run("INSERT OR REPLACE INTO idem (identity_id, key, result_json, created_at) VALUES (?, ?, ?, ?)", identity_id, `${op}:${key}`, JSON.stringify(result), now);
   }
 
+  #responseKey(identity_id: string, source_id: string): string {
+    return `response:v1:${identity_id}:${source_id}`;
+  }
+
+  /** No TTL: compact evidence/result only, retained with the conversation. Never stores response text. */
+  #responseReplay(identity_id: string, intent: ResponseIntent): PostOutcome | null {
+    const row = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = ?", this.#responseKey(identity_id, intent.source.msg_id))[0];
+    if (row) {
+      const prior = JSON.parse(row.value) as { intent: ResponseIntent; result: PostOk };
+      if (prior.intent.source.rev !== intent.source.rev || prior.intent.source.author_id !== intent.source.author_id || prior.intent.fingerprint !== intent.fingerprint) {
+        return { refused: "conflict", detail: "a different response is already recorded for this source; reconcile the original thread" };
+      }
+      // Reconcile even after source/response edits or retraction, but never resurrect either message.
+      return { ...prior.result, replayed: true };
+    }
+    const source = this.#msg(intent.source.msg_id);
+    if (!source || source.kind !== "say") return { refused: "not_found" };
+    if (source.retracted || source.rev !== intent.source.rev || source.author_id !== intent.source.author_id) {
+      return { refused: "conflict", detail: "source evidence changed or does not match; read the original message again" };
+    }
+    return null;
+  }
+
+  /** Read-only preflight; post repeats this check inside the artifact/outbox transaction. */
+  async responseReplay(tenant_id: string, conversation_id: string, identity_id: string, intent: ResponseIntent): Promise<PostOutcome | null> {
+    this.#bind(tenant_id, conversation_id);
+    return this.#responseReplay(identity_id, intent);
+  }
+
   /** Spec 6.4: messages by others, not system, newer than `after` in the scope (the thread, or the top level). */
   #stale(me: string, after: number, root: string | null): MsgView[] {
     const scope = root ? "(thread_root = ? OR msg_id = ?)" : "thread_root IS NULL";
@@ -263,13 +292,21 @@ export class Conversation extends DurableObject<Env> {
 
   #post(p: PostInput): PostOutcome {
     const me = p.author;
-    const prior = this.#replay(me.id, "post", p.idempotency_key, p.now);
-    if (prior) return prior;
+    // Durable responses must never replay an unrelated ordinary idempotency key.
+    if (!p.response) {
+      const prior = this.#replay(me.id, "post", p.idempotency_key, p.now);
+      if (prior) return prior;
+    }
     // The Worker checks these from D1 first; the object refuses too, so a bug or a race there cannot let an agent through.
     if (me.kind === "agent") {
       if (!p.audience.agents_enabled) return { refused: "forbidden", detail: "agent posting is switched off in this tenant" };
       if (p.audience.muted_agents.includes(me.id)) return { refused: "forbidden", detail: "this agent is muted" };
       if (p.policy === "muted") return { refused: "forbidden", detail: "this channel takes no agent posts" };
+    }
+    if (p.response) {
+      if (p.reply_to !== p.response.source.msg_id || p.after === null) return { refused: "conflict", detail: "durable responses require the exact source reply target and a read head" };
+      const prior = this.#responseReplay(me.id, p.response);
+      if (prior) return prior;
     }
     let target: MsgRow | null = null;
     if (p.reply_to !== null) {
@@ -373,7 +410,11 @@ export class Conversation extends DurableObject<Env> {
     }
 
     const result: PostOk = { refused: null, seq, msg_id, rev: 1, hop, head: this.#head(), woke, suppressed, loop_tripped: loop, replayed: false };
-    this.#remember(me.id, "post", p.idempotency_key, result, p.now);
+    if (p.response) {
+      this.#run("INSERT INTO meta (key, value) VALUES (?, ?)", this.#responseKey(me.id, p.response.source.msg_id), JSON.stringify({ intent: p.response, result }));
+    } else {
+      this.#remember(me.id, "post", p.idempotency_key, result, p.now);
+    }
     return result;
   }
 
