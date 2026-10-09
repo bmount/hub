@@ -97,6 +97,18 @@ production email entry point with provider-style delegated/escaped keys; these
 are synthetic trusted-resolver responses, not evidence of real provider delivery.
 Header bytes are capped at 64 KiB, signatures at six and raw mail at 10 MiB.
 
+The outer-header framing policy also refuses every C0 control except HTAB,
+plus DEL, in field values and continuation lines (including non-authoritative
+extension headers). CRLF is accepted only as line framing. This deliberately
+excludes obsolete control-bearing header syntax: cryptographic success does not
+make that syntax supported or remove MIME-parser ambiguity. It remains unknown
+before DNS, replay reservation, consent, welcome or agent wake. Signed RSA/Ed25519
+control-bearing fixtures otherwise pass the library's cryptographic verifier;
+regressions exercise every forbidden byte and the production email entry point.
+Folded HTAB and UTF-8 headers still work, and this check neither inspects nor
+rewrites signed body bytes. This is framing hardening, not evidence of a forged
+signature or a claim of universal RFC/DMARC/provider compatibility.
+
 The handler bounds **actual** raw stream bytes before parsing, verification or
 consent and records actual size. The verifier is connected only through atomic
 replay storage: a valid signature alone is not enough to bypass conflicting,

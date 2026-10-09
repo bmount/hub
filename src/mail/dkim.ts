@@ -39,7 +39,11 @@ export async function verifyIndependentDkim(bytes: Uint8Array, envelope: string,
   const lines = prefix.slice(0, end).split("\r\n");
   const fields: Array<{ key: string; originalKey: string; value: string }> = [];
   for (const line of lines) {
-    if (/[\r\n\x00]/.test(line)) return unknown("header framing");
+    // Strict supported header subset: CR/LF only frame lines; HTAB is the
+    // sole permitted C0 control within a field/fold. Refuse obsolete controls
+    // and DEL before either parser/DNS, even in non-authoritative extensions.
+    // Do not apply this to body bytes or reject UTF-8 header octets.
+    if (/[\x00-\x08\x0a-\x1f\x7f]/.test(line)) return unknown("header framing");
     if (/^[ \t]/.test(line)) {
       if (!fields.length) return unknown("header framing");
       fields[fields.length - 1]!.value += `\r\n${line}`;

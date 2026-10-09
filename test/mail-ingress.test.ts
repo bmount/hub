@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fixtures from "./fixtures/mail-ingress.json";
 import mimeFixtures from "./fixtures/dkim-mime.json";
+import framingFixtures from "./fixtures/dkim-framing.json";
 import { seedAgent, seedHuman, seedTenant } from "./helpers";
 import { handleProjectMail } from "../src/mail/projectMail";
 import { handleEmail } from "../src/mail/inbound";
@@ -69,6 +70,57 @@ describe("receipt-free independently authenticated ingress", () => {
     expect((await page(w)).items).toHaveLength(0);
     expect(w.sent).toHaveLength(0);
     expect(log.mock.calls.at(-1)?.[0]).toContain('"error":null');
+  });
+
+  it.each(["controlSubject", "controlFold", "controlExtension"] as const)("keeps signed %s framing admin-only without consent, reservation or wake", async (name) => {
+    const w = await world();
+    const m = message(framingFixtures[name], w.bot.agent.identity.email);
+    const lookup = vi.fn(async (q: string) => [[q.startsWith("ed.") ? framingFixtures.edRecord : framingFixtures.record]]);
+    expect(await handleProjectMail(m, env, Date.parse(framingFixtures.now) + 120_000, lookup)).toBe("quarantined");
+    expect(lookup).not.toHaveBeenCalled();
+    expect(await env.HUB_DB.prepare("SELECT verdict, reason FROM inbound_mail").first()).toMatchObject({
+      verdict: "quarantined", reason: "authentication unknown: independent DKIM header framing",
+    });
+    expect(await env.HUB_DB.prepare("SELECT key FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").first()).toBeNull();
+    expect(m.reply).not.toHaveBeenCalled();
+    expect(m.setReject).not.toHaveBeenCalled();
+    expect(await count("consent")).toBe(0);
+    expect(await welcome()).toBeNull();
+    expect((await page(w)).items).toHaveLength(0);
+    expect(w.sent).toHaveLength(0);
+  });
+
+  it("production entry keeps signed control framing quarantined before any DNS or notification", async () => {
+    const w = await world();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const fetcher = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected network"));
+    const m = message(framingFixtures.controlSubject, w.bot.agent.identity.email);
+    await handleEmail(m, env, {} as ExecutionContext);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(await env.HUB_DB.prepare("SELECT verdict, reason FROM inbound_mail").first()).toMatchObject({
+      verdict: "quarantined", reason: "authentication unknown: independent DKIM header framing",
+    });
+    expect(m.reply).not.toHaveBeenCalled();
+    expect(await count("consent")).toBe(0);
+    expect(await welcome()).toBeNull();
+    expect((await page(w)).items).toHaveLength(0);
+    expect(w.sent).toHaveLength(0);
+  });
+
+  it("admits signed folded HTAB and UTF-8 headers with unchanged replay/welcome behavior", async () => {
+    const w = await world();
+    const lookup = async () => [[framingFixtures.record]];
+    const m = message(framingFixtures.valid, w.bot.agent.identity.email);
+    const time = Date.parse(framingFixtures.now) + 120_000;
+    expect(await handleProjectMail(m, env, time, lookup)).toBe("admitted");
+    expect(await handleProjectMail(message(framingFixtures.valid, w.bot.agent.identity.email), env, time, lookup)).toBe("admitted");
+    expect(await env.HUB_DB.prepare("SELECT subject FROM inbound_mail").first<string>("subject")).toContain("café");
+    expect(await count("inbound_mail")).toBe(1);
+    expect(await count("consent")).toBe(1);
+    expect((await page(w)).items).toHaveLength(1);
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]!.subject).toBe("Welcome to Pimwell");
+    expect(m.reply).not.toHaveBeenCalled();
   });
 
   it("admits fully signed outer MIME extensions and wakes once without a receipt", async () => {
