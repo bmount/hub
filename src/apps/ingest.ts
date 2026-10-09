@@ -7,6 +7,7 @@ import { ulid } from "../ids";
 import { usageStatement } from "../models/usage";
 import { conversationStub } from "../chat/stubs";
 import type { AppEvent } from "./redact";
+import { validatedAppBatch } from "./validate";
 
 const HOUR = 3_600_000;
 const QUIET_MS = 24 * HOUR;          // an error group that comes back after a day is news again
@@ -36,16 +37,9 @@ function problems(e: AppEvent): Problem[] {
   return out;
 }
 
-function valid(x: unknown): x is AppEvent {
-  if (!x || typeof x !== "object") return false;
-  const e = x as Record<string, unknown>;
-  return typeof e.script === "string" && e.script.length > 0 && e.script.length <= 100 && typeof e.at === "number"
-    && Array.isArray(e.logs) && Array.isArray(e.exceptions) && Array.isArray(e.usage) && e.logs.length <= 50 && e.exceptions.length <= 20 && e.usage.length <= 50;
-}
-
 export async function ingest(env: Env, raw: unknown, now: number): Promise<{ accepted: number; dropped: number }> {
   if (!Array.isArray(raw)) return { accepted: 0, dropped: 0 };
-  const events = raw.slice(0, 500).filter(valid);
+  const events = validatedAppBatch(raw, now);
   const db = env.HUB_DB;
   const scripts = [...new Set(events.map((e) => e.script))];
   if (!scripts.length) return { accepted: 0, dropped: raw.length };
@@ -55,7 +49,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
      WHERE s.script_name IN (${marks}) AND s.state = 'active' AND p.state = 'active' AND t.state = 'active'`,
   ).bind(...scripts).all<Source>()).results.map((s) => [s.script_name, s]));
   const mine = events.filter((e) => sources.has(e.script));
-  if (!mine.length) return { accepted: 0, dropped: events.length };
+  if (!mine.length) return { accepted: 0, dropped: raw.length };
 
   // What is already known: deploys and error groups touched by this batch.
   const versions = [...new Set(mine.map((e) => e.version).filter((v): v is string => !!v))];
@@ -139,7 +133,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
   }
   for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
   await postNotices(env, notices.slice(0, 10), now);
-  return { accepted: mine.length, dropped: events.length - mine.length };
+  return { accepted: mine.length, dropped: raw.length - mine.length };
 }
 
 /** Pimwell's own message in #<project>-ops; a project without that channel just doesn't get one. */
