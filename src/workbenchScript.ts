@@ -39,7 +39,11 @@ export const WORKBENCH_JS = String.raw`
     if (!cur || !next) { location.href = url; return; }
     ["list", "inspector"].forEach(function (id) {
       var a = document.getElementById(id), b = doc.getElementById(id);
-      if (a && b && (a.getAttribute("data-key") !== b.getAttribute("data-key") || id === "inspector")) { a.replaceWith(b); revive(b); voiceUp(b); }
+      // Generic one-pane pages have a title key, not a content revision. Search,
+      // refresh, same-channel posts and stale drafts must replace them even when
+      // the title is unchanged. Only explicitly keyed two-pane lists keep state.
+      var key = b && b.getAttribute("data-key") || "";
+      if (a && b && (key.indexOf("page:") === 0 || a.getAttribute("data-key") !== key || id === "inspector")) { a.replaceWith(b); revive(b); voiceUp(b); }
     });
     cur.className = next.className;
     var rail = $("#rail"), nrail = doc.getElementById("rail");

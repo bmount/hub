@@ -6,6 +6,7 @@
     "dev": "wrangler dev",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:browser:chat": "node scripts/test-chat-browser.mjs",
     "typecheck": "tsc --noEmit",
     "migrate:local": "wrangler d1 migrations apply HUB_DB --local",
     "migrate:remote": "scripts/cf/with-deploy-token.sh wrangler d1 migrations apply HUB_DB --remote",
@@ -23,12 +24,14 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20261001.1",
+    "@playwright/test": "1.64.0",
     "@types/node": "^26.6.4",
+    "@vitest/runner": "~4.1.0",
+    "@vitest/snapshot": "~4.1.0",
+    "miniflare": "5.20260815.0-alpha",
     "typescript": "^5.6.0",
     "vitest": "~4.1.0",
-    "wrangler": "^4.0.0",
-    "@vitest/runner": "~4.1.0",
-    "@vitest/snapshot": "~4.1.0"
+    "wrangler": "^4.0.0"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
