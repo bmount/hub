@@ -12,6 +12,7 @@ import { inboxStub } from "../src/chat/stubs";
 import * as stubs from "../src/chat/stubs";
 import { REPLAY_PREFIX } from "../src/mail/replay";
 import { WELCOME_PREFIX } from "../src/mail/welcome";
+import { RESPONSE_RECIPIENT_PREFIX } from "../src/mail/responseRecipients";
 import * as delivery from "../src/mail/send";
 import type { Env } from "../src/env";
 
@@ -47,6 +48,24 @@ const page = (w: Awaited<ReturnType<typeof world>>) => inbox(w).list(w.tenant.id
 afterEach(() => { delivery.setTestTransport(null); vi.restoreAllMocks(); });
 
 describe("receipt-free independently authenticated ingress", () => {
+  it("recipient preferences alone do not schedule, wake extra agents, grant access or suppress one-time context", async () => {
+    const w = await world();
+    // Persisted preferences are deliberately disconnected until a durable,
+    // independently authorized scheduling implementation exists.
+    await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?)")
+      .bind(`${RESPONSE_RECIPIENT_PREFIX}${w.tenant.id}:org`, JSON.stringify({ revision: 1,
+        recipients: [w.human.identity.id], updated_at: now, change_id: w.human.identity.id })).run();
+    const m = message();
+    expect(await handleProjectMail(m, env, now, lookup)).toBe("admitted");
+    expect(m.reply).not.toHaveBeenCalled();
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]!.subject).toBe("Welcome to Pimwell");
+    expect((await page(w)).items).toHaveLength(0);
+    expect(await count("outbound_mail")).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT recipient_id FROM inbound_mail").first()).toEqual({ recipient_id: null });
+    expect(await receive(fixtures.second)).toBe("admitted");
+    expect(w.sent).toHaveLength(1);
+  });
   it.each([false, true])("production entry verifies observed chunks, not source buffers mutated at EOF (tampered=%s)", async tampered => {
     const w = await world();
     vi.spyOn(Date, "now").mockReturnValue(now);

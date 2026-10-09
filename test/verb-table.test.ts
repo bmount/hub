@@ -20,6 +20,8 @@ const TABLE: Record<string, Decl> = {
   "tenant.delete": T("hub", "root", 10, { humanOnly: true }),
   "mail.list": T("tenant", "reader", null, { mcp: "read" }), "mail.read": T("tenant", "reader", null, { mcp: "read" }),
   "mail.release": T("tenant", "admin", 60, { humanOnly: true }),
+  "mail.response_recipients": T("tenant", "admin", null, { humanOnly: true }),
+  "mail.set_response_recipients": T("tenant", "admin", 60, { humanOnly: true }),
   "member.set_role": T("tenant", "admin", 60, { humanOnly: true }),
   "work.comment": T("tenant", "member", null, { mcp: "write" }),
   "work.subscribe": T("tenant", "reader", null, { mcp: "write" }),
