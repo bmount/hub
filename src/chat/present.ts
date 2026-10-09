@@ -41,10 +41,10 @@ export type ReadResult = { tenant_id: string; conversation_id: string; channel: 
 
 /** Compact text within the budget, and JSON for exactly the messages the text shows. */
 export async function readResult(
-  ctx: Ctx, ch: ChannelRow, msgs: MsgView[], o: { title: string; head: number; budget: number; keep: "oldest" | "newest"; has_more: boolean; full?: number | null; cursors?: Record<number, number> },
+  ctx: Ctx, ch: ChannelRow, msgs: MsgView[], o: { title: string; head: number; budget: number; keep: "oldest" | "newest"; has_more: boolean; full?: number | null; context?: number; cursors?: Record<number, number> },
 ): Promise<ReadResult> {
   const { tagOf, refs } = await present(ctx, msgs);
-  const r = renderMessages({ title: o.title, c: ch.slug, messages: msgs, tagOf, refs, budget: o.budget, keep: o.keep, has_more: o.has_more, full: o.full ?? null, cursors: o.cursors });
+  const r = renderMessages({ title: o.title, c: ch.slug, messages: msgs, tagOf, refs, budget: o.budget, keep: o.keep, has_more: o.has_more, full: o.full ?? null, context: o.context, cursors: o.cursors });
   const shown = new Set(r.shown);
   return {
     tenant_id: ch.tenant_id, conversation_id: ch.project_id, channel: ch.slug, head: o.head,

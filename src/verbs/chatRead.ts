@@ -48,21 +48,23 @@ export const chatRead = defineVerb({
 
 export const chatThread = defineVerb({
   name: "chat.thread", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Read one thread: the root and its replies. The message you name is shown in full.",
+  summary: "Read one thread in oldest current-activity order: root context plus bounded replies. Continue with next_after, not head; context never advances the reply cursor. The named message is full if included in this page. Reads do not acknowledge or prove processing.",
   mcp: {
     scope: "read", destructive: false, title: "Read a thread", render: chatText,
-    input: schema({ c: C, msg: MSG, after: { type: "integer", minimum: 0, description: "Only replies changed after this seq." }, budget: BUDGET }, ["c", "msg"]),
+    input: schema({ c: C, msg: MSG, after: { type: "integer", minimum: 0, description: "Only replies with current activity after this seq (at most the channel head). Continue using next_after, not head or the repeated root." }, budget: BUDGET }, ["c", "msg"]),
   },
   parse: (i) => ({ c: channelParam(i), msg: msgParam(i, "msg", true), after: afterParam(i), budget: budgetParam(i) }),
   run: async (ctx, p) => {
     const ch = await readableChannel(ctx, p.c);
     const page = (await conversationStub(ctx.env, ch.tenant_id, ch.project_id).read({
-      tenant_id: ch.tenant_id, conversation_id: ch.project_id, after: p.after, before: null, thread: p.msg, limit: 200,
+      // A forward-only continuation must start with oldest activity, not the newest 200 replies.
+      tenant_id: ch.tenant_id, conversation_id: ch.project_id, after: p.after ?? 0, before: null, thread: p.msg, limit: 200,
     })) as ReadPage;
     if (!page.found || !page.root) throw notFound("no such message");
+    if (p.after !== null && p.after > page.head) throw new HubError(409, "conflict", "after exceeds the current channel head; reconcile thread activity before continuing", { head: page.head });
     const msgs: MsgView[] = [page.root, ...page.messages];
     const full = /^\d+$/.test(p.msg) ? Number(p.msg) : msgs.find((m) => m.msg_id === p.msg)?.seq ?? null;
-    return readResult(ctx, ch, msgs, { title: `#${ch.slug} thread #${page.root.seq} head=${page.head}`, head: page.head, budget: p.budget, keep: "oldest", has_more: page.has_more, full, cursors: page.cursors });
+    return readResult(ctx, ch, msgs, { title: `#${ch.slug} thread #${page.root.seq} head=${page.head}`, head: page.head, budget: p.budget, keep: "oldest", has_more: page.has_more, full, context: page.root.seq, cursors: page.cursors });
   },
 });
 
