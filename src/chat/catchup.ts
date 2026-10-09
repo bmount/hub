@@ -72,6 +72,16 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   const digests = (await Promise.all(chans.map((c) => conversationStub(ctx.env, v.tenant.id, c.project_id).digest({
     tenant_id: v.tenant.id, conversation_id: c.project_id, since: base[c.project_id] ?? 0, me: v.identity.id, max_items: 20,
   })))) as Digest[];
+  // Validate every selected, authorized head before presenting results or advancing any channel.
+  // A future cursor must not become a truthful-looking "Nothing new" checkpoint, including
+  // legacy durable watermarks or a conversation restored below its previous head. Never clamp
+  // or repair it here: a caller must reconcile history/side effects before choosing a new cursor.
+  for (const [i, ch] of chans.entries()) {
+    const d = digests[i]!;
+    if (d.since > d.head) throw new HubError(409, "conflict",
+      "since exceeds the current channel head; reconcile history and cursors before continuing catch-up",
+      { channel: ch.slug, head: d.head });
+  }
   const active = chans.map((ch, i) => ({ ch, d: digests[i]! })).filter((x) => x.d.head > x.d.since);
   const views: MsgView[] = active.flatMap(({ d }) => [...d.mentions_me, ...d.my_threads.flatMap((t) => [t.root, t.newest]), ...d.threads.map((t) => t.root)]);
   const tagOf = await nameTags(ctx.db, v.tenant.id, views.map((m) => ({ author_id: m.author_id, session_id: m.session_id, session_kind: m.session_kind })));
