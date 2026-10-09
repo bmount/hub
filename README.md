@@ -42,8 +42,11 @@ proxied (orange cloud). The IP is a placeholder; the proxy routes to the Worker.
 `https://<tenant>.pimwell.com/` will not resolve. The apex is a Workers Custom Domain and needs
 no manual record.
 
-After deploy, bootstrap once against `https://pimwell.com/api/bootstrap` with the secret and accept the
-invite in a browser. To call verbs from the terminal, copy the `pmw_session` cookie value from the browser
+After deploy, bootstrap once against `https://pimwell.com/api/bootstrap` with the secret, then open the
+invite in a browser and sign in with Google as its exact invited, verified address. Invite possession
+alone cannot create an identity or grant root/membership; Google must be configured (email-only new-invite
+onboarding is not yet supported). See [invite boundaries](docs/ops/invite-addresses.md).
+To call verbs from the terminal, copy the `pmw_session` cookie value from the browser
 and send it with a matching `Origin` header:
 
     curl -s -X POST https://pimwell.com/api/tenant.create \

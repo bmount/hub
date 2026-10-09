@@ -4,13 +4,11 @@ import { shellFor } from "./shell";
 import { orgHomePage } from "./orgPages";
 import { esc, htmlResponse, page } from "../html";
 import { classifyHost } from "../tenant";
-import { acceptInvite, findInviteByToken, inviteIsOpen, setInviteAcceptedSession } from "../db/invites";
-import { recordProof } from "../db/proofs";
+import { findInviteByToken, inviteIsOpen } from "../db/invites";
 import { getTenantById, listTenants } from "../db/tenants";
-import { createBrowserSession, listSessions } from "../db/sessions";
-import { clearSessionCookie, sessionCookie } from "../auth/cookie";
+import { listSessions } from "../db/sessions";
+import { clearSessionCookie } from "../auth/cookie";
 import { buildContext, rank } from "../auth/context";
-import { recordEvent } from "../db/events";
 import { listMembershipsForIdentity } from "../db/memberships";
 import { listNamespaces } from "../db/namespaces";
 import { listProjects } from "../db/projects";
@@ -40,55 +38,23 @@ export async function invitePage(request: Request, env: Env): Promise<Response> 
   const tenant = invite.tenant_id ? await getTenantById(env.HUB_DB, invite.tenant_id) : null;
   if (invite.tenant_id && (!tenant || tenant.state !== "active")) return htmlResponse(neutralInvitePage());
   const target = tenant ? `<strong>${esc(tenant.display_name)}</strong> as ${esc(invite.role)}` : `the hub as <strong>root</strong>`;
-  const body = `<h1>You're invited</h1>
+  const next = tenant ? `?next=${encodeURIComponent(tenant.slug)}` : "";
+  const configured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+  const body = `<h1>Verify your invited address</h1>
 <p>Join ${target} with the address <strong>${esc(invite.email)}</strong>.</p>
-<form method="post" action="/invite/${esc(token!)}"><button type="submit">Accept and sign in</button></form>`;
+<p>This link is an invitation, not proof that you control this address. Existing sign-ins and old invite-derived proofs cannot accept it. Sign in with Google using the exact invited address; a verified matching account accepts open invitations.</p>
+${configured ? `<p><a class="button" href="/login/google${esc(next)}">Verify with Google and sign in</a></p>` : `<p>Independent address verification is unavailable: Google sign-in is not configured. Nothing has been granted. Ask the inviter to wait until verification is available.</p>`}
+<p>Without a matching verified Google account, this invitation stays unaccepted. Email-only onboarding for new invitations is not available yet.</p>`;
   return htmlResponse(page("Invite", body));
 }
 
 export async function acceptInvitePage(request: Request, env: Env): Promise<Response> {
   if (classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN).kind !== "apex") return notFoundPage();
   if (!sameOrigin(request)) return htmlResponse(page("Forbidden", `<h1>Forbidden</h1>`), 403);
-  const token = tokenFromPath(request);
-  const now = Date.now();
-  const invite = token ? await findInviteByToken(env.HUB_DB, token) : null;
-  if (!invite) return htmlResponse(neutralInvitePage());
-  if (invite.tenant_id) {
-    const tenant = await getTenantById(env.HUB_DB, invite.tenant_id);
-    if (!tenant || tenant.state !== "active") return htmlResponse(neutralInvitePage());
-  }
-  const accepted = await acceptInvite(env.HUB_DB, invite, now);
-  if (!accepted) return htmlResponse(neutralInvitePage());
-  await recordProof(env.HUB_DB, { identity_id: accepted.identity.id, kind: "email", subject: accepted.identity.email }, now);
-  let tenantRow: Awaited<ReturnType<typeof getTenantById>> = null;
-  if (invite.tenant_id) tenantRow = await getTenantById(env.HUB_DB, invite.tenant_id);
-  const location = tenantRow ? `https://${tenantRow.slug}.${env.HUB_DOMAIN}/` : `https://${env.HUB_DOMAIN}/`;
-
-  if (!accepted.created) {
-    // Never mint a session for a pre-existing identity.
-    const ctx = await buildContext(request, env, now);
-    const sameIdentity = ctx.identity !== null && ctx.identity.id === accepted.identity.id;
-    const sid = sameIdentity ? ctx.session?.id ?? null : null;
-    if (sid) await setInviteAcceptedSession(env.HUB_DB, invite.id, sid);
-    await recordEvent(env.HUB_DB, {
-      tenant_id: invite.tenant_id, identity_id: accepted.identity.id, session_id: sid, kind: "invite.accept", target_kind: "invite", target_id: invite.id,
-      summary: `${accepted.identity.email} accepted invite as ${invite.role}`,
-    }, now);
-    if (sameIdentity) return new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
-    const where = tenantRow ? esc(tenantRow.display_name) : "the hub";
-    if (!accepted.membershipAdded) {
-      return htmlResponse(page("Already a member", `<h1>Already a member</h1><p>Your account <strong>${esc(accepted.identity.email)}</strong> already has access to <strong>${where}</strong>. Sign in with your existing session to continue.</p>`));
-    }
-    return htmlResponse(page("Added", `<h1>You have been added</h1><p>Your account <strong>${esc(accepted.identity.email)}</strong> now has access to <strong>${where}</strong>. Sign in with your existing session to continue.</p>`));
-  }
-
-  const { session, token: sessionToken } = await createBrowserSession(env.HUB_DB, accepted.identity.id, now);
-  await setInviteAcceptedSession(env.HUB_DB, invite.id, session.id);
-  await recordEvent(env.HUB_DB, {
-    tenant_id: invite.tenant_id, identity_id: accepted.identity.id, session_id: session.id, kind: "invite.accept", target_kind: "invite", target_id: invite.id,
-    summary: `${accepted.identity.email} accepted invite as ${invite.role}`,
-  }, now);
-  return new Response(null, { status: 303, headers: { location, "set-cookie": sessionCookie(sessionToken, env.HUB_DOMAIN), "cache-control": "no-store" } });
+  // Retain the old POST URL for bookmarked/previously rendered forms, but never
+  // claim/grant/prove/sign in from a bearer invite or a legacy session. Only the
+  // independent verified exact-address Google admission path can accept invites.
+  return invitePage(request, env);
 }
 
 export async function sessionsPage(request: Request, env: Env): Promise<Response> {

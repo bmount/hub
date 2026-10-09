@@ -65,23 +65,23 @@ describe("proofs", () => {
     expect((await listProofs(db(), h.identity.id)).map((p) => [p.kind, p.subject])).toEqual([["email", "a@example.com"]]);
   });
 
-  it("accepting an invite records an email proof for a new identity", async () => {
+  it("a bearer invite cannot create an identity or manufacture an email proof", async () => {
     const t = await seedTenant("acme");
     const admin = await seedHuman("a@example.com", { memberships: [{ tenant_id: t.id, role: "admin" }] });
     const created = (await (await apiPost("acme.pimwell.test", "invite.create", { email: "new@example.com", role: "member" }, bearer(admin.token))).json()) as { result: { invite_url: string } };
     const post = await SELF.fetch(created.result.invite_url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
-    expect(post.status).toBe(303);
-    const identity = (await getIdentityByEmail(db(), "new@example.com"))!;
-    expect((await listProofs(db(), identity.id)).map((p) => [p.kind, p.subject])).toEqual([["email", "new@example.com"]]);
+    expect(post.status).toBe(200);
+    expect(await getIdentityByEmail(db(), "new@example.com")).toBeNull();
+    expect((await db().prepare("SELECT * FROM proof").all()).results).toEqual([]);
   });
 
-  it("accepting an invite for an existing identity also records a proof", async () => {
+  it("a bearer invite for an existing identity records no proof", async () => {
     const t = await seedTenant("acme");
     const admin = await seedHuman("a@example.com", { memberships: [{ tenant_id: t.id, role: "admin" }] });
     const old = await seedHuman("old@example.com");
     const created = (await (await apiPost("acme.pimwell.test", "invite.create", { email: "old@example.com", role: "member" }, bearer(admin.token))).json()) as { result: { invite_url: string } };
     const post = await SELF.fetch(created.result.invite_url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
     expect(post.status).toBe(200);
-    expect(await listProofs(db(), old.identity.id)).toHaveLength(1);
+    expect(await listProofs(db(), old.identity.id)).toEqual([]);
   });
 });

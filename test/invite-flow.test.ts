@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { apiPost, bearer, cookieHeaders, seedHuman, seedTenant } from "./helpers";
 import { getIdentityByEmail } from "../src/db/identities";
 import { getMembership } from "../src/db/memberships";
-import { listEvents } from "../src/db/events";
+import { admitGoogle } from "../src/auth/googleAdmit";
 
 async function makeInvite(role = "member") {
   const t = await seedTenant("acme");
@@ -44,12 +44,12 @@ describe("invite verbs", () => {
     expect(res.status).toBe(409);
   });
 
-  it("shows 'Already a member' when membership appeared after the invite was made", async () => {
+  it("still requires independent verification when membership appeared after the invite was made", async () => {
     const { t, url } = await makeInvite();
     await seedHuman("new@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
     const post = await SELF.fetch(url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
     expect(post.status).toBe(200);
-    expect(await post.text()).toContain("Already a member");
+    expect(await post.text()).toContain("Verify your invited address");
   });
 
   it("another tenant's admin cannot revoke the invite", async () => {
@@ -61,46 +61,30 @@ describe("invite verbs", () => {
 });
 
 describe("invite acceptance page", () => {
-  it("GET shows the tenant and a button without consuming; POST creates identity, membership, session", async () => {
-    const { t, url } = await makeInvite();
-    const get = await SELF.fetch(url);
-    expect(get.status).toBe(200);
-    const html = await get.text();
-    expect(html).toContain("ACME");
-    expect(html).toContain("<form");
-    expect(await getIdentityByEmail(env.HUB_DB, "new@example.com")).toBeNull();
-
-    const post = await SELF.fetch(url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
-    expect(post.status).toBe(303);
-    expect(post.headers.get("location")).toBe("https://acme.pimwell.test/");
-    const cookie = post.headers.get("set-cookie")!;
-    expect(cookie).toContain("pmw_session=pms_");
-    const identity = await getIdentityByEmail(env.HUB_DB, "new@example.com");
-    expect(identity?.display_name).toBe("New Person");
-    expect((await getMembership(env.HUB_DB, identity!.id, t.id))?.role).toBe("member");
-    const events = await listEvents(env.HUB_DB, t.id, 5);
-    expect(events[0]!.kind).toBe("invite.accept");
-    expect(events[0]!.identity_id).toBe(identity!.id);
-
-    const token = cookie.split(";")[0]!.split("=")[1]!;
-    const who = (await (await apiPost("acme.pimwell.test", "whoami", {}, cookieHeaders(token, "acme.pimwell.test"))).json()) as any;
-    expect(who.result.tenant.role).toBe("member");
+  it("GET and legacy POST show exact-address verification without consuming or signing in", async () => {
+    const { url } = await makeInvite();
+    for (const method of ["GET", "POST"]) {
+      const res = await SELF.fetch(url, { method, redirect: "manual", headers: { origin: "https://pimwell.test" } });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("ACME");
+      expect(html).toContain("new@example.com");
+      expect(html).toContain('href="/login/google?next=acme"');
+      expect(html).not.toContain("<form");
+      expect(res.headers.get("set-cookie")).toBeNull();
+      expect(await getIdentityByEmail(env.HUB_DB, "new@example.com")).toBeNull();
+    }
   });
 
-  it("second POST and concurrent POSTs yield exactly one session", async () => {
-    const { url } = await makeInvite();
+  it("repeated/concurrent legacy POSTs create no sessions and leave the invite open", async () => {
+    const { url, invite_id } = await makeInvite();
     const headers = { origin: "https://pimwell.test" };
-    const [a, b] = await Promise.all([
-      SELF.fetch(url, { method: "POST", redirect: "manual", headers }),
-      SELF.fetch(url, { method: "POST", redirect: "manual", headers }),
-    ]);
-    const statuses = [a.status, b.status].sort();
-    expect(statuses).toEqual([200, 303]);
-    const again = await SELF.fetch(url, { method: "POST", redirect: "manual", headers });
-    expect(again.status).toBe(200);
-    expect(await again.text()).toContain("not valid");
+    const responses = await Promise.all(Array.from({ length: 3 }, () => SELF.fetch(url, { method: "POST", redirect: "manual", headers })));
+    expect(responses.map(r => r.status)).toEqual([200, 200, 200]);
+    expect(responses.every(r => !r.headers.get("set-cookie"))).toBe(true);
+    expect((await env.HUB_DB.prepare("SELECT accepted_at FROM invite WHERE id = ?").bind(invite_id).first<any>()).accepted_at).toBeNull();
     const sessions = await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM session").first<{ n: number }>();
-    expect(sessions?.n).toBe(2);
+    expect(sessions?.n).toBe(1);
   });
 
   it("bad tokens, wrong hosts, and bad origins", async () => {
@@ -112,13 +96,14 @@ describe("invite acceptance page", () => {
     expect((await SELF.fetch(url, { method: "POST", redirect: "manual" })).status).toBe(403);
   });
 
-  it("a root invite lands on the apex", async () => {
+  it("a root invite cannot create or promote an identity from a bearer POST", async () => {
     const res = await apiPost("pimwell.test", "bootstrap", { token: "test-bootstrap-token", email: "r@example.com", display_name: "Root" });
     const url = ((await res.json()) as any).result.invite_url as string;
     const post = await SELF.fetch(url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
-    expect(post.status).toBe(303);
-    expect(post.headers.get("location")).toBe("https://pimwell.test/");
-    expect((await getIdentityByEmail(env.HUB_DB, "r@example.com"))?.is_root).toBe(1);
+    expect(post.status).toBe(200);
+    expect(await post.text()).toContain("Verify your invited address");
+    expect(post.headers.get("set-cookie")).toBeNull();
+    expect(await getIdentityByEmail(env.HUB_DB, "r@example.com")).toBeNull();
   });
 });
 
@@ -134,36 +119,36 @@ async function inviteFor(email: string) {
 }
 
 describe("invites for existing identities", () => {
-  it("anonymous accept adds membership but mints no session or cookie", async () => {
+  it("anonymous bearer POST adds no membership, session or cookie", async () => {
     const victim = await seedHuman("victim@example.com");
     const { t, url } = await inviteFor("victim@example.com");
     const post = await SELF.fetch(url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
     expect(post.status).toBe(200);
-    expect(await post.text()).toContain("You have been added");
+    expect(await post.text()).toContain("Verify your invited address");
     expect(post.headers.get("set-cookie")).toBeNull();
-    expect((await getMembership(env.HUB_DB, victim.identity.id, t.id))?.role).toBe("member");
+    expect(await getMembership(env.HUB_DB, victim.identity.id, t.id)).toBeNull();
     expect(await sessionCount(victim.identity.id)).toBe(1);
   });
 
-  it("the identity's own session gets a redirect and no new cookie", async () => {
+  it("the identity's legacy session cannot substitute for independent proof", async () => {
     const victim = await seedHuman("victim@example.com");
     const { t, url } = await inviteFor("victim@example.com");
     const post = await SELF.fetch(url, { method: "POST", redirect: "manual", headers: cookieHeaders(victim.token, "pimwell.test") });
-    expect(post.status).toBe(303);
-    expect(post.headers.get("location")).toBe("https://acme.pimwell.test/");
+    expect(post.status).toBe(200);
+    expect(await post.text()).toContain("Verify your invited address");
     expect(post.headers.get("set-cookie")).toBeNull();
-    expect((await getMembership(env.HUB_DB, victim.identity.id, t.id))?.role).toBe("member");
+    expect(await getMembership(env.HUB_DB, victim.identity.id, t.id)).toBeNull();
   });
 
-  it("a root invite for an existing identity promotes without a session", async () => {
+  it("a root invite for an existing identity cannot promote without independent proof", async () => {
     const existing = await seedHuman("r@example.com");
     const res = await apiPost("pimwell.test", "bootstrap", { token: "test-bootstrap-token", email: "r@example.com", display_name: "Root" });
     const url = ((await res.json()) as any).result.invite_url as string;
     const post = await SELF.fetch(url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
     expect(post.status).toBe(200);
-    expect(await post.text()).toContain("You have been added");
+    expect(await post.text()).toContain("Verify your invited address");
     expect(post.headers.get("set-cookie")).toBeNull();
-    expect((await getIdentityByEmail(env.HUB_DB, "r@example.com"))?.is_root).toBe(1);
+    expect((await getIdentityByEmail(env.HUB_DB, "r@example.com"))?.is_root).toBe(0);
     expect(await sessionCount(existing.identity.id)).toBe(1);
   });
 });
@@ -179,7 +164,9 @@ describe("invite policy", () => {
 
   it("revoking an accepted invite is a conflict", async () => {
     const { admin, invite_id, url } = await makeInvite();
-    await SELF.fetch(url, { method: "POST", redirect: "manual", headers: { origin: "https://pimwell.test" } });
+    const admission = await admitGoogle(env.HUB_DB, { sub: "new-sub", email: "new@example.com", email_verified: true }, Date.now(), "pimwell.test");
+    expect(admission.ok).toBe(true);
+    expect(await (await SELF.fetch(url)).text()).toContain("not valid");
     expect((await apiPost("acme.pimwell.test", "invite.revoke", { invite_id }, bearer(admin.token))).status).toBe(409);
   });
 });

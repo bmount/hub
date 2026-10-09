@@ -35,7 +35,7 @@ afterEach(() => setGoogleFetchForTest(null));
 type Who = { email: string; sub?: string; hd?: string; email_verified?: boolean; name?: string };
 
 /** Runs the whole browser flow against a stand-in Google and returns the callback response. */
-async function signIn(who: Who, opts: { next?: string; tamperState?: boolean; noCookie?: boolean; session?: string; reproof?: boolean } = {}) {
+async function signIn(who: Who, opts: { next?: string; tamperState?: boolean; noCookie?: boolean; session?: string; reproof?: boolean; invalidSignature?: boolean } = {}) {
   const ip = `203.0.113.${++ipSeq % 250}`;
   const qs = [opts.reproof ? "reproof=1" : "", opts.next ? `next=${encodeURIComponent(opts.next)}` : ""].filter(Boolean).join("&");
   const sess = opts.session ? `pmw_session=${opts.session}` : "";
@@ -56,7 +56,10 @@ async function signIn(who: Who, opts: { next?: string; tamperState?: boolean; no
         iss: "https://accounts.google.com", aud: CLIENT, sub: who.sub ?? `sub-${who.email}`, email: who.email,
         email_verified: who.email_verified ?? true, name: who.name, nonce, iat: now, exp: now + 3600, ...(who.hd ? { hd: who.hd } : {}),
       };
-      return Response.json({ id_token: await idToken(claims), access_token: "unused" });
+      const token = await idToken(claims);
+      const split = token.split(".");
+      if (opts.invalidSignature) split[2] = (split[2]!.startsWith("A") ? "B" : "A") + split[2]!.slice(1);
+      return Response.json({ id_token: split.join("."), access_token: "unused" });
     }
     if (url === "https://www.googleapis.com/oauth2/v3/certs") return Response.json({ keys: [{ ...jwk, kid: "test-k", alg: "RS256" }] });
     return new Response("unexpected", { status: 500 });
@@ -65,7 +68,7 @@ async function signIn(who: Who, opts: { next?: string; tamperState?: boolean; no
   const res = await SELF.fetch(`https://${HOST}/login/google/callback?code=c0de&state=${cbState}`, {
     redirect: "manual", headers: opts.noCookie ? {} : { cookie: [`pmw_gstate=${state}`, sess].filter(Boolean).join("; ") },
   });
-  return { res, exchanged: exchanged as URLSearchParams | null };
+  return { res, state, exchanged: exchanged as URLSearchParams | null };
 }
 
 function sessionSet(res: Response): boolean {
@@ -106,6 +109,53 @@ describe("Sign in with Google", () => {
     expect(id?.is_root).toBe(1);
     const proof = await env.HUB_DB.prepare("SELECT kind FROM proof WHERE identity_id = ?").bind(id!.id).first<{ kind: string }>();
     expect(proof?.kind).toBe("google");
+  });
+
+  it("accepts a tenant invitation only after verified exact-address sign-in, and cannot replay its callback", async () => {
+    const tenant = await seedTenant("invited");
+    const { invite, token } = await createInvite(env.HUB_DB, { tenant_id: tenant.id, email: "invited@example.com", role: "member", display_name: "Invited", created_by: null }, Date.now());
+    const { res, state } = await signIn({ email: "Invited@Example.com" }, { next: "invited" });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("https://invited.pimwell.test/");
+    expect(sessionSet(res)).toBe(true);
+    const identity = (await getIdentityByEmail(env.HUB_DB, "invited@example.com"))!;
+    expect((await getMembership(env.HUB_DB, identity.id, tenant.id))?.role).toBe("member");
+    expect((await env.HUB_DB.prepare("SELECT accepted_at FROM invite WHERE id = ?").bind(invite.id).first<any>()).accepted_at).not.toBeNull();
+    expect((await env.HUB_DB.prepare("SELECT kind FROM proof WHERE identity_id = ?").bind(identity.id).all()).results).toEqual([{ kind: "google" }]);
+    const before = (await env.HUB_DB.prepare("SELECT * FROM session ORDER BY id").all()).results;
+    const replay = await SELF.fetch(`https://${HOST}/login/google/callback?code=c0de&state=${state}`, { redirect: "manual", headers: { cookie: `pmw_gstate=${state}` } });
+    expect(replay.status).toBe(400);
+    expect(sessionSet(replay)).toBe(false);
+    expect((await env.HUB_DB.prepare("SELECT * FROM session ORDER BY id").all()).results).toEqual(before);
+    const legacy = await SELF.fetch(`https://${HOST}/invite/${token}`, { method: "POST", headers: { origin: `https://${HOST}` } });
+    expect(await legacy.text()).toContain("not valid");
+    expect((await env.HUB_DB.prepare("SELECT * FROM session ORDER BY id").all()).results).toEqual(before);
+  });
+
+  it("cannot claim an invited address using unverified email, a different account, or a forged signature", async () => {
+    const tenant = await seedTenant("protected");
+    const { invite } = await createInvite(env.HUB_DB, { tenant_id: tenant.id, email: "protected@example.com", role: "admin", display_name: null, created_by: null }, Date.now());
+    const { invite: root } = await createInvite(env.HUB_DB, { tenant_id: null, email: "protected@example.com", role: "root", display_name: null, created_by: null }, Date.now());
+    for (const [who, opts, status] of [
+      [{ email: "protected@example.com", email_verified: false }, {}, 403],
+      [{ email: "different@example.com" }, {}, 403],
+      [{ email: "protected@example.com" }, { invalidSignature: true }, 400],
+    ] as const) {
+      const { res } = await signIn(who, opts);
+      expect(res.status).toBe(status);
+      expect(sessionSet(res)).toBe(false);
+      expect(await getIdentityByEmail(env.HUB_DB, "protected@example.com")).toBeNull();
+      for (const id of [invite.id, root.id]) expect((await env.HUB_DB.prepare("SELECT accepted_at FROM invite WHERE id = ?").bind(id).first<any>()).accepted_at).toBeNull();
+      for (const table of ["membership", "proof", "session"]) expect((await env.HUB_DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<any>()).n).toBe(0);
+    }
+  });
+
+  it("promotes an existing invited account to root only after its independent verified sign-in", async () => {
+    const existing = await seedHuman("promoted@example.com");
+    await createInvite(env.HUB_DB, { tenant_id: null, email: existing.identity.email, role: "root", display_name: null, created_by: null }, Date.now());
+    expect((await getIdentityByEmail(env.HUB_DB, existing.identity.email))?.is_root).toBe(0);
+    expect((await signIn({ email: existing.identity.email })).res.status).toBe(303);
+    expect((await getIdentityByEmail(env.HUB_DB, existing.identity.email))?.is_root).toBe(1);
   });
 
   it("admits a verified Workspace account on a listed domain and grants its project", async () => {
