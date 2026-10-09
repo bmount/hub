@@ -1,6 +1,6 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { cookieHeaders } from "./helpers";
+import { cookieHeaders, seedHuman, seedTenant } from "./helpers";
 import { HOST, channelWith, chatWorld, ok } from "./chat-helpers";
 
 const get = (path: string, token: string | null) =>
@@ -91,6 +91,102 @@ describe("chat pages", () => {
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<b>bold");
     expect(html).toContain("&quot;&gt;&lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  it("keeps unread state on GET and marks only this viewer's channel read on explicit same-origin POST", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    await ok(w.lead.token, "chat.post", { c: "general", body: "new activity" });
+    const channel = await (await get("/c/general", w.dev.token)).text();
+    expect(channel).toContain('class="chat-workspace"');
+    expect(channel).toContain('aria-label="Channels"');
+    expect(channel).toContain('aria-current="page">#general');
+    expect(channel).toContain('class="pill">Unread');
+    expect(channel).toContain('action="/api/chat.mark_read"');
+    expect(channel).toContain('Mark channel read through #1');
+    const cursor = async (token: string) => (await ok(token, "chat.conversations")).conversations[0].read_seq;
+    expect(await cursor(w.dev.token)).toBe(0);
+    const fields = { c: "general", seq: "1", _back: "/c/general" };
+    expect((await postForm("/api/chat.mark_read", w.dev.token, fields, "https://evil.example")).status).toBe(403);
+    expect(await cursor(w.dev.token)).toBe(0);
+    const marked = await postForm("/api/chat.mark_read", w.dev.token, fields);
+    expect([marked.status, marked.headers.get("location")]).toEqual([303, "/c/general"]);
+    expect(await cursor(w.dev.token)).toBe(1);
+    expect(await cursor(w.lead.token)).toBe(0);
+    expect(await (await get("/c/general", w.dev.token)).text()).not.toContain('class="pill">Unread');
+    await ok(w.lead.token, "chat.post", { c: "general", body: "later activity" });
+    expect(await (await get("/c/general", w.dev.token)).text()).toContain('class="pill">Unread');
+  });
+
+  it("filters discovery by name/topic with inert rendering and excludes archived or other-tenant channels", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    await ok(w.lead.token, "channel.create", { slug: "support", display_name: "Customer care", topic: '<img src=x onerror=alert(1)> questions' });
+    await ok(w.lead.token, "channel.create", { slug: "retired", topic: "old-secret-topic" });
+    await ok(w.lead.token, "channel.archive", { c: "retired" });
+    const other = await seedTenant("other");
+    const outsider = await seedHuman("other@example.com", { memberships: [{ tenant_id: other.id, role: "admin" }] });
+    // Create through the other host; its name/topic must never enter this tenant's discovery or rail.
+    const created = await SELF.fetch("https://other.pimwell.test/api/channel.create", {
+      method: "POST", headers: { ...cookieHeaders(outsider.token, "other.pimwell.test"), origin: "https://other.pimwell.test", "content-type": "application/json" },
+      body: JSON.stringify({ slug: "private-other", topic: "other-tenant-secret" }),
+    });
+    expect(created.status).toBe(200);
+    const html = await (await get("/c?q=questions", w.dev.token)).text();
+    const directory = html.split('<ul class="channel-directory grid">')[1]!.split("</ul>")[0]!;
+    expect(directory).toContain("Customer care");
+    expect(directory).not.toContain("#general");
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("old-secret-topic");
+    expect(html).not.toContain("other-tenant-secret");
+    expect(html).not.toContain("private-other");
+    expect((await get("/c/private-other", w.dev.token)).status).toBe(404);
+    expect((await get("/c/general", outsider.token)).status).toBe(404);
+    const injected = await (await get('/c?q=%22%3E%3Cscript%3Ebad%3C%2Fscript%3E', w.dev.token)).text();
+    expect(injected).toContain('value="&quot;&gt;&lt;script&gt;bad&lt;/script&gt;"');
+    expect(injected).not.toContain("<script>bad");
+  });
+
+  it("pages a large thread forward while preserving the root and channel rail", async () => {
+    const w = await chatWorld();
+    await channelWith(w, "general", []);
+    const root = await ok(w.lead.token, "chat.post", { c: "general", body: "thread root" });
+    // Two human authors stay within the unchanged 30-posts/minute per-identity limit.
+    for (let i = 0; i < 50; i++) await ok(i % 2 ? w.dev.token : w.lead.token, "chat.post", { c: "general", reply_to: root.seq, body: `reply-${i} ${"x".repeat(1000)}` });
+    const first = await (await get(`/c/general/t/${root.seq}`, w.dev.token)).text();
+    const link = first.match(/href="(\/c\/general\/t\/1\?after=\d+)">More replies/);
+    expect(link).not.toBeNull();
+    expect(first).toContain("reply-0 ");
+    expect(first).not.toContain("reply-49 ");
+    const next = await (await get(link![1]!, w.dev.token)).text();
+    expect(next).toContain("thread root");
+    expect(next).toContain("reply-49 ");
+    expect(next).not.toContain("reply-0 ");
+    expect(next).toContain('aria-current="page">#general');
+  });
+
+  it("gives readers navigation and unread controls but no posting or membership-management forms", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const reader = await seedHuman("reader@example.com", { memberships: [{ tenant_id: w.acme.id, role: "reader" }] });
+    const list = await (await get("/c", reader.token)).text();
+    expect(list).not.toContain('action="/api/channel.create"');
+    expect(list).not.toContain('action="/api/channel.add_agent"');
+    const channel = await (await get("/c/general", reader.token)).text();
+    expect(channel).toContain("read-only access");
+    expect(channel).not.toContain('name="body"');
+    expect((await postForm("/c/general", reader.token, { body: "not allowed", after: "0" })).status).toBe(403);
+  });
+
+  it("offers organization chat on the signed-in hub without listing other tenants", async () => {
+    const w = await chatWorld();
+    await seedTenant("other");
+    const res = await SELF.fetch("https://pimwell.test/", { headers: cookieHeaders(w.dev.token, "pimwell.test") });
+    const html = await res.text();
+    expect(html).toContain('aria-label="Organization chat"');
+    expect(html).toContain('href="https://acme.pimwell.test/c"');
+    expect(html).not.toContain('href="https://other.pimwell.test/c"');
   });
 
   it("answer a bad form body with 400", async () => {

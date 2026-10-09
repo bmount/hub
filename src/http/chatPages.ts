@@ -1,7 +1,7 @@
 import { sameOrigin } from "./login";
 import type { Env } from "../env";
 import { shellFor } from "./shell";
-import { buildContext, type Ctx } from "../auth/context";
+import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { HubError } from "../errors";
 import { esc, htmlResponse, page } from "../html";
@@ -43,6 +43,29 @@ function errorPage(e: unknown, extra: Extra): Response {
   return htmlResponse(page("Error", "<h1>Something went wrong</h1>"), 500, extra);
 }
 
+type Conversation = { channel: string; display_name: string; topic: string; head: number; read_seq: number };
+
+async function conversations(ctx: Ctx): Promise<Conversation[]> {
+  const r = await verb<{ conversations: Conversation[] }>(ctx, "chat.conversations", {});
+  return r.conversations;
+}
+
+function channelLink(c: Conversation, active = ""): string {
+  const unread = c.head > c.read_seq;
+  return `<li class="${unread ? "is-unread" : ""}"><a href="/c/${esc(c.channel)}"${active === c.channel ? ' aria-current="page"' : ""}>#${esc(c.channel)}${unread ? ' <span class="pill">Unread</span>' : ""}</a></li>`;
+}
+
+/** Only chat.conversations supplies discovery and rail data; no unfiltered project queries. */
+function workspace(channels: Conversation[], active: string, content: string): string {
+  const rail = `<aside class="channel-rail" aria-label="Chat workspace"><h2>Chat</h2>${NAV}<nav aria-label="Channels"><ul>${channels.map((c) => channelLink(c, active)).join("") || "<li>No active channels.</li>"}</ul></nav></aside>`;
+  return `<div class="chat-workspace">${rail}<section class="channel-content" aria-label="${esc(active ? `#${active}` : "Channel discovery")}">${content}</section></div>`;
+}
+
+function markRead(slug: string, head: number, back: string): string {
+  // Explicit POST only: loading a page (possibly paginated or truncated) does not silently clear unread state.
+  return `<form class="inline" method="post" action="/api/chat.mark_read"><input type="hidden" name="_back" value="${esc(back)}"><input type="hidden" name="c" value="${esc(slug)}"><input type="hidden" name="seq" value="${head}"><button class="quiet" type="submit">Mark channel read through #${head}</button></form>`;
+}
+
 const when = (at: number) => new Date(at).toISOString().slice(0, 16).replace("T", " ");
 
 /** The name tag as the server computed it; nothing here comes from message text. */
@@ -64,26 +87,30 @@ function msgHtml(slug: string, m: MsgJson, inThread: boolean): string {
   const body = m.retracted ? "" : `<pre style="white-space:pre-wrap;margin:.25rem 0">${esc(m.body)}</pre>`;
   const refs = m.refs.length > 0 ? `<p><small>${m.refs.map(refHtml).join(" · ")}</small></p>` : "";
   const thread = inThread || m.system ? "" : `<p><small><a href="/c/${esc(slug)}/t/${m.seq}">${m.reply_count > 0 ? `${m.reply_count} ${m.reply_count === 1 ? "reply" : "replies"}` : "reply"}</a></small></p>`;
-  return `<article id="m${m.seq}"><p><a href="/m/${esc(m.msg_id)}">#${m.seq}</a> ${when(m.created_at)} ${who}${marks}</p>${body}${refs}${thread}</article>`;
+  return `<article class="channel-message" id="m${m.seq}"><p><a href="/m/${esc(m.msg_id)}">#${m.seq}</a> ${when(m.created_at)} ${who}${marks}</p>${body}${refs}${thread}</article>`;
 }
 
 function compose(action: string, head: number, draft: string, notice: string, label: string): string {
   const note = notice ? `<p role="status"><strong>${esc(notice)}</strong></p>` : "";
-  return `${note}<form method="post" action="${esc(action)}"><input type="hidden" name="after" value="${head}">`
-    + `<textarea data-voice name="body" rows="4" cols="60" maxlength="8192" required>${esc(draft)}</textarea><br><button type="submit">${esc(label)}</button></form>`;
+  return `${note}<form class="channel-compose" method="post" action="${esc(action)}"><input type="hidden" name="after" value="${head}">`
+    + `<label for="chat-body">${esc(label === "Reply" ? "Reply in thread" : "Message channel")}</label><textarea id="chat-body" data-voice name="body" rows="4" cols="60" maxlength="8192" required>${esc(draft)}</textarea><button type="submit">${esc(label)}</button></form>`;
 }
 
 export async function channelsPage(request: Request, env: Env): Promise<Response> {
   const pc = await pageCtx(request, env);
   if (pc instanceof Response) return pc;
   try {
-    const r = await verb<{ conversations: Array<{ channel: string; topic: string; head: number; read_seq: number }> }>(pc.ctx, "chat.conversations", {});
-    const rows = r.conversations.map((c) => `<li><a href="/c/${esc(c.channel)}">#${esc(c.channel)}</a> ${esc(c.topic)}${c.head > c.read_seq ? " <strong>new</strong>" : ""}</li>`).join("");
-    const forms = `<h2>New channel</h2><form method="post" action="/api/channel.create"><input type="hidden" name="_back" value="/c">`
-      + `<input name="slug" placeholder="name" required> <button type="submit">Create</button></form>`
+    const channels = await conversations(pc.ctx);
+    const q = (new URL(request.url).searchParams.get("q") ?? "").slice(0, 100);
+    const matches = channels.filter((c) => `${c.channel} ${c.display_name} ${c.topic}`.toLowerCase().includes(q.toLowerCase()));
+    const rows = matches.map((c) => `<li class="card"><h3><a href="/c/${esc(c.channel)}">#${esc(c.channel)}</a>${c.head > c.read_seq ? ' <span class="pill">Unread</span>' : ""}</h3><p>${esc(c.display_name)}</p><p>${esc(c.topic)}</p></li>`).join("");
+    const search = `<form class="filters" method="get" action="/c"><label for="channel-query">Find a channel</label><input id="channel-query" name="q" maxlength="100" value="${esc(q)}"><button type="submit">Find</button></form>`;
+    const forms = rank(pc.ctx.role) >= rank("member") ? `<details class="edit"><summary>Manage channels</summary><h2>New channel</h2><p>Channels are readable by organization members. Agents need explicit access.</p><form method="post" action="/api/channel.create"><input type="hidden" name="_back" value="/c">`
+      + `<label>Channel name <input name="slug" maxlength="63" placeholder="name" required></label> <button type="submit">Create</button></form>`
       + `<h2>Add an agent you operate</h2><form method="post" action="/api/channel.add_agent"><input type="hidden" name="_back" value="/c">`
-      + `<input name="c" placeholder="channel" required> <input name="agent" placeholder="agent" required> <button type="submit">Add</button></form>`;
-    return htmlResponse(page("Channels", `<h1>Channels</h1>${NAV}<ul>${rows || "<li>None yet.</li>"}</ul>${forms}`, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
+      + `<label>Channel <input name="c" required></label> <label>Agent <input name="agent" required></label> <button type="submit">Add</button></form></details>` : "";
+    const content = `<h1>Channels</h1><p class="lede">Discover conversations you can read in this organization.</p>${search}<ul class="channel-directory grid">${rows || "<li>No matching active channels.</li>"}</ul>${forms}`;
+    return htmlResponse(page("Chat", workspace(channels, "", content), shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);
   }
@@ -97,8 +124,12 @@ export async function channelPage(request: Request, env: Env, slug: string, draf
     const before = new URL(request.url).searchParams.get("before");
     const r = await verb<ReadResult>(pc.ctx, "chat.read", { c: slug, limit: 50, budget: 8000, ...(before && /^\d{1,12}$/.test(before) ? { before } : {}) });
     const older = r.next_before !== null ? `<p><a href="/c/${esc(r.channel)}?before=${r.next_before}">older messages</a></p>` : "";
-    const body = `<h1>#${esc(r.channel)}</h1>${NAV}${older}${r.messages.map((m) => msgHtml(r.channel, m, false)).join("")}${compose(`/c/${r.channel}`, r.head, draft, notice, "Post")}`;
-    return htmlResponse(page(`#${r.channel}`, body, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
+    const channels = await conversations(pc.ctx);
+    const current = channels.find((c) => c.channel === r.channel);
+    const body = `<header class="channel-header"><h1>#${esc(r.channel)}</h1><p class="lede">${esc(current?.topic ?? "")}</p><a class="chip" href="/c/${esc(r.channel)}">Refresh</a> ${markRead(r.channel, r.head, `/c/${r.channel}`)}</header>${older}`
+      + `<div class="channel-messages">${r.messages.map((m) => msgHtml(r.channel, m, false)).join("") || '<p class="lede">No messages yet. Start a conversation.</p>'}</div>`
+      + (rank(pc.ctx.role) >= rank("member") ? compose(`/c/${r.channel}`, r.head, draft, notice, "Post") : '<p class="lede">You have read-only access.</p>');
+    return htmlResponse(page(`#${r.channel}`, workspace(channels, r.channel, body), shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);
   }
@@ -109,11 +140,15 @@ export async function threadPage(request: Request, env: Env, slug: string, seq: 
   const pc = await pageCtx(request, env);
   if (pc instanceof Response) return pc;
   try {
-    const r = await verb<ReadResult>(pc.ctx, "chat.thread", { c: slug, msg: seq, budget: 8000 });
+    const after = new URL(request.url).searchParams.get("after");
+    const r = await verb<ReadResult>(pc.ctx, "chat.thread", { c: slug, msg: seq, budget: 8000, ...(after && /^\d{1,12}$/.test(after) ? { after } : {}) });
     const root = r.messages[0]!;
-    const body = `<h1>#${esc(r.channel)} thread #${root.seq}</h1>${NAV}<p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p>`
-      + r.messages.map((m) => msgHtml(r.channel, m, true)).join("") + compose(`/c/${r.channel}/t/${root.seq}`, r.head, draft, notice, "Reply");
-    return htmlResponse(page(`#${r.channel} thread`, body, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
+    const channels = await conversations(pc.ctx);
+    const body = `<header class="channel-header"><p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p><h1>Thread #${root.seq}</h1><a class="chip" href="/c/${esc(r.channel)}/t/${root.seq}">Refresh thread</a></header>`
+      + `<div class="channel-messages">${r.messages.map((m) => msgHtml(r.channel, m, true)).join("")}</div>`
+      + (r.next_after !== null ? `<p><a href="/c/${esc(r.channel)}/t/${root.seq}?after=${r.next_after}">More replies</a></p>` : "")
+      + (rank(pc.ctx.role) >= rank("member") ? compose(`/c/${r.channel}/t/${root.seq}`, r.head, draft, notice, "Reply") : '<p class="lede">You have read-only access.</p>');
+    return htmlResponse(page(`#${r.channel} thread`, workspace(channels, r.channel, body), shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);
   }

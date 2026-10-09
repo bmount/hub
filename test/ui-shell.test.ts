@@ -21,7 +21,7 @@ const hasTip = (html: string) => TIPS.some((t) => html.includes(t.replace(/'/g, 
 describe("the signed-in shell", () => {
   it("frames every organization page with the same navigation, the current section marked, and a reminder", async () => {
     const w = await world();
-    for (const [path, label] of [["/", "Home"], ["/docket", "Docket"], ["/mail", "Mail"], ["/c", "Conversations"], ["/people", "People and agents"]] as const) {
+    for (const [path, label] of [["/", "Home"], ["/docket", "Docket"], ["/mail", "Mail"], ["/c", "Chat"], ["/people", "People and agents"]] as const) {
       const res = await w.get(path);
       expect(res.status, path).toBe(200);
       const html = await res.text();

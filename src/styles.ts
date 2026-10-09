@@ -60,6 +60,15 @@ details.edit label>input,details.edit label>textarea{display:block;width:100%;ma
 .extra-check{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r);padding:12px 16px;margin:10px 0;max-width:40rem}
 .extra-check h2{margin:0 0 4px}.extra-check p{margin:4px 0 10px}.extra-check .actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.extra-check .sent{color:var(--ink);background:var(--accent-soft);padding:8px 10px;border-radius:var(--r-sm)}
 button.copy{min-width:6rem}
+.chat-workspace{display:grid;grid-template-columns:minmax(10rem,14rem) minmax(0,1fr);gap:18px;min-height:60vh}
+.channel-rail{background:var(--sunk);border:1px solid var(--line);border-radius:var(--r);padding:10px;align-self:start;position:sticky;top:8px}
+.channel-rail h2{margin:0 0 8px;font-size:var(--fs-h1)}.channel-rail ul,.channel-directory{list-style:none;padding:0;margin:0}
+.channel-rail nav a{display:block;color:var(--ink);padding:7px 8px;border-radius:var(--r-sm);text-decoration:none;overflow-wrap:anywhere}
+.channel-rail nav a:hover,.channel-rail nav a[aria-current]{background:var(--accent-soft)}.channel-rail .is-unread a{font-weight:700}
+.channel-content{min-width:0}.channel-header{padding:0 0 12px;border-bottom:1px solid var(--line)}.channel-header .inline{display:inline-block;margin-top:6px}
+.channel-message{padding:10px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.channel-message p{margin:0 0 4px}.channel-message pre{font:inherit;overflow-wrap:anywhere;border:0;background:none;padding:0}
+.channel-compose{margin-top:16px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}.channel-compose label,.channel-compose textarea{display:block;width:100%}.channel-compose textarea{resize:vertical;margin-bottom:8px}
+@media (max-width:760px){.chat-workspace{grid-template-columns:minmax(0,1fr);gap:12px}.channel-rail{position:static}.channel-rail nav{max-height:11rem;overflow:auto}.channel-rail nav ul{display:flex;flex-wrap:wrap;gap:4px}.channel-rail nav a{min-height:40px}.channel-directory{grid-template-columns:minmax(0,1fr)}}
 .only-s{display:none}
 .assist{display:flex;flex-direction:column;min-height:100%;max-width:48rem;margin:0 auto;font-size:var(--fs-chat);line-height:1.55}
 .assist-top{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.assist-top .chips{margin:0}

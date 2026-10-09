@@ -37,7 +37,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
       link("/docket", "Docket", "docket", r?.open),
       link("/docket?owner=me", "Mine", "mine", r?.mine),
       link("/mail", "Mail", "mail", r?.held),
-      link("/c", "Conversations", "chat"),
+      link("/c", "Chat", "chat"),
       link("/people", "People and agents", "people"),
       link("/assistant", "Assistant", "playground"),
       link("/reviews", "Reviews", "reviews"),
@@ -50,6 +50,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
     const planned = PLANNED_LINKS.map((l) => ({ href: l.href, label: l.label, active: active === "planned" && key === l.key, planned: true }));
     const tabs = [
       { href: "/docket", label: "Docket", active: active === "docket" || active === "project", count: r?.open },
+      { href: "/c", label: "Chat", active: active === "chat" },
       { href: "/attention", label: "Needs me", active: active === "attention", count: r?.needs },
       { href: "/mail", label: "Mail", active: active === "mail", count: r?.held },
       { href: "/assistant", label: "Assistant", active: active === "playground" },
