@@ -88,13 +88,21 @@ function refHtml(r: ViewRef): string {
   return `<code>${esc(refShort(r))}</code>${r.title ? ` ${esc(r.title)}` : ""}`;
 }
 
-function msgHtml(slug: string, m: MsgJson, inThread: boolean): string {
+function msgHtml(slug: string, m: MsgJson, inThread: boolean, readSeq?: number): string {
   const marks = m.retracted ? " <em>retracted</em>" : m.edited ? ` <em>edited r${m.rev}</em>` : "";
   const who = m.system ? "<strong>hub</strong>" : tagHtml(m.author);
   const body = m.retracted ? "" : `<pre style="white-space:pre-wrap;margin:.25rem 0">${esc(m.body)}</pre>`;
   const refs = m.refs.length > 0 ? `<p><small>${m.refs.map(refHtml).join(" · ")}</small></p>` : "";
-  const thread = inThread || m.system ? "" : `<p><small><a href="/c/${esc(slug)}/t/${m.seq}">${m.reply_count > 0 ? `${m.reply_count} ${m.reply_count === 1 ? "reply" : "replies"}` : "reply"}</a></small></p>`;
+  const newThreadActivity = readSeq !== undefined && m.last_reply_seq !== null && m.last_reply_seq > readSeq
+    ? ` · <a href="/c/${esc(slug)}/t/${m.seq}?after=${readSeq}">New thread activity</a>` : "";
+  const thread = inThread || m.system ? "" : `<p><small><a href="/c/${esc(slug)}/t/${m.seq}">${m.reply_count > 0 ? `${m.reply_count} ${m.reply_count === 1 ? "reply" : "replies"}` : "reply"}</a>${newThreadActivity}</small></p>`;
   return `<article class="channel-message" id="m${m.seq}"><p><a href="/m/${esc(m.msg_id)}">#${m.seq}</a> ${when(m.created_at)} ${who}${marks}</p>${body}${refs}${thread}</article>`;
+}
+
+/** A read cursor is an activity watermark, not an unread count. Mark only new message sequences. */
+function channelMessages(slug: string, messages: MsgJson[], readSeq: number | undefined): string {
+  const firstUnread = readSeq === undefined ? undefined : messages.find((m) => m.seq > readSeq);
+  return messages.map((m) => `${m === firstUnread ? '<h2 class="unread-divider" id="unread">Messages after your read marker</h2>' : ""}${msgHtml(slug, m, false, readSeq)}`).join("");
 }
 
 function compose(action: string, head: number, draft: string, notice: string, label: string): string {
@@ -133,8 +141,11 @@ export async function channelPage(request: Request, env: Env, slug: string, draf
     const older = r.next_before !== null ? `<p><a href="/c/${esc(r.channel)}?before=${r.next_before}">older messages</a></p>` : "";
     const channels = await conversations(pc.ctx);
     const current = channels.find((c) => c.channel === r.channel);
-    const body = `<header class="channel-header"><h1>#${esc(r.channel)}</h1><p class="lede">${esc(current?.topic ?? "")}</p><a class="chip" href="/c/${esc(r.channel)}">Refresh</a> ${markRead(r.channel, r.head, `/c/${r.channel}`)}</header>${presencePanel(r.channel, channels)}${older}`
-      + `<div class="channel-messages">${r.messages.map((m) => msgHtml(r.channel, m, false)).join("") || '<p class="lede">No messages yet. Start a conversation.</p>'}</div>`
+    const hasUnreadMessages = current && r.messages.some((m) => m.seq > current.read_seq);
+    const unreadLink = hasUnreadMessages ? ' <a class="chip" href="#unread">Jump to new messages on this page</a>' : "";
+    const partial = `<p class="lede">${r.next_before !== null ? "This is a partial channel view. Older messages may also be unread. " : ""}The channel shows top-level messages; open threads to read replies. Marking the channel read acknowledges all activity through the displayed head, including activity not shown here.</p>`;
+    const body = `<header class="channel-header"><h1>#${esc(r.channel)}</h1><p class="lede">${esc(current?.topic ?? "")}</p><a class="chip" href="/c/${esc(r.channel)}">Refresh</a>${unreadLink} ${markRead(r.channel, r.head, `/c/${r.channel}`)}</header>${presencePanel(r.channel, channels)}${partial}${older}`
+      + `<div class="channel-messages">${channelMessages(r.channel, r.messages, current?.read_seq) || '<p class="lede">No messages yet. Start a conversation.</p>'}</div>`
       + (rank(pc.ctx.role) >= rank("member") ? compose(`/c/${r.channel}`, r.head, draft, notice, "Post") : '<p class="lede">You have read-only access.</p>');
     return htmlResponse(page(`#${r.channel}`, workspace(channels, r.channel, body), shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
@@ -152,7 +163,8 @@ export async function threadPage(request: Request, env: Env, slug: string, seq: 
     const root = r.messages[0]!;
     const channels = await conversations(pc.ctx);
     const body = `<header class="channel-header"><p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p><h1>Thread #${root.seq}</h1><a class="chip" href="/c/${esc(r.channel)}/t/${root.seq}">Refresh thread</a></header>${presencePanel(r.channel, channels)}`
-      + `<div class="channel-messages">${r.messages.map((m) => msgHtml(r.channel, m, true)).join("")}</div>`
+      + `<section class="thread-root" aria-labelledby="thread-original"><h2 id="thread-original">Original message</h2>${msgHtml(r.channel, root, true)}</section>`
+      + `<section aria-labelledby="thread-replies"><h2 id="thread-replies">Replies${after ? " (continued)" : ""}</h2><div class="channel-messages">${r.messages.slice(1).map((m) => msgHtml(r.channel, m, true)).join("") || '<p class="lede">No replies shown.</p>'}</div></section>`
       + (r.next_after !== null ? `<p><a href="/c/${esc(r.channel)}/t/${root.seq}?after=${r.next_after}">More replies</a></p>` : "")
       + (rank(pc.ctx.role) >= rank("member") ? compose(`/c/${r.channel}/t/${root.seq}`, r.head, draft, notice, "Reply") : '<p class="lede">You have read-only access.</p>');
     return htmlResponse(page(`#${r.channel} thread`, workspace(channels, r.channel, body), shellFor(pc.ctx, env, "chat")), 200, pc.extra);
@@ -177,7 +189,7 @@ export async function channelPost(request: Request, env: Env, slug: string, thre
     return new Response(null, { status: 303, headers: { location: back, "cache-control": "no-store", ...pc.extra } });
   } catch (e) {
     if (e instanceof HubError && e.reason === "stale_view") {
-      const notice = "New messages arrived while you were writing. They are shown above; your draft is below. Post again when ready.";
+      const notice = "New activity arrived while you were writing. The refreshed view is above and may be partial; your draft is below. Review the activity and post again when ready.";
       return threadSeq ? threadPage(request, env, slug, threadSeq, body, notice) : channelPage(request, env, slug, body, notice);
     }
     return errorPage(e, pc.extra);

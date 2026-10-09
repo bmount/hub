@@ -7,6 +7,9 @@ The signed-in hub offers chat links only for the caller's active organizations. 
 - Channel rail on discovery, channel, and thread views, sourced exclusively from `chat.conversations` (existing viewer/tenant access policy).
 - Server-side channel discovery by slug, display name, or topic; archived channels stay out of active discovery.
 - Channel topics, active-channel indication, unread badges, refresh links, accessible composer labels, and read-only presentation for readers.
+- A viewer-bound read-marker divider and jump link for new top-level messages on the displayed page. Activity cursors are not message counts: edits still produce the channel unread badge but are not falsely labeled new messages. Roots with newer replies offer **New thread activity**, using the viewer's activity cursor to open unread/changed replies.
+- Explicit disclosure that the channel lists top-level messages, not replies, and that marking read acknowledges hidden activity too. Paginated/budget-limited pages additionally warn that older messages may remain unread.
+- Thread views distinguish the original message from replies, with continuation headings; stale compose notices accurately describe potentially partial refreshed views.
 - Explicit same-origin POST to `chat.mark_read`, bound to the viewer and channel, through the head shown on the form. GETs never move the cursor: a page can be partial, and opening one thread does not imply reading all channel activity. The control intentionally says **Mark channel read through #N**, not “mark these messages read.”
 - Thread replies and forward pagination using the existing authoritative `next_after` cursor, with the thread root retained on continuation pages.
 - Responsive one-column small-screen layout and wrapping for long message text. No new message HTML/Markdown interpretation: bodies, names, topics, references, and drafts remain escaped text.
@@ -14,7 +17,7 @@ The signed-in hub offers chat links only for the caller's active organizations. 
 
 ## Regression evidence
 
-`test/chat-pages.test.ts` covers tenant discovery isolation, denied outside-tenant access, query/topic/body escaping, reader denials, same-origin unread acknowledgement, per-viewer cursor isolation, subsequent unread activity, hub organization links, stale drafts, and large-thread continuation. Existing chat access, channel, conversation and UI-shell tests also run.
+`test/chat-pages.test.ts` covers tenant discovery isolation, denied outside-tenant access, query/topic/body escaping, reader denials, same-origin unread acknowledgement, per-viewer cursor isolation, subsequent unread activity, hub organization links, stale drafts, large-thread continuation, viewer-specific unread dividers, edits versus new messages, hidden reply activity, and partial-page disclosure. Existing chat access, channel, conversation and UI-shell tests also run.
 
 ## Remaining acceptance
 

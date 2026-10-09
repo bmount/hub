@@ -67,6 +67,7 @@ button.copy{min-width:6rem}
 .channel-rail nav a:hover,.channel-rail nav a[aria-current]{background:var(--accent-soft)}.channel-rail .is-unread a{font-weight:700}
 .channel-content{min-width:0}.channel-header{padding:0 0 12px;border-bottom:1px solid var(--line)}.channel-header .inline{display:inline-block;margin-top:6px}
 .channel-message{padding:10px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.channel-message p{margin:0 0 4px}.channel-message pre{font:inherit;overflow-wrap:anywhere;border:0;background:none;padding:0}
+.unread-divider{font-size:var(--fs-sm);color:var(--accent);border-top:2px solid var(--accent);padding-top:8px;scroll-margin-top:16px}.thread-root{background:var(--sunk);padding:12px;border:1px solid var(--line);border-radius:var(--r);margin-top:12px}.thread-root h2{font-size:var(--fs-sm);margin:0}.channel-message:target{background:var(--accent-soft);scroll-margin-top:16px}
 .channel-compose{margin-top:16px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}.channel-compose label,.channel-compose textarea{display:block;width:100%}.channel-compose textarea{resize:vertical;margin-bottom:8px}
 @media (max-width:760px){.chat-workspace{grid-template-columns:minmax(0,1fr);gap:12px}.channel-rail{position:static}.channel-rail nav{max-height:11rem;overflow:auto}.channel-rail nav ul{display:flex;flex-wrap:wrap;gap:4px}.channel-rail nav a{min-height:40px}.channel-directory{grid-template-columns:minmax(0,1fr)}}
 .only-s{display:none}

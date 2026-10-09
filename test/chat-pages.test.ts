@@ -46,7 +46,8 @@ describe("chat pages", () => {
     const stale = await postForm("/c/general", w.dev.token, { body: "my careful draft", after: "1" });
     expect(stale.status).toBe(200);
     const html = await stale.text();
-    expect(html).toContain("New messages arrived");
+    expect(html).toContain("New activity arrived");
+    expect(html).toContain("may be partial");
     expect(html).toContain(">my careful draft</textarea>");
     expect(html).toContain("meanwhile");
   });
@@ -116,6 +117,55 @@ describe("chat pages", () => {
     expect(await (await get("/c/general", w.dev.token)).text()).not.toContain('class="pill">Unread');
     await ok(w.lead.token, "chat.post", { c: "general", body: "later activity" });
     expect(await (await get("/c/general", w.dev.token)).text()).toContain('class="pill">Unread');
+  });
+
+  it("places one unread divider at the viewer's cursor and never changes it on channel or thread GET", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const first = await ok(w.lead.token, "chat.post", { c: "general", body: "already read" });
+    await ok(w.dev.token, "chat.mark_read", { c: "general", seq: first.seq });
+    await ok(w.lead.token, "chat.post", { c: "general", body: "new root" });
+    await ok(w.lead.token, "chat.post", { c: "general", reply_to: first.seq, body: "new reply" });
+    const html = await (await get("/c/general", w.dev.token)).text();
+    expect(html.match(/id="unread"/g)).toHaveLength(1);
+    expect(html).toContain('href="#unread">Jump to new messages on this page');
+    expect(html.indexOf("already read")).toBeLessThan(html.indexOf('id="unread"'));
+    expect(html.indexOf('id="unread"')).toBeLessThan(html.indexOf("new root"));
+    expect(html).toContain('href="/c/general/t/1?after=1">New thread activity');
+    expect(html).toContain("open threads to read replies");
+    const thread = await (await get("/c/general/t/1?after=1", w.dev.token)).text();
+    expect(thread).toContain('aria-labelledby="thread-original"');
+    expect(thread).toContain('aria-labelledby="thread-replies"');
+    expect(thread).toContain('id="m3"');
+    expect(thread).toContain("Replies (continued)");
+    expect((await ok(w.dev.token, "chat.conversations")).conversations[0].read_seq).toBe(first.seq);
+    await ok(w.dev.token, "chat.mark_read", { c: "general", seq: 3 });
+    const read = await (await get("/c/general", w.dev.token)).text();
+    expect(read).not.toContain('id="unread"');
+    expect(read).not.toContain('href="#unread"');
+    expect(read).not.toContain("New thread activity");
+    // Another viewer has its own unchanged read marker.
+    const other = await (await get("/c/general", w.lead.token)).text();
+    expect(other.indexOf('id="unread"')).toBeLessThan(other.indexOf("already read"));
+  });
+
+  it("discloses partial unread views and does not invent new-message markers for edits", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const root = await ok(w.lead.token, "chat.post", { c: "general", body: "old body" });
+    await ok(w.dev.token, "chat.mark_read", { c: "general", seq: root.seq });
+    await ok(w.lead.token, "chat.edit", { c: "general", msg: root.seq, body: "updated body" });
+    const edited = await (await get("/c/general", w.dev.token)).text();
+    expect(edited).toContain('class="pill">Unread');
+    expect(edited).not.toContain('id="unread"');
+    for (let i = 0; i < 50; i++) await ok(i % 2 ? w.dev.token : w.lead.token, "chat.post", { c: "general", body: `long message ${i} ${"x".repeat(1000)}` });
+    const partial = await (await get("/c/general", w.dev.token)).text();
+    expect(partial).toContain("This is a partial channel view");
+    expect(partial).toContain("including activity not shown here");
+    const older = await (await get("/c/general?before=2", w.dev.token)).text();
+    expect(older).toContain("updated body");
+    expect(older).not.toContain('id="unread"');
+    expect((await ok(w.dev.token, "chat.conversations")).conversations[0].read_seq).toBe(root.seq);
   });
 
   it("filters discovery by name/topic with inert rendering and excludes archived or other-tenant channels", async () => {
