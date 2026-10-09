@@ -3,8 +3,6 @@ import { reqEnum } from "./params";
 import { channelParam } from "./chatParams";
 import { readableChannel, viewerOf } from "../chat/access";
 import { notFound } from "../errors";
-import { listAgentMembers } from "../db/chat";
-import { people } from "../chat/handles";
 import { conversationStub } from "../chat/stubs";
 import { presenceState, PRESENCE_TTL_MS, type PresenceRow } from "../chat/presence";
 import type { Ctx } from "../auth/context";
@@ -23,6 +21,28 @@ function presenceText(result: unknown): string {
       display_name: cutText(cleanText(String(e.display_name)), 80).text,
     }))),
   ]);
+}
+
+type PresenceSubject = { identity_id: string; handle: string | null; display_name: string; kind: "human" | "agent" };
+
+/** Query-only lookup: presence polling must not invoke the chat directory's lazy handle writes. */
+async function presenceSubjects(ctx: Ctx, tenant_id: string, conversation_id: string, rows: PresenceRow[]): Promise<Map<string, PresenceSubject>> {
+  const ids = [...new Set(rows.map(r => r.identity_id))];
+  const subjects = new Map<string, PresenceSubject>();
+  // The DO bounds rows to 200; chunk below D1's bound-parameter limit (including tenant/channel).
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90);
+    const result = await ctx.db.prepare(`SELECT i.id AS identity_id, i.kind, i.display_name, m.handle
+      FROM membership m JOIN identity i ON i.id = m.identity_id
+      WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active'
+        AND i.id IN (${chunk.map(() => "?").join(",")})
+        AND (i.kind = 'human' OR (i.kind = 'agent' AND EXISTS (
+          SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = m.tenant_id
+            AND cm.conversation_id = ? AND cm.identity_id = i.id AND cm.removed_at IS NULL
+        )))`).bind(tenant_id, ...chunk, conversation_id).all<PresenceSubject>();
+    for (const subject of result.results) subjects.set(subject.identity_id, subject);
+  }
+  return subjects;
 }
 
 async function activeChannel(ctx: Ctx, c: string) {
@@ -62,14 +82,13 @@ export const chatPresence = defineVerb({
   run: async (ctx, p) => {
     const ch = await activeChannel(ctx, p.c);
     const rows = await conversationStub(ctx.env, ch.tenant_id, ch.project_id).presence(ch.tenant_id, ch.project_id) as PresenceRow[];
-    const dir = await people(ctx.db, ch.tenant_id);
-    const agents = new Set((await listAgentMembers(ctx.db, ch.tenant_id, ch.project_id)).map((a) => a.identity_id));
+    const subjects = await presenceSubjects(ctx, ch.tenant_id, ch.project_id, rows);
     const observed_at = Date.now();
     // Recheck subjects too: old heartbeats cannot expose a removed member/agent's activity.
     const entries = rows.flatMap((r) => {
-      const person = dir.get(r.identity_id);
-      if (!person?.active || (person.kind === "agent" && !agents.has(person.identity_id))) return [];
-      return [{ identity_id: r.identity_id, handle: person.handle, display_name: person.display_name, kind: person.kind, via_assistant: r.via_assistant === true,
+      const person = subjects.get(r.identity_id);
+      if (!person) return [];
+      return [{ identity_id: r.identity_id, handle: person.handle ?? "unknown", display_name: person.display_name, kind: person.kind, via_assistant: r.via_assistant === true,
         state: presenceState(r, observed_at), last_seen: r.last_seen, expires_at: r.expires_at }];
     });
     return { channel: ch.slug, observed_at, entries, missing: "unknown", ttl_ms: PRESENCE_TTL_MS };

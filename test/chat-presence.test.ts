@@ -52,6 +52,48 @@ describe("explicit expiring channel presence", () => {
     expect((await inboxStub(env, w.acme.id, w.lead.identity.id).list(w.acme.id, w.lead.identity.id, { after: 0, limit: 50, include_acked: true })).items).toEqual([]);
   });
 
+  it("reads presence without backfilling subject or unrelated membership handles", async () => {
+    const w = await chatWorld(); await channelWith(w, "general", ["scout"]);
+    await ok(w.dev.token, "chat.heartbeat", { c: "general", status: "online" });
+    await ok(w.scout.token, "chat.heartbeat", { c: "general", status: "away" });
+    await env.HUB_DB.prepare("UPDATE membership SET handle = NULL, handle_skeleton = NULL WHERE tenant_id = ?").bind(w.acme.id).run();
+    const memberships = () => env.HUB_DB.prepare("SELECT * FROM membership WHERE tenant_id = ? ORDER BY id").bind(w.acme.id).all();
+    const before = (await memberships()).results;
+    for (let i = 0; i < 2; i++) {
+      const result = await ok(w.lead.token, "chat.presence", { c: "general" });
+      expect(result.entries).toHaveLength(2);
+      expect(result.entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ identity_id: w.dev.identity.id, handle: "unknown", kind: "human", state: "online" }),
+        expect.objectContaining({ identity_id: w.scout.agent.identity.id, handle: "unknown", kind: "agent", state: "away" }),
+      ]));
+      expect((await memberships()).results).toEqual(before);
+    }
+  });
+
+  it("resolves a full bounded directory in SQL-sized chunks with active tenant subjects only", async () => {
+    const w = await chatWorld(); await channelWith(w);
+    const { stub } = await stubFor(w.acme.id);
+    const now = Date.now();
+    const foreign = await seedTenant("presence-foreign");
+    const rows: PresenceRow[] = [];
+    const statements: D1PreparedStatement[] = [];
+    for (let i = 0; i < PRESENCE_MAX; i++) {
+      const id = `presence-subject-${i}`;
+      rows.push({ identity_id: id, status: "online", last_seen: now, expires_at: now + PRESENCE_TTL_MS });
+      statements.push(env.HUB_DB.prepare("INSERT INTO identity (id, kind, display_name, email, state, created_at) VALUES (?, 'human', ?, ?, ?, ?)")
+        .bind(id, `<Subject ${i}>`, `${id}@example.com`, i === 90 ? "archived" : "active", now));
+      statements.push(env.HUB_DB.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, 'reader', ?, ?)")
+        .bind(id, id, i === 180 ? foreign.id : w.acme.id, i === 199 ? "archived" : "active", now));
+    }
+    await env.HUB_DB.batch(statements);
+    await inDO(stub, (_obj, state) => state.storage.put("presence:v1", rows));
+    const entries = (await ok(w.lead.token, "chat.presence", { c: "general" })).entries;
+    expect(entries.map((r: { identity_id: string }) => r.identity_id)).toEqual(rows.filter((_, i) => ![90, 180, 199].includes(i)).map(r => r.identity_id));
+    expect(entries.every((r: { handle: string }) => r.handle === "unknown")).toBe(true);
+    expect(entries[91].display_name).toBe("<Subject 92>");
+    expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM membership WHERE id LIKE 'presence-subject-%' AND handle IS NOT NULL").first<{ n: number }>())!.n).toBe(0);
+  });
+
   it("serializes concurrent identities and bounds stored state while replacing the caller's previous heartbeat", async () => {
     const w = await chatWorld(); await channelWith(w);
     const { stub, ch } = await stubFor(w.acme.id);
@@ -92,6 +134,9 @@ describe("explicit expiring channel presence", () => {
       expect((await call(w.tidy.token, verb, { c: "general", status: "online" })).status).toBe(404);
     }
     await ok(w.scout.token, "chat.heartbeat", { c: "general", status: "online" });
+    // Existing handles remain intact; queries do not allocate missing ones.
+    await env.HUB_DB.prepare("UPDATE membership SET handle = 'scout', handle_skeleton = 'scout' WHERE tenant_id = ? AND identity_id = ?")
+      .bind(w.acme.id, w.scout.agent.identity.id).run();
     expect((await ok(w.dev.token, "chat.presence", { c: "general" })).entries[0]).toMatchObject({ kind: "agent", handle: "scout" });
     await ok(w.lead.token, "channel.remove_agent", { c: "general", agent: "scout" });
     expect((await ok(w.dev.token, "chat.presence", { c: "general" })).entries).toEqual([]);
