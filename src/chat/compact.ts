@@ -78,6 +78,8 @@ export function messageBlock(m: MsgView, tag: NameTag, o: { c: string; channel?:
 export type RenderInput = {
   title: string; c: string; messages: MsgView[]; tagOf: TagOf; refs: Map<number, ViewRef[]>; budget: number;
   keep: "oldest" | "newest"; has_more: boolean; full?: number | null;
+  /** Repeated thread root is context, not part of the paged activity or its continuation cursor. */
+  context?: number;
   /** message number -> the cursor to continue from after showing it (reads after a cursor). */
   cursors?: Record<number, number>;
 };
@@ -85,7 +87,8 @@ export type Rendered = { text: string; shown: number[]; next_after: number | nul
 
 /**
  * A page of messages within a token budget. `keep: "oldest"` (reading after a cursor, threads) drops from the end;
- * `keep: "newest"` (the latest page) drops from the start. At least one message is always shown.
+ * `keep: "newest"` (the latest page) drops from the start. At least one paged message is always shown.
+ * Optional thread root context is retained separately and never consumes that guarantee or advances a cursor.
  */
 export function renderMessages(o: RenderInput): Rendered {
   const limit = textBudget(o.budget);
@@ -95,16 +98,26 @@ export function renderMessages(o: RenderInput): Rendered {
   let used = [DATA_NOTE, CHAT_NOTE, "", o.title].join("\n").length + 64;
   const order = blocks.map((_, i) => (o.keep === "oldest" ? i : blocks.length - 1 - i));
   const kept = new Set<number>();
+  const context = o.messages.findIndex((m) => m.seq === o.context);
+  if (context >= 0) {
+    kept.add(context);
+    used += blocks[context]!.length + 1;
+  }
+  let paged = 0;
   for (const i of order) {
+    if (i === context) continue;
     const size = blocks[i]!.length + 1;
-    if (kept.size > 0 && used + size > limit) break;
+    // Root context must not starve forward progress: keep at least one reply, even at the smallest budget.
+    if (paged > 0 && used + size > limit) break;
     kept.add(i);
+    paged++;
     used += size;
   }
   const idx = [...kept].sort((a, b) => a - b);
   const shown = idx.map((i) => o.messages[i]!.seq);
   const more = idx.length < o.messages.length || o.has_more;
-  const lastShown = shown[shown.length - 1];
+  const activity = shown.filter((seq) => seq !== o.context);
+  const lastShown = activity[activity.length - 1];
   const next_after = o.keep === "oldest" && more && lastShown !== undefined ? o.cursors?.[lastShown] ?? lastShown : null;
   const next_before = o.keep === "newest" && more && shown.length > 0 ? shown[0]! : null;
   const lines = [DATA_NOTE, CHAT_NOTE, "", `${o.title} (${shown.length} of ${o.messages.length}${o.has_more ? "+" : ""} shown)`, ...idx.map((i) => blocks[i]!)];
