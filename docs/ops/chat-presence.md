@@ -1,5 +1,13 @@
 # Explicit channel presence increment (#132)
 
+## Abort-independent recovery increment
+
+The browser now races the complete headers/body operation against an explicit abort rejection. Previously, if transport or body decoding ignored an abort signal and never settled, the client remained pending indefinitely: its deadline could not clear cached activity/reset consent, and restored or reconnected views could not query. Deadline and lifecycle aborts now settle the abandoned refresh immediately, retire the timeout/listener and allow fresh queries. The losing operation remains observed, so late success or denial cannot repaint activity, disable fresh controls, continue an abandoned heartbeat into a query or disturb renewed consent. The existing absolute elapsed-time deadline checks remain in place for delayed timer delivery. Recovery never replays ambiguous heartbeat writes or claims offline delivery.
+
+Two new shipped-asset tests (both failed against the prior asset) exercise abort-ignoring headers and JSON decoding, exact timeout clearing/query-only recovery before old transport settles, late denial after new opt-in, history/freeze/offline restoration and permanently detached panes. Typecheck and **1226 tests / 139 files** pass, including current tenant/channel/grant/auth/CSRF boundaries.
+
+The real disposable Chromium/Worker fixture passes at 1440/390/320 widths. A local-only fetch wrapper holds an actual Worker-accepted heartbeat response, deliberately ignoring abort until manually released. Controlled browser-clock deadline delivery clears the UI/consent, the next timer queries while that response remains unsettled, explicit opt-in alone republishes, and late release has no further effect. This is an abort-ignoring fixture, not a claim that native fetch ignores abort or native sleep/freeze occurred. All existing keyboard/layout/offline/ambiguity/navigation/cursor/isolation checks pass; 209 local browser requests, screenshots `/tmp/pimwell-chat-screenshots-PAO5j7`, mobile disconnected rendering inspected. Native history continues to report no-store refusal/fresh return, not persisted acceptance. The supported-engine BFCache and authorized headed-freeze dependencies below remain outstanding. No server expiry/auth/grant/privacy headers/schema/runtime/scheduler changes.
+
 ## Contract
 
 - `POST /api/chat.heartbeat` accepts `{ c, status }`, where status is `online`, `away`, or `offline`. It publishes **only the authenticated caller's identity** in an active channel the caller can read. No client-controlled identity, TTL, timestamp, session label, or free-text status is accepted into stored presence.

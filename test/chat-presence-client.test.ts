@@ -63,6 +63,61 @@ function client() {
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 describe("presence browser asset", () => {
+  it("releases an aborted headers/body request without waiting for ignored transport, recovers query-only and ignores late denial", async () => {
+    for (const body of [false, true]) {
+      const c = client(); await settle();
+      if (!body) c.deny();
+      const release = body ? c.delayBodyNext() : c.delayNext();
+      c.toggle.fire("click"); await settle();
+      const request = c.calls.at(-1)!;
+      c.deadline(); await settle();
+      expect(request.signal.aborted).toBe(true);
+      expect(c.list.children).toEqual([]);
+      expect(c.sharing.textContent).toContain("Delivery is uncertain");
+      expect(c.toggle.textContent).toBe("Share presence in this channel");
+      c.allow(); const count = c.calls.length;
+      c.poll(); await settle();
+      expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence"]);
+      expect(c.list.children).toHaveLength(1);
+      c.toggle.fire("click"); await settle();
+      expect(c.toggle.textContent).toBe("Stop sharing presence");
+      const renewed = c.calls.length;
+      release(); await settle();
+      expect(c.calls).toHaveLength(renewed);
+      expect(c.toggle.disabled).toBe(false);
+      expect(c.toggle.textContent).toBe("Stop sharing presence");
+      expect(c.list.children).toHaveLength(1);
+    }
+  });
+
+  it("can restore or reconnect while obsolete transport never settles, without writing until new consent", async () => {
+    for (const lifecycle of ["history", "freeze", "offline", "dispose"]) {
+      const c = client(); await settle();
+      const release = c.delayBodyNext(); c.toggle.fire("click"); await settle();
+      if (lifecycle === "history") c.winEvents.fire("pagehide");
+      else if (lifecycle === "freeze") c.docEvents.fire("freeze");
+      else if (lifecycle === "dispose") c.dispose();
+      else { c.navigator.onLine = false; c.winEvents.fire("offline"); }
+      await settle(); const count = c.calls.length;
+      if (lifecycle === "history") c.winEvents.fire("pageshow", { persisted: true });
+      else if (lifecycle === "freeze") c.docEvents.fire("resume");
+      else if (lifecycle === "offline") { c.navigator.onLine = true; c.winEvents.fire("online"); }
+      c.poll(); await settle();
+      expect(c.calls.slice(count).every(x => x.name === "/api/chat.presence")).toBe(true);
+      if (lifecycle === "dispose") {
+        expect(c.calls).toHaveLength(count); expect(c.list.children).toEqual([]);
+      } else {
+        expect(c.calls.length).toBeGreaterThan(count);
+        expect(c.list.children).toHaveLength(1);
+        c.toggle.fire("click"); await settle();
+        expect(c.calls.at(-2)!.status).toBe("online");
+      }
+      const renewed = c.calls.length; release(); await settle();
+      expect(c.calls).toHaveLength(renewed);
+      expect(c.list.children).toHaveLength(lifecycle === "dispose" ? 0 : 1);
+    }
+  });
+
   it("rejects a late heartbeat at the exact deadline even when the abort timer did not run, without replaying queued changes", async () => {
     const c = client(); await settle();
     const release = c.delayNext(); c.toggle.fire("click"); await settle();

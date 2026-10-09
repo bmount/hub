@@ -61,6 +61,10 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     const controller = new AbortController();
     requests.add(controller);
     const requestedAt = clock();
+    let rejectAbort;
+    const aborted = new Promise((_, reject) => { rejectAbort = reject; });
+    function onAbort() { rejectAbort(new Error('presence request aborted')); }
+    controller.signal.addEventListener('abort', onAbort, { once: true });
     const timeout = setTimeout(() => controller.abort(), 8000);
     function timely() {
       // Timers/abort delivery can be delayed by sleep or an event-loop stall. Check
@@ -71,19 +75,27 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       }
     }
     try {
-      const res = await fetch('/api/' + name, { method: 'POST', credentials: 'same-origin', redirect: 'error',
-        headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: controller.signal });
-      if (!res.ok) {
-        const error = new Error('unavailable');
-        error.denied = [401, 403, 404].includes(res.status);
-        throw error;
-      }
-      timely();
-      const body = await res.json();
-      timely();
-      if (!body.ok) throw new Error('unavailable');
-      return body.result;
-    } finally { requests.delete(controller); clearTimeout(timeout); }
+      // Abort must release refresh even when fetch/body decoding ignores its signal.
+      // The losing operation remains observed by race; its late result/denial cannot
+      // alter a recovered view or continue the abandoned heartbeat into a query.
+      return await Promise.race([aborted, (async () => {
+        const res = await fetch('/api/' + name, { method: 'POST', credentials: 'same-origin', redirect: 'error',
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: controller.signal });
+        if (!res.ok) {
+          const error = new Error('unavailable');
+          error.denied = [401, 403, 404].includes(res.status);
+          throw error;
+        }
+        timely();
+        const body = await res.json();
+        timely();
+        if (!body.ok) throw new Error('unavailable');
+        return body.result;
+      })()]);
+    } finally {
+      requests.delete(controller); clearTimeout(timeout);
+      controller.signal.removeEventListener('abort', onAbort);
+    }
   }
   function pauseSharing() {
     opted = false; queued = false; nextStatus = null; participationAt = null;

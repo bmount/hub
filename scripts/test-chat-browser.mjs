@@ -231,6 +231,43 @@ try {
     await page.locator('[data-presence-toggle]').click();
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(deadlineStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
+    // Model an abort-ignoring transport after a real Worker-accepted write. Keep
+    // the response unsettled through deadline/recovery, then deliver it late.
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-list]')).toContainText('offline');
+    await page.evaluate(() => {
+      const original = window.fetch;
+      window.__heldPresence = { accepted: false, release: null };
+      window.fetch = async (url, init) => {
+        if (url !== '/api/chat.heartbeat') return original(url, init);
+        window.fetch = original;
+        const response = await original(url, init);
+        const text = await response.text();
+        const saved = new Response(text, { status: response.status, headers: response.headers });
+        return new Promise(resolve => {
+          window.__heldPresence.release = () => resolve(saved);
+          window.__heldPresence.accepted = true;
+        });
+      };
+    });
+    await page.locator('[data-presence-toggle]').click();
+    await expect.poll(() => page.evaluate(() => window.__heldPresence.accepted)).toBe(true);
+    expect((await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev').state).toBe('online');
+    await page.clock.fastForward(8000);
+    await expect(page.locator('[data-presence-sharing]')).toContainText('Delivery is uncertain');
+    await expect(page.locator('[data-presence-list] li')).toHaveCount(0);
+    const abortStart = presenceCalls.length;
+    await page.clock.fastForward(30001);
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(abortStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(abortStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
+    const lateStart = presenceCalls.length;
+    await page.evaluate(() => window.__heldPresence.release());
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
+    await expect(page.locator('[data-presence-list]')).toContainText('online');
+    expect(presenceCalls).toHaveLength(lateStart);
     // Advance over a stalled interval, firing each due timer at most once. This is
     // a controlled browser-clock regression, not native OS sleep/freeze acceptance.
     const gapStart = presenceCalls.length;
@@ -246,7 +283,7 @@ try {
     expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(beforeCursor);
     await noOverflow(page);
     await ctx.close();
-    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/absolute-deadline/timer-gap recovery, cursor unchanged`);
+    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/absolute-deadline/abort-ignoring-transport/timer-gap recovery, cursor unchanged`);
   }
   // Playwright routing and its default Chromium flag disable native BFCache.
   // Use an actual loopback HTTP bridge and omit ONLY that flag for this pass.
