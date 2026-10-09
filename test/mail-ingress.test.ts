@@ -47,6 +47,52 @@ const page = (w: Awaited<ReturnType<typeof world>>) => inbox(w).list(w.tenant.id
 afterEach(() => { delivery.setTestTransport(null); vi.restoreAllMocks(); });
 
 describe("receipt-free independently authenticated ingress", () => {
+  it.each([false, true])("production entry verifies observed chunks, not source buffers mutated at EOF (tampered=%s)", async tampered => {
+    const w = await world();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const name = "test._domainkey.example.com";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ Status: 0,
+      Question: [{ name, type: 16 }], Answer: [{ name, type: 16,
+        data: fixtures.record.match(/.{1,200}/g)!.map(s => `"${s}"`).join(" ") }] },
+    { headers: { "content-type": "application/dns-json" } }));
+    const signed = new TextEncoder().encode(fixtures.first);
+    const altered = new TextEncoder().encode(fixtures.first.replace("Original body.", "Modified body."));
+    expect(altered.length).toBe(signed.length);
+    const storage = tampered ? altered.slice() : signed.slice();
+    let delivered = false;
+    const raw = new ReadableStream<Uint8Array>({ pull(c) {
+      if (!delivered) { delivered = true; c.enqueue(storage); }
+      else { storage.set(tampered ? signed : altered); c.close(); }
+    } }, { highWaterMark: 0 });
+    const m = Object.assign(message(fixtures.first, w.bot.agent.identity.email), { raw });
+    await handleEmail(m, env, {} as ExecutionContext);
+    expect(raw.locked).toBe(false);
+    expect(await env.HUB_DB.prepare("SELECT verdict, reason, text, size FROM inbound_mail").first()).toMatchObject({
+      verdict: tampered ? "quarantined" : "admitted",
+      reason: tampered ? expect.stringContaining("authentication unknown") : null,
+      text: expect.stringContaining(tampered ? "Modified body." : "Original body."),
+      size: signed.length,
+    });
+    expect(m.reply).not.toHaveBeenCalled();
+    expect(m.setReject).not.toHaveBeenCalled();
+    expect(await count("consent")).toBe(tampered ? 0 : 1);
+    expect((await page(w)).items).toHaveLength(tampered ? 0 : 1);
+    expect(w.sent).toHaveLength(tampered ? 0 : 1);
+    if (tampered) {
+      expect(await welcome()).toBeNull();
+      expect(await env.HUB_DB.prepare("SELECT key FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").first()).toBeNull();
+    } else {
+      expect(w.sent[0]!.subject).toBe("Welcome to Pimwell");
+      // A normal immutable redelivery reconciles the same observed bytes: no
+      // collision, second wake, consent or welcome, regardless of source reuse.
+      expect(await receive(fixtures.first, w.bot.agent.identity.email)).toBe("admitted");
+      expect(await count("inbound_mail")).toBe(1);
+      expect(await count("consent")).toBe(1);
+      expect((await page(w)).items).toHaveLength(1);
+      expect(w.sent).toHaveLength(1);
+    }
+  });
+
   it("production ingress quarantines stalled DNS body proof without receipt, consent or wake", async () => {
     const w = await world();
     vi.spyOn(Date, "now").mockReturnValue(now);

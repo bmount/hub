@@ -110,7 +110,19 @@ rewrites signed body bytes. This is framing hardening, not evidence of a forged
 signature or a claim of universal RFC/DMARC/provider compatibility.
 
 The handler bounds **actual** raw stream bytes before parsing, verification or
-consent and records actual size. The verifier is connected only through atomic
+consent and records actual size. `readBoundedMail` snapshots each observed chunk
+before requesting another, including offset views and Node Buffer inputs. A
+producer reusing its backing storage cannot alter earlier observed header/body
+bytes at EOF: parsing, cryptographic proof and replay hashing all receive the
+same owned byte sequence. The shared reader applies this rule to trusted DoH
+response bodies too. Limits are checked before retaining another snapshot;
+abort/oversize cancellation and lock cleanup remain unchanged. This guarantees
+preservation of bytes observed at the reader boundary, not bytes mutated before
+a read resolves, a new ingress authenticity contract, or evidence that Cloudflare
+actually reuses source buffers. Native-Workers tests cover reused buffers, valid
+RSA/Ed25519 proof, observed body tampering subsequently restored at EOF, and
+production-entry admission/quarantine with consent/wake/replay/no-receipt checks.
+The verifier is connected only through atomic
 replay storage: a valid signature alone is not enough to bypass conflicting,
 legacy or pending state. See [replay](mail-replay.md) for storage, audit and
 permanent agent-wake dedup, including lost-response reconciliation.

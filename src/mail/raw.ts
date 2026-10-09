@@ -2,6 +2,8 @@ export const MAX_RAW_MAIL_BYTES = 10 * 1024 * 1024;
 
 /** Bound actual stream bytes, not just the platform's declared rawSize. Preserve
  * original bytes so independent cryptographic verification can reuse them.
+ * Snapshot each observed chunk before requesting another: stream producers may
+ * reuse/mutate backing storage, including offset views and Node Buffer chunks.
  * Optional cancellation bounds a pending read too; never await a source's
  * possibly stalled cancel callback before returning a limit/abort failure.
  */
@@ -24,7 +26,9 @@ export async function readBoundedMail(stream: ReadableStream<Uint8Array>, maximu
       if (done) break;
       size += value.byteLength;
       if (size > maximum) { cancel(); throw new Error("message too large"); }
-      chunks.push(value);
+      // Uint8Array's copy constructor also copies Node Buffer inputs; value.slice()
+      // would retain an alias for Buffers. Copy only after the actual-byte limit.
+      chunks.push(new Uint8Array(value));
     }
   } finally {
     if (signal && onAbort) signal.removeEventListener("abort", onAbort);
