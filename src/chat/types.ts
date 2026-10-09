@@ -37,7 +37,7 @@ export type ResponseStatus = {
   intent_check?: { stage: ResponseStage; matches: boolean | null };
 };
 
-/** Caller-only bounded-window posting evidence, not payload verification or execution status. */
+/** Caller-only bounded-window posting evidence, not current-text validation or execution status. */
 export type PostStatus = {
   head: number; observed_at: number;
   record: {
@@ -45,6 +45,8 @@ export type PostStatus = {
     current: { rev: number; retracted: boolean } | null;
     expires_at: number; intent_bound: boolean;
   } | null;
+  /** Original intent comparison only. Missing/legacy unbound records cannot verify a payload. */
+  intent_check?: { matches: boolean | null; reason: "match" | "mismatch" | "missing" | "unbound" };
 };
 
 export type PostInput = {
