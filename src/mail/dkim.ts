@@ -11,9 +11,14 @@ export const MAX_DKIM_BYTES = MAX_RAW_MAIL_BYTES;
 const MAX_HEADER_BYTES = 64 * 1024;
 const MAX_SIGNATURES = 6;
 // These affect stored content, addressed-mail permissions, reply targets or threading.
+// All outer MIME Content-* fields need coverage, not just the current parser's
+// Content-Type/Encoding/Disposition: ID/Description and future MIME extensions
+// must not acquire unsigned semantic authority as parsing/rendering evolves.
+// Inner part headers are already covered by the complete DKIM body hash.
 // Unknown transport/authentication headers are evidence only, never authority.
 const SEMANTIC = new Set(["from", "sender", "reply-to", "to", "cc", "bcc", "subject", "date", "message-id",
-  "in-reply-to", "references", "mime-version", "content-type", "content-transfer-encoding", "content-disposition"]);
+  "in-reply-to", "references", "mime-version"]);
+const isSemantic = (key: string) => SEMANTIC.has(key) || key.startsWith("content-");
 export type DkimProof =
   | { authentication: "pass"; source: "aligned_dkim"; domain: string; messageId: string }
   | { authentication: "unknown"; source: null; reason: string };
@@ -48,7 +53,7 @@ export async function verifyIndependentDkim(bytes: Uint8Array, envelope: string,
   const domain = envelope.trim().toLowerCase().split("@").pop()!;
   const signatures = fields.filter((h) => h.key === "dkim-signature");
   if (!signatures.length || signatures.length > MAX_SIGNATURES) return unknown("signature count");
-  const semantic = fields.filter((h) => SEMANTIC.has(h.key));
+  const semantic = fields.filter((h) => isSemantic(h.key));
   if (new Set(semantic.map((h) => h.key)).size !== semantic.length) return unknown("duplicate semantic header");
   const id = fields.find((h) => h.key === "message-id")?.value.trim();
   const messageId = safeMessageId(id ?? null);

@@ -56,7 +56,14 @@ between address parsers, an unambiguous Message-ID, non-testing keys, RSA keys
 of at least 2048 bits, valid signature time and no `l=` body limit—even one
 covering the currently complete body. Each present semantic header affecting
 content, copied-mail permissions, reply targets or threading must be covered
-by the **same** passing signature. Duplicate semantic headers are refused.
+by the **same** passing signature. This includes **every outer `Content-*`
+header**, not only Content-Type, Transfer-Encoding and Disposition: Content-ID,
+Content-Description, Content-Language and future MIME extensions cannot carry
+unsigned semantic authority. Fully signed mixed-case/folded MIME fields work;
+unsigned extensions and duplicate semantic headers are refused. Inner MIME part
+headers are protected by the full signed body hash, not separately by `h=`.
+Coverage from different passing signatures is never combined; a later complete
+signature may pass even if an earlier signature lacks coverage.
 Unsigned Authentication-Results/ARC headers do not supply authority.
 
 Key resolution in `src/mail/dkim-dns.ts` uses only

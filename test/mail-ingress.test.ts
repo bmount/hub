@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fixtures from "./fixtures/mail-ingress.json";
+import mimeFixtures from "./fixtures/dkim-mime.json";
 import { seedAgent, seedHuman, seedTenant } from "./helpers";
 import { handleProjectMail } from "../src/mail/projectMail";
 import { handleEmail } from "../src/mail/inbound";
@@ -45,6 +46,37 @@ const page = (w: Awaited<ReturnType<typeof world>>) => inbox(w).list(w.tenant.id
 afterEach(() => { delivery.setTestTransport(null); vi.restoreAllMocks(); });
 
 describe("receipt-free independently authenticated ingress", () => {
+  it("admits fully signed outer MIME extensions and wakes once without a receipt", async () => {
+    const w = await world();
+    const address = w.bot.agent.identity.email;
+    const lookup = async () => [[mimeFixtures.record]];
+    const m = message(mimeFixtures.valid, address);
+    const time = Date.parse(mimeFixtures.now) + 120_000;
+    expect(await handleProjectMail(m, env, time, lookup)).toBe("admitted");
+    expect(await handleProjectMail(message(mimeFixtures.valid, address), env, time, lookup)).toBe("admitted");
+    expect(m.reply).not.toHaveBeenCalled();
+    expect(await count("inbound_mail")).toBe(1);
+    expect(await count("event")).toBe(1);
+    expect(await count("consent")).toBe(1);
+    expect((await page(w)).items).toHaveLength(1);
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]!.subject).toBe("Welcome to Pimwell");
+  });
+
+  it.each(["unsignedMime", "splitCoverage"] as const)("quarantines %s MIME proof without consent or wake", async (name) => {
+    const w = await world();
+    const m = message(mimeFixtures[name], w.bot.agent.identity.email);
+    const lookup = async (q: string) => [[q.startsWith("ed.") ? mimeFixtures.edRecord : mimeFixtures.record]];
+    expect(await handleProjectMail(m, env, Date.parse(mimeFixtures.now) + 120_000, lookup)).toBe("quarantined");
+    expect(await env.HUB_DB.prepare("SELECT verdict, reason FROM inbound_mail").first()).toMatchObject({
+      verdict: "quarantined", reason: "authentication unknown: independent DKIM no acceptable aligned full-coverage signature",
+    });
+    expect(m.reply).not.toHaveBeenCalled();
+    expect(await count("consent")).toBe(0);
+    expect((await page(w)).items).toHaveLength(0);
+    expect(w.sent).toHaveLength(0);
+  });
+
   it("admits first and subsequent signed mail, sends guidance once and never replies with Received", async () => {
     const w = await world();
     expect(await receive()).toBe("admitted");
