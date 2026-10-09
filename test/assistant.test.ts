@@ -2,6 +2,7 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MODEL_CALL_TIMEOUT_MS } from "../src/models/deadline";
+import { ASSISTANT_TURN_TIMEOUT_MS } from "../src/assistant/deadline";
 import { setModelFetchForTest } from "../src/models/providers";
 import { addCredential } from "../src/models/store";
 import { format } from "../src/http/assistantPages";
@@ -74,6 +75,27 @@ describe("the Assistant", () => {
     expect(calls).toBe(1);
     expect((await env.HUB_DB.prepare("SELECT ok, input_tokens, output_tokens FROM model_call").all()).results).toEqual([{ ok: 0, input_tokens: null, output_tokens: null }]);
     expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'playground.call'").first())!.n).toBe(0);
+    expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM assistant_message").first())!.n).toBe(0);
+  });
+
+  it("bounds multiple individually timely model rounds as one HTTP turn, with no late tool or answer", async () => {
+    const w = await world();
+    let wall = Date.now(), calls = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => wall);
+    setModelFetchForTest(async () => {
+      calls++; wall += ASSISTANT_TURN_TIMEOUT_MS / 3;
+      return Response.json({ output: [{ type: "function_call", call_id: `c${calls}`, name: "whoami", arguments: "{}" }], usage: { input_tokens: 3, output_tokens: 2 } });
+    });
+    const response = await w.chat(w.pat.token, { text: "look up several things" });
+    expect(response.status).toBe(504);
+    expect(await response.json()).toMatchObject({ error: "assistant_timeout", reason: expect.stringContaining("may still complete"), thread: expect.any(String) });
+    expect(calls).toBe(3);
+    // First two rounds were observed and metered; the expired third round's
+    // usage is not fabricated or logged as zero. No late third lookup runs.
+    expect((await env.HUB_DB.prepare("SELECT ok, input_tokens, output_tokens FROM model_call").all()).results).toEqual([
+      { ok: 1, input_tokens: 3, output_tokens: 2 }, { ok: 1, input_tokens: 3, output_tokens: 2 },
+    ]);
+    expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'playground.call'").first())!.n).toBe(2);
     expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM assistant_message").first())!.n).toBe(0);
   });
 
