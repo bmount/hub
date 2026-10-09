@@ -50,8 +50,9 @@ Substantive replies and login proof are unaffected.
 
 ## Remaining acceptance work
 
-1. #134 must reserve/reconcile replay atomically using the verified Message-ID,
-   sender and exact tenant/mailbox scope before independent-proof admission.
+1. #134 now has an inactive transactional replay/storage candidate in
+   `src/mail/replay.ts`; see `docs/ops/mail-replay.md`. Integrate it and reconcile
+   audit/agent wake effects by stable stored mail id before enabling admission.
 2. Replace the receipt-dependent path with that verified admission path. Unknown
    proof stays fail-closed; arbitrary Authentication-Results/ARC is not authority.
 3. Call welcome after durable admission, without letting welcome errors quarantine
