@@ -122,6 +122,27 @@ a read resolves, a new ingress authenticity contract, or evidence that Cloudflar
 actually reuses source buffers. Native-Workers tests cover reused buffers, valid
 RSA/Ed25519 proof, observed body tampering subsequently restored at EOF, and
 production-entry admission/quarantine with consent/wake/replay/no-receipt checks.
+`readOriginalMail` adds a **ten-second whole-original-stream read deadline**
+after the existing recipient/member/rate gates. The budget is not reset per
+chunk. A private abort signal bounds pending reads even if the source's cancel
+callback never settles. Monotonic checks at read/assembly checkpoints refuse
+late data or EOF even when the timeout callback has not yet been dispatched.
+Timers/listeners/reader locks are cleaned on success and failure. An incomplete,
+overdue or unreadable original is rejected with the same generic SMTP reason
+as size/read failures, not parsed or stored as partial quarantine evidence.
+Even complete signed bytes cannot gain authority until EOF within the budget;
+a late completion cannot trigger DNS, replay, consent, welcome or agent wake.
+Existing rate accounting precedes the read and is not undone on rejection.
+DoH retains its separate, shorter whole-query/shared budgets and snapshots.
+
+This bounds asynchronous read waiting and checks synchronous chunk/assembly
+work at checkpoints; JavaScript cannot preempt a synchronously blocking producer
+or parser. It is not a total handler/D1/DKIM/welcome deadline or evidence of a
+Cloudflare ingress stall. Signed RSA/Ed25519 bytes completing inside the deadline
+remain eligible for normal strict verification. Deployment status for this and
+preceding header-control/snapshot increments is tracked in #134/deploy records;
+documentation of code is not a claim they are deployed.
+
 The verifier is connected only through atomic
 replay storage: a valid signature alone is not enough to bypass conflicting,
 legacy or pending state. See [replay](mail-replay.md) for storage, audit and

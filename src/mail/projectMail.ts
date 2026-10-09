@@ -23,7 +23,7 @@ import { takeRateDetail } from "../rate";
 import { safeMessageId } from "./mime";
 import { storeIndependentMailCandidate } from "./replay";
 import { sendNewcomerWelcome } from "./welcome";
-import { MAX_RAW_MAIL_BYTES, readBoundedMail } from "./raw";
+import { MAX_RAW_MAIL_BYTES, readOriginalMail } from "./raw";
 
 export const MAX_MAIL_BYTES = MAX_RAW_MAIL_BYTES;
 export const MAX_TEXT_CHARS = 400_000;
@@ -109,7 +109,7 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
   }
 
   let bytes: Uint8Array<ArrayBuffer>;
-  try { bytes = await readBoundedMail(message.raw); }
+  try { bytes = await readOriginalMail(message.raw); }
   catch { message.setReject("Message too large or unreadable"); return "rejected"; }
   const result = await storeIndependentMailCandidate(env, { bytes, from, to: message.to }, now, resolver);
   if (result.status === "stored" || result.status === "duplicate") {
