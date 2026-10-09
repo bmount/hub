@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "test": "vitest run",
+    "test": "npm run test:dependencies && vitest run",
+    "test:dependencies": "node --test scripts/test-dev-dependencies.mjs",
     "test:watch": "vitest",
     "docs:mcp": "vitest run test/mcp-reference.test.ts --update",
     "test:browser:chat": "node scripts/test-chat-browser.mjs",
@@ -41,7 +42,9 @@
   },
   "overrides": {
     "miniflare": {
-      "workerd": "1.20261006.1"
+      "workerd": "1.20261006.1",
+      "sharp": "0.35.5",
+      "undici": "7.29.1"
     }
   }
 }
