@@ -13,7 +13,7 @@ describe("reading a channel", () => {
     const page = await ok(w.scout.token, "chat.read", { c: "general", limit: 3 });
     expect(page.messages.map((m: { seq: number }) => m.seq)).toEqual([3, 4, 5]);
     expect([page.head, page.next_before, page.next_after]).toEqual([5, 3, null]);
-    expect(page.messages[0].author).toEqual({ identity_id: w.lead.identity.id, handle: "lead", display_name: "lead", kind: "human", operator: null, session_id: w.lead.session.id, run: null, via_assistant: false });
+    expect(page.messages[0].author).toEqual({ identity_id: w.lead.identity.id, handle: "lead", display_name: "lead", kind: "human", operator: null, session_id: w.lead.session.id, session_kind: "browser", run: null, via_assistant: false });
     expect(page.messages[0].body).toBe("m3");
     expect(page.text).toContain("older: pass before=3");
     const older = await ok(w.scout.token, "chat.read", { c: "general", before: 3 });

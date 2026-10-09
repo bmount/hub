@@ -77,8 +77,8 @@ export const chatHistory = defineVerb({
     const tagOf = await nameTags(ctx.db, ch.tenant_id, h.versions.map((x) => ({ author_id: x.author_id, session_id: x.session_id, session_kind: x.session_kind })));
     const lines: string[] = [];
     const versions = h.versions.map((x) => {
-      const tag = tagOf(x.author_id, x.session_id);
-      lines.push(`[#${h.msg.seq} r${x.rev} ${hhmm(x.created_at)} @${tag.handle}${x.retracted ? " retracted" : ""}]`);
+      const tag = tagOf(x.author_id, x.session_id, x.session_kind);
+      lines.push(`[#${h.msg.seq} r${x.rev} ${hhmm(x.created_at)} @${tag.handle}${tag.kind === "unknown" ? " unknown-author" : ""}${tag.session_kind === "unknown" ? " unknown-session" : ""}${tag.via_assistant ? " via-assistant" : ""}${x.retracted ? " retracted" : ""}]`);
       if (!x.retracted) for (const l of cleanLines(x.body).split("\n")) lines.push(`  ${l}`);
       return { rev: x.rev, seq: x.seq, author: authorJson(tag), body: x.body, retracted: x.retracted, created_at: x.created_at };
     });

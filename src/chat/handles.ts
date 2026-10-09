@@ -1,4 +1,4 @@
-import type { AuthorKind } from "./types";
+import type { AuthorKind, ChatSessionKind } from "./types";
 
 /** Messaging spec 4.6. */
 export const HANDLE_RE = /^[a-z][a-z0-9-]{1,23}$/;
@@ -79,13 +79,13 @@ export async function people(db: D1Database, tenant_id: string): Promise<Map<str
 
 /** Spec 4.6: handle, display name, kind, operator for agents, session label, and `via assistant`. Never from message text. */
 export type NameTag = {
-  identity_id: string; handle: string; display_name: string; kind: AuthorKind; operator_handle: string | null;
-  session_id: string | null; session_label: string | null; via_assistant: boolean;
+  identity_id: string; handle: string; display_name: string; kind: AuthorKind | "unknown"; operator_handle: string | null;
+  session_id: string | null; session_kind: ChatSessionKind | "unknown"; session_label: string | null; via_assistant: boolean;
 };
-export type TagOf = (author_id: string, session_id: string | null) => NameTag;
+export type TagOf = (author_id: string, session_id: string | null, session_kind?: string | null) => NameTag;
 
 export const HUB_TAG: NameTag = {
-  identity_id: "hub", handle: "hub", display_name: "Pimwell", kind: "hub", operator_handle: null, session_id: null, session_label: null, via_assistant: false,
+  identity_id: "hub", handle: "hub", display_name: "Pimwell", kind: "hub", operator_handle: null, session_id: null, session_kind: "hub", session_label: null, via_assistant: false,
 };
 
 /** Run labels are chosen by an agent's runner: only `[A-Za-z0-9._-]`, at most 32, so a label cannot forge a header. */
@@ -112,16 +112,20 @@ export async function nameTags(
     for (const s of r.results) sessions.set(s.id, s);
   }
   const stored = new Map<string, string>();
-  for (const p of pairs) if (p.session_id && p.session_kind && !stored.has(p.session_id)) stored.set(p.session_id, p.session_kind);
-  return (author_id, session_id) => {
+  const pairKey = (author: string, session: string) => JSON.stringify([author, session]);
+  for (const p of pairs) if (p.session_id && p.session_kind && !stored.has(pairKey(p.author_id, p.session_id))) stored.set(pairKey(p.author_id, p.session_id), p.session_kind);
+  return (author_id, session_id, session_kind) => {
     if (author_id === "hub") return HUB_TAG;
     const p = dir.get(author_id);
     const s = session_id ? sessions.get(session_id) : undefined;
-    const kind = (session_id ? stored.get(session_id) : undefined) ?? s?.kind;
+    // Per-artifact evidence wins even for a missing session id, or mixed revisions using the same
+    // session. Callers presenting messages pass it explicitly; directory fallback is display only.
+    const kind = session_kind ?? (session_id ? stored.get(pairKey(author_id, session_id)) : undefined) ?? s?.kind;
+    const knownKind = kind === "browser" || kind === "oauth" || kind === "agent_run" || kind === "hub" ? kind : "unknown";
     return {
-      identity_id: author_id, handle: p?.handle ?? "unknown", display_name: p?.display_name ?? "unknown", kind: p?.kind ?? "human",
-      operator_handle: p?.operator_id ? dir.get(p.operator_id)?.handle ?? null : null, session_id,
-      session_label: s && kind === "agent_run" ? safeLabel(s.label) : null, via_assistant: kind === "oauth",
+      identity_id: author_id, handle: p?.handle ?? "unknown", display_name: p?.display_name ?? "unknown", kind: p?.kind ?? "unknown",
+      operator_handle: p?.operator_id ? dir.get(p.operator_id)?.handle ?? null : null, session_id, session_kind: knownKind,
+      session_label: s && knownKind === "agent_run" ? safeLabel(s.label) : null, via_assistant: knownKind === "oauth",
     };
   };
 }

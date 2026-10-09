@@ -79,11 +79,11 @@ describe("name tags", () => {
     ]);
     expect(tagOf(scout.agent.identity.id, scout.session.id)).toEqual({
       identity_id: scout.agent.identity.id, handle: "scout", display_name: "scout", kind: "agent", operator_handle: "lead",
-      session_id: scout.session.id, session_label: "run-1", via_assistant: false,
+      session_id: scout.session.id, session_kind: "agent_run", session_label: "run-1", via_assistant: false,
     });
     expect(tagOf(lead.identity.id, oauthSession.id)).toMatchObject({ handle: "lead", kind: "human", via_assistant: true, session_label: null });
     expect(tagOf("hub", null)).toEqual(HUB_TAG);
-    expect(tagOf("01UNKNOWN0000000000000000", null)).toMatchObject({ handle: "unknown" });
+    expect(tagOf("01UNKNOWN0000000000000000", null)).toMatchObject({ handle: "unknown", kind: "unknown", session_kind: "unknown", via_assistant: false });
   });
 
   it("looks sessions up within the tenant only, and trusts the kind stored with the message for via assistant", async () => {

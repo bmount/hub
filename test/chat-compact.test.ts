@@ -17,8 +17,8 @@ function msg(seq: number, body: string, over: Partial<MsgView> = {}): MsgView {
     hop_limited: false, created_at: AT, updated_at: AT, ...over,
   };
 }
-const lead: NameTag = { identity_id: "H1", handle: "lead", display_name: "Lead", kind: "human", operator_handle: null, session_id: "S1", session_label: null, via_assistant: false };
-const scout: NameTag = { identity_id: "A1", handle: "scout", display_name: "Scout", kind: "agent", operator_handle: "lead", session_id: "S2", session_label: "nightly-2", via_assistant: false };
+const lead: NameTag = { identity_id: "H1", handle: "lead", display_name: "Lead", kind: "human", operator_handle: null, session_id: "S1", session_kind: "browser", session_label: null, via_assistant: false };
+const scout: NameTag = { identity_id: "A1", handle: "scout", display_name: "Scout", kind: "agent", operator_handle: "lead", session_id: "S2", session_kind: "agent_run", session_label: "nightly-2", via_assistant: false };
 
 describe("compact headers", () => {
   it("are written by the server from the name tag and message state", () => {

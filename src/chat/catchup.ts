@@ -104,7 +104,7 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   if (mentions.length > 0) fits(["## For you"]);
   for (const { ch, m } of mentions) {
     const refs = await refsForViewer(ctx.db, v, m.refs);
-    const tag = tagOf(m.author_id, m.session_id);
+    const tag = tagOf(m.author_id, m.session_id, m.session_kind);
     if (fits(messageBlock(m, tag, { c: ch.slug, channel: true, cut: 400, refs }))) out.for_you.push({ ...msgJson(m, tag, refs), channel: ch.slug });
     else {
       omitted++;

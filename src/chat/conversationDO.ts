@@ -44,6 +44,7 @@ type MsgRow = {
   msg_id: string; first_seq: number; last_seq: number; rev: number; kind: string; author_id: string; author_kind: string;
   session_id: string | null; session_kind: string; thread_root: string | null; hop: number; retracted: number; reply_count: number;
   last_reply_seq: number | null; created_at: number; updated_at: number; body: string; meta_json: string;
+  current_session_id: string | null; current_session_kind: string;
 };
 type ArtifactRow = {
   seq: number; msg_id: string; rev: number; kind: string; author_id: string; session_id: string | null; session_kind: string;
@@ -58,7 +59,9 @@ type NewMessage = {
 export const SYSTEM_GATE = "Agents have posted 8 messages in a row here. Agent posts are paused until a human posts.";
 export const SYSTEM_LOOP = "Two agents kept answering each other. Wakes between them are paused for 30 minutes.";
 
-const MSG_SELECT = "SELECT m.*, a.body, a.meta_json FROM msg m JOIN artifact a ON a.seq = m.last_seq";
+// Author identity remains the original message owner (including operator retractions), but the current
+// text's session provenance comes from its latest artifact, not the session that created revision 1.
+const MSG_SELECT = "SELECT m.*, a.body, a.meta_json, a.session_id AS current_session_id, a.session_kind AS current_session_kind FROM msg m JOIN artifact a ON a.seq = m.last_seq";
 
 /** Messaging spec 9.1: one per channel. Serializes every write to the conversation and assigns `seq`. */
 export class Conversation extends DurableObject<Env> {
@@ -107,7 +110,7 @@ export class Conversation extends DurableObject<Env> {
       .map((x) => ({ kind: x.kind as StoredRef["kind"], key: x.key, title: x.title }));
     return {
       seq: r.first_seq, msg_id: r.msg_id, rev: r.rev, kind: r.kind === "system" ? "system" : "say", thread_root: r.thread_root, root_seq: root,
-      author_id: r.author_id, author_kind: r.author_kind as AuthorKind, session_id: r.session_id, session_kind: r.session_kind as ChatSessionKind,
+      author_id: r.author_id, author_kind: r.author_kind as AuthorKind, session_id: r.current_session_id, session_kind: r.current_session_kind as ChatSessionKind,
       hop: r.hop, body: r.body, edited: r.rev > 1 && r.retracted === 0, retracted: r.retracted === 1, reply_count: r.reply_count,
       last_reply_seq: r.last_reply_seq, refs, mentions: meta.mentions ?? [], hop_limited: meta.hop_limited === true,
       created_at: r.created_at, updated_at: r.updated_at,

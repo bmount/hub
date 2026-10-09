@@ -48,6 +48,8 @@ export function header(m: MsgView, tag: NameTag, channel?: string): string {
     if (tag.session_label) parts.push(`run:${tag.session_label}`);
     parts.push(`hop${m.hop}`);
   }
+  if (tag.kind === "unknown") parts.push("unknown-author");
+  if (tag.session_kind === "unknown") parts.push("unknown-session");
   if (tag.via_assistant) parts.push("via-assistant");
   if (m.root_seq !== null) parts.push(`in:#${m.root_seq}`);
   if (m.retracted) parts.push("retracted");
@@ -86,7 +88,7 @@ export type Rendered = { text: string; shown: number[]; next_after: number | nul
  */
 export function renderMessages(o: RenderInput): Rendered {
   const limit = textBudget(o.budget);
-  const blocks = o.messages.map((m) => messageBlock(m, o.tagOf(m.author_id, m.session_id), {
+  const blocks = o.messages.map((m) => messageBlock(m, o.tagOf(m.author_id, m.session_id, m.session_kind), {
     c: o.c, cut: m.seq === o.full ? LIMITS.BODY_MAX : BODY_CUT, refs: o.refs.get(m.seq),
   }).join("\n"));
   let used = [DATA_NOTE, CHAT_NOTE, "", o.title].join("\n").length + 64;
