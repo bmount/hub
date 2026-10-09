@@ -8,7 +8,7 @@ import type { Env } from "../env";
 import type { Ctx } from "../auth/context";
 import { HubError } from "../errors";
 import { open, seal } from "../models/secretbox";
-import { createGitSession } from "../db/sessions";
+import { createGitSession, createRepoCreateSession, revokeSession } from "../db/sessions";
 
 const TIMEOUT_MS = 10_000;
 const REFRESH_MS = 7 * 86_400_000;           // mint a new git session when the sealed one has less than a week left
@@ -68,6 +68,22 @@ export async function codeAuth(ctx: Ctx): Promise<string> {
 /** Read code as this caller: the repository is the project's slug. */
 export async function codeRead<T>(ctx: Ctx, verb: string, body: Record<string, unknown>): Promise<ArdiPage<T>> {
   return ardiCall<T>(ctx.env, ctx.tenant!.slug, await codeAuth(ctx), verb, body);
+}
+
+/**
+ * Create the repository for a repo project, as the person or agent who made the project. The git host lets only admins
+ * create repositories, so the hub spends a one-shot session (createRepoCreateSession) on this one call. A repository that
+ * already exists is fine: it is the project's.
+ */
+export async function createRepo(env: Env, db: D1Database, input: { identity_id: string; tenant_id: string; org: string; name: string }, now: number): Promise<void> {
+  const { session, token } = await createRepoCreateSession(db, { identity_id: input.identity_id, tenant_id: input.tenant_id }, now);
+  try {
+    await ardiCall(env, input.org, basic("pimwell", token), "repo.create", { name: input.name });
+  } catch (e) {
+    if (!(e instanceof HubError && e.status === 502 && /already exists/.test(e.message))) throw e;
+  } finally {
+    await revokeSession(db, session.id, now);
+  }
 }
 
 // ---------- Shapes of what Ardi returns (the fields the hub uses) ----------

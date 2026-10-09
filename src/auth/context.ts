@@ -92,6 +92,10 @@ export async function credentialUsable(
   if (session !== null && session.kind === "git") {
     return via === "introspect" && identity.kind === "human" && apiToken === null && tenant !== null && session.tenant_id === tenant.id;
   }
+  // Repository-create sessions: minted and spent by the hub itself, only through introspection, on their own tenant.
+  if (session !== null && session.kind === "repo_create") {
+    return via === "introspect" && apiToken === null && tenant !== null && session.tenant_id === tenant.id;
+  }
   if (via === "introspect" && (session === null || session.kind !== "agent_run")) return false;
   if (identity.kind === "human") return apiToken === null && session !== null && session.kind === "browser";
   if (session && session.parent_token_id === null) return false;

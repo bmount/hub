@@ -23,6 +23,8 @@ export default defineConfig({
         serviceBindings: {
           async ARDI(request: Request) {
             const bytes = request.body ? new Uint8Array(await request.arrayBuffer()) : new Uint8Array();
+            // Making a repo project creates its repository (createRepo).
+            if (new URL(request.url).pathname.endsWith("/api/repo.create")) return Response.json({ ok: true, result: { name: JSON.parse(new TextDecoder().decode(bytes)).name } });
             if (request.headers.get("x-stub-401")) return new Response("denied\n", { status: 401, headers: { "www-authenticate": 'Basic realm="ardi"', "x-ardi-stub": "1" } });
             const body = bytes.length > 4096 ? "" : new TextDecoder().decode(bytes);
             return Response.json({

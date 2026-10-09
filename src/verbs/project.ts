@@ -5,6 +5,7 @@ import { conflict, notFound } from "../errors";
 import { getNamespaceBySlug, listNamespaces } from "../db/namespaces";
 import { createProject, getProjectByPath, listProjects, setProjectState } from "../db/projects";
 import { recordEvent } from "../db/events";
+import { createRepo } from "../code/ardi";
 import type { Ctx } from "../auth/context";
 import type { Namespace, Project, State } from "../db/types";
 
@@ -42,6 +43,15 @@ export const projectCreate = defineVerb({
   run: async (ctx, p) => {
     const ns = await resolveNamespace(ctx, p.namespace);
     const project = await createProject(ctx.db, { tenant_id: ctx.tenant!.id, namespace_id: ns?.id ?? null, slug: p.slug, kind: p.kind, display_name: p.display_name }, ctx.now);
+    // A repo project's repository is named after it (codeRead). If the git host can't make it, there is no project.
+    if (project.kind === "repo") {
+      try {
+        await createRepo(ctx.env, ctx.db, { identity_id: ctx.identity!.id, tenant_id: ctx.tenant!.id, org: ctx.tenant!.slug, name: project.slug }, ctx.now);
+      } catch (e) {
+        await ctx.db.prepare("DELETE FROM project WHERE id = ? AND tenant_id = ?").bind(project.id, ctx.tenant!.id).run();
+        throw e;
+      }
+    }
     const path = ns ? `${ns.slug}/${project.slug}` : project.slug;
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "project.create", target_kind: "project", target_id: project.id, summary: `Created project ${path}` }, ctx.now);
     const channels = project.namespace_id === null ? await ensureProjectChannels(ctx.db, project, ctx.identity!.id, ctx.now) : [];

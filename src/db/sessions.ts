@@ -70,6 +70,29 @@ export async function createAgentSession(
   return { session, token };
 }
 
+/**
+ * A one-shot credential for creating one repository on the git host: pinned to one tenant, a minute long, never shown to
+ * anyone. Introspection vouches for it as admin, since the git host lets only admins create repositories; the hub uses it
+ * for exactly one repo.create and then revokes it.
+ */
+export async function createRepoCreateSession(
+  db: D1Database,
+  input: { identity_id: string; tenant_id: string },
+  now: number,
+): Promise<{ session: Session; token: string }> {
+  const token = randomToken("pms_");
+  const session: Session = {
+    id: ulid(now), identity_id: input.identity_id, tenant_id: input.tenant_id, kind: "repo_create", label: "Create repository",
+    token_hash: await sha256Hex(token), created_at: now, last_seen_at: now, expires_at: now + 60_000,
+    last_proof_at: now, revoked_at: null, parent_token_id: null,
+  };
+  await db.prepare(
+    `INSERT INTO session (id, identity_id, tenant_id, kind, label, token_hash, created_at, last_seen_at, expires_at, last_proof_at, revoked_at, parent_token_id)
+     VALUES (?, ?, ?, 'repo_create', ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+  ).bind(session.id, session.identity_id, session.tenant_id, session.label, session.token_hash, now, now, session.expires_at, now).run();
+  return { session, token };
+}
+
 export function getSessionById(db: D1Database, id: string): Promise<Session | null> {
   return db.prepare("SELECT * FROM session WHERE id = ?").bind(id).first<Session>();
 }

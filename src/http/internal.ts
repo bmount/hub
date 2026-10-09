@@ -55,6 +55,9 @@ export async function introspect(request: Request, env: Env, now: number = Date.
     if (rank(opRole) < rank(role)) role = opRole;
     if (rank(role) > rank("member")) role = "member";
   }
+  // Making a repo project creates its repository, which the git host lets only admins do. The hub mints this session for
+  // that one call and revokes it right after (createRepo); it never leaves the hub.
+  if (session.kind === "repo_create") role = "admin";
   // Shows on /me when a credential was last used; at most one write per hour, expiry unchanged.
   if (session.kind === "git") await touchSession(db, session, now);
   return json({
