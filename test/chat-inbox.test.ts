@@ -86,6 +86,27 @@ describe("Inbox object", () => {
     expect(await box().waiting(T, "I1")).toBe(0);
   });
 
+  it("reads one saved cursor across reconstruction without conflating absent and zero or changing attention", async () => {
+    await box().deliver(T, "I1", [item(1)]);
+    expect(await box().readCursor(T, "I1", "C1")).toBeNull();
+    expect(await box().cursors(T, "I1")).toEqual({});
+    await box().markRead(T, "I1", "C1", 0);
+    await box().markRead(T, "I1", "C2", 99);
+    const before = await box().list(T, "I1", { after: 0, limit: 10, include_acked: true });
+    await inDO(box(), async (_obj, state) => {
+      const fresh = new Inbox(state, env);
+      expect(await fresh.readCursor(T, "I1", "C1")).toBe(0);
+      expect(await fresh.readCursor(T, "I1", "C2")).toBe(99);
+      expect(await fresh.readCursor(T, "I1", "missing")).toBeNull();
+      await expect(fresh.readCursor("other", "I1", "C1")).rejects.toThrow(/another tenant/);
+      await expect(fresh.readCursor(T, "other", "C1")).rejects.toThrow(/another tenant or owner/);
+      expect(await fresh.cursors(T, "I1")).toEqual({ C1: 0, C2: 99 });
+      expect(await fresh.list(T, "I1", { after: 0, limit: 10, include_acked: true })).toEqual(before);
+    });
+    expect(await box("I2").readCursor(T, "I2", "C2")).toBeNull();
+    expect(await box().waiting(T, "I1")).toBe(0);
+  });
+
   it("retains the allocated sequence across pruning and fresh object instances without exposing another binding", async () => {
     expect(await box().highWater(T, "I1")).toBe(0);
     await box().deliver(T, "I1", [item(1), item(2)]);

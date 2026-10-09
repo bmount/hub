@@ -175,6 +175,12 @@ export class Inbox extends DurableObject<Env> {
     });
   }
 
+  /** Exact saved cursor only; absence differs from an explicitly saved zero. Never repairs or advances. */
+  async readCursor(tenant_id: string, identity_id: string, conversation_id: string): Promise<number | null> {
+    bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
+    return this.#q<{ read_seq: number }>("SELECT read_seq FROM cursor WHERE conversation_id = ?", conversation_id)[0]?.read_seq ?? null;
+  }
+
   async cursors(tenant_id: string, identity_id: string): Promise<Record<string, number>> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
     return Object.fromEntries(this.#q<{ conversation_id: string; read_seq: number }>("SELECT conversation_id, read_seq FROM cursor").map((r) => [r.conversation_id, r.read_seq]));

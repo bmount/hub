@@ -94,6 +94,7 @@ const TABLE: Record<string, Decl> = {
   "chat.read": T("tenant", "reader", null, { mcp: "read" }), "chat.thread": T("tenant", "reader", null, { mcp: "read" }),
   "chat.response_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.post_status": T("tenant", "reader", null, { mcp: "read" }),
+  "chat.read_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.catchup": T("tenant", "reader", null, { mcp: "read" }),
   "chat.history": T("tenant", "reader", null, { mcp: "read" }), "chat.inbox": T("tenant", "reader", null, { mcp: "read" }),
   "inbox.ack_status": T("tenant", "reader", null, { mcp: "read" }),

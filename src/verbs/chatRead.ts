@@ -237,6 +237,31 @@ export const inboxAckStatus = defineVerb({
   },
 });
 
+export const chatReadStatus = defineVerb({
+  name: "chat.read_status", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
+  summary: "Reconcile your saved read cursor in one currently readable channel without advancing it. Null means no saved cursor, distinct from zero. An out-of-head cursor is reported, never repaired. Cursor state is not processing or execution proof, an operation receipt or permission to retry.",
+  mcp: {
+    scope: "read", destructive: false, title: "Reconcile channel read cursor", render: chatText, auditKeysOnly: true,
+    input: schema({ c: C }, ["c"]),
+  },
+  parse: (i) => ({ c: channelParam(i) }),
+  run: async (ctx, p) => {
+    const v = viewerOf(ctx);
+    // Current channel permission precedes both snapshots; never disclose stored cursors for denied channels.
+    const ch = await readableChannel(ctx, p.c);
+    const head = await conversationStub(ctx.env, ch.tenant_id, ch.project_id).head(ch.tenant_id, ch.project_id);
+    const read_seq = await inboxStub(ctx.env, v.tenant.id, v.identity.id).readCursor(v.tenant.id, v.identity.id, ch.project_id);
+    const ahead_of_head = read_seq !== null && read_seq > head;
+    // Separate stores, not an atomic operation receipt. Concurrent marking can exceed this earlier head snapshot.
+    return { tenant_id: v.tenant.id, identity_id: v.identity.id, conversation_id: ch.project_id,
+      channel: ch.slug, head, read_seq, ahead_of_head,
+      text: plainText(`#${ch.slug} saved read cursor`, [
+        `head=${head} read_seq=${read_seq === null ? "absent" : read_seq} ahead_of_head=${ahead_of_head}`,
+        "Separate head/cursor snapshots, not processing or execution proof or an operation receipt. Reconcile retained decisions and originals; no automatic retry, advance or repair.",
+      ]) };
+  },
+});
+
 export const chatMarkRead = defineVerb({
   name: "chat.mark_read", kind: "command", scope: "tenant", minRole: "reader", freshProofMinutes: null,
   summary: "Move your durable read cursor in an authorized channel forward to seq (it never moves back). Future sequences above the current channel head are refused. Explicitly mark only processed activity; reads do not move cursors.",

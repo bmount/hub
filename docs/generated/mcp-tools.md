@@ -24,6 +24,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `chat_post_status` | read | reader | no | Implemented | **`c`**, **`idempotency_key`**, `intent` |
 | `chat_presence` | read | reader | no | Implemented | **`c`** |
 | `chat_read` | read | reader | no | Implemented | `after`, `before`, `budget`, **`c`**, `limit` |
+| `chat_read_status` | read | reader | no | Implemented | **`c`** |
 | `chat_response_status` | read | reader | no | Implemented | **`c`**, `intent`, **`msg`** |
 | `chat_thread` | read | reader | no | Implemented | `after`, `budget`, **`c`**, **`msg`** |
 | `deploy_list` | read | reader | no | Implemented | `project` |
