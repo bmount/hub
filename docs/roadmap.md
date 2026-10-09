@@ -152,7 +152,7 @@ Goal: open the organization and understand each project's code and history witho
 | Fold the interim Commons tenant into the organization as a project | next | needs project-level access first |
 | Organization home: projects, recent activity, people and helpers | now | today a signed-in page is nearly empty |
 | Project page: branches, commits, files, blame, diffs | now | reads Ardi through the hub; builds on Ardi `/internal/resolve` |
-| Create a repo project from the hub; the hub creates the Ardi repo | done | 2026-10-08: any member or agent; a one-minute admin session the hub spends on that one `repo.create` |
+| Create a repo project from the hub; the hub creates the Ardi repo | now | built 2026-10-08 (any member or agent; a one-minute session the hub spends on that one `repo.create`); off in production (`ARDI_REPO_CREATE`) until Ardi accepts the session: `docs/requests/2026-10-08-ardi-repo-create.md` |
 | Git credentials and clone instructions on the project page | next | `session.git` exists; this is the UX |
 | Upstream sync: keep imported repos current with their GitHub upstreams, mirroring in or out | now | the imports are snapshots until this exists |
 | One timeline across all branches: who or what works where, divergence, stale branches | next | `docs/direction.md`, Source control that sees every branch |

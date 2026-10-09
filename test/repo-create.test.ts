@@ -93,6 +93,22 @@ describe("making a repo project creates its repository", () => {
     expect(await projects()).toEqual(["site"]);
   });
 
+  it("off unless ARDI_REPO_CREATE is on: the project is made without touching the git host", async () => {
+    const t = await seedTenant("acme");
+    const h = await seedHuman("ann@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    const seen: Seen[] = [];
+    fakeArdi(seen);
+    const was = env.ARDI_REPO_CREATE;
+    (env as { ARDI_REPO_CREATE?: string }).ARDI_REPO_CREATE = undefined;
+    try {
+      expect((await apiPost(HOST, "project.create", { slug: "site", kind: "repo", display_name: "Site" }, bearer(h.token))).status).toBe(200);
+    } finally {
+      (env as { ARDI_REPO_CREATE?: string }).ARDI_REPO_CREATE = was;
+    }
+    expect(seen).toHaveLength(0);
+    expect(await projects()).toEqual(["site"]);
+  });
+
   it("trackers have no repository", async () => {
     const t = await seedTenant("acme");
     const h = await seedHuman("ann@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });

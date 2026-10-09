@@ -44,7 +44,7 @@ export const projectCreate = defineVerb({
     const ns = await resolveNamespace(ctx, p.namespace);
     const project = await createProject(ctx.db, { tenant_id: ctx.tenant!.id, namespace_id: ns?.id ?? null, slug: p.slug, kind: p.kind, display_name: p.display_name }, ctx.now);
     // A repo project's repository is named after it (codeRead). If the git host can't make it, there is no project.
-    if (project.kind === "repo") {
+    if (project.kind === "repo" && ctx.env.ARDI_REPO_CREATE === "on") {
       try {
         await createRepo(ctx.env, ctx.db, { identity_id: ctx.identity!.id, tenant_id: ctx.tenant!.id, org: ctx.tenant!.slug, name: project.slug }, ctx.now);
       } catch (e) {

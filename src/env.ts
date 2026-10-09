@@ -15,6 +15,8 @@ export type Env = {
   HUB_SECRETS_KEY?: string;
   /** Bearer for POST /internal/evals/intent; unset, the route does not exist. */
   EVAL_KEY?: string;
+  /** "on": making a repo project creates its repository on the git host. Off until Ardi accepts repo_create sessions (docs/requests/2026-10-08-ardi-repo-create.md). */
+  ARDI_REPO_CREATE?: string;
   /** The Ardi git host (service binding); absent means git URLs answer 503. */
   ARDI?: Fetcher;
   /** One SQLite object per channel, named `<tenant_id>:<conversation_id>` (messaging spec 9.1). */
