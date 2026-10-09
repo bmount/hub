@@ -91,7 +91,7 @@ const TABLE: Record<string, Decl> = {
   "chat.response_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.post_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.catchup": T("tenant", "reader", null, { mcp: "read" }),
-  "chat.history": T("tenant", "reader", null), "chat.inbox": T("tenant", "reader", null, { mcp: "read" }),
+  "chat.history": T("tenant", "reader", null, { mcp: "read" }), "chat.inbox": T("tenant", "reader", null, { mcp: "read" }),
   "inbox.wait": T("tenant", "reader", null), "inbox.ack": T("tenant", "reader", null, { mcp: "write" }), "chat.mark_read": T("tenant", "reader", null, { mcp: "write" }),
   "ref.backlinks": T("tenant", "reader", null, { mcp: "read" }),
   "chat.conversations": T("tenant", "reader", null),
@@ -191,7 +191,7 @@ describe("verb table", () => {
       idempotency_key: "k", refs: [], state: "active", prefix: false,
     };
     // Where one name means different things to different verbs.
-    const OVERRIDE: Record<string, Record<string, unknown>> = { "chat.post": { kind: "say" }, "chat.heartbeat": { status: "online" } };
+    const OVERRIDE: Record<string, Record<string, unknown>> = { "chat.post": { kind: "say" }, "chat.heartbeat": { status: "online" }, "chat.history": { limit: 2 } };
     const AUTHORISH = ["author", "author_id", "as", "identity", "identity_id", "display_name_override", "session_id", "name_tag", "via", "by", "handle", "avatar", "on_behalf_of"];
     const planted = Object.fromEntries(AUTHORISH.map((k) => [k, "01PLANTED0000000000000000000"]));
     const keysDeep = (v: unknown): string[] => (v && typeof v === "object" ? Object.entries(v).flatMap(([k, x]) => [k, ...keysDeep(x)]) : []);

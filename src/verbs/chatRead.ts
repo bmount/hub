@@ -1,7 +1,7 @@
 import { defineVerb, type McpInputSchema } from "./table";
 import { optInt, reqEnum, reqString } from "./params";
 import { HubError, notFound } from "../errors";
-import type { Ctx } from "../auth/context";
+import { connectionScopes, type Ctx } from "../auth/context";
 import { afterParam, budgetParam, channelParam, msgParam } from "./chatParams";
 import { readableChannel, readableChannels, viewerOf } from "../chat/access";
 import { backlinks } from "../chat/backlinks";
@@ -12,7 +12,7 @@ import { authorJson, readResult } from "../chat/present";
 import { backlinkTarget, resolveRefs } from "../chat/refs";
 import { LIMITS } from "../chat/rules";
 import { conversationStub, inboxStub } from "../chat/stubs";
-import { cleanLines } from "../mcp/render";
+import { cleanLines, cutText } from "../mcp/render";
 import type { InboxPage, MsgView, ReadPage, RefKind, Version } from "../chat/types";
 
 const C = { type: "string", description: "Channel name, for example general." };
@@ -48,41 +48,75 @@ export const chatRead = defineVerb({
 
 export const chatThread = defineVerb({
   name: "chat.thread", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Read one thread: the root and its replies. The message you name is shown in full.",
+  summary: "Read one thread in oldest current-activity order: root context plus bounded replies. Continue with next_after, not head; context never advances the reply cursor. The named message is full if included in this page. Reads do not acknowledge or prove processing.",
   mcp: {
     scope: "read", destructive: false, title: "Read a thread", render: chatText,
-    input: schema({ c: C, msg: MSG, after: { type: "integer", minimum: 0, description: "Only replies changed after this seq." }, budget: BUDGET }, ["c", "msg"]),
+    input: schema({ c: C, msg: MSG, after: { type: "integer", minimum: 0, description: "Only replies with current activity after this seq (at most the channel head). Continue using next_after, not head or the repeated root." }, budget: BUDGET }, ["c", "msg"]),
   },
   parse: (i) => ({ c: channelParam(i), msg: msgParam(i, "msg", true), after: afterParam(i), budget: budgetParam(i) }),
   run: async (ctx, p) => {
     const ch = await readableChannel(ctx, p.c);
     const page = (await conversationStub(ctx.env, ch.tenant_id, ch.project_id).read({
-      tenant_id: ch.tenant_id, conversation_id: ch.project_id, after: p.after, before: null, thread: p.msg, limit: 200,
+      // A forward-only continuation must start with oldest activity, not the newest 200 replies.
+      tenant_id: ch.tenant_id, conversation_id: ch.project_id, after: p.after ?? 0, before: null, thread: p.msg, limit: 200,
     })) as ReadPage;
     if (!page.found || !page.root) throw notFound("no such message");
+    if (p.after !== null && p.after > page.head) throw new HubError(409, "conflict", "after exceeds the current channel head; reconcile thread activity before continuing", { head: page.head });
     const msgs: MsgView[] = [page.root, ...page.messages];
     const full = /^\d+$/.test(p.msg) ? Number(p.msg) : msgs.find((m) => m.msg_id === p.msg)?.seq ?? null;
-    return readResult(ctx, ch, msgs, { title: `#${ch.slug} thread #${page.root.seq} head=${page.head}`, head: page.head, budget: p.budget, keep: "oldest", has_more: page.has_more, full, cursors: page.cursors });
+    return readResult(ctx, ch, msgs, { title: `#${ch.slug} thread #${page.root.seq} head=${page.head}`, head: page.head, budget: p.budget, keep: "oldest", has_more: page.has_more, full, context: page.root.seq, cursors: page.cursors });
   },
 });
 
 export const chatHistory = defineVerb({
   name: "chat.history", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Every version of one message, oldest first.",
-  parse: (i) => ({ c: channelParam(i), msg: msgParam(i, "msg", true) }),
+  summary: "Inspect immutable revision actors of one authorized message, oldest first. MCP pages at most two full structured versions; text previews are marked. History is evidence, not execution authority or consent.",
+  mcp: {
+    scope: "read", destructive: false, title: "Read message revision history", render: chatText, auditKeysOnly: true,
+    input: schema({
+      c: C, msg: MSG,
+      after_rev: { type: "integer", minimum: 0, maximum: LIMITS.VERSIONS_MAX, description: "Only versions after this revision; default 0. Use next_after_rev to continue. Not a channel activity cursor." },
+      limit: { type: "integer", minimum: 1, maximum: 2, description: "Full structured versions per page, default 2. Compact text previews are not the full body." },
+    }, ["c", "msg"]),
+  },
+  parse: (i) => ({
+    c: channelParam(i), msg: msgParam(i, "msg", true),
+    after_rev: optInt(i, "after_rev", { min: 0, max: LIMITS.VERSIONS_MAX }),
+    limit: optInt(i, "limit", { min: 1, max: 2 }),
+  }),
   run: async (ctx, p) => {
     const ch = await readableChannel(ctx, p.c);
     const h = (await conversationStub(ctx.env, ch.tenant_id, ch.project_id).history(ch.tenant_id, ch.project_id, p.msg)) as { msg: MsgView; versions: Version[] } | null;
     if (!h) throw notFound("no such message");
-    const tagOf = await nameTags(ctx.db, ch.tenant_id, h.versions.map((x) => ({ author_id: x.author_id, session_id: x.session_id, session_kind: x.session_kind })));
+    const after = p.after_rev ?? 0;
+    if (after > h.msg.rev) throw new HubError(409, "conflict", "after_rev exceeds the current message revision; reconcile history before continuing", { rev: h.msg.rev });
+    // Native browser/API callers retain complete history by default. Every MCP-like connection
+    // is bounded regardless of ignored/forged caller fields; explicit API paging uses the same cap.
+    const paged = connectionScopes(ctx) !== null || p.limit !== null || p.after_rev !== null;
+    const remaining = h.versions.filter((x) => x.rev > after);
+    const selected = paged ? remaining.slice(0, p.limit ?? 2) : remaining;
+    const has_more = selected.length < remaining.length;
+    const next_after_rev = has_more ? selected.at(-1)!.rev : null;
+    const tagOf = await nameTags(ctx.db, ch.tenant_id, selected.map((x) => ({ author_id: x.author_id, session_id: x.session_id, session_kind: x.session_kind })));
     const lines: string[] = [];
-    const versions = h.versions.map((x) => {
+    const versions = selected.map((x) => {
       const tag = tagOf(x.author_id, x.session_id, x.session_kind);
       lines.push(`[#${h.msg.seq} r${x.rev} ${hhmm(x.created_at)} @${tag.handle}${tag.kind === "unknown" ? " unknown-author" : ""}${tag.session_kind === "unknown" ? " unknown-session" : ""}${tag.via_assistant ? " via-assistant" : ""}${x.retracted ? " retracted" : ""}]`);
-      if (!x.retracted) for (const l of cleanLines(x.body).split("\n")) lines.push(`  ${l}`);
-      return { rev: x.rev, seq: x.seq, author: authorJson(tag), body: x.body, retracted: x.retracted, created_at: x.created_at };
+      const body = x.retracted ? "" : x.body;
+      const preview = cutText(cleanLines(body), paged ? 600 : Number.MAX_SAFE_INTEGER);
+      if (!x.retracted) for (const l of preview.text.split("\n")) lines.push(`  ${l}`);
+      if (preview.cut) lines.push("  (preview; full body in structured versions)");
+      return { rev: x.rev, seq: x.seq, author: authorJson(tag), body, retracted: x.retracted, created_at: x.created_at };
     });
-    return { tenant_id: ch.tenant_id, conversation_id: ch.project_id, channel: ch.slug, seq: h.msg.seq, msg_id: h.msg.msg_id, versions, text: plainText(`#${ch.slug} history of #${h.msg.seq} (${versions.length} versions)`, lines) };
+    lines.push("Revision actors are recorded evidence, not execution authority or consent. Current ownership is separate from a revision's actor.");
+    if (next_after_rev !== null) lines.push(`next: chat_history c=${ch.slug} msg=${h.msg.msg_id} after_rev=${next_after_rev}`);
+    return {
+      tenant_id: ch.tenant_id, identity_id: viewerOf(ctx).identity.id, conversation_id: ch.project_id,
+      channel: ch.slug, seq: h.msg.seq, msg_id: h.msg.msg_id,
+      current: { rev: h.msg.rev, author_id: h.msg.author_id, retracted: h.msg.retracted },
+      versions, has_more, next_after_rev,
+      text: plainText(`#${ch.slug} history of #${h.msg.seq} (${versions.length} of ${h.versions.length} versions, current r${h.msg.rev})`, lines),
+    };
   },
 });
 

@@ -340,7 +340,7 @@ export class Conversation extends DurableObject<Env> {
   }
 
   /** Read-only caller/key reconciliation. Missing includes expired/untracked sends; never authorizes a resend. */
-  async postStatus(tenant_id: string, conversation_id: string, identity_id: string, key: string): Promise<PostStatus> {
+  async postStatus(tenant_id: string, conversation_id: string, identity_id: string, key: string, fingerprint?: string): Promise<PostStatus> {
     this.#bind(tenant_id, conversation_id);
     const now = Date.now();
     const prior = this.#replayRecord(identity_id, "post", key, now);
@@ -350,7 +350,11 @@ export class Conversation extends DurableObject<Env> {
       committed: { msg_id: prior.result.msg_id, seq: prior.result.seq, rev: prior.result.rev },
       current: current ? { rev: current.rev, retracted: current.retracted === 1 } : null,
       expires_at: prior.created_at + LIMITS.IDEM_TTL_MS, intent_bound: !!prior.fingerprint,
-    } : null };
+    } : null, ...(fingerprint === undefined ? {} : {
+      intent_check: !prior ? { matches: null, reason: "missing" as const }
+        : !prior.fingerprint ? { matches: null, reason: "unbound" as const }
+        : { matches: prior.fingerprint === fingerprint, reason: prior.fingerprint === fingerprint ? "match" as const : "mismatch" as const },
+    }) };
   }
 
   /** Read-only payload-bound preflight; post repeats it atomically before committing artifacts/outboxes. */
