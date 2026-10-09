@@ -164,17 +164,23 @@ export class Conversation extends DurableObject<Env> {
     this.#run("INSERT OR REPLACE INTO idem (identity_id, key, result_json, created_at) VALUES (?, ?, ?, ?)", identity_id, `${op}:${key}`, JSON.stringify(result), now);
   }
 
-  #responseKey(identity_id: string, source_id: string): string {
-    return `response:v1:${identity_id}:${source_id}`;
+  #responseKey(identity_id: string, intent: ResponseIntent): string {
+    // Preserve all previously committed responses as the default result slot.
+    return intent.stage === "progress"
+      ? `response:v2:progress:${identity_id}:${intent.source.msg_id}`
+      : `response:v1:${identity_id}:${intent.source.msg_id}`;
   }
 
   /** No TTL: compact evidence/result only, retained with the conversation. Never stores response text. */
   #responseReplay(identity_id: string, intent: ResponseIntent): PostOutcome | null {
-    const row = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = ?", this.#responseKey(identity_id, intent.source.msg_id))[0];
+    if (intent.stage !== undefined && intent.stage !== "progress" && intent.stage !== "result") {
+      return { refused: "conflict", detail: "response stage must be progress or result" };
+    }
+    const row = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = ?", this.#responseKey(identity_id, intent))[0];
     if (row) {
       const prior = JSON.parse(row.value) as { intent: ResponseIntent; result: PostOk };
       if (prior.intent.source.rev !== intent.source.rev || prior.intent.source.author_id !== intent.source.author_id || prior.intent.fingerprint !== intent.fingerprint) {
-        return { refused: "conflict", detail: "a different response is already recorded for this source; reconcile the original thread" };
+        return { refused: "conflict", detail: "a different response is already recorded for this source/stage; reconcile the original thread" };
       }
       // Reconcile even after source/response edits or retraction, but never resurrect either message.
       return { ...prior.result, replayed: true };
@@ -411,7 +417,7 @@ export class Conversation extends DurableObject<Env> {
 
     const result: PostOk = { refused: null, seq, msg_id, rev: 1, hop, head: this.#head(), woke, suppressed, loop_tripped: loop, replayed: false };
     if (p.response) {
-      this.#run("INSERT INTO meta (key, value) VALUES (?, ?)", this.#responseKey(me.id, p.response.source.msg_id), JSON.stringify({ intent: p.response, result }));
+      this.#run("INSERT INTO meta (key, value) VALUES (?, ?)", this.#responseKey(me.id, p.response), JSON.stringify({ intent: p.response, result }));
     } else {
       this.#remember(me.id, "post", p.idempotency_key, result, p.now);
     }

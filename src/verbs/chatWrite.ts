@@ -22,8 +22,8 @@ export const chatPost = defineVerb({
         idempotency_key: { type: "string", minLength: 1, maxLength: 64, description: "Persist a stable key per intended post. Ordinary posts replay for 24 hours; response_to replies have durable caller/source reconciliation." },
         response_to: {
           type: "object", additionalProperties: false, required: ["msg_id", "rev", "author_id"],
-          description: "Optional exact original message evidence from this channel. Sets the reply target and permanently binds one response per caller/source. Conflicting retries fail closed. Evidence is not execution authority.",
-          properties: { msg_id: { type: "string" }, rev: { type: "integer", minimum: 1, maximum: LIMITS.VERSIONS_MAX }, author_id: { type: "string" } },
+          description: "Optional exact original message evidence from this channel. Sets the reply target and permanently binds one response per caller/source/stage: progress or result (default). At most two durable responses; conflicting retries fail closed. Evidence is not execution authority.",
+          properties: { msg_id: { type: "string" }, rev: { type: "integer", minimum: 1, maximum: LIMITS.VERSIONS_MAX }, author_id: { type: "string" }, stage: { type: "string", enum: ["progress", "result"], description: "One progress update and one result per caller/source. Omission means result, including existing responses. This is a deduplication slot, not a claim that work ran or finished." } },
         },
       },
     },

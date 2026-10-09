@@ -30,6 +30,53 @@ function version(id: string, msg: string, body: string | null): VersionInput {
 }
 
 describe("durable source-bound chat responses", () => {
+  it("commits independent bounded progress/result slots and replays each across keys, sessions and restart", async () => {
+    const { input, response, source } = await setup();
+    const progress = { ...input, body: "testing", body_sha256: "sha:testing", response: { ...response, stage: "progress" as const, fingerprint: "sha:testing" } };
+    const attempts = await Promise.all(Array.from({ length: 4 }, (_, i) => conv().post({ ...progress, author: { ...progress.author, session_id: `progress-${i}` }, idempotency_key: `progress-${i}` })));
+    const first = ok(attempts.find((r) => r.refused === null && !r.replayed)!);
+    expect(attempts.filter((r) => r.refused === null && !r.replayed)).toHaveLength(1);
+    const result = ok(await conv().post({ ...input, after: first.head, response: { ...response, stage: "result" } }));
+    expect(result.msg_id).not.toBe(first.msg_id);
+    const later = Date.now() + 48 * 3_600_000;
+    for (const [intent, committed] of [[progress.response, first], [response, result]] as const) {
+      expect(await inDO(conv(), async (_object, state) => new Conversation(state, env).responseReplay(tenant, channel, "A", intent))).toEqual({ ...committed, replayed: true });
+    }
+    expect(ok(await conv().post({ ...progress, now: later, idempotency_key: "retry" }))).toEqual({ ...first, replayed: true });
+    expect(ok(await conv().post({ ...input, now: later, idempotency_key: "retry" }))).toEqual({ ...result, replayed: true });
+    expect((await conv().getMessage(tenant, channel, result.msg_id))!.thread_root).toBe(source.msg_id);
+    expect(await conv().head(tenant, channel)).toBe(3);
+    const inbox = await inboxStub(env, tenant, "B").list(tenant, "B", { after: 0, limit: 100, include_acked: true });
+    expect(inbox.items).toHaveLength(2);
+    expect((await conv().post({ ...progress, response: { ...progress.response, fingerprint: "changed" } })).refused).toBe("conflict");
+    expect((await conv().post({ ...input, response: { ...response, stage: "result", fingerprint: "changed" } })).refused).toBe("conflict");
+  });
+
+  it("reconciles legacy records as result, without permitting arbitrary stage namespaces", async () => {
+    const { input, response } = await setup();
+    const legacy = ok(await conv().post(input));
+    expect(ok(await conv().post({ ...input, response: { ...response, stage: "result" } }))).toEqual({ ...legacy, replayed: true });
+    const invalid = { ...response, stage: "arbitrary" } as unknown as ResponseIntent;
+    expect((await conv().responseReplay(tenant, channel, "A", invalid))!.refused).toBe("conflict");
+    expect((await conv().post({ ...input, response: invalid })).refused).toBe("conflict");
+    expect(await conv().head(tenant, channel)).toBe(2);
+  });
+
+  it("checks current source evidence and gates for each new slot without resurrecting retracted progress", async () => {
+    const { input, response, source } = await setup();
+    const progress = { ...input, response: { ...response, stage: "progress" as const } };
+    const first = ok(await conv().post(progress));
+    ok(await conv().version(version("H", source.msg_id, "changed request")));
+    expect((await conv().post({ ...input, after: 3 })).refused).toBe("conflict");
+    ok(await conv().version(version("A", first.msg_id, null)));
+    expect(ok(await conv().post(progress))).toEqual({ ...first, replayed: true });
+    expect((await conv().getMessage(tenant, channel, first.msg_id))!.retracted).toBe(true);
+    for (const stage of ["progress", "result"] as const) {
+      expect((await conv().post({ ...input, policy: "muted", response: { ...response, stage } })).refused).toBe("forbidden");
+    }
+    expect(await conv().head(tenant, channel)).toBe(4);
+  });
+
   it("atomically posts one response and wake across concurrent keys/sessions and retries beyond 24 hours", async () => {
     const { input, response } = await setup();
     const results = await Promise.all(Array.from({ length: 4 }, (_, i) => conv().post({ ...input, author: { ...input.author, session_id: `S${i}` }, idempotency_key: `k${i}` })));

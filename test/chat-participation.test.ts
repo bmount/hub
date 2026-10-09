@@ -79,13 +79,47 @@ describe("authenticated MCP chat participation", () => {
     expect((await tool(w.scout.longLived, "chat_post", args)).content[0].text).toContain("not_found");
   });
 
+  it("posts authenticated progress and result in one source thread with independent durable replay", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const source = await ok(w.lead.token, "chat.post", { c: "general", body: "@scout product request" });
+    const evidence = { msg_id: source.msg_id, rev: 1, author_id: w.lead.identity.id };
+    const progressArgs = { ...post, after: source.head, body: "@tidy testing increment", response_to: { ...evidence, stage: "progress" } };
+    const progress = await tool(w.scout.longLived, "chat_post", progressArgs);
+    expect(progress.isError).toBeUndefined();
+    const resultArgs = { ...post, after: progress.structuredContent.head, body: "@tidy tested result", response_to: { ...evidence, stage: "result" } };
+    const result = await tool(w.scout.longLived, "chat_post", resultArgs);
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent.msg_id).not.toBe(progress.structuredContent.msg_id);
+    for (const [args, committed] of [[progressArgs, progress], [resultArgs, result]] as const) {
+      const retry = await tool(w.scout.longLived, "chat_post", { ...args, idempotency_key: "new-key" });
+      expect(retry.structuredContent).toMatchObject({ msg_id: committed.structuredContent.msg_id, replayed: true });
+      expect((await tool(w.scout.longLived, "chat_post", { ...args, body: "different" })).content[0].text).toContain("conflict");
+    }
+    const defaultResult = await tool(w.scout.longLived, "chat_post", { ...resultArgs, response_to: evidence });
+    expect(defaultResult.structuredContent).toMatchObject({ msg_id: result.structuredContent.msg_id, replayed: true });
+    const thread = (await tool(w.scout.longLived, "chat_thread", { c: "general", msg: source.msg_id })).structuredContent;
+    expect(thread.head).toBe(3);
+    expect(thread.messages).toHaveLength(3);
+    for (const reply of thread.messages.slice(1)) {
+      expect(reply.root_seq).toBe(source.seq);
+      expect(reply.author).toMatchObject({ identity_id: w.scout.agent.identity.id, kind: "agent", via_assistant: false });
+    }
+    const inbox = await inboxStub(env, w.acme.id, w.tidy.agent.identity.id).list(w.acme.id, w.tidy.agent.identity.id, { after: 0, limit: 100, include_acked: true });
+    expect(inbox.items).toHaveLength(2);
+    const events = await env.HUB_DB.prepare("SELECT target_id FROM event WHERE tenant_id = ? AND kind = 'chat.post' AND identity_id = ?").bind(w.acme.id, w.scout.agent.identity.id).all();
+    expect(events.results).toHaveLength(2);
+    await ok(w.lead.token, "channel.remove_agent", { c: "general", agent: "scout" });
+    for (const args of [progressArgs, resultArgs]) expect((await tool(w.scout.longLived, "chat_post", args)).content[0].text).toContain("not_found");
+  });
+
   it("refuses malformed, forged, changed or cross-channel source evidence before writing", async () => {
     const w = await chatWorld();
     await channelWith(w);
     await channelWith(w, "other");
     const source = await ok(w.lead.token, "chat.post", { c: "general", body: "original request" });
     const evidence = { msg_id: source.msg_id, rev: 1, author_id: w.lead.identity.id };
-    for (const response_to of [null, [], "general/1", { ...evidence, msg_id: 1 }, { ...evidence, rev: "1" }, { ...evidence, rev: 0 }, { ...evidence, author_id: "handle" }, { ...evidence, authority: "admin" }]) {
+    for (const response_to of [null, [], "general/1", { ...evidence, msg_id: 1 }, { ...evidence, rev: "1" }, { ...evidence, rev: 0 }, { ...evidence, author_id: "handle" }, { ...evidence, authority: "admin" }, ...[null, "", "other", 1, {}, []].map((stage) => ({ ...evidence, stage }))]) {
       expect((await tool(w.scout.longLived, "chat_post", { ...post, after: 1, response_to })).content[0].text).toContain("bad_request");
     }
     expect((await tool(w.scout.longLived, "chat_post", { ...post, after: 1, response_to: evidence, reply_to: source.msg_id })).content[0].text).toContain("bad_request");

@@ -12,9 +12,9 @@ import { resolveRefs, type Unresolved } from "./refs";
 import { LIMITS } from "./rules";
 import { conversationStub, inboxStub } from "./stubs";
 import type { ReserveResult } from "./inboxDO";
-import type { AgentPolicy, Audience, Author, ChatSessionKind, Mention, PostOk, PostOutcome, Refusal, ResponseIntent, ResponseSource, StoredRef } from "./types";
+import type { AgentPolicy, Audience, Author, ChatSessionKind, Mention, PostOk, PostOutcome, Refusal, ResponseIntent, ResponseTarget, StoredRef } from "./types";
 
-export type PostParams = { c: string; body: string; after: number | null; reply_to: string | null; refs: Array<{ kind: string; key: string }>; idempotency_key: string | null; response_to?: ResponseSource };
+export type PostParams = { c: string; body: string; after: number | null; reply_to: string | null; refs: Array<{ kind: string; key: string }>; idempotency_key: string | null; response_to?: ResponseTarget };
 export type VersionParams = { c: string; msg: string; body: string | null; after: number | null; idempotency_key: string | null };
 export type PostResult = {
   channel: string; seq: number; msg_id: string; rev: number; hop: number; head: number; woke: number; unresolved: Unresolved[];
@@ -170,7 +170,8 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
   const ch = await readableChannel(ctx, p.c);
   const conv = conversationStub(ctx.env, ch.tenant_id, ch.project_id);
   const response: ResponseIntent | undefined = p.response_to ? {
-    source: p.response_to, fingerprint: await sha256Hex(JSON.stringify({ body: p.body, refs: p.refs })),
+    source: { msg_id: p.response_to.msg_id, rev: p.response_to.rev, author_id: p.response_to.author_id },
+    stage: p.response_to.stage ?? "result", fingerprint: await sha256Hex(JSON.stringify({ body: p.body, refs: p.refs })),
   } : undefined;
   if (response && p.reply_to !== response.source.msg_id) throw badRequest("response_to must be the exact reply target");
   if (!response && p.idempotency_key) {

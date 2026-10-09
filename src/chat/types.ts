@@ -17,13 +17,15 @@ export type Audience = { agent_members: string[]; operators: Record<string, stri
 
 /** Exact source evidence, not a grant of execution authority. */
 export type ResponseSource = { msg_id: string; rev: number; author_id: string };
-export type ResponseIntent = { source: ResponseSource; fingerprint: string };
+export type ResponseStage = "progress" | "result";
+export type ResponseTarget = ResponseSource & { stage?: ResponseStage };
+export type ResponseIntent = { source: ResponseSource; fingerprint: string; stage?: ResponseStage };
 
 export type PostInput = {
   tenant_id: string; conversation_id: string; now: number; author: Author; policy: AgentPolicy;
   body: string; body_sha256: string; after: number | null; reply_to: string | null;
   refs: StoredRef[]; mentions: Mention[];
-  /** One durable response per authenticated caller/source, atomically committed with the message. */
+  /** One durable response per authenticated caller/source/stage, atomically committed with the message. */
   response?: ResponseIntent;
   /** Hop of the author's newest open top-level wake here, and of the newest open wake per thread (ruling C-4), from the author's Inbox. */
   wake_hop: number | null; thread_wake_hops: Record<string, number>;

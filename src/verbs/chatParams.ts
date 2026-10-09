@@ -1,7 +1,7 @@
 import { badRequest } from "../errors";
 import { optInt, reqString } from "./params";
 import { LIMITS } from "../chat/rules";
-import type { ResponseSource } from "../chat/types";
+import type { ResponseTarget } from "../chat/types";
 
 type Input = Record<string, unknown>;
 
@@ -34,19 +34,20 @@ export function msgParam(i: Input, key: string, required: boolean): string | nul
 }
 
 /** Durable replies bind exact source evidence, never a handle or caller-claimed execution authority. */
-export function responseParam(i: Input): ResponseSource | undefined {
+export function responseParam(i: Input): ResponseTarget | undefined {
   const v = i.response_to;
   if (v === undefined) return undefined;
   if (!v || typeof v !== "object" || Array.isArray(v)) throw badRequest("response_to must be {msg_id, rev, author_id}");
   const s = v as Input;
-  if (Object.keys(s).some((k) => !["msg_id", "rev", "author_id"].includes(k)) ||
+  if (Object.keys(s).some((k) => !["msg_id", "rev", "author_id", "stage"].includes(k)) ||
       typeof s.msg_id !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(s.msg_id) ||
       typeof s.author_id !== "string" || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(s.author_id) ||
       typeof s.rev !== "number" || !Number.isSafeInteger(s.rev) || s.rev < 1 || s.rev > LIMITS.VERSIONS_MAX) {
     throw badRequest("response_to requires exact msg_id, author_id and integer rev from the original message");
   }
+  if (s.stage !== undefined && s.stage !== "progress" && s.stage !== "result") throw badRequest("response_to stage must be progress or result");
   if (i.reply_to !== undefined && i.reply_to !== null && i.reply_to !== "") throw badRequest("response_to sets the reply target; omit reply_to");
-  return { msg_id: s.msg_id, rev: s.rev, author_id: s.author_id };
+  return { msg_id: s.msg_id, rev: s.rev, author_id: s.author_id, ...(s.stage === undefined ? {} : { stage: s.stage }) };
 }
 
 /** Spec 5.1: explicit refs, `[{kind, key}]`, key in body syntax. */

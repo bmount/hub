@@ -1,4 +1,4 @@
-# Authenticated worker chat participation — #133 increment
+# Authenticated worker chat participation — #97 / #133 increments
 
 MCP now exposes `chat_post`, `chat_mark_read`, and `inbox_ack` **only to write-scoped connections**, within the caller's current role. Read-only OAuth/Playground connections retain the existing read-only surface. No tokens, grants, memberships, polling daemon, or scheduler are created or changed by this increment.
 
@@ -13,13 +13,14 @@ MCP now exposes `chat_post`, `chat_mark_read`, and `inbox_ack` **only to write-s
 
 ## Durable source-bound response contract
 
-`chat_post` optionally accepts `response_to: {msg_id, rev, author_id}` using exact fields from the original message (`author.identity_id` supplies `author_id`). Omit `reply_to`: the server sets the reply target from the source. Continue passing the current read head and a stable idempotency key over MCP.
+`chat_post` optionally accepts `response_to: {msg_id, rev, author_id, stage?}` using exact fields from the original message (`author.identity_id` supplies `author_id`). The fixed stages are `progress` and `result`; omission means `result`. Omit `reply_to`: the server sets the reply target from the source. Continue passing the current read head and a stable idempotency key over MCP.
 
 - The source must be a non-retracted user/agent message in **this authorized channel**. The server checks its exact stored author and revision before the first response, and repeats that check within the synchronous message/outbox transaction. A changed source returns `conflict`; a missing/cross-channel/system source returns `not_found`. There is no automatic execution decision, primary-user allowlist, new grant, or trust in quoted/assistant text.
-- One committed response is retained per **tenant/conversation/caller/source message**, irrespective of run session or idempotency key. This is intentionally one initial response per source, not one per source revision. Follow-up progress can be an ordinary post, or a response to a new message, after reconciliation.
+- One committed response is retained per **tenant/conversation/caller/source message/stage**, irrespective of run session or idempotency key. This provides at most **one progress update and one result**, not an unbounded series of milestones and not one pair per source revision. Arbitrary stage names are refused. Each first write verifies current exact source evidence independently. A stage is a deduplication slot, not execution authority or a claim that a task ran/finished; it is not an ordered task state machine.
+- All previously committed responses remain in the **result** slot: explicit `result` and omitted stage reconcile the existing record without duplicate messages. Progress uses a separate bounded namespace in the same existing store, requiring no migration. Never change stage to evade a conflict. Both posts reply to the original source in the same thread with the actual authenticated posting identity.
 - A compact record in the Conversation's existing SQL metadata table stores source identifiers/revision, SHA-256 of the submitted body and explicit refs, and the original result. No new schema/migration is needed. The record is atomic with artifacts and wake outboxes, has **no TTL**, and lives with the conversation; ordinary idempotency pruning does not remove it. It is not a permanent record beyond conversation deletion/rollback/restore.
 - Retrying the **identical persisted intent** returns the first response's identifiers, with `replayed: true`, even after 24 hours, a new session/key, or source/response edits or retractions. The returned head/revision are the **original committed result**, not current channel state. Read the thread for its current state. Replay never resurrects text or re-wakes recipients. Sequential replay skips rate reservation and chat-post events; simultaneous first attempts may each reserve a rate slot but only one message/outbox/result commits.
-- Different body, explicit refs, source author or revision returns `conflict`; do not fall back to an ordinary post or new key to evade it. Reconcile the original thread. If the persisted intent was lost, read original history rather than guessing a payload and resending. This increment does not supply a separate response-status query or migrate already-sent ordinary responses into the ledger.
+- Different body, explicit refs, source author or revision in an occupied slot returns `conflict`; do not fall back to an ordinary post or new key to evade it. Reconcile the original thread. If the persisted intent was lost, read original history rather than guessing a payload and resending. This increment does not supply a separate response-status query or migrate already-sent ordinary responses into the ledger.
 - Current authenticated session/write scope, tenant/channel membership, channel active state, and disabled/muted agent controls are checked even on durable replay. First writes also retain mention-only, stale-view, rates, duplicate, hop and human loop checks. Losing access cannot disclose a response record.
 
 Example (values are placeholders, not executable authority):
@@ -30,9 +31,11 @@ Example (values are placeholders, not executable authority):
   "body": "Tested increment completed; evidence is on the work item.",
   "after": 412,
   "idempotency_key": "persisted-response-intent-1",
-  "response_to": {"msg_id": "<exact original msg_id>", "rev": 1, "author_id": "<exact original author.identity_id>"}
+  "response_to": {"msg_id": "<exact original msg_id>", "rev": 1, "author_id": "<exact original author.identity_id>", "stage": "result"}
 }
 ```
+
+To send a progress checkpoint before the result, persist a separate intent using `stage: "progress"` and truthful progress text. Read the thread again before the result and supply its current head; keep each slot's original persisted body/refs/source for retries. Later updates beyond these two slots require ordinary post/history reconciliation or a newly addressed source, not invented stage names.
 
 ## Privacy and capabilities
 
@@ -42,6 +45,6 @@ Agents cannot self-join channels using these tools. The operator/admin must add 
 
 ## Acceptance and remaining work
 
-Regression tests exercise the real `/agent/mcp` and OAuth endpoints: scoped exposure, required replay key/read head, retry without duplicate posts/wakes, server-owned author/tenant provenance, muted/mention-only/disabled/archived policies, revoked membership and cross-tenant isolation, inert evidence rendering (existing chat MCP tests), private audit, caller-only monotonic cursors/acks and assistant provenance in catch-up. Durable-response tests additionally cover concurrent different keys/sessions, 48-hour retries after ordinary replay pruning, fresh-object SQL persistence, changed/forged/retracted source evidence, conflicting content, independent caller/channel namespaces, and replay without resurrection, extra wakes or chat-post events. Existing rate/loop/DO tests continue to apply.
+Regression tests exercise the real `/agent/mcp` and OAuth endpoints: scoped exposure, required replay key/read head, retry without duplicate posts/wakes, server-owned author/tenant provenance, muted/mention-only/disabled/archived policies, revoked membership and cross-tenant isolation, inert evidence rendering (existing chat MCP tests), private audit, caller-only monotonic cursors/acks and assistant provenance in catch-up. Durable-response tests additionally cover concurrent different keys/sessions, 48-hour retries after ordinary replay pruning, fresh-object SQL persistence, changed/forged/retracted source evidence, conflicting content, independent caller/channel namespaces, and replay without resurrection, extra wakes or chat-post events. Progress/result regressions additionally cover concurrent progress attempts, independent slot replay across 48 hours and fresh object instances, legacy/default-result compatibility, bounded stage validation, changed/retracted evidence, actual actor/thread identity, exactly two wake deliveries/events, and revoked/muted access. Existing rate/loop/DO tests continue to apply.
 
 Full #133 acceptance still needs an operator-owned integration that persists checkpoint decisions and response intents, adopts source-bound responses for chat, reconciles existing ordinary/ambiguous sends, and routes only exact authenticated requests within delegated scope. That integration must adopt these product tools without changing grants or manufacturing online presence. This document does not claim the background worker already posts autonomously, or that a channel membership exists where none has been granted.
