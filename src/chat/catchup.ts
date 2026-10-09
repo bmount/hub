@@ -100,7 +100,7 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
       incomplete.add(ch.project_id);
     }
   }
-  const mentions = active.flatMap(({ ch, d }) => d.mentions_me.map((m) => ({ ch, m }))).sort((a, b) => a.m.created_at - b.m.created_at);
+  const mentions = active.flatMap(({ ch, d }) => d.mentions_me.map((m) => ({ ch, m }))).sort((a, b) => a.m.updated_at - b.m.updated_at);
   if (mentions.length > 0) fits(["## For you"]);
   for (const { ch, m } of mentions) {
     const refs = await refsForViewer(ctx.db, v, m.refs);

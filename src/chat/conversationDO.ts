@@ -557,9 +557,12 @@ export class Conversation extends DurableObject<Env> {
       "SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN author_kind = 'agent' THEN 1 ELSE 0 END), 0) AS agents FROM msg WHERE kind = 'say' AND retracted = 0 AND first_seq > ?", since,
     )[0]!;
     // Identity ids are ULIDs, so a quoted id inside meta_json is an exact match.
+    // Mentions are current-revision evidence: an edit after the cursor may add or revise a mention
+    // on an older message. Use activity order, not creation order; removed mentions and retractions
+    // are not current requests. The new-message counts above still count only newly created text.
     // One row past the cap says the list was cut, so the caller does not move its cursor over what it never saw.
     const mentionRows = this.#q<MsgRow>(
-      `${MSG_SELECT} WHERE m.kind = 'say' AND m.first_seq > ? AND m.author_id <> ? AND m.retracted = 0 AND a.meta_json LIKE ? ORDER BY m.first_seq LIMIT ?`,
+      `${MSG_SELECT} WHERE m.kind = 'say' AND m.last_seq > ? AND m.author_id <> ? AND m.retracted = 0 AND a.meta_json LIKE ? ORDER BY m.last_seq LIMIT ?`,
       since, q.me, `%"${q.me}"%`, q.max_items + 1,
     );
     const mentions_truncated = mentionRows.length > q.max_items;
