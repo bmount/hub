@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { getChannelBySlug } from "../src/db/chat";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
-import { channelWith, chatWorld, ok } from "./chat-helpers";
+import { call, channelWith, chatWorld, ok } from "./chat-helpers";
 import { connectWithTokens, mcpPost, rpcBody } from "./oauth-helpers";
 
 async function tool(token: string, name: string, args: Record<string, unknown>) {
@@ -67,6 +67,45 @@ describe("integrated bounded chat reconciliation", () => {
       expect(denied.isError).toBe(true);
       expect(denied.structuredContent).toBeUndefined();
     }
+  });
+
+  it("refuses future channel-read checkpoints without pretending the evidence range is empty or acknowledging it", async () => {
+    const w = await chatWorld(); await channelWith(w);
+    const oauth = await connectWithTokens(w.dev.token, { scope: "read" });
+    const args = { c: "general", after: Number.MAX_SAFE_INTEGER, identity_id: w.lead.identity.id, head: Number.MAX_SAFE_INTEGER };
+    const box = inboxStub(env, w.acme.id, w.scout.agent.identity.id);
+    const before = await box.list(w.acme.id, w.scout.agent.identity.id, { after: 0, limit: 100, include_acked: true });
+    for (let i = 0; i < 3; i++) {
+      const api = await call(w.dev.token, "chat.read", args);
+      expect(api).toMatchObject({ status: 409, body: { error: "conflict", data: { head: 0 } } });
+      const agent = await tool(w.scout.longLived, "chat_read", args);
+      expect(agent.isError).toBe(true);
+      expect(agent.structuredContent).toBeUndefined();
+      const human = (await rpcBody(await mcpPost("acme", oauth.tokens.access_token, "tools/call", { name: "chat_read", arguments: args }))).result;
+      expect(human.isError).toBe(true);
+      expect(human.structuredContent).toBeUndefined();
+    }
+    expect(await box.cursors(w.acme.id, w.scout.agent.identity.id)).toEqual({});
+    expect(await box.list(w.acme.id, w.scout.agent.identity.id, { after: 0, limit: 100, include_acked: true })).toEqual(before);
+    const exactEmpty = (await tool(w.scout.longLived, "chat_read", { c: "general", after: 0 })).structuredContent;
+    expect(exactEmpty).toMatchObject({ identity_id: w.scout.agent.identity.id, head: 0, messages: [] });
+    const source = await ok(w.lead.token, "chat.post", { c: "general", body: "Native source remains discoverable @scout" });
+    await ok(w.lead.token, "chat.edit", { c: "general", msg: source.msg_id, body: "Current native revision @scout", after: source.head });
+    const changed = (await tool(w.scout.longLived, "chat_read", { c: "general", after: source.seq })).structuredContent;
+    expect(changed).toMatchObject({ head: 2, identity_id: exactEmpty.identity_id, messages: [{ msg_id: source.msg_id, rev: 2, author: { identity_id: w.lead.identity.id, session_kind: "browser" } }] });
+    expect((await call(w.dev.token, "chat.read", { c: "general", after: 3 })).body).toMatchObject({ error: "conflict", data: { head: 2 } });
+    expect((await tool(w.scout.longLived, "chat_read", { c: "general", after: changed.head })).structuredContent.messages).toEqual([]);
+    await channelWith(w, "other");
+    expect((await call(w.dev.token, "chat.read", { c: "other", after: changed.head })).body).toMatchObject({ error: "conflict", data: { head: 0 } });
+    await ok(w.lead.token, "channel.remove_agent", { c: "general", agent: "scout" });
+    const denied = await tool(w.scout.longLived, "chat_read", args);
+    expect(denied.isError).toBe(true);
+    expect(denied.structuredContent).toBeUndefined();
+    expect(JSON.stringify(denied)).not.toContain("current channel head");
+    expect((await call(w.dev.token, "chat.read", { c: "missing", after: 3 })).body.data?.head).toBeUndefined();
+    await env.HUB_DB.prepare("UPDATE oauth_grant SET revoked_at = ? WHERE client_id = ?").bind(Date.now(), oauth.client_id).run();
+    expect((await mcpPost("acme", oauth.tokens.access_token, "tools/call", { name: "chat_read", arguments: args })).status).toBe(401);
+    expect(await box.cursors(w.acme.id, w.scout.agent.identity.id)).toEqual({});
   });
 
   it("binds empty reads and thread pages to the current reader, not forged author/connection fields", async () => {

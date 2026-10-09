@@ -23,11 +23,11 @@ const schema = (properties: McpInputSchema["properties"], required: string[] = [
 
 export const chatRead = defineVerb({
   name: "chat.read", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Read a channel: the newest messages, or what changed after a cursor (after = the head you saw last). Replies are collapsed; use chat_thread for a thread.",
+  summary: "Read a channel: newest messages, or current changes after an activity cursor at most the authorized channel head. Future cursors are refused, not an empty evidence range. Replies are collapsed; use chat_thread. Reads do not acknowledge or prove processing.",
   mcp: {
     scope: "read", destructive: false, title: "Read a channel", render: chatText,
     input: schema({
-      c: C, after: { type: "integer", minimum: 0, description: "Only what changed after this seq." },
+      c: C, after: { type: "integer", minimum: 0, description: "Only current changes after this activity seq, at most the authorized channel head. Continue with next_after, not a guessed future cursor." },
       before: { type: "integer", minimum: 1, description: "Page back: messages numbered below this." },
       limit: { type: "integer", minimum: 1, maximum: 200, description: "Messages to fetch, default 50." }, budget: BUDGET,
     }, ["c"]),
@@ -41,6 +41,7 @@ export const chatRead = defineVerb({
     const page = (await conversationStub(ctx.env, ch.tenant_id, ch.project_id).read({
       tenant_id: ch.tenant_id, conversation_id: ch.project_id, after: p.after, before: p.before, thread: null, limit: p.limit,
     })) as ReadPage;
+    if (p.after !== null && p.after > page.head) throw new HubError(409, "conflict", "after exceeds the current channel head; reconcile channel activity before continuing", { head: page.head });
     const title = `#${ch.slug} head=${page.head}${p.after !== null ? ` since=${p.after}` : ""}`;
     return readResult(ctx, ch, page.messages, { title, head: page.head, budget: p.budget, keep: p.after === null ? "newest" : "oldest", has_more: page.has_more, cursors: page.cursors });
   },
