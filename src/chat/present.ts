@@ -8,7 +8,7 @@ import type { MsgView, ViewRef } from "./types";
 
 /** Spec 11.3: "The JSON form keeps author fields and body in separate keys." */
 export type AuthorJson = {
-  handle: string; display_name: string; kind: NameTag["kind"]; operator: string | null; session_id: string | null; run: string | null; via_assistant: boolean;
+  identity_id: string; handle: string; display_name: string; kind: NameTag["kind"]; operator: string | null; session_id: string | null; run: string | null; via_assistant: boolean;
 };
 export type MsgJson = {
   seq: number; msg_id: string; rev: number; root_seq: number | null; author: AuthorJson; hop: number; body: string; edited: boolean;
@@ -16,7 +16,7 @@ export type MsgJson = {
 };
 
 export function authorJson(t: NameTag): AuthorJson {
-  return { handle: t.handle, display_name: t.display_name, kind: t.kind, operator: t.operator_handle, session_id: t.session_id, run: t.session_label, via_assistant: t.via_assistant };
+  return { identity_id: t.identity_id, handle: t.handle, display_name: t.display_name, kind: t.kind, operator: t.operator_handle, session_id: t.session_id, run: t.session_label, via_assistant: t.via_assistant };
 }
 
 export function msgJson(m: MsgView, t: NameTag, refs: ViewRef[]): MsgJson {
@@ -35,7 +35,7 @@ export async function present(ctx: Ctx, msgs: MsgView[]): Promise<{ tagOf: TagOf
   return { tagOf, refs };
 }
 
-export type ReadResult = { channel: string; head: number; messages: MsgJson[]; next_after: number | null; next_before: number | null; text: string };
+export type ReadResult = { tenant_id: string; conversation_id: string; channel: string; head: number; messages: MsgJson[]; next_after: number | null; next_before: number | null; text: string };
 
 /** Compact text within the budget, and JSON for exactly the messages the text shows. */
 export async function readResult(
@@ -45,7 +45,7 @@ export async function readResult(
   const r = renderMessages({ title: o.title, c: ch.slug, messages: msgs, tagOf, refs, budget: o.budget, keep: o.keep, has_more: o.has_more, full: o.full ?? null, cursors: o.cursors });
   const shown = new Set(r.shown);
   return {
-    channel: ch.slug, head: o.head,
+    tenant_id: ch.tenant_id, conversation_id: ch.project_id, channel: ch.slug, head: o.head,
     messages: msgs.filter((m) => shown.has(m.seq)).map((m) => msgJson(m, tagOf(m.author_id, m.session_id), refs.get(m.seq) ?? [])),
     next_after: r.next_after, next_before: r.next_before, text: r.text,
   };

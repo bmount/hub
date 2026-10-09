@@ -112,7 +112,7 @@ export function renderMessages(o: RenderInput): Rendered {
 }
 
 /** One inbox item: ids, kind, and handle only; no message text (spec 6.3 delivery is content-free). */
-export type ItemView = { item: number; kind: string; channel: string; seq: number; msg_id: string; author: string; hop: number; wake: boolean; created_at: number };
+export type ItemView = { item: number; kind: string; channel: string; seq: number; msg_id: string; author_id: string; author: string; hop: number; wake: boolean; created_at: number };
 
 export function itemLine(i: ItemView): string {
   if (i.kind === "mail") return `[mail ${hhmm(i.created_at)} from @${i.author} id=${i.msg_id} item=${i.item}; read it with mail_read]`;
@@ -123,7 +123,12 @@ export function plainText(title: string, lines: string[]): string {
   return [DATA_NOTE, CHAT_NOTE, "", title, ...lines].join("\n");
 }
 
-/** The `render` of every chat verb: its result carries the text the renderer already wrote. */
+/** Content-free command receipts: JSON quotes member-supplied metadata; no message body is returned. */
+export function chatCommandText(result: unknown): string {
+  return plainText("Chat command result", [cleanText(JSON.stringify(result))]);
+}
+
+/** The `render` of every chat read verb: its result carries the text the renderer already wrote. */
 export function chatText(result: unknown): string {
   return (result as { text: string }).text;
 }

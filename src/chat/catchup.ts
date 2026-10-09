@@ -12,6 +12,7 @@ import type { Digest, MsgView } from "./types";
 export type CatchupParams = { since: string | null; budget: number; scope: string | null; advance: boolean };
 type ConvSummary = { channel: string; head: number; since: number; new: number; agent: number; threads: Array<{ seq: number; replies: number }>; authors: string[]; refs: string[] };
 export type CatchupResult = {
+  tenant_id: string;
   budget: number; used_tokens: number; omitted: number; next: string; advanced: boolean;
   for_you: Array<MsgJson & { channel: string }>;
   threads: Array<{ channel: string; root_seq: number; replies: number; latest_seq: number; latest_author: string }>;
@@ -72,7 +73,7 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   })))) as Digest[];
   const active = chans.map((ch, i) => ({ ch, d: digests[i]! })).filter((x) => x.d.head > x.d.since);
   const views: MsgView[] = active.flatMap(({ d }) => [...d.mentions_me, ...d.my_threads.flatMap((t) => [t.root, t.newest]), ...d.threads.map((t) => t.root)]);
-  const tagOf = await nameTags(ctx.db, v.tenant.id, views.map((m) => ({ author_id: m.author_id, session_id: m.session_id })));
+  const tagOf = await nameTags(ctx.db, v.tenant.id, views.map((m) => ({ author_id: m.author_id, session_id: m.session_id, session_kind: m.session_kind })));
   const dir = await people(ctx.db, v.tenant.id);
   const handle = (id: string) => (id === "hub" ? "hub" : dir.get(id)?.handle ?? "unknown");
 
@@ -159,5 +160,5 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   if (p.advance) for (const { ch, d } of done) await box.markRead(v.tenant.id, v.identity.id, ch.project_id, d.head);
   const next = encodeCursors(nextCursors);
   lines.push("", `omitted: ${omitted}`, `next: since=${next}`);
-  return { budget: p.budget, used_tokens: Math.ceil(used / 4), omitted, next, advanced: p.advance, ...out, text: lines.join("\n") };
+  return { tenant_id: v.tenant.id, budget: p.budget, used_tokens: Math.ceil(used / 4), omitted, next, advanced: p.advance, ...out, text: lines.join("\n") };
 }

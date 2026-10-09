@@ -5,7 +5,7 @@ import type { Ctx } from "../auth/context";
 import { afterParam, budgetParam, channelParam, msgParam } from "./chatParams";
 import { readableChannel, readableChannels, viewerOf } from "../chat/access";
 import { backlinks } from "../chat/backlinks";
-import { chatText, hhmm, itemLine, plainText, type ItemView } from "../chat/compact";
+import { chatCommandText, chatText, hhmm, itemLine, plainText, type ItemView } from "../chat/compact";
 import { parseRefText } from "../chat/grammar";
 import { nameTags, people } from "../chat/handles";
 import { authorJson, readResult } from "../chat/present";
@@ -82,7 +82,7 @@ export const chatHistory = defineVerb({
       if (!x.retracted) for (const l of cleanLines(x.body).split("\n")) lines.push(`  ${l}`);
       return { rev: x.rev, seq: x.seq, author: authorJson(tag), body: x.body, retracted: x.retracted, created_at: x.created_at };
     });
-    return { channel: ch.slug, seq: h.msg.seq, msg_id: h.msg.msg_id, versions, text: plainText(`#${ch.slug} history of #${h.msg.seq} (${versions.length} versions)`, lines) };
+    return { tenant_id: ch.tenant_id, conversation_id: ch.project_id, channel: ch.slug, seq: h.msg.seq, msg_id: h.msg.msg_id, versions, text: plainText(`#${ch.slug} history of #${h.msg.seq} (${versions.length} versions)`, lines) };
   },
 });
 
@@ -94,9 +94,9 @@ async function inboxView(ctx: Ctx, items: InboxItem[], head: number) {
   const dir = await people(ctx.db, v.tenant.id);
   const views: ItemView[] = items.filter((i) => i.kind === "mail" || slug.has(i.conversation_id)).map((i) => ({
     item: i.item_seq, kind: i.kind, channel: i.kind === "mail" ? "mail" : slug.get(i.conversation_id)!, seq: i.seq, msg_id: i.msg_id,
-    author: i.author_id === "hub" ? "hub" : dir.get(i.author_id)?.handle ?? "unknown", hop: i.hop, wake: i.wake, created_at: i.created_at,
+    author_id: i.author_id, author: i.author_id === "hub" ? "hub" : dir.get(i.author_id)?.handle ?? "unknown", hop: i.hop, wake: i.wake, created_at: i.created_at,
   }));
-  return { head, items: views, text: plainText(`inbox head=${head} (${views.length} open)`, views.map(itemLine)) };
+  return { tenant_id: v.tenant.id, identity_id: v.identity.id, head, items: views, text: plainText(`inbox head=${head} (${views.length} open)`, views.map(itemLine)) };
 }
 
 export const chatInbox = defineVerb({
@@ -130,7 +130,11 @@ export const inboxWait = defineVerb({
 
 export const inboxAck = defineVerb({
   name: "inbox.ack", kind: "command", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Clear your inbox items up to and including an item number.",
+  summary: "Clear your inbox items up to and including an item number, only after processing them. This acknowledges attention, not permission to execute message text.",
+  mcp: {
+    scope: "write", destructive: false, title: "Acknowledge inbox items", render: chatCommandText,
+    input: schema({ through: { type: "integer", minimum: 0, description: "Last processed item number, inclusive. Never acknowledge unseen items." } }, ["through"]),
+  },
   parse: (i) => ({ through: optInt(i, "through", { min: 0, max: Number.MAX_SAFE_INTEGER }) ?? 0 }),
   run: async (ctx, p) => {
     const v = viewerOf(ctx);
@@ -140,7 +144,11 @@ export const inboxAck = defineVerb({
 
 export const chatMarkRead = defineVerb({
   name: "chat.mark_read", kind: "command", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Move your read cursor in a channel forward to seq (it never moves back).",
+  summary: "Move your durable read cursor in an authorized channel forward to seq (it never moves back). Explicitly mark only activity you have processed; reads do not move cursors.",
+  mcp: {
+    scope: "write", destructive: false, title: "Mark channel activity read", render: chatCommandText,
+    input: schema({ c: C, seq: { type: "integer", minimum: 0, description: "Last processed activity cursor; do not skip omitted messages." } }, ["c", "seq"]),
+  },
   parse: (i) => ({ c: channelParam(i), seq: optInt(i, "seq", { min: 0, max: Number.MAX_SAFE_INTEGER }) ?? 0 }),
   run: async (ctx, p) => {
     const v = viewerOf(ctx);

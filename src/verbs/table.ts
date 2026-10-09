@@ -16,7 +16,11 @@ export type McpInputSchema = {
  * `render`: verbs whose results carry member-written text (messages) write their own text with the chat renderer
  * (messaging spec 11.3); the tool result then starts with DATA_NOTE and its structuredContent is cleaned.
  */
-export type McpDecl = { scope: "read" | "write"; destructive: boolean; title: string; input: McpInputSchema; render?: (result: unknown) => string };
+export type McpDecl = {
+  scope: "read" | "write"; destructive: boolean; title: string; input: McpInputSchema; render?: (result: unknown) => string;
+  /** Record only argument names, never values (for tools carrying private conversation content). */
+  auditKeysOnly?: boolean;
+};
 
 export type VerbDef<P, R> = {
   name: string;

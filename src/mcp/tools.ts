@@ -87,7 +87,7 @@ async function audit(
   keysOnly: boolean,
 ): Promise<void> {
   const label = verb ? target : quotedName(target, 64);
-  const summary = `${label} ${outcome} {${argSummary(args, declaredKeys(verb), keysOnly || !verb)}}`;
+  const summary = `${label} ${outcome} {${argSummary(args, declaredKeys(verb), keysOnly || !verb || verb.mcp?.auditKeysOnly === true)}}`;
   await recordEvent(ctx.db, {
     tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind, target_kind: "verb",
     target_id: cutText(cleanText(target), 64).text, summary: cutText(summary, SUMMARY_MAX).text,
