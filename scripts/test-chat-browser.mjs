@@ -2,6 +2,7 @@
 // Entirely disposable local acceptance: real bundled Worker, D1/DOs, browser and
 // synthetic sessions. No remote services, production cookies or credential files.
 import { execFileSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readdir, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,7 +16,7 @@ const artifacts = path.resolve(process.env.CHAT_BROWSER_ARTIFACTS || await mkdte
 await mkdir(artifacts, { recursive: true });
 const host = 'acme.pimwell.test';
 const base = `https://${host}`;
-let mf, browser;
+let mf, browser, cacheBrowser, cacheServer;
 let counter = 0;
 const id = () => String(++counter).padStart(26, '0');
 const now = Date.now();
@@ -181,6 +182,95 @@ try {
     await ctx.close();
     console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing and recovery, cursor unchanged`);
   }
+  // Playwright routing and its default Chromium flag disable native BFCache.
+  // Use an actual loopback HTTP bridge and omit ONLY that flag for this pass.
+  // Host/origin translation lives entirely in the disposable test adapter.
+  const cacheCalls = [];
+  cacheServer = createServer(async (req, res) => {
+    try {
+      const pathname = new URL(req.url, 'http://localhost').pathname;
+      if (pathname === '/cache-away') {
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end('<!doctype html><title>Away from channel</title><p>Local BFCache destination</p>');
+        return;
+      }
+      if (!(pathname.startsWith('/assets/') || pathname === '/c/general' || /^\/api\/chat\.(presence|heartbeat)$/.test(pathname))) {
+        res.writeHead(404); res.end(); return;
+      }
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = Buffer.concat(chunks);
+      if (pathname.startsWith('/api/')) cacheCalls.push({ name: pathname, ...JSON.parse(body.toString()) });
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(req.headers)) if (value) headers.set(key, Array.isArray(value) ? value.join(', ') : value);
+      headers.set('x-local-browser-host', host);
+      if (headers.has('origin')) headers.set('origin', base);
+      const result = await mf.dispatchFetch(base + req.url, {
+        method: req.method, headers, body: body.length ? body : undefined,
+      });
+      // Preserve the real Worker's cache-control and content; never force cache eligibility.
+      res.writeHead(result.status, Object.fromEntries(result.headers));
+      res.end(Buffer.from(await result.arrayBuffer()));
+    } catch { res.writeHead(500); res.end('Local bridge failed'); }
+  });
+  await new Promise(resolve => cacheServer.listen(0, '127.0.0.1', resolve));
+  const cacheBase = `http://127.0.0.1:${cacheServer.address().port}`;
+  cacheBrowser = await chromium.launch({ channel: 'chromium', headless: true,
+    ignoreDefaultArgs: ['--disable-back-forward-cache'],
+    args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'],
+  });
+  for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }]]) {
+    const cacheCtx = await cacheBrowser.newContext({ viewport, serviceWorkers: 'block' });
+    await cacheCtx.addCookies([{ name: 'pmw_session', value: member, url: cacheBase, httpOnly: true, sameSite: 'Lax' }]);
+    const cachePage = await cacheCtx.newPage();
+    const cacheDiagnostics = await cacheCtx.newCDPSession(cachePage);
+    await cacheDiagnostics.send('Page.enable');
+    const cacheMisses = [];
+    cacheDiagnostics.on('Page.backForwardCacheNotUsed', event => cacheMisses.push(...event.notRestoredExplanations));
+    await cachePage.addInitScript(() => {
+      window.__cacheLifecycle = [];
+      window.__cacheDocument = Math.random();
+      for (const name of ['pageshow', 'pagehide']) window.addEventListener(name, event => {
+        window.__cacheLifecycle.push({ name, persisted: event.persisted });
+      });
+    });
+    await cachePage.goto(`${cacheBase}/c/general`);
+    await expect(cachePage.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    await cachePage.locator('[data-presence-toggle]').click();
+    await expect(cachePage.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
+    await expect(cachePage.locator('[data-presence-list]')).toContainText('online');
+    const documentId = await cachePage.evaluate(() => window.__cacheDocument);
+    // A top-level navigation, not workbench pushState or synthetic lifecycle events.
+    await cachePage.goto(`${cacheBase}/cache-away`);
+    const restoreStart = cacheCalls.length;
+    await cachePage.goBack();
+    const restored = (await cachePage.evaluate(() => window.__cacheDocument)) === documentId;
+    if (restored) {
+      expect(await cachePage.evaluate(() => window.__cacheLifecycle)).toEqual([
+        { name: 'pageshow', persisted: false }, { name: 'pagehide', persisted: true }, { name: 'pageshow', persisted: true },
+      ]);
+      await expect(cachePage.locator('[data-presence-sharing]')).toContainText('Share explicitly again');
+    } else {
+      // Current Chromium refuses no-store pages/API results. That is not a
+      // persisted-page pass: assert the authoritative reason and fresh document.
+      // Do not strip private cache headers or force feature flags to obtain a pass.
+      expect(cacheMisses.some(e => e.reason === 'MainResourceHasCacheControlNoStore')).toBe(true);
+      expect(await cachePage.evaluate(() => window.__cacheLifecycle)).toEqual([{ name: 'pageshow', persisted: false }]);
+    }
+    await expect(cachePage.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+    await expect(cachePage.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    // Exercise a real post-restoration 30s timer, without injecting page events/clocks.
+    await expect.poll(() => cacheCalls.slice(restoreStart).filter(c => c.name.endsWith('presence')).length, { timeout: 40000 }).toBeGreaterThan(1);
+    expect(cacheCalls.slice(restoreStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(0);
+    await cachePage.locator('[data-chat-presence]').screenshot({ path: path.join(artifacts, `${label}-presence-native-bfcache.png`) });
+    await cachePage.locator('[data-presence-toggle]').click();
+    await expect.poll(() => cacheCalls.slice(restoreStart).filter(c => c.name.endsWith('heartbeat') && c.status === 'online').length).toBe(1);
+    await expect(cachePage.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
+    await cacheCtx.close();
+    console.log(`PASS ${label}: native history ${restored ? 'persisted BFCache restore' : 'no-store cache refusal and fresh-document return'}; renewed explicit opt-in, real 30s query-only timer`);
+  }
+  await cacheBrowser.close(); cacheBrowser = null;
+  await new Promise(resolve => cacheServer.close(resolve)); cacheServer = null;
   let lastRead = 0;
   for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }], ['narrow', { width: 320, height: 740 }]]) {
     const ctx = await context(member, viewport);
@@ -285,6 +375,8 @@ try {
   console.log(`PASS reader/viewer isolation and outside-tenant/unauthenticated denials; ${requests} local browser requests. Screenshots: ${artifacts}`);
 } finally {
   await browser?.close();
+  await cacheBrowser?.close();
+  if (cacheServer) await new Promise(resolve => cacheServer.close(resolve));
   await mf?.dispose();
   await rm(temp, { recursive: true, force: true });
 }
