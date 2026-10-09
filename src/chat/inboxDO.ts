@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { bindOnce } from "./bound";
 import { LIMITS, postVerdict } from "./rules";
-import type { InboxItem, WakeItem } from "./types";
+import type { InboxItem, InboxPage, WakeItem } from "./types";
 
 const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -62,6 +62,13 @@ export class Inbox extends DurableObject<Env> {
     return rows.map((r) => ({ ...r, kind: r.kind as InboxItem["kind"], wake: r.wake === 1 }));
   }
 
+  /** Synchronous snapshot; the extra row tests continuation but is never returned or skipped. */
+  #page(after: number, limit: number, includeAcked: boolean): InboxPage {
+    const rows = this.#open(after, limit + 1, includeAcked);
+    const items = rows.slice(0, limit);
+    return { head: this.#head(), items, next_after: items.at(-1)?.item_seq ?? after, has_more: rows.length > limit };
+  }
+
   async head(tenant_id: string, identity_id: string): Promise<number> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
     return this.#head();
@@ -92,9 +99,9 @@ export class Inbox extends DurableObject<Env> {
     return added;
   }
 
-  async list(tenant_id: string, identity_id: string, q: { after: number; limit: number; include_acked: boolean }): Promise<{ head: number; items: InboxItem[] }> {
+  async list(tenant_id: string, identity_id: string, q: { after: number; limit: number; include_acked: boolean }): Promise<InboxPage> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
-    return { head: this.#head(), items: this.#open(q.after, clampLimit(q.limit), q.include_acked) };
+    return this.#page(q.after, clampLimit(q.limit), q.include_acked);
   }
 
   /**
@@ -102,14 +109,14 @@ export class Inbox extends DurableObject<Env> {
    * that does not qualify (nothing open after `after`) does not end the wait: it loops until the deadline. At most
    * INBOX_WAITERS_MAX polls park at once; beyond that a call answers at once, as if `wait_ms` were 0.
    */
-  async wait(tenant_id: string, identity_id: string, q: { after: number; limit: number; wait_ms: number }): Promise<{ head: number; items: InboxItem[] }> {
+  async wait(tenant_id: string, identity_id: string, q: { after: number; limit: number; wait_ms: number }): Promise<InboxPage> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
     const limit = clampLimit(q.limit);
     const deadline = Date.now() + Math.min(Math.max(0, q.wait_ms), LIMITS.INBOX_WAIT_MAX_S * 1000);
     for (;;) {
-      const ready = this.#open(q.after, limit, false);
+      const page = this.#page(q.after, limit, false);
       const left = deadline - Date.now();
-      if (ready.length > 0 || left <= 0 || this.#waiters.size >= LIMITS.INBOX_WAITERS_MAX) return { head: this.#head(), items: ready };
+      if (page.items.length > 0 || left <= 0 || this.#waiters.size >= LIMITS.INBOX_WAITERS_MAX) return page;
       await new Promise<void>((resolve) => {
         const done = () => {
           clearTimeout(timer);

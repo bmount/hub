@@ -115,7 +115,7 @@ export function renderMessages(o: RenderInput): Rendered {
 }
 
 /** One inbox item: ids, kind, and handle only; no message text (spec 6.3 delivery is content-free). */
-export type ItemView = { item: number; kind: string; channel: string; seq: number; msg_id: string; author_id: string; author: string; hop: number; wake: boolean; created_at: number };
+export type ItemView = { item: number; kind: string; channel: string; conversation_id: string | null; seq: number; msg_id: string; author_id: string; author: string; hop: number; wake: boolean; created_at: number };
 
 export function itemLine(i: ItemView): string {
   if (i.kind === "mail") return `[mail ${hhmm(i.created_at)} from @${i.author} id=${i.msg_id} item=${i.item}; read it with mail_read]`;
