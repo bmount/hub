@@ -33,6 +33,30 @@ export function snippet(text: string, ts: string[], max = 160): string {
 }
 
 export type Hit = { kind: string; ref: string; title: string; snippet: string; href: string; at: number };
+const SOURCE_LIMITS = { work: 20, mail: 15, messages: 15, people: 10, projects: 10, errors: 10 } as const;
+const CHANNEL_LIMIT = 40;
+const PER_CHANNEL_LIMIT = 10;
+type SearchSource = keyof typeof SOURCE_LIMITS;
+export type SearchGroups = Record<SearchSource, Hit[]>;
+type MessageCoverage = { readable_active_channels: number; searched_channels: number; channel_limit: number; per_channel_limit: number; channels_at_hit_limit: number };
+export type SearchCoverage = {
+  scope: "caller_readable_records";
+  matching: "all_terms_substring";
+  terms_used: string[];
+  freshness: "unknown";
+  sources: Record<SearchSource, { returned: number; limit: number; total_matches: null; may_have_more: boolean }>;
+  conversations: MessageCoverage;
+  not_searched: string[];
+};
+export type SearchResult = SearchGroups & { coverage: SearchCoverage };
+
+/** Fixed descriptions only: never enumerate inaccessible channels/mailboxes as coverage gaps. */
+export function coverageText(c: SearchCoverage): string {
+  return `Coverage: caller-readable records; all-term substring matching (${c.terms_used.length} terms used; first six words of two or more characters). ` +
+    Object.entries(c.sources).map(([k, s]) => `${k}: ${s.returned} returned, limit ${s.limit}${s.may_have_more ? "; more matches may exist" : ""}`).join("; ") +
+    `. Conversations: ${c.conversations.searched_channels}/${c.conversations.readable_active_channels} readable active channels searched (limit ${c.conversations.channel_limit}), up to ${c.conversations.per_channel_limit} matches each; ${c.conversations.channels_at_hit_limit} channels reached that cap. ` +
+    `Not searched: ${c.not_searched.join(", ")}. Total matches and source freshness unknown. Zero results are not proof of absence outside this coverage.`;
+}
 
 function workHitsStatement(ctx: Ctx, ts: string[], project: string | null, limit: number) {
   const hay = "w.title || ' ' || w.body || ' ' || COALESCE(w.source_quote, '') || ' ' || COALESCE((SELECT GROUP_CONCAT(c.body, ' ') FROM work_comment c WHERE c.item_id = w.id), '')";
@@ -66,16 +90,20 @@ export const workSearch = defineVerb({
   },
 });
 
-async function messageHits(ctx: Ctx, ts: string[], only: string | null, limit: number): Promise<Hit[]> {
+async function messageHits(ctx: Ctx, ts: string[], only: string | null, limit: number): Promise<{ hits: Hit[]; coverage: MessageCoverage }> {
   const v = viewerOf(ctx);
-  const chans = (await readableChannels(ctx.db, v, "active")).filter((c) => !only || c.slug === only).slice(0, 40);
+  const readable = (await readableChannels(ctx.db, v, "active")).filter((c) => !only || c.slug === only);
+  const chans = readable.slice(0, CHANNEL_LIMIT);
   const dir = await people(ctx.db, ctx.tenant!.id);
   const found = await Promise.all(chans.map(async (c) => {
     const rows = await (conversationStub(ctx.env, ctx.tenant!.id, c.project_id) as unknown as { search(t: string, cid: string, terms: string[], n: number): Promise<Array<{ seq: number; author_id: string; body: string; created_at: number; thread_root: string | null }>> })
-      .search(ctx.tenant!.id, c.project_id, ts, 10);
+      .search(ctx.tenant!.id, c.project_id, ts, PER_CHANNEL_LIMIT);
     return rows.map((m): Hit => ({ kind: "Message", ref: `#${c.slug} #${m.seq}`, title: `@${dir.get(m.author_id)?.handle ?? "unknown"} in #${c.slug}`, snippet: snippet(m.body, ts), href: `/c/${c.slug}`, at: m.created_at }));
   }));
-  return found.flat().sort((a, b) => b.at - a.at).slice(0, limit);
+  return {
+    hits: found.flat().sort((a, b) => b.at - a.at).slice(0, limit),
+    coverage: { readable_active_channels: readable.length, searched_channels: chans.length, channel_limit: CHANNEL_LIMIT, per_channel_limit: PER_CHANNEL_LIMIT, channels_at_hit_limit: found.filter((rows) => rows.length >= PER_CHANNEL_LIMIT).length },
+  };
 }
 
 export const messageSearch = defineVerb({
@@ -87,43 +115,55 @@ export const messageSearch = defineVerb({
     render: (r) => { const x = (r as { hits: Hit[] }).hits; return [DATA_NOTE, NOTE, "", `**${x.length} messages**`, ...x.map((h) => `- ${h.ref} ${cleanText(h.title)}: ${cleanText(h.snippet)}`)].join("\n"); },
   },
   parse: (i) => ({ q: reqString(i, "q", { max: 200 }), c: optString(i, "c", { max: 64 }) }),
-  run: async (ctx, p) => ({ hits: await messageHits(ctx, terms(p.q), p.c, 30) }),
+  run: async (ctx, p) => ({ hits: (await messageHits(ctx, terms(p.q), p.c, 30)).hits }),
 });
 
-/** Everything at once, grouped: work, mail, messages, people, projects, app errors. */
-export async function searchAll(ctx: Ctx, q: string): Promise<Record<string, Hit[]>> {
+/** Available sources, grouped, with explicit bounds and unsearched-source disclosure. */
+export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
   const ts = terms(q);
   const access = readableMail(ctx);
   const tid = ctx.tenant!.id;
   const [work, mail, ppl, proj, errs] = await ctx.db.batch([
-    workHitsStatement(ctx, ts, null, 20),
+    workHitsStatement(ctx, ts, null, SOURCE_LIMITS.work),
     ctx.db.prepare(`SELECT m.id, m.subject, m.text, m.from_email, m.received_at FROM inbound_mail m WHERE ${access.sql}
-      AND ${all("m.subject || ' ' || m.text || ' ' || m.from_email", ts.length)} ORDER BY m.received_at DESC LIMIT 15`).bind(...access.bindings, ...ts.map(like)),
+      AND ${all("m.subject || ' ' || m.text || ' ' || m.from_email", ts.length)} ORDER BY m.received_at DESC LIMIT ?`).bind(...access.bindings, ...ts.map(like), SOURCE_LIMITS.mail),
     ctx.db.prepare(`SELECT i.display_name, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active'
-      AND ${all("i.display_name || ' ' || i.email", ts.length)} LIMIT 10`).bind(tid, ...ts.map(like)),
-    ctx.db.prepare(`SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel' AND ${all("slug || ' ' || display_name", ts.length)} LIMIT 10`).bind(tid, ...ts.map(like)),
+      AND ${all("i.display_name || ' ' || i.email", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.people),
+    ctx.db.prepare(`SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel' AND ${all("slug || ' ' || display_name", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.projects),
     ctx.db.prepare(`SELECT g.id, g.script_name, g.title, g.last_message, g.last_seen FROM app_error_group g WHERE g.tenant_id = ? AND ${all("g.title || ' ' || g.last_message || ' ' || g.script_name", ts.length)}
-      ORDER BY g.last_seen DESC LIMIT 10`).bind(tid, ...ts.map(like)),
+      ORDER BY g.last_seen DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.errors),
   ]);
-  return {
+  const messages = await messageHits(ctx, ts, null, SOURCE_LIMITS.messages);
+  const groups: SearchGroups = {
     work: (work!.results as WorkRow[]).map((r) => workHit(r, ts)),
     mail: (mail!.results as Array<{ id: string; subject: string; text: string; from_email: string; received_at: number }>).map((m) => ({ kind: "Mail", ref: m.from_email, title: m.subject || "(no subject)", snippet: snippet(m.text, ts), href: `/mail/${m.id}`, at: m.received_at })),
-    messages: await messageHits(ctx, ts, null, 15),
+    messages: messages.hits,
     people: (ppl!.results as Array<{ display_name: string; email: string; kind: string }>).map((x) => ({ kind: x.kind === "agent" ? "Agent" : "Person", ref: x.email, title: x.display_name, snippet: "", href: `/people/${encodeURIComponent(x.email)}`, at: 0 })),
     projects: (proj!.results as Array<{ slug: string; display_name: string }>).map((x) => ({ kind: "Project", ref: x.slug, title: x.display_name, snippet: "", href: `/${x.slug}/docket`, at: 0 })),
     errors: (errs!.results as Array<{ id: string; script_name: string; title: string; last_message: string; last_seen: number }>).map((g) => ({ kind: "Error", ref: g.script_name, title: g.title, snippet: snippet(g.last_message, ts), href: `/apps?g=${g.id}`, at: g.last_seen })),
   };
+  const sources = Object.fromEntries(Object.entries(SOURCE_LIMITS).map(([key, limit]) => {
+    const returned = groups[key as SearchSource].length;
+    const channelGap = key === "messages" && (messages.coverage.searched_channels < messages.coverage.readable_active_channels || messages.coverage.channels_at_hit_limit > 0);
+    return [key, { returned, limit, total_matches: null, may_have_more: returned >= limit || channelGap }];
+  })) as SearchCoverage["sources"];
+  return { ...groups, coverage: {
+    scope: "caller_readable_records", matching: "all_terms_substring", terms_used: ts, freshness: "unknown", sources,
+    conversations: messages.coverage,
+    not_searched: ["outbound mail", "mail attachments", "reviews", "situations", "repository code", "archived conversations"],
+  } };
 }
 
 export const searchQuery = defineVerb({
   name: "search.query", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "One search across work, mail, conversations, people, projects and app errors, grouped by kind.",
+  summary: "Search caller-readable work, inbound mail, active conversations, people, projects and app errors. Bounded results with explicit coverage; not a search of every source.",
   mcp: {
-    scope: "read", destructive: false, title: "Search everything",
+    scope: "read", destructive: false, title: "Search available sources",
     input: { type: "object", properties: { q: { type: "string", description: "What to find" } }, required: ["q"], additionalProperties: false },
     render: (r) => {
-      const g = r as Record<string, Hit[]>;
-      return [DATA_NOTE, NOTE, "", ...Object.entries(g).filter(([, v]) => v.length).flatMap(([k, v]) => [`**${k}** (${v.length})`, ...v.map((h) => `- ${cleanText(h.ref)} ${cleanText(h.title)}${h.snippet ? `: ${cleanText(h.snippet)}` : ""}`), ""])].join("\n") || "Nothing found.";
+      const { coverage, ...g } = r as SearchResult;
+      const found = Object.entries(g).filter(([, v]) => v.length).flatMap(([k, v]) => [`**${k}** (${v.length})`, ...v.map((h) => `- ${cleanText(h.ref)} ${cleanText(h.title)}${h.snippet ? `: ${cleanText(h.snippet)}` : ""}`), ""]);
+      return [DATA_NOTE, NOTE, "", coverageText(coverage), "", ...(found.length ? found : ["No matches within this coverage."])].join("\n");
     },
   },
   parse: (i) => ({ q: reqString(i, "q", { max: 200 }) }),

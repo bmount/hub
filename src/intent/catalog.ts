@@ -31,7 +31,7 @@ export const ACTIONS: Action[] = [
     { name: "kind", type: { enum: KIND_WORDS }, about: "for work: as for docket" },
     { name: "owner", type: "string", about: "for work: \"me\", an email, or a person's name as they said it" },
     { name: "finished", type: "boolean", about: "for work: true for finished work" }] },
-  { id: "search", about: "Search everything: work, mail, conversations, people, projects, errors.", params: [{ name: "query", type: "string", about: "what to look for", required: true }] },
+  { id: "search", about: "Search available work, inbound mail, active conversations, people, projects and errors with coverage and limits. Not every source is searched.", params: [{ name: "query", type: "string", about: "what to look for", required: true }] },
   { id: "ask_assistant", about: "Ask a question about the work or the record (what's late, what changed, who is on what, any errors). The Assistant answers it.", params: [{ name: "question", type: "string", about: "their question, in their words", required: true }] },
   { id: "file_work", about: "File new work: a wish, snag, errand, quest, call or spark.", params: [
     { name: "title", type: "string", about: "one line, from their words", required: true }, { name: "kind", type: { enum: KIND_WORDS }, about: "as for docket" },

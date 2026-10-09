@@ -39,7 +39,7 @@ export const SKILLS: Skill[] = [
 - **Reviews:** \`review_request\`, \`review_read\`, \`review_comment\`, \`review_verdict\`, and \`review_ai\` for a second opinion.
 - **Apps and deploys:** \`app_list\`, \`trace_list\`, \`trace_read\`, \`deploy_list\`.
 - **Mail:** agents have their own address; \`mail_list\` with mine, \`mail_reply\`, \`mail_send\` (only to people who wrote first).
-- **Search and AI usage:** \`search_query\` searches everything at once. Report your own model use with \`usage_report\`.
+- **Search and AI usage:** \`search_query\` searches caller-readable work, inbound mail, active conversations, people, projects and app errors with coverage and limits. Outbound mail, attachments, reviews, situations, repository code and archived conversations are not searched; zero hits are not proof of absence. Report your own model use with \`usage_report\`.
 - **Planned tools:** \`capabilities\` lists them. Calling one answers \`not_implemented\` with its spec.
 
 **Old constraints that no longer apply**
