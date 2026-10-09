@@ -100,6 +100,7 @@ button.copy{min-width:6rem}
 table.diff{font-family:var(--mono);font-size:12px;margin:4px 0 14px}table.diff td{padding:0 6px;border:0;white-space:pre-wrap;word-break:break-all}table.diff code{background:none;padding:0;font-size:12px;font-family:var(--mono)}
 table.diff td.ln{color:var(--faint);text-align:right;width:1%;white-space:nowrap;user-select:none}table.diff tr.ins td{background:var(--add-bg)}table.diff tr.dl td{background:var(--del-bg)}
 table.diff tr.hunk td{color:var(--muted);background:var(--sunk)}.add{color:var(--add)}.del{color:var(--del)}
+.closure-counts{table-layout:fixed}.closure-counts th:first-child{width:50%}.closure-counts th,.closure-counts td{padding:8px 6px;overflow-wrap:anywhere}.closure-counts small{display:block}
 .board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:8px}.bcol{background:var(--sunk);border-radius:var(--r);padding:6px 8px}.bcol h2{margin:4px 0 8px}
 .bcard{margin:0 0 6px;font-size:var(--fs-md)}.progress{height:6px;background:var(--sunk);border-radius:3px;overflow:hidden;margin:6px 0}.progress span{display:block;height:100%;background:var(--accent)}
 .bulk{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0;font-size:var(--fs-md)}

@@ -16,6 +16,16 @@ export type WorkLink = { id: string; item_id: string; target_kind: string; targe
 
 export const LEASE_MS = 3600_000;
 
+/** Only the authenticated verb supplies this actor; never infer it from owner_id. */
+export type ClosureActor = { identity_id: string; session_id: string | null };
+function doneEventStatement(db: D1Database, item: { id: string; tenant_id: string }, actor: ClosureActor, now: number): D1PreparedStatement {
+  // Must immediately follow the work write inside one transactional D1 batch.
+  // Snapshot losers have changes() = 0 even when the winner wrote identical values.
+  return db.prepare(`INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
+    SELECT ?, ?, ?, ?, 'work.done', 'work_item', ?, 'Recorded done transition', ? WHERE changes() = 1`)
+    .bind(ulid(now), item.tenant_id, actor.identity_id, actor.session_id, item.id, now);
+}
+
 export async function createWork(
   db: D1Database,
   input: {
@@ -23,7 +33,7 @@ export async function createWork(
     state?: WorkState; owner_id?: string | null; parent_id?: string | null;
     source_kind?: string | null; source_ref?: string | null; source_quote?: string | null; source_at?: number | null; created_at?: number;
   },
-  now: number,
+  now: number, closureActor?: ClosureActor,
 ): Promise<WorkItem> {
   const title = input.title.trim();
   if (!title) throw badRequest("a title is required");
@@ -34,12 +44,14 @@ export async function createWork(
   const id = ulid(now);
   const created = input.created_at ?? now;
   const state = input.state ?? "open";
-  await db.prepare(
+  const insert = db.prepare(
     `INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, owner_id, parent_id, source_kind, source_ref, source_quote, source_at, created_by, created_at, updated_at, closed_at)
      SELECT ?, ?, ?, COALESCE(MAX(number), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM work_item WHERE project_id = ?`,
   ).bind(id, input.tenant_id, input.project_id, input.kind, title, input.body.trim(), state, input.owner_id ?? null, input.parent_id ?? null,
     input.source_kind ?? null, input.source_ref ?? null, input.source_quote ?? null, input.source_at ?? null, input.created_by, created, now,
-    state === "done" || state === "dropped" ? now : null, input.project_id).run();
+    state === "done" || state === "dropped" ? now : null, input.project_id);
+  if (state === "done" && closureActor) await db.batch([insert, doneEventStatement(db, { id, tenant_id: input.tenant_id }, closureActor, now)]);
+  else await insert.run();
   return (await getWork(db, input.tenant_id, id))!;
 }
 
@@ -96,7 +108,7 @@ function snapshotPredicate(item: WorkItem): { sql: string; args: Array<string | 
 export async function updateWork(
   db: D1Database, item: WorkItem,
   ch: { title?: string; body?: string; kind?: WorkKind; state?: WorkState; owner_id?: string | null; parent_id?: string | null },
-  now: number,
+  now: number, closureActor?: ClosureActor,
 ): Promise<WorkItem> {
   const next = { ...item, ...Object.fromEntries(Object.entries(ch).filter(([, v]) => v !== undefined)) } as WorkItem;
   if (!next.title.trim()) throw badRequest("a title is required");
@@ -107,8 +119,11 @@ export async function updateWork(
   const lease = next.state === "doing" && next.owner_id === item.owner_id ? item.lease_until : null;
   const updated_at = Math.max(now, item.updated_at + 1);
   const snapshot = snapshotPredicate(item);
-  const r = await db.prepare(`UPDATE work_item SET title = ?, body = ?, kind = ?, state = ?, owner_id = ?, parent_id = ?, lease_until = ?, closed_at = ?, updated_at = ? WHERE ${snapshot.sql}`)
-    .bind(next.title.trim(), next.body, next.kind, next.state, next.owner_id, next.parent_id, lease, closed_at, updated_at, ...snapshot.args).run();
+  const write = db.prepare(`UPDATE work_item SET title = ?, body = ?, kind = ?, state = ?, owner_id = ?, parent_id = ?, lease_until = ?, closed_at = ?, updated_at = ? WHERE ${snapshot.sql}`)
+    .bind(next.title.trim(), next.body, next.kind, next.state, next.owner_id, next.parent_id, lease, closed_at, updated_at, ...snapshot.args);
+  const r = next.state === "done" && item.state !== "done" && closureActor
+    ? (await db.batch([write, doneEventStatement(db, item, closureActor, now)]))[0]!
+    : await write.run();
   if (r.meta.changes !== 1) throw conflict("that item changed; read it again before retrying your edit");
   return { ...next, title: next.title.trim(), lease_until: lease, closed_at, updated_at };
 }

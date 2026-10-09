@@ -645,6 +645,34 @@ try {
   await workCtx.close();
   console.log('PASS same-title refresh/stale draft and explicit two-pane list retention');
 
+  // Recorded closers are historical actors, not assignees or presence. Exercise
+  // the actual board/API with only synthetic local work and browser sessions.
+  const closedWork = await verb(member, 'work.create', { project: 'site', kind: 'snag', title: 'Closure evidence', owner: 'peer@example.test' });
+  await verb(member, 'work.update', { id: closedWork.item.id, state: 'done' });
+  await verb(member, 'work.update', { id: closedWork.item.id, state: 'open' });
+  await verb(member, 'work.update', { id: closedWork.item.id, state: 'done' });
+  const closures = (await verb(reader, 'work.board', { project: 'site' })).closures;
+  expect(closures.actors.map(a => ({ name: a.name, items: a.items }))).toEqual([{ name: 'dev', items: 1 }]);
+  expect(closures.currently_done_without_record).toBe(0);
+  // Long inert directory text must wrap rather than execute or overflow.
+  await db.prepare("UPDATE identity SET display_name = ? WHERE email = 'dev@example.test'")
+    .bind('<img src=x onerror=alert(1)>' + 'X'.repeat(120)).run();
+  for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }], ['narrow', { width: 320, height: 740 }]]) {
+    const boardCtx = await context(reader, viewport), boardPage = await boardCtx.newPage();
+    await boardPage.goto(`${base}/site/board`);
+    await expect(boardPage.locator('.closure-report h2')).toHaveText('Recorded closures by actor');
+    await expect(boardPage.locator('.closure-counts tbody tr')).toHaveCount(1);
+    await expect(boardPage.locator('.closure-counts tbody td').last()).toHaveText('1');
+    await expect(boardPage.locator('.closure-report')).toContainText('including reopened items');
+    await expect(boardPage.locator('.closure-report')).toContainText('Historical prose events are not attributed');
+    await expect(boardPage.locator('.closure-report img')).toHaveCount(0);
+    await noOverflow(boardPage);
+    await boardPage.locator('.closure-report').scrollIntoViewIfNeeded();
+    await boardPage.screenshot({ path: path.join(artifacts, `${label}-closure-counts.png`) });
+    await boardCtx.close();
+    console.log(`PASS ${label}: real board closer attribution, reclosure deduplication, safe wrapping and historical coverage`);
+  }
+
   const ctx = await context(reader, { width: 390, height: 844 });
   const page = await ctx.newPage();
   await page.goto(`${base}/c/general`);

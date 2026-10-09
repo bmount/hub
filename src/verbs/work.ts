@@ -125,7 +125,7 @@ export const workCreate = defineVerb({
       tenant_id: ctx.tenant!.id, project_id: pr.id, kind: p.kind, title: p.title, body: p.body, created_by: ctx.identity!.id,
       owner_id: owner ?? null, parent_id: parent?.id ?? null, state: (p.state as WorkState | null) ?? undefined,
       source_kind: p.source_kind ?? (p.source_quote ? "words" : null), source_ref: p.source_ref, source_quote: p.source_quote, source_at: sourceAt,
-    }, ctx.now);
+    }, ctx.now, { identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null });
     await audit(ctx, item, "work.create", `Filed ${ref(pr.slug, item)} (${KINDS[item.kind].name}): ${item.title}`);
     await afterChange(ctx, item, `${ctx.identity!.display_name} filed ${ref(pr.slug, item)} for you: ${item.title}`, { newOwner: item.owner_id !== ctx.identity!.id ? item.owner_id : null, reason: "filed" });
     return { item, ref: ref(pr.slug, item) };
@@ -249,7 +249,7 @@ export const workUpdate = defineVerb({
       // An empty body sent on purpose clears the details; leaving it out changes nothing.
       body: i.body === undefined || i.body === null ? undefined : optString(i, "body", { max: 20_000 }) ?? "",
       kind: kind ?? undefined, state: (stateRaw as WorkState | null) ?? undefined, owner_id: await ownerId(ctx, optString(i, "owner", { max: 254 })), parent_id,
-    }, ctx.now);
+    }, ctx.now, { identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null });
     const what = updated.state !== item.state ? `${STATES[item.state]} to ${STATES[updated.state]}` : "details";
     await audit(ctx, updated, "work.update", `Updated ${ref(project, updated)} (${what}): ${updated.title}`);
     const newOwner = updated.owner_id && updated.owner_id !== item.owner_id && updated.owner_id !== ctx.identity!.id ? updated.owner_id : null;
