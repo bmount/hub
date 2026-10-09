@@ -1,22 +1,28 @@
 // Self-recorded human intention, NOT delivery, a scheduler, a grant or a reply promise.
 import type { Ctx } from "../auth/context";
-import { conflict, notFound } from "../errors";
+import { badRequest, conflict, notFound } from "../errors";
+import { REPLY_WINDOW_MS } from "./limits";
 import { sha256Hex, ulid } from "../ids";
 import { REPLAY_PREFIX, type ReplayState } from "./replay";
 import { decodeResponseRecipients, RESPONSE_RECIPIENT_PREFIX, recipientId } from "./responseRecipients";
 import { resolveMailAddress } from "./projectMail";
 
 export const RESPONSE_INTENT_PREFIX = "mail_response_intent:v1:";
-type Intent = { revision: number; state: "planned" | "cancelled"; updated_at: number; change_id: string };
+// The public UTC minute format has a four-digit year; corrupt records cannot reach Date rendering.
+const UTC_FORMAT_END = Date.UTC(10000, 0, 1);
+type Intent = { revision: number; state: "planned" | "cancelled"; updated_at: number; change_id: string; respond_by: number | null };
 type Evidence = { id: string; tenant_id: string; project_id: string | null; identity_id: string;
-  from_email: string; to_address: string; message_id: string };
+  from_email: string; to_address: string; message_id: string; received_at: number };
 function decode(raw: string | null): Intent | null {
   if (raw === null) return null;
   try {
     const s = JSON.parse(raw) as Intent;
+    const due = s?.respond_by;
+    const validDue = due === undefined || due === null || (s.state === "planned" && Number.isSafeInteger(due)
+      && due > s.updated_at && due - s.updated_at <= REPLY_WINDOW_MS && due < UTC_FORMAT_END);
     return s && Number.isSafeInteger(s.revision) && s.revision > 0 && s.revision < Number.MAX_SAFE_INTEGER
       && ["planned", "cancelled"].includes(s.state) && Number.isSafeInteger(s.updated_at) && s.updated_at >= 0
-      && recipientId(s.change_id) ? s : null;
+      && recipientId(s.change_id) && validDue ? { ...s, respond_by: due ?? null } : null;
   } catch { return null; }
 }
 const keyFor = (ctx: Ctx, id: string) => `${RESPONSE_INTENT_PREFIX}${ctx.tenant!.id}:${id}:${ctx.identity!.id}`;
@@ -34,7 +40,7 @@ const BASE = `m.id = ? AND m.tenant_id = ? AND m.recipient_id IS NULL
 async function evidence(ctx: Ctx, id: string) {
   const bindings = [id, ctx.tenant!.id, ctx.identity!.id];
   const row = await ctx.db.prepare(`SELECT m.id, m.tenant_id, m.project_id, m.identity_id,
-    m.from_email, m.to_address, m.message_id FROM inbound_mail m WHERE ${BASE}`)
+    m.from_email, m.to_address, m.message_id, m.received_at FROM inbound_mail m WHERE ${BASE}`)
     .bind(...bindings).first<Evidence>();
   if (!row) throw notFound();
   const replayKey = REPLAY_PREFIX + row.tenant_id + ":" + await sha256Hex(JSON.stringify([row.from_email, row.to_address, row.message_id]));
@@ -59,23 +65,33 @@ export async function responseIntent(ctx: Ctx, id: string) {
   const { row } = await evidence(ctx, id);
   const raw = await valueAt(ctx, keyFor(ctx, id)), state = decode(raw), p = await preference(ctx, row);
   return { mail_id: id, revision: raw === null ? 0 : state?.revision ?? null,
-    state: raw === null ? "unset" : !state ? "invalid" : state.state === "planned" && !p.eligible ? "stale" : state.state,
-    updated_at: state?.updated_at ?? null, can_plan: p.eligible,
+    state: raw === null ? "unset" : !state ? "invalid" : state.state === "planned" && !p.eligible ? "stale"
+      : state.state === "planned" && state.respond_by !== null && state.respond_by <= ctx.now ? "overdue" : state.state,
+    updated_at: state?.updated_at ?? null, respond_by: state?.respond_by ?? null, can_plan: p.eligible,
     automatic_execution: "not_implemented", notification: "not_requested", response_guaranteed: false };
 }
-export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["state"], expected: number) {
+export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["state"], expected: number, respondBy: number | null = null) {
+  if (respondBy !== null && (state !== "planned" || !Number.isSafeInteger(respondBy) || respondBy <= ctx.now
+    || respondBy - ctx.now > REPLY_WINDOW_MS || respondBy >= UTC_FORMAT_END)) {
+    throw badRequest("respond-by must be a future UTC time within the reply window, for a planned intention only");
+  }
   const e = await evidence(ctx, id), key = keyFor(ctx, id), raw = await valueAt(ctx, key), old = decode(raw);
+  if (respondBy !== null && (!Number.isSafeInteger(e.row.received_at) || e.row.received_at < 0
+    || e.row.received_at > ctx.now || respondBy > e.row.received_at + REPLY_WINDOW_MS)) {
+    throw conflict("respond-by must be within 30 days of receiving this message");
+  }
   if (raw !== null && !old) throw conflict("invalid response intent requires reconciliation");
   if ((old?.revision ?? 0) !== expected) throw conflict("response intent changed; read before editing");
-  if (state === old?.state || (state === "cancelled" && !old)) throw conflict("no response intent transition");
+  if ((state === old?.state && respondBy === old.respond_by) || (state === "cancelled" && !old)) throw conflict("no response intent transition");
   const p = await preference(ctx, e.row);
   if (state === "planned" && !p.eligible) throw conflict("current mailbox preferences do not select you");
-  const next: Intent = { revision: expected + 1, state, updated_at: ctx.now, change_id: ulid(ctx.now) };
+  const next: Intent = { revision: expected + 1, state, updated_at: ctx.now, change_id: ulid(ctx.now), respond_by: respondBy };
   const value = JSON.stringify(next);
   const r = await ctx.db.batch([
     ctx.db.prepare(`INSERT INTO meta (key, value) SELECT ?, ? FROM inbound_mail m
       WHERE ${BASE} AND m.project_id IS ? AND m.identity_id = ? AND m.from_email = ? AND m.to_address = ? AND m.message_id = ?
         AND EXISTS (SELECT 1 FROM meta r WHERE r.key = ? AND r.value = ?)
+        AND (? IS NULL OR m.received_at = ? AND m.received_at <= ? AND ? <= m.received_at + ?)
         AND (? IS NULL OR EXISTS (SELECT 1 FROM meta previous WHERE previous.key = ? AND previous.value = ?))
         AND (? = 'cancelled' OR (
           EXISTS (SELECT 1 FROM meta c WHERE c.key = ? AND c.value = ?)
@@ -85,7 +101,8 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
                 AND m.to_address = t.slug || '.' || pr.slug || '@' || ?))))
       ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE meta.value = ?`)
       .bind(key, value, ...e.bindings, e.row.project_id, e.row.identity_id, e.row.from_email, e.row.to_address, e.row.message_id,
-        e.replayKey, e.replayRaw, raw, key, raw, state, p.key, p.raw, ctx.env.HUB_DOMAIN.toLowerCase(), ctx.env.HUB_DOMAIN.toLowerCase(), raw),
+        e.replayKey, e.replayRaw, respondBy, e.row.received_at, ctx.now, respondBy, REPLY_WINDOW_MS,
+        raw, key, raw, state, p.key, p.raw, ctx.env.HUB_DOMAIN.toLowerCase(), ctx.env.HUB_DOMAIN.toLowerCase(), raw),
     ctx.db.prepare(`INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
       SELECT ?, ?, ?, ?, 'mail.set_response_intent', 'inbound_mail', ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)`)
@@ -94,5 +111,5 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
         ctx.now, key, value),
   ]);
   if (r[0]!.meta.changes !== 1) throw conflict("response intent or eligibility changed; read before editing");
-  return { revision: next.revision, state, automatic_execution: "not_implemented", notification: "not_requested", response_guaranteed: false };
+  return { revision: next.revision, state, respond_by: respondBy, automatic_execution: "not_implemented", notification: "not_requested", response_guaranteed: false };
 }

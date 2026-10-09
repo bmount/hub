@@ -7,7 +7,9 @@ import { checkAccess } from "../src/verbs/dispatch";
 import { buildContext } from "../src/auth/context";
 import { storeIndependentMailCandidate, REPLAY_PREFIX } from "../src/mail/replay";
 import { RESPONSE_RECIPIENT_PREFIX } from "../src/mail/responseRecipients";
-import { RESPONSE_INTENT_PREFIX, setResponseIntent } from "../src/mail/responseIntent";
+import { RESPONSE_INTENT_PREFIX, responseIntent, setResponseIntent } from "../src/mail/responseIntent";
+import { REPLY_WINDOW_MS } from "../src/mail/limits";
+import { mailSetResponseIntent } from "../src/verbs/mailIntent";
 import { createProject } from "../src/db/projects";
 import { deleteTenant } from "../src/db/tenantDelete";
 import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
@@ -263,6 +265,192 @@ describe("explicit self-recorded human response intent, not automatic scheduling
     if (change === "corrupt") expect(html).toContain("Stored intention is invalid");
     if (change === "unselected") expect(html).toContain("Current mailbox preferences do not select you");
     expect(await count()).toBe(0);
+  });
+  it.each([false, true])("records optional UTC deadline, observes overdue without side effects, and retimes/cancels org/project=%s", async project => {
+    const w = await world(project);
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    ctx.now = now + 60_000;
+    const due = ctx.now + 60_000;
+    expect(await setResponseIntent(ctx, w.id, "planned", 0, due)).toMatchObject({ state: "planned", revision: 1, respond_by: due, automatic_execution: "not_implemented" });
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ state: "planned", respond_by: due, response_guaranteed: false });
+    const stored = (await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.intentKey).first<string>("value"))!;
+    ctx.now = due - 1;
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ state: "planned", revision: 1 });
+    ctx.now = due;
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ state: "overdue", revision: 1, respond_by: due, notification: "not_requested" });
+    expect(await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.intentKey).first("value")).toBe(stored);
+    expect(await count()).toBe(1);
+    expect(await setResponseIntent(ctx, w.id, "planned", 1, due + 60_000)).toMatchObject({ state: "planned", revision: 2 });
+    expect(await setResponseIntent(ctx, w.id, "planned", 2)).toMatchObject({ state: "planned", revision: 3, respond_by: null });
+    expect(await setResponseIntent(ctx, w.id, "cancelled", 3)).toMatchObject({ state: "cancelled", revision: 4, respond_by: null });
+    for (const table of ["outbound_mail", "attention", "consent", "oauth_grant"]) expect(await env.HUB_DB.prepare(`SELECT COUNT(*) n FROM ${table}`).first("n")).toBe(0);
+  });
+  it.each(["2026-02-29T12:00", "2026-04-31T12:00", "2026-10-10T24:00", "2026-10-10T12:60",
+    "2026-10-10T12:00Z", "2026-10-10T12:00+01:00", "2026-10-10T12:00:00", "2026-1-1T1:00", "garbage", 123, {}, " 2026-10-10T12:00"]) (
+    "refuses invalid/non-UTC-minute input %s rather than normalizing it", async value => {
+      const w = await world();
+      expect((await apiPost(host, "mail.set_response_intent", { id: w.id, state: "planned", expected_revision: 0, respond_by_utc: value }, w.headers)).status).toBe(400);
+      expect(await count()).toBe(0);
+      expect(await read(w)).toMatchObject({ state: "unset", revision: 0, respond_by: null });
+    });
+  it("interprets a valid calendar minute in explicit UTC and accepts blank optional input", () => {
+    const id = "01M4AF980SG4A68Q7VNA21WX92";
+    expect(mailSetResponseIntent.parse({ id, state: "planned", expected_revision: 0, respond_by_utc: "2028-02-29T12:34" }).due).toBe(Date.parse("2028-02-29T12:34:00Z"));
+    for (const value of [undefined, null, ""]) expect(mailSetResponseIntent.parse({ id, state: "planned", expected_revision: 0, respond_by_utc: value }).due).toBeNull();
+    expect(() => mailSetResponseIntent.parse({ id, state: "cancelled", expected_revision: 1, respond_by_utc: "2028-02-29T12:34" })).toThrow("cancellation");
+  });
+  it.each(["past", "equal", "too-late", "fractional", "nan", "cancelled"]) (
+    "refuses %s deadline even on direct product entry, without a write", async change => {
+      const w = await world();
+      const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+      ctx.now = now + 60_000;
+      const due = change === "past" ? ctx.now - 1 : change === "equal" ? ctx.now : change === "too-late" ? ctx.now + REPLY_WINDOW_MS + 1
+        : change === "fractional" ? ctx.now + 0.5 : change === "nan" ? NaN : ctx.now + 60_000;
+      await expect(setResponseIntent(ctx, w.id, change === "cancelled" ? "cancelled" : "planned", 0, due)).rejects.toThrow("future UTC time");
+      expect(await count()).toBe(0);
+      expect(await read(w)).toMatchObject({ state: "unset", revision: 0 });
+    });
+  it.each(["outside", "expired", "future-receipt"]) (
+    "refuses %s received-message window for a deadline", async change => {
+      const w = await world();
+      const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+      ctx.now = change === "expired" ? now + REPLY_WINDOW_MS : now + 60_000;
+      if (change === "future-receipt") await env.HUB_DB.prepare("UPDATE inbound_mail SET received_at = ? WHERE id = ?").bind(ctx.now + 1, w.id).run();
+      const due = change === "outside" ? now + REPLY_WINDOW_MS + 1 : ctx.now + 60_000;
+      await expect(setResponseIntent(ctx, w.id, "planned", 0, due)).rejects.toThrow("30 days of receiving");
+      expect(await count()).toBe(0);
+    });
+  it("accepts the exact reply-window end and retains legacy untimed intent compatibility", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    ctx.now = now + 60_000;
+    expect((await setResponseIntent(ctx, w.id, "planned", 0, now + REPLY_WINDOW_MS)).respond_by).toBe(now + REPLY_WINDOW_MS);
+    const stored = JSON.parse((await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.intentKey).first<string>("value"))!);
+    delete stored.respond_by;
+    await env.HUB_DB.prepare("UPDATE meta SET value = ? WHERE key = ?").bind(JSON.stringify(stored), w.intentKey).run();
+    ctx.now = now + REPLY_WINDOW_MS + 1;
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ state: "planned", revision: 1, respond_by: null });
+    expect((await setResponseIntent(ctx, w.id, "cancelled", 1)).revision).toBe(2);
+  });
+  it.each(["received", "preferences"]) ("rechecks %s snapshot inside deadline retiming CAS", async change => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    ctx.now = now + 60_000;
+    await setResponseIntent(ctx, w.id, "planned", 0, ctx.now + 60_000);
+    const original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, key) {
+      if (key !== "batch") { const v = Reflect.get(db, key); return typeof v === "function" ? v.bind(db) : v; }
+      return async (stmts: D1PreparedStatement[]) => {
+        if (change === "received") await env.HUB_DB.prepare("UPDATE inbound_mail SET received_at = received_at - 1 WHERE id = ?").bind(w.id).run();
+        else await env.HUB_DB.prepare("UPDATE meta SET value = '{}' WHERE key = ?").bind(w.prefKey).run();
+        return original(stmts);
+      };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "planned", 1, ctx.now + 120_000)).rejects.toThrow("eligibility changed");
+    expect(await count()).toBe(1);
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ revision: 1, respond_by: ctx.now + 60_000 });
+  });
+  it("preserves stale authority over overdue timing, with cancellation after expiry and configuration removal", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    ctx.now = now + 60_000;
+    await setResponseIntent(ctx, w.id, "planned", 0, ctx.now + 60_000);
+    await env.HUB_DB.prepare("UPDATE meta SET value = '{}' WHERE key = ?").bind(w.prefKey).run();
+    ctx.now = now + REPLY_WINDOW_MS + 1;
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ state: "stale", revision: 1, can_plan: false });
+    expect((await setResponseIntent(ctx, w.id, "cancelled", 1)).state).toBe("cancelled");
+  });
+  it.each(["bad", -1, 1.5, now, now + REPLY_WINDOW_MS * 2])("treats corrupt deadline %s as invalid, without silently clearing it", async due => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    ctx.now = now + 60_000;
+    await setResponseIntent(ctx, w.id, "planned", 0);
+    const stored = JSON.parse((await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.intentKey).first<string>("value"))!);
+    stored.respond_by = due;
+    await env.HUB_DB.prepare("UPDATE meta SET value = ? WHERE key = ?").bind(JSON.stringify(stored), w.intentKey).run();
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ state: "invalid", revision: null, respond_by: null });
+    await expect(setResponseIntent(ctx, w.id, "planned", 1, ctx.now + 60_000)).rejects.toThrow("requires reconciliation");
+    expect(await count()).toBe(1);
+  });
+  it("serializes concurrent retimings and reconciles a lost response without replay", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    ctx.now = now + 60_000;
+    await setResponseIntent(ctx, w.id, "planned", 0, ctx.now + 60_000);
+    const results = await Promise.allSettled([setResponseIntent(ctx, w.id, "planned", 1, ctx.now + 120_000), setResponseIntent(ctx, w.id, "planned", 1, ctx.now + 180_000)]);
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(await count()).toBe(2);
+    const original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, key) {
+      if (key !== "batch") { const v = Reflect.get(db, key); return typeof v === "function" ? v.bind(db) : v; }
+      return async (stmts: D1PreparedStatement[]) => { await original(stmts); throw new Error("lost response"); };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "planned", 2, ctx.now + 240_000)).rejects.toThrow("lost response");
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ state: "planned", revision: 3, respond_by: ctx.now + 240_000 });
+    await expect(setResponseIntent(ctx, w.id, "planned", 2, ctx.now + 240_000)).rejects.toThrow("read before editing");
+    expect(await count()).toBe(3);
+  });
+  it.each(["private", "foreign", "unproven", "unselected", "old-proof", "agent"])("a deadline does not bypass %s authority", async change => {
+    const w = await world(); let headers = w.headers;
+    if (change === "private") await env.HUB_DB.prepare("UPDATE inbound_mail SET recipient_id = ? WHERE id = ?").bind(w.bot.agent.identity.id, w.id).run();
+    if (change === "foreign") await env.HUB_DB.prepare("UPDATE inbound_mail SET tenant_id = ? WHERE id = ?").bind(w.foreign.id, w.id).run();
+    if (change === "unproven") await env.HUB_DB.prepare("DELETE FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").run();
+    if (change === "unselected") headers = w.adminHeaders;
+    if (change === "old-proof") await env.HUB_DB.prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(Date.now() - 61 * 60_000, w.member.session.id).run();
+    if (change === "agent") headers = bearer(w.bot.token);
+    const due = new Date(Date.now() + 180_000).toISOString().slice(0, 16);
+    expect((await apiPost(host, "mail.set_response_intent", { id: w.id, state: "planned", expected_revision: 0, respond_by_utc: due }, headers)).status).not.toBe(200);
+    expect(await count()).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.intentKey).first()).toBeNull();
+  });
+  it("rolls back retiming when audit fails and refuses an identical timed transition", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    ctx.now = now + 60_000;
+    await setResponseIntent(ctx, w.id, "planned", 0, ctx.now + 60_000);
+    await expect(setResponseIntent(ctx, w.id, "planned", 1, ctx.now + 60_000)).rejects.toThrow("no response intent transition");
+    ctx.session = { ...ctx.session!, id: "missing-session" };
+    await expect(setResponseIntent(ctx, w.id, "planned", 1, ctx.now + 120_000)).rejects.toThrow();
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ revision: 1, respond_by: ctx.now + 60_000 });
+    expect(await count()).toBe(1);
+  });
+  it("refuses a stored deadline on a cancelled intention instead of resurrecting it", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    ctx.now = now + 60_000;
+    await setResponseIntent(ctx, w.id, "planned", 0);
+    await setResponseIntent(ctx, w.id, "cancelled", 1);
+    const stored = JSON.parse((await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.intentKey).first<string>("value"))!);
+    stored.respond_by = ctx.now + 60_000;
+    await env.HUB_DB.prepare("UPDATE meta SET value = ? WHERE key = ?").bind(JSON.stringify(stored), w.intentKey).run();
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ state: "invalid", revision: null, respond_by: null });
+    await expect(setResponseIntent(ctx, w.id, "planned", 2, ctx.now + 120_000)).rejects.toThrow("requires reconciliation");
+    expect(await count()).toBe(2);
+  });
+  it("renders explicit UTC native deadline fields, deadline values and overdue status with pane-key invalidation", async () => {
+    const w = await world();
+    const due = Math.ceil((Date.now() + 120_000) / 60_000) * 60_000;
+    const text = new Date(due).toISOString().slice(0, 16);
+    const html = await (await SELF.fetch(`https://${host}/mail/${w.id}`, { headers: w.headers })).text();
+    expect(html).toContain("Optional respond-by (UTC)");
+    expect(html).toContain('type="datetime-local" name="respond_by_utc" step="60"');
+    const key = html.match(/id="inspector"[^>]*data-key="([^"]*)"/)![1];
+    const body = new URLSearchParams({ id: w.id, state: "planned", expected_revision: "0", respond_by_utc: text, _back: `/mail/${w.id}` });
+    const saved = await SELF.fetch(`https://${host}/api/mail.set_response_intent`, { method: "POST", body, headers: w.headers, redirect: "manual" });
+    expect(saved.status).toBe(303);
+    expect(await read(w)).toMatchObject({ respond_by: due, state: "planned" });
+    const page = await (await SELF.fetch(`https://${host}/mail/${w.id}`, { headers: w.headers })).text();
+    expect(page).toContain(`value="${text}"`);
+    expect(page).toContain("Update my respond-by time");
+    expect(page).toContain("Cancel my intention");
+    expect(page.match(/id="inspector"[^>]*data-key="([^"]*)"/)![1]).not.toBe(key);
+    expect((await SELF.fetch(`https://${host}/api/mail.set_response_intent`, { method: "POST", body, headers: w.headers, redirect: "manual" })).status).toBe(409);
+    const value = JSON.parse((await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.intentKey).first<string>("value"))!);
+    value.updated_at = Date.now() - 120_000; value.respond_by = Date.now() - 60_000;
+    await env.HUB_DB.prepare("UPDATE meta SET value = ? WHERE key = ?").bind(JSON.stringify(value), w.intentKey).run();
+    const overdue = await (await SELF.fetch(`https://${host}/mail/${w.id}`, { headers: w.headers })).text();
+    expect(overdue).toContain("intended respond-by time has passed");
+    expect(overdue.match(/id="inspector"[^>]*data-key="([^"]*)"/)![1]).not.toBe(page.match(/id="inspector"[^>]*data-key="([^"]*)"/)![1]);
   });
   it("cleans only the deleted tenant's intent keys", async () => {
     const w = await world();

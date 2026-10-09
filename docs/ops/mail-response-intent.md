@@ -2,7 +2,9 @@
 
 This is a small scheduling-semantics increment: a currently configured human
 reader can **voluntarily record an intention to respond to a particular shared
-message**, then cancel it. It is not a scheduler, a delivered notification,
+message**, optionally record a UTC respond-by time, retime it or cancel it.
+Reads distinguish a passed intended deadline from an outstanding intention.
+It is not a scheduler, a delivered notification,
 an acknowledgement from someone else, or a guarantee of a substantive reply.
 Preferences alone still do not create an intention. Nothing in an incoming
 message, forwarded quotation, attachment or caller-supplied proof creates one.
@@ -13,13 +15,30 @@ Tenant-host APIs (not MCP/assistant tools):
 
 - `POST /api/mail.response_intent`, `{ "id": "<mail id>" }`: reads only the
   caller's own intention. Returns `mail_id`, `revision`, `state`, `updated_at`,
-  `can_plan`, `automatic_execution: "not_implemented"`,
+  `respond_by` (UTC epoch milliseconds or null), `can_plan`, `automatic_execution: "not_implemented"`,
   `notification: "not_requested"`, `response_guaranteed: false`.
 - `POST /api/mail.set_response_intent`,
   `{ "id": "<mail id>", "state": "planned", "expected_revision": 0 }`:
-  records the caller's voluntary intention. `state: "cancelled"` cancels an
-  existing intention. A cancelled intention may be replanned at its current
+  records the caller's voluntary intention. Optional `respond_by_utc`, e.g.
+  `"2026-10-10T12:30"`, is **explicit UTC** at minute precision, not local time.
+  Only the exact `YYYY-MM-DDTHH:mm` calendar format is accepted: offsets, `Z`,
+  seconds, rollover dates and whitespace are rejected. Omitted/null/blank means
+  an untimed intention; on a planned intention it explicitly clears the old
+  deadline. Retiming an existing planned intention uses its current revision.
+  An identical state/deadline conflicts without another audit.
+  `state: "cancelled"` cancels an existing intention and does not accept a
+  respond-by time. A cancelled intention may be replanned at its current
   revision, only if current preferences still select the caller.
+
+A respond-by time must be strictly after server request time and at most 30 days
+from the message's stored receipt time. Future/invalid receipt timestamps and
+expired windows cannot create timed plans. Untimed legacy planning remains
+compatible. The receipt snapshot is rechecked inside the write transaction.
+The reply window constant is shared with actual human `mail.reply` eligibility,
+but recording a deadline does **not** check or satisfy sending enabled, consent,
+quota, transport, or actual reply gates. No deferred execution is reserved.
+The minute input has no timezone conversion: the browser label explicitly says
+UTC. This is not a local-time appointment picker.
 
 Both require an active human member/admin with explicit membership in this
 organization. Global root authority is not a recipient assignment. Writes
@@ -31,7 +50,9 @@ configured humans may independently intend to respond; this is not exclusive
 ownership, priority routing or fanout.
 
 The browser mail inspector offers **My response intention** and native
-revision-checked plan/cancel forms for eligible human browser readers. An old
+revision-checked plan/retime/cancel forms for eligible human browser readers,
+including an optional UTC minute field. Existing UTC deadlines are shown as
+ISO text; a passed deadline says overdue, never sent/failed. An old
 proof shows the existing confirmation flow, not an active form. The inspector
 key includes the full own-intention/preference eligibility/proof observation,
 so navigation cannot retain an old form across changed observations. Responses
@@ -73,15 +94,25 @@ renaming its address, without authorizing a new response.
 
 Existing `meta` holds
 `mail_response_intent:v1:<tenant id>:<mail id>:<human id>`; no schema migration.
-Only revision, fixed state, update time and unique change ID are stored, never
+Only revision, fixed state, optional UTC deadline, update time and unique change
+ID are stored, never
 mail content, addresses, credentials, raw prompts or transport diagnostics.
 
 - Absent: `unset`, revision 0. Preferences do not populate it.
-- Recorded: `planned`, positive revision. This means intention only.
+- Recorded: `planned`, positive revision, optional `respond_by`. This means
+  intention only. Legacy records without that field remain untimed.
+- Intended deadline passed: reads report `overdue` at or after `respond_by`,
+  retaining the planned stored state and revision. No background timer, write,
+  audit, reminder, wake, cancellation, failure or reply is inferred. Reads at
+  request time observe passage; an open browser pane is not a live countdown.
 - Preference/address availability changed: reads report `stale` while retaining
-  the planned revision. No background write or automatic cancellation occurs.
+  the planned revision. Stale eligibility takes precedence over overdue timing.
+  No background write or automatic cancellation occurs.
 - Explicit cancellation: `cancelled`, next revision.
-- Corrupt/unsupported stored state: `invalid`, revision null; no silent reset.
+- Corrupt/unsupported stored state or deadline: `invalid`, revision null; no
+  silent reset. Timed records must have a safe supported UTC timestamp after
+  their update time and within the reply-window budget; cancellation stores no
+  deadline.
 - Loss of source/read authority: fail closed, not a made-up terminal delivery
   outcome. Staleness is a bounded current observation, not a lock or future
   authority guarantee.
@@ -90,6 +121,7 @@ Revision compare-and-swap and its audit event commit in one D1 transaction.
 The write rechecks current actor membership/identity, active tenant, exact
 shared mail identity/destination/verdict, the exact independent evidence
 snapshot, and (for planning) exact preferences and current destination activity.
+Timed writes additionally recheck the exact stored receipt timestamp/window.
 An audit failure rolls back the intent. Concurrent changes at one revision
 commit at most one update/audit. Same-state/no-intent cancellation and stale
 replays conflict instead of creating duplicate audit events.
@@ -107,6 +139,12 @@ subject, address or extra recipient list. Read status contains only the caller's
 own record, not another responder's private state.
 
 ## Not implemented / acceptance remaining
+
+Optional respond-by times are self-recorded human plans, not genuine automated
+scheduling, durable execution/resumption or a delivery attempt. Past intended
+times do not generate notices or suppress setup guidance. Boundary tests cover
+native Workers HTTP forms and server state, not browser-engine picker layout,
+real-human timed work or provider delivery acceptance.
 
 No mail send, inbox wake, attention, automatic execution, response assignment,
 access grant, consent change, notification or guidance suppression occurs.

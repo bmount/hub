@@ -16,7 +16,8 @@ import { readableMail } from "../auth/mailAccess";
 import { sendMail } from "../mail/send";
 import { DATA_NOTE } from "../mcp/render";
 
-export const REPLY_WINDOW_MS = 30 * 86_400_000;
+import { REPLY_WINDOW_MS } from "../mail/limits";
+export { REPLY_WINDOW_MS } from "../mail/limits";
 export const SENDER_DAILY = 50;
 export const TENANT_DAILY = 500;
 
