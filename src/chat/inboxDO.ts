@@ -157,6 +157,24 @@ export class Inbox extends DurableObject<Env> {
     ).length;
   }
 
+  /** Exact retained attention states only. Absence/pruning is unknown, never inferred acknowledgement. */
+  async ackStatus(tenant_id: string, identity_id: string, items: number[]): Promise<{ item: number; state: "open" | "acked" | "unknown"; acked_at: number | null }[]> {
+    bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
+    if (!Array.isArray(items) || items.length < 1 || items.length > LIMITS.INBOX_LIMIT_MAX ||
+        !items.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 1)) {
+      throw new Error("invalid inbox item numbers");
+    }
+    const selected = [...new Set(items)];
+    // One synchronous bounded snapshot; no source metadata, counters or retention mutation.
+    const rows = new Map(this.#q<{ item_seq: number; acked_at: number | null }>(
+      "SELECT item_seq, acked_at FROM item WHERE item_seq IN (SELECT value FROM json_each(?))", JSON.stringify(selected),
+    ).map(r => [r.item_seq, r]));
+    return selected.map(item => {
+      const row = rows.get(item);
+      return { item, state: row === undefined ? "unknown" : row.acked_at === null ? "open" : "acked", acked_at: row?.acked_at ?? null };
+    });
+  }
+
   async cursors(tenant_id: string, identity_id: string): Promise<Record<string, number>> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
     return Object.fromEntries(this.#q<{ conversation_id: string; read_seq: number }>("SELECT conversation_id, read_seq FROM cursor").map((r) => [r.conversation_id, r.read_seq]));

@@ -94,6 +94,7 @@ const TABLE: Record<string, Decl> = {
   "chat.post_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.catchup": T("tenant", "reader", null, { mcp: "read" }),
   "chat.history": T("tenant", "reader", null, { mcp: "read" }), "chat.inbox": T("tenant", "reader", null, { mcp: "read" }),
+  "inbox.ack_status": T("tenant", "reader", null, { mcp: "read" }),
   "inbox.wait": T("tenant", "reader", null), "inbox.ack": T("tenant", "reader", null, { mcp: "write" }), "chat.mark_read": T("tenant", "reader", null, { mcp: "write" }),
   "ref.backlinks": T("tenant", "reader", null, { mcp: "read" }),
   "chat.conversations": T("tenant", "reader", null),
@@ -201,7 +202,12 @@ describe("verb table", () => {
     expect(chat.length).toBeGreaterThan(15);
     for (const v of chat) {
       // `display_name` is a real parameter of channel.create, so it is in SAMPLE; the planted keys are only the ones no verb has.
-      const parsed = v.parse({ ...planted, ...SAMPLE, ...OVERRIDE[v.name] });
+      const input = { ...planted, ...SAMPLE, ...OVERRIDE[v.name] };
+      if (v.name === "inbox.ack_status") {
+        delete input.through; // Exact status intentionally has no prefix selector.
+        input.items = [1];
+      }
+      const parsed = v.parse(input);
       const leaked = keysDeep(parsed).filter((k) => AUTHORISH.includes(k));
       expect({ verb: v.name, leaked }).toEqual({ verb: v.name, leaked: [] });
       expect(JSON.stringify(parsed)).not.toContain("PLANTED");

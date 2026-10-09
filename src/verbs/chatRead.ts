@@ -211,6 +211,32 @@ export const inboxAck = defineVerb({
   },
 });
 
+export const inboxAckStatus = defineVerb({
+  name: "inbox.ack_status", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
+  summary: "Reconcile exact inbox item attention states without acknowledging. Retained items are open or acked; absent/pruned items are unknown, not proof of acknowledgement. No source details or processing/execution proof; not permission to replay a send or clear skipped attention.",
+  mcp: {
+    scope: "read", destructive: false, title: "Reconcile inbox acknowledgement", render: chatText, auditKeysOnly: true,
+    input: schema({ items: { type: "array", minItems: 1, maxItems: 100, items: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER }, description: "Exact item numbers from the caller's inbox and retained acknowledgement intent, not message/activity sequences. Duplicates return once in first-occurrence order. No prefix selector." } }, ["items"]),
+  },
+  parse: (i) => {
+    if (Object.hasOwn(i, "through")) throw badRequest("acknowledgement status requires exact items, not through");
+    if (!Array.isArray(i.items) || i.items.length < 1 || i.items.length > LIMITS.INBOX_LIMIT_MAX ||
+        !i.items.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 1)) {
+      throw badRequest("items must be an array of 1–100 positive safe integer inbox item numbers");
+    }
+    return { items: [...new Set(i.items as number[])] };
+  },
+  run: async (ctx, p) => {
+    const v = viewerOf(ctx);
+    const items = await inboxStub(ctx.env, v.tenant.id, v.identity.id).ackStatus(v.tenant.id, v.identity.id, p.items);
+    return { tenant_id: v.tenant.id, identity_id: v.identity.id, items,
+      text: plainText("Inbox acknowledgement states", [
+        ...items.map(i => `item=${i.item} state=${i.state}${i.acked_at === null ? "" : ` acked_at=${i.acked_at}`}`),
+        "Attention snapshot only, not processing or execution proof. Unknown includes absent/pruned items; reconcile originals and retained outcomes, never infer acknowledgement or permission to resend.",
+      ]) };
+  },
+});
+
 export const chatMarkRead = defineVerb({
   name: "chat.mark_read", kind: "command", scope: "tenant", minRole: "reader", freshProofMinutes: null,
   summary: "Move your durable read cursor in an authorized channel forward to seq (it never moves back). Future sequences above the current channel head are refused. Explicitly mark only processed activity; reads do not move cursors.",

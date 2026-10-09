@@ -30,6 +30,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `deploy_record` | write | member | no | Implemented | **`commit`**, `environment`, `message`, **`project`** |
 | `event_list` | read | member | no | Implemented | `cursor`, `limit`, `session_id` |
 | `inbox_ack` | write | reader | no | Implemented | `items`, `through` |
+| `inbox_ack_status` | read | reader | no | Implemented | **`items`** |
 | `mail_list` | read | reader | no | Implemented | `limit`, `mine`, `project`, `quarantined` |
 | `mail_propose_work` | read | member | no | Implemented | **`id`** |
 | `mail_read` | read | reader | no | Implemented | **`id`** |

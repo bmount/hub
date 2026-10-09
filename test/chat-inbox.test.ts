@@ -60,6 +60,32 @@ describe("Inbox object", () => {
     expect((await box().list(T, "I1", { after: 0, limit: 10, include_acked: false })).items.map(x => x.item_seq)).toEqual([2, 4]);
   });
 
+  it("reconciles exact retained acknowledgement states across reconstruction, pruning and owner boundaries without mutation", async () => {
+    await box().deliver(T, "I1", [item(1), item(2), item(3)]);
+    const at = Date.now() - 31 * 86_400_000;
+    await box().ackItems(T, "I1", [2], at);
+    const before = await box().list(T, "I1", { after: 0, limit: 10, include_acked: true });
+    await inDO(box(), async (_obj, state) => {
+      const fresh = new Inbox(state, env);
+      expect(await fresh.ackStatus(T, "I1", [3, 2, 3, 1, Number.MAX_SAFE_INTEGER])).toEqual([
+        { item: 3, state: "open", acked_at: null }, { item: 2, state: "acked", acked_at: at },
+        { item: 1, state: "open", acked_at: null }, { item: Number.MAX_SAFE_INTEGER, state: "unknown", acked_at: null },
+      ]);
+      for (const invalid of [[], [0], [NaN], [1.5], Array(101).fill(1)]) {
+        await expect(fresh.ackStatus(T, "I1", invalid)).rejects.toThrow("invalid inbox item numbers");
+      }
+      await expect(fresh.ackStatus("other", "I1", [1])).rejects.toThrow(/another tenant/);
+      await expect(fresh.ackStatus(T, "other", [1])).rejects.toThrow(/another tenant or owner/);
+      expect(await fresh.list(T, "I1", { after: 0, limit: 10, include_acked: true })).toEqual(before);
+      expect(await fresh.cursors(T, "I1")).toEqual({});
+      expect(await fresh.highWater(T, "I1")).toBe(3);
+    });
+    await box().deliver(T, "I1", []);
+    expect(await box().ackStatus(T, "I1", [2])).toEqual([{ item: 2, state: "unknown", acked_at: null }]);
+    expect(await box("I2").ackStatus(T, "I2", [1])).toEqual([{ item: 1, state: "unknown", acked_at: null }]);
+    expect(await box().waiting(T, "I1")).toBe(0);
+  });
+
   it("retains the allocated sequence across pruning and fresh object instances without exposing another binding", async () => {
     expect(await box().highWater(T, "I1")).toBe(0);
     await box().deliver(T, "I1", [item(1), item(2)]);
