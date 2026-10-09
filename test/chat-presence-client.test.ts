@@ -24,7 +24,8 @@ function client() {
   class ClockDate extends Date { static now() { return wall; } }
   const calls: Array<{ name: string; status?: string; signal: AbortSignal }> = [];
   let delayed: Promise<void> | null = null, delayedBody: Promise<void> | null = null;
-  let failNext = false, timeoutId = 0;
+  let failNext = false, timeoutId = 0, cancelledBodies = 0, hangingCancel = false;
+  let rawBody: { text: string; chunkSize: number; length?: string } | null = null;
   const intervals = new Map<number, () => void>(), timeouts = new Map<number, () => void>();
   let entries = [{ identity_id: 'agent-1', display_name: 'Agent', handle: '<img src=x onerror=alert(1)>', kind: "agent", via_assistant: false, state: "online", last_seen: 1000, expires_at: 91000 }];
   let snapshotOverride: Record<string, unknown> | null = null;
@@ -32,10 +33,24 @@ function client() {
     const input = JSON.parse(init.body); calls.push({ name: url, status: input.status, signal: init.signal });
     const result = { channel: 'general', missing: 'unknown', ttl_ms: 90000, entries, observed_at: 1000, ...snapshotOverride };
     const bodyWait = delayedBody; delayedBody = null;
-    const response = { ok: !denied, status: denied ? denialStatus : 200, json: async () => {
-      if (bodyWait) await bodyWait;
-      return { ok: true, result };
-    } };
+    const bodySpec = rawBody; rawBody = null;
+    const bytes = new TextEncoder().encode(bodySpec?.text ?? JSON.stringify({ ok: true, result }));
+    let offset = 0, first = true;
+    const response = { ok: !denied, status: denied ? denialStatus : 200,
+      headers: new Headers(bodySpec?.length ? { 'content-length': bodySpec.length } : {}),
+      body: { getReader: () => ({
+        read: async () => {
+          if (first && bodyWait) await bodyWait;
+          first = false;
+          if (offset === bytes.length) return { done: true };
+          const end = Math.min(bytes.length, offset + (bodySpec?.chunkSize ?? bytes.length));
+          const value = bytes.slice(offset, end); offset = end;
+          return { done: false, value };
+        },
+        cancel: async () => { cancelledBodies++; if (hangingCancel) await new Promise<void>(() => {}); }, releaseLock: () => {},
+      }) },
+      json: async () => { if (bodyWait) await bodyWait; return JSON.parse(new TextDecoder().decode(bytes)); },
+    };
     const wait = delayed; delayed = null;
     const fail = failNext; failNext = false;
     // Deliberately allow late delivery even after abort: generation guards must also work.
@@ -49,6 +64,9 @@ function client() {
     (fn: () => void, ms: number) => { intervals.set(ms, fn); return ms; }, (id: number) => intervals.delete(id), (fn: () => void) => { timeouts.set(++timeoutId, fn); return timeoutId; }, (id: number) => timeouts.delete(id), ClockDate);
   return { connection, sharing, freshness, list, toggle, document, navigator, calls, docEvents, winEvents,
     snapshot: (value: Record<string, unknown> | null) => { snapshotOverride = value; },
+    rawNext: (text: string, chunkSize = 65536, length?: string) => { rawBody = { text, chunkSize, length }; },
+    cancelled: () => cancelledBodies,
+    hangCancel: () => { hangingCancel = true; },
     delayNext: () => { let release!: () => void; delayed = new Promise<void>((resolve) => { release = resolve; }); return release; },
     delayBodyNext: () => { let release!: () => void; delayedBody = new Promise<void>((resolve) => { release = resolve; }); return release; },
     deadline: () => { for (const fn of timeouts.values()) fn(); },
@@ -66,6 +84,64 @@ function client() {
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 describe("presence browser asset", () => {
+  it("rejects oversized streamed success before JSON parsing and recovers query-only", async () => {
+    for (const length of [undefined, '1', '262145']) {
+      const c = client(); await settle(); c.toggle.fire('click'); await settle();
+      const release = c.delayBodyNext();
+      c.rawNext(JSON.stringify({ ok: true, result: {}, padding: 'x'.repeat(262144) }), 65536, length);
+      c.poll(); await settle(); // Heartbeat may be accepted, but its response is bounded too.
+      expect(c.calls.at(-1)!.status).toBe('online');
+      release(); await settle();
+      expect(c.list.children).toEqual([]);
+      expect(c.toggle.textContent).toBe('Share presence in this channel');
+      expect(c.sharing.textContent).toContain('Delivery is uncertain');
+      expect(c.cancelled()).toBeGreaterThan(0);
+      const count = c.calls.length; c.poll(); await settle();
+      expect(c.calls.slice(count).map(x => x.name)).toEqual(['/api/chat.presence']);
+      c.toggle.fire('click'); await settle();
+      expect(c.calls.at(-2)!.status).toBe('online');
+    }
+  });
+
+  it("does not wait for body cancellation and cancels headers delivered after abandonment", async () => {
+    for (const delayed of ['headers', 'body']) {
+      const c = client(); await settle(); c.toggle.fire('click'); await settle();
+      c.hangCancel();
+      const release = delayed === 'headers' ? c.delayNext() : c.delayBodyNext();
+      c.poll(); await settle(); const old = c.calls.at(-1)!;
+      c.deadline(); await settle();
+      expect(old.signal.aborted).toBe(true);
+      expect(c.list.children).toEqual([]);
+      expect(c.toggle.textContent).toBe('Share presence in this channel');
+      if (delayed === 'body') expect(c.cancelled()).toBeGreaterThan(0);
+      const recover = c.calls.length; c.poll(); await settle();
+      expect(c.calls.slice(recover).map(x => x.name)).toEqual(['/api/chat.presence']);
+      c.toggle.fire('click'); await settle(); const renewed = c.calls.length;
+      release(); await settle();
+      expect(c.cancelled()).toBeGreaterThan(0);
+      expect(c.calls).toHaveLength(renewed);
+      expect(c.toggle.textContent).toBe('Stop sharing presence');
+      expect(c.toggle.disabled).toBe(false);
+    }
+  });
+
+  it("bounds presence query bodies, accepts the exact UTF-8 byte boundary, and rejects malformed JSON", async () => {
+    for (const [size, valid] of [[262144, true], [262145, false]] as const) {
+      const c = client(); await settle();
+      const json = JSON.stringify({ ok: true, result: { channel: 'general', missing: 'unknown', ttl_ms: 90000, observed_at: 2000, entries: [] }, padding: 'é' });
+      const byteLength = new TextEncoder().encode(json).length;
+      c.rawNext(json + ' '.repeat(size - byteLength), 32767, '1'); c.poll();
+      for (let i = 0; i < 5; i++) await settle();
+      if (valid) expect(c.list.children[0]!.textContent).toContain('Presence is unknown');
+      else { expect(c.list.children).toEqual([]); expect(c.cancelled()).toBeGreaterThan(0); }
+      expect(c.calls.every(x => !x.status)).toBe(true);
+    }
+    const c = client(); await settle(); c.rawNext('{not json'); c.poll(); await settle();
+    expect(c.list.children).toEqual([]);
+    const count = c.calls.length; c.poll(); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(['/api/chat.presence']);
+  });
+
   it("cancels sharing at exact snapshot expiry before another timer or visibility renewal", async () => {
     for (const via of ['draw', 'poll', 'visibility']) {
       for (const wallOnly of [false, true]) {

@@ -97,6 +97,7 @@ try {
   const overdueHeartbeatResponse = new WeakSet();
   const overdueDeniedHeartbeatResponse = new WeakSet();
   const wrongChannelSnapshot = new WeakSet();
+  const oversizedPresenceResponse = new WeakMap();
   const repeatedSnapshot = new WeakMap();
   async function context(token, viewport) {
     const ctx = await browser.newContext({ viewport, serviceWorkers: 'block' });
@@ -134,6 +135,15 @@ try {
         // Advance wall time without running timeout callbacks. This tests the absolute
         // response guard in a real browser, not native sleep or a real network delay.
         await page.clock.setSystemTime((await page.evaluate(() => Date.now())) + 8000);
+      }
+      if (url.pathname === oversizedPresenceResponse.get(ctx)) {
+        oversizedPresenceResponse.delete(ctx);
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        body.fixturePadding = 'x'.repeat(262144); // Local-only oversized successful body.
+        const responseHeaders = Object.fromEntries(res.headers);
+        delete responseHeaders['content-length']; // Enforce actual bytes, not an advertised bound.
+        return route.fulfill({ status: res.status, headers: responseHeaders, body: JSON.stringify(body) });
       }
       if (url.pathname === '/api/chat.presence' && repeatedSnapshot.has(ctx)) {
         expect(res.status).toBe(200);
@@ -346,6 +356,26 @@ try {
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(invalidStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
+    for (const endpoint of ['/api/chat.heartbeat', '/api/chat.presence']) {
+      oversizedPresenceResponse.set(ctx, endpoint);
+      await page.clock.fastForward(30000);
+      await expect(page.locator('[data-presence-connection]')).toContainText('Current status is unknown');
+      await expect(page.locator('[data-presence-list] li')).toHaveCount(0);
+      await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+      await expect(page.locator('[data-presence-sharing]')).toContainText('Delivery is uncertain');
+      // Heartbeat was genuinely accepted; response rejection is not write rejection.
+      expect((await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev').state).toBe('online');
+      const boundedStart = presenceCalls.length;
+      await page.clock.fastForward(30000);
+      await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+      expect(presenceCalls.slice(boundedStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+      const boundedRecovery = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
+      await page.locator('[data-presence-toggle]').click();
+      await (await boundedRecovery).finished();
+      await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
+      await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+      expect(presenceCalls.slice(boundedStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
+    }
     // Repeated successful snapshots must not restart their age, even as actual
     // heartbeat writes succeed. This is fixture replay, not a production proxy claim.
     repeatedSnapshot.set(ctx, null);
@@ -386,7 +416,7 @@ try {
     expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(beforeCursor);
     await noOverflow(page);
     await ctx.close();
-    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/absolute-deadline/overdue-denial/abort-ignoring-transport/timer-gap/wrong-channel/replayed-snapshot recovery, cursor unchanged`);
+    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/absolute-deadline/overdue-denial/abort-ignoring-transport/timer-gap/wrong-channel/oversized-body/replayed-snapshot recovery, cursor unchanged`);
   }
   // Playwright routing and its default Chromium flag disable native BFCache.
   // Use an actual loopback HTTP bridge and omit ONLY that flag for this pass.

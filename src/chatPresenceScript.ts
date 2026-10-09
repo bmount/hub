@@ -64,6 +64,16 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     const controller = new AbortController();
     requests.add(controller);
     const requestedAt = clock();
+    const maxResponseBytes = 262144;
+    let reader = null, bodyComplete = false;
+    function closeBody() {
+      if (!reader) return;
+      if (!bodyComplete) {
+        try { Promise.resolve(reader.cancel()).catch(() => {}); } catch (_) {}
+      }
+      try { reader.releaseLock(); } catch (_) {}
+      reader = null;
+    }
     let rejectAbort;
     const aborted = new Promise((_, reject) => { rejectAbort = reject; });
     function onAbort() { rejectAbort(new Error('presence request aborted')); }
@@ -84,6 +94,8 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       return await Promise.race([aborted, (async () => {
         const res = await fetch('/api/' + name, { method: 'POST', credentials: 'same-origin', redirect: 'error',
           headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: controller.signal });
+        // Own the body even for denied/obsolete headers so cleanup can cancel it.
+        reader = res.body ? res.body.getReader() : null;
         // An overdue denial is an obsolete transport result, not a current access
         // verdict. Enforce the budget before interpreting status, just as for body.
         timely();
@@ -92,12 +104,36 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
           error.denied = [401, 403, 404].includes(res.status);
           throw error;
         }
-        const body = await res.json();
+        const declared = res.headers.get('content-length');
+        if (!reader || (declared && /^\d+$/.test(declared) && Number(declared) > maxResponseBytes)) {
+          throw new Error('presence response too large or missing');
+        }
+        // Bound actual Fetch body bytes, not an untrusted Content-Length or
+        // entry count checked only after unbounded JSON parsing. The same deadline
+        // covers every chunk; abort releases refresh even if read/cancel never settles.
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        const parts = [];
+        let bytes = 0;
+        while (true) {
+          const chunk = await reader.read();
+          timely();
+          if (chunk.done) { bodyComplete = true; break; }
+          bytes += chunk.value.byteLength;
+          if (bytes > maxResponseBytes) throw new Error('presence response too large');
+          const text = decoder.decode(chunk.value, { stream: true });
+          if (text) parts.push(text);
+        }
+        parts.push(decoder.decode());
         timely();
-        if (!body.ok) throw new Error('unavailable');
+        const body = JSON.parse(parts.join(''));
+        timely();
+        if (!body || !body.ok) throw new Error('unavailable');
         return body.result;
-      })()]);
+      })().finally(closeBody)]); // Also cleans up headers delivered after abandonment.
     } finally {
+      // Cleanup is best effort, never a dependency for query-only recovery. Observe
+      // rejected cancellation promises without awaiting an abort-ignoring transport.
+      closeBody();
       requests.delete(controller); clearTimeout(timeout);
       controller.signal.removeEventListener('abort', onAbort);
     }
