@@ -33,16 +33,19 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     pauseSharing();
     invalidate('Sharing interval expired. Current status is unknown until refreshed.');
   }
+  function expireSnapshot() {
+    // Expiring the directory must also retire its participation interval BEFORE a
+    // renewal. A recent heartbeat cannot make an old/replayed snapshot current.
+    if (!snapshotValid || age(snapshotAt) < 90000) return;
+    if (opted || nextStatus) pauseSharing();
+    invalidate('Presence snapshot expired. Current status is unknown; refresh will retry.');
+  }
   function draw() {
     expireParticipation();
+    expireSnapshot();
     list.replaceChildren();
     if (!snapshotValid) return;
     const elapsed = age(snapshotAt);
-    // Even explicit offline is only a bounded snapshot, not a permanent directory.
-    if (elapsed >= 90000) {
-      unknown('Presence snapshot expired. Current status is unknown; refresh will retry.');
-      return;
-    }
     freshness.textContent = 'Snapshot observed at ' + new Date(observedAt).toISOString() + ' · at least ' + Math.floor(elapsed / 1000) + ' seconds old (including request time).';
     for (const entry of entries) {
       const li = document.createElement('li');
@@ -133,6 +136,7 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     if (stopped) return;
     // Check before a renewal, not only in the expiry timer: both timers can be delayed.
     expireParticipation();
+    expireSnapshot();
     if (pending) { queued = true; return; }
     pending = true;
     const startedGeneration = generation;
@@ -189,7 +193,11 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
   }
   toggle.addEventListener('click', () => {
     if (stopped || toggle.disabled) return;
-    opted = !opted; nextStatus = opted ? (document.hidden ? 'away' : 'online') : 'offline';
+    // Retire stale state before installing new consent, but preserve the button's
+    // displayed intent: a Stop click must never turn into renewed online sharing.
+    const startSharing = !opted;
+    expireSnapshot();
+    opted = startSharing; nextStatus = opted ? (document.hidden ? 'away' : 'online') : 'offline';
     participationAt = clock(); // A new explicit action is fresh consent, not a timer retry.
     toggle.textContent = opted ? 'Stop sharing presence' : 'Share presence in this channel';
     sharing.textContent = opted ? 'Sharing while this channel is visible; hidden pages stop renewing online status.' : 'Not sharing. If the offline update cannot be delivered, the previous heartbeat expires within 90 seconds.';

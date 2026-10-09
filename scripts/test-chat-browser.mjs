@@ -359,10 +359,16 @@ try {
       await (await repeat).finished();
       await expect(page.locator('[data-presence-freshness]')).toContainText(`at least ${seconds} seconds old`);
     }
+    const expiryStart = presenceCalls.length;
+    const expiryQuery = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
     await page.clock.fastForward(30000);
+    await (await expiryQuery).finished();
     await expect(page.locator('[data-presence-connection]')).toContainText('Current status is unknown');
     await expect(page.locator('[data-presence-list] li')).toHaveCount(0);
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+    // At the exact snapshot boundary, cancel consent BEFORE renewal: recent
+    // accepted heartbeats at 30s/60s do not rejuvenate the replayed directory.
+    expect(presenceCalls.slice(expiryStart).map(c => c.name)).toEqual(['/api/chat.presence']);
     const replayStart = presenceCalls.length;
     await page.clock.fastForward(30000);
     await expect(page.locator('[data-presence-list] li')).toHaveCount(0);

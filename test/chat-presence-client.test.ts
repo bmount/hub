@@ -66,6 +66,88 @@ function client() {
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 describe("presence browser asset", () => {
+  it("cancels sharing at exact snapshot expiry before another timer or visibility renewal", async () => {
+    for (const via of ['draw', 'poll', 'visibility']) {
+      for (const wallOnly of [false, true]) {
+        const c = client(); await settle(); c.toggle.fire('click'); await settle();
+        c.clocks(60000, 60000); c.poll(); await settle();
+        expect(c.toggle.textContent).toBe('Stop sharing presence');
+        // Reporting at 60s keeps participation live, but cannot refresh a replayed
+        // snapshot. Expiry must cancel consent BEFORE any further write is sent.
+        const count = c.calls.length;
+        c.clocks(wallOnly ? 60000 : 90000, 90000, via === 'draw');
+        if (via === 'poll') c.poll();
+        if (via === 'visibility') c.docEvents.fire('visibilitychange');
+        await settle();
+        expect(c.toggle.textContent).toBe('Share presence in this channel');
+        expect(c.list.children).toEqual([]);
+        expect(c.calls.slice(count).every(x => !x.status)).toBe(true);
+        c.snapshot({ observed_at: 91000, entries: [] });
+        const recover = c.calls.length; c.poll(); await settle();
+        expect(c.calls.slice(recover).map(x => x.name)).toEqual(['/api/chat.presence']);
+        expect(c.toggle.textContent).toBe('Share presence in this channel');
+        c.toggle.fire('click'); await settle();
+        expect(c.calls.at(-2)!.status).toBe('online');
+      }
+    }
+  });
+
+  it("aborts a pending heartbeat and queued status at snapshot expiry without waiting for transport", async () => {
+    for (const queuedOffline of [false, true]) {
+      const c = client(); await settle(); c.toggle.fire('click'); await settle();
+      c.clocks(85000, 85000, false);
+      const release = c.delayNext(); c.poll(); await settle();
+      const old = c.calls.at(-1)!;
+      if (queuedOffline) c.toggle.fire('click'); // Queued offline behind uncertain online.
+      const count = c.calls.length;
+      c.clocks(90000, 90000); await settle();
+      expect(old.signal.aborted).toBe(true);
+      expect(c.toggle.textContent).toBe('Share presence in this channel');
+      expect(c.list.children).toEqual([]);
+      expect(c.sharing.textContent).toContain('Delivery is uncertain');
+      c.snapshot({ observed_at: 91000, entries: [] }); c.poll(); await settle();
+      expect(c.calls.slice(count).map(x => x.name)).toEqual(['/api/chat.presence']);
+      c.toggle.fire('click'); await settle();
+      const renewed = c.calls.length;
+      release(); await settle();
+      expect(c.calls).toHaveLength(renewed);
+      expect(c.toggle.textContent).toBe('Stop sharing presence');
+      expect(c.toggle.disabled).toBe(false);
+    }
+  });
+
+  it("expires old snapshot consent before a fresh click, preserving its displayed start/stop intent", async () => {
+    for (const previouslyOpted of [false, true]) {
+      const c = client(); await settle();
+      if (previouslyOpted) { c.toggle.fire('click'); await settle(); }
+      c.clocks(60000, 60000); c.poll(); await settle();
+      c.clocks(90000, 90000, false); // No expiry/timer callback yet.
+      c.snapshot({ observed_at: 91000, entries: [] });
+      const count = c.calls.length; c.toggle.fire('click'); await settle();
+      expect(c.calls.slice(count).map(x => [x.name, x.status])).toEqual([
+        ['/api/chat.heartbeat', previouslyOpted ? 'offline' : 'online'], ['/api/chat.presence', undefined],
+      ]);
+      expect(c.toggle.textContent).toBe(previouslyOpted ? 'Share presence in this channel' : 'Stop sharing presence');
+    }
+  });
+
+  it("keeps unexpired snapshots usable and preserves denial across read-only expiry", async () => {
+    const c = client(); await settle(); c.toggle.fire('click'); await settle();
+    c.clocks(89999, 89999); const count = c.calls.length; c.poll(); await settle();
+    expect(c.toggle.textContent).toBe('Stop sharing presence');
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(['/api/chat.heartbeat', '/api/chat.presence']);
+    c.deny(); c.poll(); await settle();
+    expect(c.toggle.disabled).toBe(true);
+    c.allow(); c.snapshot({ observed_at: 91000, entries: [] }); c.poll(); await settle();
+    // Current access denial remains disabled even if a later query succeeds.
+    c.clocks(179999, 179999); c.poll(); await settle();
+    expect(c.list.children).toEqual([]);
+    expect(c.toggle.disabled).toBe(true);
+    const deniedCount = c.calls.length; c.toggle.fire('click'); await settle();
+    expect(c.calls).toHaveLength(deniedCount);
+    expect(c.sharing.textContent).toContain('channel access is unavailable');
+  });
+
   it("treats overdue denied headers as uncertain delivery, not a permanent current access verdict", async () => {
     for (const status of [401, 403, 404]) {
       for (const heartbeat of [false, true]) {
