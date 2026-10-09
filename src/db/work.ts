@@ -60,21 +60,27 @@ export type WorkFilter = {
 };
 
 /** The Docket query as a statement, so pages can put it in a batch. */
-export function listWorkStatement(db: D1Database, tenant_id: string, f: WorkFilter): D1PreparedStatement {
-  const where = ["tenant_id = ?"]; const args: unknown[] = [tenant_id];
-  if (f.project_id) { where.push("project_id = ?"); args.push(f.project_id); }
-  if (f.kinds?.length) { where.push(`kind IN (${f.kinds.map(() => "?").join(",")})`); args.push(...f.kinds); }
-  if (f.states?.length) { where.push(`state IN (${f.states.map(() => "?").join(",")})`); args.push(...f.states); }
-  if (f.owner_id) { where.push("owner_id = ?"); args.push(f.owner_id); }
-  if (f.owner_email) { where.push("owner_id = (SELECT id FROM identity WHERE email = ?)"); args.push(f.owner_email.trim().toLowerCase()); }
-  if (f.parent_id) { where.push("parent_id = ?"); args.push(f.parent_id); }
-  if (f.parent_number && f.project_id) { where.push("parent_id = (SELECT id FROM work_item WHERE project_id = ? AND number = ?)"); args.push(f.project_id, f.parent_number); }
-  if (f.before) { where.push("updated_at < ?"); args.push(f.before); }
-  return db.prepare(`SELECT * FROM work_item WHERE ${where.join(" AND ")} ORDER BY updated_at DESC, id DESC LIMIT ?`).bind(...args, f.limit);
+export function listWorkStatement(db: D1Database, tenant_id: string, f: WorkFilter, withProject = false): D1PreparedStatement {
+  const where = ["w.tenant_id = ?"]; const args: unknown[] = [tenant_id];
+  if (f.project_id) { where.push("w.project_id = ?"); args.push(f.project_id); }
+  if (f.kinds?.length) { where.push(`w.kind IN (${f.kinds.map(() => "?").join(",")})`); args.push(...f.kinds); }
+  if (f.states?.length) { where.push(`w.state IN (${f.states.map(() => "?").join(",")})`); args.push(...f.states); }
+  if (f.owner_id) { where.push("w.owner_id = ?"); args.push(f.owner_id); }
+  if (f.owner_email) { where.push("w.owner_id = (SELECT id FROM identity WHERE email = ?)"); args.push(f.owner_email.trim().toLowerCase()); }
+  if (f.parent_id) { where.push("w.parent_id = ?"); args.push(f.parent_id); }
+  if (f.parent_number && f.project_id) { where.push("w.parent_id = (SELECT id FROM work_item WHERE project_id = ? AND number = ?)"); args.push(f.project_id, f.parent_number); }
+  if (f.before) { where.push("w.updated_at < ?"); args.push(f.before); }
+  const join = withProject ? "JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind <> 'channel'" : "";
+  return db.prepare(`SELECT w.*${withProject ? ", p.slug AS project" : ""} FROM work_item w ${join} WHERE ${where.join(" AND ")} ORDER BY w.updated_at DESC, w.id DESC LIMIT ?`).bind(...args, f.limit);
 }
 
 export async function listWork(db: D1Database, tenant_id: string, f: WorkFilter): Promise<WorkItem[]> {
   return (await listWorkStatement(db, tenant_id, f).all<WorkItem>()).results;
+}
+
+/** One query regardless of the number of distinct projects in the work.list sample. */
+export async function listWorkWithProjects(db: D1Database, tenant_id: string, f: WorkFilter): Promise<Array<WorkItem & { project: string }>> {
+  return (await listWorkStatement(db, tenant_id, f, true).all<WorkItem & { project: string }>()).results;
 }
 
 /** Match everything a write derives from, including nullable fields. This also detects

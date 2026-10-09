@@ -11,44 +11,67 @@ import { KINDS, STATES, type WorkKind, type WorkState } from "../work/names";
 
 const STALL_MS = 7 * 86_400_000;
 const DONE_WINDOW_MS = 14 * 86_400_000;
+export const BOARD_ITEM_LIMIT = 500;
 
 export type BoardItem = { ref: string; slug: string; number: number; kind: WorkKind; state: WorkState; title: string; owner: string | null; updated_at: number; stalled: boolean };
 export type Quest = { ref: string; slug: string; number: number; title: string; state: WorkState; done: number; total: number };
-export type Board = { scope: string; columns: Record<"open" | "doing" | "done", BoardItem[]>; quests: Quest[]; stalled: number };
+export type Board = {
+  scope: string; columns: Record<"open" | "doing" | "done", BoardItem[]>; quests: Quest[]; stalled: number;
+  totals: Record<"open" | "doing" | "done", number>;
+  examples: { limit: number; shown: number; truncated: boolean };
+};
 
 export async function board(ctx: Ctx, project: string | null): Promise<Board> {
-  const [items, quests] = await ctx.db.batch([
+  // Counts and bounded examples share predicates and one D1 batch. Never infer totals
+  // (especially old stalled items) from the globally newest-item sample.
+  const scope = "w.tenant_id = ? AND p.tenant_id = w.tenant_id AND p.kind <> 'channel' AND (? IS NULL OR p.slug = ?)";
+  const visible = "(w.state IN ('open', 'doing') OR (w.state = 'done' AND w.closed_at > ?))";
+  const args = [ctx.tenant!.id, project, project, ctx.now - DONE_WINDOW_MS];
+  const [items, quests, counts] = await ctx.db.batch([
     ctx.db.prepare(`SELECT p.slug, w.number, w.kind, w.state, w.title, w.updated_at, i.display_name AS owner FROM work_item w JOIN project p ON p.id = w.project_id LEFT JOIN identity i ON i.id = w.owner_id
-      WHERE w.tenant_id = ? AND (? IS NULL OR p.slug = ?) AND (w.state IN ('open', 'doing') OR (w.state = 'done' AND w.closed_at > ?)) ORDER BY w.updated_at DESC LIMIT 500`)
-      .bind(ctx.tenant!.id, project, project, ctx.now - DONE_WINDOW_MS),
+      WHERE ${scope} AND ${visible} ORDER BY w.updated_at DESC, w.id DESC LIMIT ?`)
+      .bind(...args, BOARD_ITEM_LIMIT),
     ctx.db.prepare(`SELECT p.slug, q.number, q.title, q.state,
-        (SELECT COUNT(*) FROM work_item c WHERE c.parent_id = q.id AND c.state = 'done') AS done,
-        (SELECT COUNT(*) FROM work_item c WHERE c.parent_id = q.id AND c.state <> 'dropped') AS total
-      FROM work_item q JOIN project p ON p.id = q.project_id WHERE q.tenant_id = ? AND (? IS NULL OR p.slug = ?) AND q.kind = 'quest' AND q.state IN ('open', 'doing') ORDER BY q.number`)
+        (SELECT COUNT(*) FROM work_item c WHERE c.parent_id = q.id AND c.tenant_id = q.tenant_id AND c.project_id = q.project_id AND c.state = 'done') AS done,
+        (SELECT COUNT(*) FROM work_item c WHERE c.parent_id = q.id AND c.tenant_id = q.tenant_id AND c.project_id = q.project_id AND c.state <> 'dropped') AS total
+      FROM work_item q JOIN project p ON p.id = q.project_id WHERE q.tenant_id = ? AND p.tenant_id = q.tenant_id AND p.kind <> 'channel' AND (? IS NULL OR p.slug = ?) AND q.kind = 'quest' AND q.state IN ('open', 'doing') ORDER BY q.number, q.id`)
       .bind(ctx.tenant!.id, project, project),
+    ctx.db.prepare(`SELECT COALESCE(SUM(w.state = 'open'), 0) AS open,
+        COALESCE(SUM(w.state = 'doing'), 0) AS doing, COALESCE(SUM(w.state = 'done'), 0) AS done,
+        COALESCE(SUM(w.state = 'doing' AND w.updated_at < ?), 0) AS stalled
+      FROM work_item w JOIN project p ON p.id = w.project_id WHERE ${scope} AND ${visible}`)
+      .bind(ctx.now - STALL_MS, ...args),
   ]);
   const columns: Board["columns"] = { open: [], doing: [], done: [] };
-  let stalled = 0;
   for (const r of items!.results as Array<Omit<BoardItem, "ref" | "stalled">>) {
     const s = r.state === "doing" && ctx.now - r.updated_at > STALL_MS;
-    if (s) stalled++;
     const col = r.state === "done" ? "done" : r.state === "doing" ? "doing" : "open";
     columns[col].push({ ...r, ref: `${r.slug}#${r.number}`, stalled: s });
   }
-  return { scope: project ?? "organization", columns, quests: (quests!.results as Array<Omit<Quest, "ref">>).map((q) => ({ ...q, ref: `${q.slug}#${q.number}` })), stalled };
+  const { open, doing, done, stalled } = counts!.results[0] as Board["totals"] & { stalled: number };
+  return {
+    scope: project ?? "organization", columns,
+    quests: (quests!.results as Array<Omit<Quest, "ref">>).map((q) => ({ ...q, ref: `${q.slug}#${q.number}` })),
+    totals: { open, doing, done }, stalled,
+    examples: { limit: BOARD_ITEM_LIMIT, shown: items!.results.length, truncated: open + doing + done > items!.results.length },
+  };
 }
 
 export const workBoard = defineVerb({
   name: "work.board", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "The board: open, under way, and done in the last two weeks; each quest's progress; and what has stalled (under way, untouched for a week).",
+  summary: "The board: exact open, under-way, recent-done and stalled totals with bounded latest-item examples; each quest's progress. Done covers the last two weeks; stalled means under way, untouched for a week.",
   mcp: {
     scope: "read", destructive: false, title: "Board",
     input: { type: "object", properties: { project: { type: "string", description: "Omit for the whole organization" } }, additionalProperties: false },
     render: (r) => {
       const b = r as Board;
       const line = (i: BoardItem) => `- **${i.ref}** ${KINDS[i.kind].name}: ${cleanText(i.title)}${i.owner ? ` (${cleanText(i.owner)})` : ""}${i.stalled ? " [stalled]" : ""}`;
-      return [DATA_NOTE, "", `**Board: ${b.scope}** (${b.stalled} stalled)`, "", "Quests:", ...b.quests.map((q) => `- **${q.ref}** ${cleanText(q.title)}: ${q.done}/${q.total} done`),
-        "", `Under way (${b.columns.doing.length}):`, ...b.columns.doing.slice(0, 40).map(line), "", `Open (${b.columns.open.length}):`, ...b.columns.open.slice(0, 40).map(line), "", `Done lately (${b.columns.done.length}):`, ...b.columns.done.slice(0, 20).map(line)].join("\n");
+      return [DATA_NOTE, "", `**Board: ${cleanText(b.scope)}** (${b.stalled} stalled)`,
+        `Exact recorded totals; examples come from the latest ${b.examples.limit}-item sample (${b.examples.shown} sampled${b.examples.truncated ? "; truncated" : ""}). Missing examples do not mean an empty column.`,
+        "", "Quests:", ...b.quests.map((q) => `- **${q.ref}** ${cleanText(q.title)}: ${q.done}/${q.total} done`),
+        "", `Under way (${b.totals.doing}; showing ${Math.min(b.columns.doing.length, 40)}):`, ...b.columns.doing.slice(0, 40).map(line),
+        "", `Open (${b.totals.open}; showing ${Math.min(b.columns.open.length, 40)}):`, ...b.columns.open.slice(0, 40).map(line),
+        "", `Done lately (${b.totals.done}; showing ${Math.min(b.columns.done.length, 20)}):`, ...b.columns.done.slice(0, 20).map(line)].join("\n");
     },
   },
   parse: (i) => ({ project: optString(i, "project", { max: 63 }) }),

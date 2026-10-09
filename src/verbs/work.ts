@@ -6,7 +6,7 @@ import { badRequest, conflict, notFound } from "../errors";
 import { recordEvent } from "../db/events";
 import { getIdentityByEmail } from "../db/identities";
 import { getMembership } from "../db/memberships";
-import { claimWork, createWork, getWork, getWorkByNumber, linkWork, listLinks, listWork, updateWork, type WorkItem } from "../db/work";
+import { claimWork, createWork, getWork, getWorkByNumber, linkWork, listLinks, listWork, listWorkWithProjects, updateWork, type WorkItem } from "../db/work";
 import { DOCKET, KINDS, STATES, kindOf, labelled, type WorkKind, type WorkState } from "../work/names";
 import { DATA_NOTE, cleanText, cutText } from "../mcp/render";
 import type { Ctx } from "../auth/context";
@@ -164,10 +164,8 @@ export const workList = defineVerb({
   run: async (ctx, p) => {
     const project = p.project ? await projectBySlug(ctx, p.project) : null;
     const owner = p.owner ? await ownerId(ctx, p.owner) : undefined;
-    const items = await listWork(ctx.db, ctx.tenant!.id, { project_id: project?.id ?? null, kinds: p.kinds, states: p.states, owner_id: owner ?? null, limit: p.limit });
-    const slugs = new Map<string, string>();
-    for (const w of items) if (!slugs.has(w.project_id)) slugs.set(w.project_id, await slugOf(ctx, w.project_id));
-    return { items: items.map((w) => ({ ...w, project: slugs.get(w.project_id)!, ref: ref(slugs.get(w.project_id)!, w) })) };
+    const items = await listWorkWithProjects(ctx.db, ctx.tenant!.id, { project_id: project?.id ?? null, kinds: p.kinds, states: p.states, owner_id: owner ?? null, limit: p.limit });
+    return { items: items.map((w) => ({ ...w, ref: ref(w.project, w) })) };
   },
 });
 
