@@ -30,6 +30,35 @@ function version(id: string, msg: string, body: string | null): VersionInput {
 }
 
 describe("durable source-bound chat responses", () => {
+  it("looks up legacy result and independent progress evidence across pruning/restart without knowing the fingerprint", async () => {
+    const { source, input, response } = await setup();
+    expect(await conv().responseStatus(tenant, channel, "A", source.msg_id)).toMatchObject({ progress: null, result: null });
+    const result = ok(await conv().post(input));
+    // Each stage may have been committed against a different source revision.
+    ok(await conv().version(version("H", source.msg_id, "revised request")));
+    const revised = { ...response.source, rev: 2 };
+    const progress = ok(await conv().post({ ...input, after: 3, body: "revisiting tests", body_sha256: "sha:revisiting", response: { source: revised, stage: "progress", fingerprint: "different" } }));
+    ok(await conv().version(version("A", result.msg_id, "edited answer")));
+    ok(await conv().version(version("A", progress.msg_id, null)));
+    const later = Date.now() + 48 * 3_600_000;
+    ok(await conv().post(post("H", "later", { now: later, idempotency_key: "prune" })));
+    const status = await inDO(conv(), async (_object, state) => new Conversation(state, env).responseStatus(tenant, channel, "A", String(source.seq)));
+    expect(status).toEqual({ head: 7, source: { ...revised, seq: source.seq, retracted: false },
+      progress: { source: revised, committed: { msg_id: progress.msg_id, seq: progress.seq, rev: 1 }, current: { rev: 2, retracted: true } },
+      result: { source: response.source, committed: { msg_id: result.msg_id, seq: result.seq, rev: 1 }, current: { rev: 2, retracted: false } },
+    });
+    expect(await conv().responseStatus(tenant, channel, "B", source.msg_id)).toMatchObject({ progress: null, result: null });
+    const other = conversationStub(env, tenant, "C2");
+    expect(await other.responseStatus(tenant, "C2", "A", source.msg_id)).toBeNull();
+    await inDO(conv(), async (object) => {
+      await expect((object as Conversation).responseStatus("wrong", channel, "A", source.msg_id)).rejects.toThrow("another tenant or owner");
+    });
+    expect(JSON.stringify(status)).not.toMatch(/fingerprint|woke|suppressed|answer|different/);
+    expect(await conv().head(tenant, channel)).toBe(7);
+    const inbox = await inboxStub(env, tenant, "B").list(tenant, "B", { after: 0, limit: 100, include_acked: true });
+    expect(inbox.items).toHaveLength(2);
+  });
+
   it("commits independent bounded progress/result slots and replays each across keys, sessions and restart", async () => {
     const { input, response, source } = await setup();
     const progress = { ...input, body: "testing", body_sha256: "sha:testing", response: { ...response, stage: "progress" as const, fingerprint: "sha:testing" } };

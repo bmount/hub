@@ -88,6 +88,7 @@ const TABLE: Record<string, Decl> = {
   "channel.archive": T("tenant", "admin", 60, { humanOnly: true }), "channel.unarchive": T("tenant", "admin", 60, { humanOnly: true }),
   "chat.post": T("tenant", "member", null, { mcp: "write" }), "chat.edit": T("tenant", "member", null), "chat.retract": T("tenant", "member", null),
   "chat.read": T("tenant", "reader", null, { mcp: "read" }), "chat.thread": T("tenant", "reader", null, { mcp: "read" }),
+  "chat.response_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.catchup": T("tenant", "reader", null, { mcp: "read" }),
   "chat.history": T("tenant", "reader", null), "chat.inbox": T("tenant", "reader", null, { mcp: "read" }),
   "inbox.wait": T("tenant", "reader", null), "inbox.ack": T("tenant", "reader", null, { mcp: "write" }), "chat.mark_read": T("tenant", "reader", null, { mcp: "write" }),

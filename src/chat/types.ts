@@ -20,6 +20,18 @@ export type ResponseSource = { msg_id: string; rev: number; author_id: string };
 export type ResponseStage = "progress" | "result";
 export type ResponseTarget = ResponseSource & { stage?: ResponseStage };
 export type ResponseIntent = { source: ResponseSource; fingerprint: string; stage?: ResponseStage };
+/** A recorded chat post, not a task/execution status. No body, fingerprint, wake recipients or other callers' records. */
+export type ResponseSlot = {
+  source: ResponseSource;
+  committed: { msg_id: string; seq: number; rev: number };
+  current: { rev: number; retracted: boolean } | null;
+};
+export type ResponseStatus = {
+  head: number;
+  source: ResponseSource & { seq: number; retracted: boolean };
+  progress: ResponseSlot | null;
+  result: ResponseSlot | null;
+};
 
 export type PostInput = {
   tenant_id: string; conversation_id: string; now: number; author: Author; policy: AgentPolicy;

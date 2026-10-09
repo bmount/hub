@@ -8,7 +8,7 @@ import { getControls } from "../db/chat";
 import { LIMITS, computeHop, gateRefuses, nextAgentRun, pairTrip, wakesAllowed } from "./rules";
 import type {
   AuthorKind, ChatSessionKind, Digest, DigestQuery, MsgView, PostInput, PostOk, PostOutcome, ReadPage, ReadQuery, StoredRef, Suppressed,
-  ResponseIntent, Version, VersionInput, WakeItem, WakeKind,
+  ResponseIntent, ResponseSlot, ResponseStatus, Version, VersionInput, WakeItem, WakeKind,
 } from "./types";
 
 const SCHEMA = [
@@ -164,7 +164,7 @@ export class Conversation extends DurableObject<Env> {
     this.#run("INSERT OR REPLACE INTO idem (identity_id, key, result_json, created_at) VALUES (?, ?, ?, ?)", identity_id, `${op}:${key}`, JSON.stringify(result), now);
   }
 
-  #responseKey(identity_id: string, intent: ResponseIntent): string {
+  #responseKey(identity_id: string, intent: Pick<ResponseIntent, "source" | "stage">): string {
     // Preserve all previously committed responses as the default result slot.
     return intent.stage === "progress"
       ? `response:v2:progress:${identity_id}:${intent.source.msg_id}`
@@ -197,6 +197,27 @@ export class Conversation extends DurableObject<Env> {
   async responseReplay(tenant_id: string, conversation_id: string, identity_id: string, intent: ResponseIntent): Promise<PostOutcome | null> {
     this.#bind(tenant_id, conversation_id);
     return this.#responseReplay(identity_id, intent);
+  }
+
+  /** Caller-only durable ledger lookup, including changed/retracted sources. Never sends or replays a post. */
+  async responseStatus(tenant_id: string, conversation_id: string, identity_id: string, msg: string): Promise<ResponseStatus | null> {
+    this.#bind(tenant_id, conversation_id);
+    const source = this.#msg(msg);
+    if (!source || source.kind !== "say") return null;
+    const evidence = { msg_id: source.msg_id, rev: source.rev, author_id: source.author_id };
+    const slot = (stage: "progress" | "result"): ResponseSlot | null => {
+      const row = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = ?", this.#responseKey(identity_id, { source: evidence, stage }))[0];
+      if (!row) return null;
+      const prior = JSON.parse(row.value) as { intent: ResponseIntent; result: PostOk };
+      const current = this.#msg(prior.result.msg_id);
+      return {
+        source: { msg_id: prior.intent.source.msg_id, rev: prior.intent.source.rev, author_id: prior.intent.source.author_id },
+        committed: { msg_id: prior.result.msg_id, seq: prior.result.seq, rev: prior.result.rev },
+        current: current ? { rev: current.rev, retracted: current.retracted === 1 } : null,
+      };
+    };
+    // Synchronous SQL reads observe one snapshot: current head/source and both slots cannot interleave with a write.
+    return { head: this.#head(), source: { ...evidence, seq: source.first_seq, retracted: source.retracted === 1 }, progress: slot("progress"), result: slot("result") };
   }
 
   /** Spec 6.4: messages by others, not system, newer than `after` in the scope (the thread, or the top level). */
