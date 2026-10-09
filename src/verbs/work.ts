@@ -279,7 +279,7 @@ export const workLink = defineVerb({
       properties: {
         ...ITEM_SCHEMA,
         target_kind: { type: "string", enum: ["commit", "mail", "message", "event", "item", "url"] },
-        target_ref: { type: "string", description: "Commit hash (repo@hash), mail or event id, item reference, or URL." },
+        target_ref: { type: "string", description: "Commit hash (repo@hash), mail or event id, item reference, or absolute HTTPS URL without credentials, whitespace or control characters." },
         note: { type: "string" },
       },
       required: ["target_kind", "target_ref"], additionalProperties: false,

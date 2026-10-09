@@ -1,6 +1,7 @@
 import { defineVerb } from "./table";
 import { optInt, optString } from "./params";
 import { listEventsPage } from "../db/events";
+import { readableMailEvents } from "../auth/mailAccess";
 
 export const eventList = defineVerb({
   name: "event.list", kind: "query", scope: "tenant", minRole: "member", freshProofMinutes: null,
@@ -23,7 +24,7 @@ export const eventList = defineVerb({
     session_id: optString(i, "session_id", { max: 26 }),
   }),
   run: async (ctx, p) => {
-    const rows = await listEventsPage(ctx.db, ctx.tenant!.id, { limit: p.limit + 1, before: p.cursor, session_id: p.session_id });
+    const rows = await listEventsPage(ctx.db, ctx.tenant!.id, { limit: p.limit + 1, before: p.cursor, session_id: p.session_id, visibility: readableMailEvents(ctx, "event") });
     const page = rows.slice(0, p.limit);
     return {
       events: page.map((e) => ({

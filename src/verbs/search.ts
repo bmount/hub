@@ -4,7 +4,8 @@
 import { defineVerb } from "./table";
 import { optString, reqString } from "./params";
 import { badRequest } from "../errors";
-import { rank, type Ctx } from "../auth/context";
+import type { Ctx } from "../auth/context";
+import { readableMail } from "../auth/mailAccess";
 import { DATA_NOTE, cleanText } from "../mcp/render";
 import { readableChannels, viewerOf } from "../chat/access";
 import { conversationStub } from "../chat/stubs";
@@ -92,12 +93,12 @@ export const messageSearch = defineVerb({
 /** Everything at once, grouped: work, mail, messages, people, projects, app errors. */
 export async function searchAll(ctx: Ctx, q: string): Promise<Record<string, Hit[]>> {
   const ts = terms(q);
-  const admin = rank(ctx.role) >= rank("admin");
+  const access = readableMail(ctx);
   const tid = ctx.tenant!.id;
   const [work, mail, ppl, proj, errs] = await ctx.db.batch([
     workHitsStatement(ctx, ts, null, 20),
-    ctx.db.prepare(`SELECT m.id, m.subject, m.text, m.from_email, m.received_at FROM inbound_mail m WHERE m.tenant_id = ? AND (m.verdict = 'admitted' OR ?)
-      AND ${all("m.subject || ' ' || m.text || ' ' || m.from_email", ts.length)} ORDER BY m.received_at DESC LIMIT 15`).bind(tid, admin ? 1 : 0, ...ts.map(like)),
+    ctx.db.prepare(`SELECT m.id, m.subject, m.text, m.from_email, m.received_at FROM inbound_mail m WHERE ${access.sql}
+      AND ${all("m.subject || ' ' || m.text || ' ' || m.from_email", ts.length)} ORDER BY m.received_at DESC LIMIT 15`).bind(...access.bindings, ...ts.map(like)),
     ctx.db.prepare(`SELECT i.display_name, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active'
       AND ${all("i.display_name || ' ' || i.email", ts.length)} LIMIT 10`).bind(tid, ...ts.map(like)),
     ctx.db.prepare(`SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel' AND ${all("slug || ' ' || display_name", ts.length)} LIMIT 10`).bind(tid, ...ts.map(like)),

@@ -4,6 +4,7 @@ import type { Env } from "../env";
 import { shellFor } from "./shell";
 import { esc, htmlResponse, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
+import { canInspectMail, readableMail } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { KINDS, STATES, type WorkKind, type WorkState } from "../work/names";
@@ -25,16 +26,17 @@ async function mailPage(request: Request, env: Env, id: string | null): Promise<
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
-  const admin = rank(ctx.role) >= rank("admin");
+  const admin = canInspectMail(ctx);
+  const access = readableMail(ctx);
   const tid = ctx.tenant.id;
   const [rowsR, projR, msgR, filedR, repliesR, switchR] = await ctx.db.batch([
     ctx.db.prepare(`SELECT m.id, COALESCE(pr.slug, r.display_name) AS project, m.from_email, m.subject, m.received_at, m.verdict, m.forwarded FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id
-      WHERE m.tenant_id = ? AND (m.verdict = 'admitted' OR ?) ORDER BY m.received_at DESC LIMIT 200`).bind(tid, admin ? 1 : 0),
+      WHERE ${access.sql} ORDER BY m.received_at DESC LIMIT 200`).bind(...access.bindings),
     ctx.db.prepare("SELECT slug, display_name FROM project WHERE tenant_id = ? AND state = 'active' AND kind <> 'channel' ORDER BY display_name").bind(tid),
-    ctx.db.prepare("SELECT m.*, COALESCE(pr.slug, 'agent ' || r.display_name) AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id WHERE m.id = ? AND m.tenant_id = ?").bind(id ?? "", tid),
+    ctx.db.prepare(`SELECT m.*, COALESCE(pr.slug, 'agent ' || r.display_name) AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id WHERE m.id = ? AND ${access.sql}`).bind(id ?? "", ...access.bindings),
     ctx.db.prepare(`SELECT p.slug, w.number, w.kind, w.state, w.title FROM work_item w JOIN project p ON p.id = w.project_id
       WHERE w.tenant_id = ? AND w.source_kind = 'mail' AND w.source_ref = ? ORDER BY w.number`).bind(tid, id ?? ""),
-    ctx.db.prepare(`SELECT o.text, o.created_at, o.status, i.display_name AS who FROM outbound_mail o JOIN identity i ON i.id = o.sent_by WHERE o.in_reply_to = ? AND o.tenant_id = ? ORDER BY o.created_at`).bind(id ?? "", tid),
+    ctx.db.prepare(`SELECT o.text, o.created_at, o.status, i.display_name AS who FROM outbound_mail o JOIN identity i ON i.id = o.sent_by WHERE o.in_reply_to = ? AND o.tenant_id = ? AND EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = o.in_reply_to AND ${access.sql}) ORDER BY o.created_at`).bind(id ?? "", tid, ...access.bindings),
     ctx.db.prepare("SELECT mail_out FROM tenant WHERE id = ?").bind(tid),
   ]);
   const sendingOn = (switchR!.results[0] as { mail_out: number } | undefined)?.mail_out === 1;

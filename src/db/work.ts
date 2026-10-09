@@ -1,5 +1,6 @@
 // Work items and their links (overnight plan task 2).
 import { ulid } from "../ids";
+import { safeExternalUrl } from "../security/urls";
 import { badRequest, conflict, notFound } from "../errors";
 import type { WorkKind, WorkState } from "../work/names";
 
@@ -102,8 +103,8 @@ export async function claimWork(db: D1Database, item: WorkItem, identity_id: str
 
 export async function linkWork(db: D1Database, item: WorkItem, input: { target_kind: string; target_ref: string; note: string | null; created_by: string }, now: number): Promise<WorkLink> {
   if (!["commit", "mail", "message", "event", "item", "url"].includes(input.target_kind)) throw badRequest("unknown link kind");
-  const ref = input.target_ref.trim();
-  if (!ref) throw badRequest("a link target is required");
+  const ref = input.target_kind === "url" ? safeExternalUrl(input.target_ref) : input.target_ref.trim();
+  if (!ref) throw badRequest(input.target_kind === "url" ? "URL links must be absolute HTTPS URLs without credentials, whitespace or control characters" : "a link target is required");
   const row: WorkLink = { id: ulid(now), item_id: item.id, target_kind: input.target_kind, target_ref: ref, note: input.note, created_by: input.created_by, created_at: now };
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO work_link (id, item_id, target_kind, target_ref, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")

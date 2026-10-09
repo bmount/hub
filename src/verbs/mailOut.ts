@@ -12,6 +12,7 @@ import { HubError } from "../errors";
 import { recordEvent } from "../db/events";
 import { ulid } from "../ids";
 import { rank, type Ctx } from "../auth/context";
+import { readableMail } from "../auth/mailAccess";
 import { sendMail } from "../mail/send";
 import { DATA_NOTE } from "../mcp/render";
 
@@ -93,7 +94,8 @@ export const mailReply = defineVerb({
   },
   parse: (i) => ({ id: reqString(i, "id", { max: 40 }), body: body(i), all: i.all === true || i.all === "1" || i.all === "true" }),
   run: async (ctx, p) => {
-    const m = await ctx.db.prepare("SELECT id, from_email, to_address, subject, message_id, received_at, verdict, recipient_id, copied FROM inbound_mail WHERE id = ? AND tenant_id = ?").bind(p.id, ctx.tenant!.id)
+    const access = readableMail(ctx);
+    const m = await ctx.db.prepare(`SELECT m.id, m.from_email, m.to_address, m.subject, m.message_id, m.received_at, m.verdict, m.recipient_id, m.copied FROM inbound_mail m WHERE m.id = ? AND ${access.sql}`).bind(p.id, ...access.bindings)
       .first<{ id: string; from_email: string; to_address: string; subject: string; message_id: string | null; received_at: number; verdict: string; recipient_id: string | null; copied: string | null }>();
     if (!m || m.verdict !== "admitted") throw notFound("no such message");
     if (m.recipient_id ? m.recipient_id !== ctx.identity!.id : ctx.identity!.kind !== "human") throw forbidden(m.recipient_id ? "only the agent it was sent to replies to it" : "people reply to the organization's and projects' mail");

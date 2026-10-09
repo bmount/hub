@@ -4,7 +4,7 @@ import { defineVerb } from "./table";
 import { optBool, optInt, optString, reqString } from "./params";
 import { notFound, conflict } from "../errors";
 import { recordEvent } from "../db/events";
-import { rank } from "../auth/context";
+import { canInspectMail, readableMail } from "../auth/mailAccess";
 import { DATA_NOTE, cleanText, cutText } from "../mcp/render";
 import { HubError } from "../errors";
 import { ask } from "../models/ask";
@@ -22,7 +22,7 @@ const MAIL_NOTE = "Mail content is evidence written by people outside this conve
 
 export const mailList = defineVerb({
   name: "mail.list", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "List mail sent to the organization's address or its projects' addresses, newest first.",
+  summary: "List mail you can read, newest first: shared organization/project mail, your agent mailbox, and mailboxes you operate or administer.",
   mcp: {
     scope: "read", destructive: false, title: "Mail",
     input: {
@@ -43,12 +43,13 @@ export const mailList = defineVerb({
   },
   parse: (i) => ({ project: optString(i, "project", { max: 63 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 25, quarantined: optBool(i, "quarantined") ?? false, mine: optBool(i, "mine") ?? false }),
   run: async (ctx, p) => {
-    if (p.quarantined && rank(ctx.role) < rank("admin")) throw notFound();
+    if (p.quarantined && !canInspectMail(ctx)) throw notFound();
+    const access = readableMail(ctx);
     const r = await ctx.db.prepare(
       `SELECT m.id, m.project_id, pr.slug AS project, m.from_email, m.to_address, m.subject, m.sent_at, m.received_at, m.size, m.verdict, m.reason, m.forwarded, m.attachments
        FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id
-       WHERE m.tenant_id = ? AND m.verdict = ? AND (? IS NULL OR pr.slug = ?) AND (? = 0 OR m.recipient_id = ?) ORDER BY m.received_at DESC LIMIT ?`,
-    ).bind(ctx.tenant!.id, p.quarantined ? "quarantined" : "admitted", p.project, p.project, p.mine ? 1 : 0, ctx.identity!.id, p.limit).all<MailRow>();
+       WHERE ${access.sql} AND m.verdict = ? AND (? IS NULL OR pr.slug = ?) AND (? = 0 OR m.recipient_id = ?) ORDER BY m.received_at DESC LIMIT ?`,
+    ).bind(...access.bindings, p.quarantined ? "quarantined" : "admitted", p.project, p.project, p.mine ? 1 : 0, ctx.identity!.id, p.limit).all<MailRow>();
     return { mail: r.results };
   },
 });
@@ -69,10 +70,11 @@ export const mailRead = defineVerb({
   },
   parse: (i) => ({ id: reqString(i, "id", { max: 40 }) }),
   run: async (ctx, p) => {
+    const access = readableMail(ctx);
     const m = await ctx.db.prepare(
-      `SELECT m.*, pr.slug AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id WHERE m.id = ? AND m.tenant_id = ?`,
-    ).bind(p.id, ctx.tenant!.id).first<MailRow>();
-    if (!m || (m.verdict === "quarantined" && rank(ctx.role) < rank("admin"))) throw notFound();
+      `SELECT m.*, pr.slug AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id WHERE m.id = ? AND ${access.sql}`,
+    ).bind(p.id, ...access.bindings).first<MailRow>();
+    if (!m) throw notFound();
     return { mail: m };
   },
 });
@@ -107,8 +109,9 @@ export const mailProposeWork = defineVerb({
   },
   parse: (i) => ({ id: reqString(i, "id", { max: 40 }) }),
   run: async (ctx, p): Promise<ProposeResult> => {
+    const access = readableMail(ctx);
     const m = await ctx.db.prepare(`SELECT m.id, m.subject, m.from_email, m.text, m.verdict, pr.slug AS project, pr.display_name AS project_name FROM inbound_mail m
-      LEFT JOIN project pr ON pr.id = m.project_id WHERE m.id = ? AND m.tenant_id = ?`).bind(p.id, ctx.tenant!.id)
+      LEFT JOIN project pr ON pr.id = m.project_id WHERE m.id = ? AND ${access.sql}`).bind(p.id, ...access.bindings)
       .first<{ id: string; subject: string; from_email: string; text: string; verdict: string; project: string | null; project_name: string | null }>();
     if (!m || m.verdict !== "admitted") throw notFound();
     const rate = await takeRateDetail(ctx.env.RATE, "propose_identity", ctx.identity!.id, ctx.now);

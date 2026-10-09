@@ -3,6 +3,7 @@
 // and the script keeps the list where it was. Every page reads in one D1 batch after the project lookup.
 import { attentionQuery } from "../verbs/collab";
 import type { Env } from "../env";
+import { safeExternalUrl } from "../security/urls";
 import { esc, htmlResponse, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
@@ -167,7 +168,7 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
   const under = d.children.length
     ? `<h2>Under it</h2><table><tbody>${d.children.map((c) => `<tr data-href="/${esc(project.slug)}/w/${c.number}"><td class="ref">#${c.number}</td><td class="k-${c.kind}"><span class="kd"></span>${esc(KINDS[c.kind].name)}</td><td><a href="/${esc(project.slug)}/w/${c.number}">${esc(c.title)}</a></td><td>${esc(STATES[c.state])}</td></tr>`).join("")}</tbody></table>`
     : w.kind === "quest" ? `<h2>Under it</h2><p class="lede">Nothing yet. To put an item under this quest, choose it as the item's quest when you edit it.</p>` : "";
-  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map((l) => `<li>${esc(l.target_kind)}: ${l.target_kind === "url" ? `<a href="${esc(l.target_ref)}" rel="noopener noreferrer" data-reload>${esc(l.target_ref)}</a>` : `<code>${esc(l.target_ref)}</code>`}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`).join("")}</ul>` : "<p class=\"lede\">None yet. Agents link commits, threads and pages here with work_link.</p>"}`;
+  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map((l) => `<li>${esc(l.target_kind)}: ${l.target_kind === "url" && safeExternalUrl(l.target_ref) ? `<a href="${esc(safeExternalUrl(l.target_ref)!)}" rel="noopener noreferrer" data-reload>${esc(l.target_ref)}</a>` : `<code>${esc(l.target_ref)}</code>`}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`).join("")}</ul>` : "<p class=\"lede\">None yet. Agents link commits, threads and pages here with work_link.</p>"}`;
   const activity = d.activity.length ? `<h2>Activity</h2><ul class="timeline">${d.activity.map((a) => `<li><time title="${when(a.created_at)}">${ago(a.created_at, ctx.now)}</time><span>${esc(a.who ?? "Pimwell")}: ${esc(a.summary)}</span></li>`).join("")}</ul>` : "";
   return `<a class="back" href="${esc(back)}">‹ ${esc(DOCKET.name)}</a>
 <div class="head"><span class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)} (${esc(KINDS[w.kind].plain)})</span><strong>${esc(project.slug)}#${w.number}</strong><span>${esc(STATES[w.state])}</span></div>

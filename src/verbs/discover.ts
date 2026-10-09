@@ -7,6 +7,7 @@ import { exposedVerbs, mcpViolations, toolName } from "../mcp/policy";
 import { SKILLS, skill } from "../skills";
 import { DATA_NOTE, cleanText } from "../mcp/render";
 import { connectionScopes, type Ctx } from "../auth/context";
+import { readableMailEvents } from "../auth/mailAccess";
 
 export const skillList = defineVerb({
   name: "skill.list", kind: "query", scope: "public", minRole: "public", freshProofMinutes: null,
@@ -105,12 +106,13 @@ export const projectHistory = defineVerb({
   run: async (ctx, p) => {
     const pr = await ctx.db.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel'").bind(ctx.tenant!.id, p.project.trim().toLowerCase()).first<{ id: string; slug: string }>();
     if (!pr) throw notFound("no such project");
+    const eventAccess = readableMailEvents(ctx);
     const r = await ctx.db.prepare(`SELECT e.id, e.kind, e.summary, e.created_at, e.target_kind, e.target_id, i.display_name AS who, i.kind AS who_kind
       FROM event e LEFT JOIN identity i ON i.id = e.identity_id
       WHERE e.tenant_id = ? AND (? IS NULL OR e.created_at < ?) AND ((e.target_kind = 'project' AND e.target_id = ?)
         OR (e.target_kind = 'work_item' AND e.target_id IN (SELECT id FROM work_item WHERE project_id = ?))
         OR (e.target_kind = 'inbound_mail' AND e.target_id IN (SELECT id FROM inbound_mail WHERE project_id = ?)))
-      ORDER BY e.created_at DESC, e.id DESC LIMIT ?`).bind(ctx.tenant!.id, p.before, p.before, pr.id, pr.id, pr.id, p.limit).all<Ev>();
+      AND ${eventAccess.sql} ORDER BY e.created_at DESC, e.id DESC LIMIT ?`).bind(ctx.tenant!.id, p.before, p.before, pr.id, pr.id, pr.id, ...eventAccess.bindings, p.limit).all<Ev>();
     const events = r.results;
     return { project: pr.slug, events, next_before: events.length === p.limit ? events[events.length - 1]!.created_at : null };
   },

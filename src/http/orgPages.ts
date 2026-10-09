@@ -4,6 +4,7 @@ import type { Env } from "../env";
 import { esc, htmlResponse, onramp, page } from "../html";
 import { intentBox } from "../intent/page";
 import { buildContext, rank, type Ctx } from "../auth/context";
+import { readableMail, readableMailEvents } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
@@ -36,12 +37,13 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   if (oc instanceof Response) return oc;
   const { ctx, extra } = oc;
   const t = ctx.tenant!;
+  const access = readableMail(ctx), eventAccess = readableMailEvents(ctx);
   const [projects, byKind, events, mail, people] = await ctx.db.batch([
     ctx.db.prepare(`SELECT p.slug, p.display_name, p.kind, (SELECT COUNT(*) FROM work_item w WHERE w.project_id = p.id AND w.state IN ('open','doing')) AS open_work,
       (SELECT MAX(w.updated_at) FROM work_item w WHERE w.project_id = p.id) AS last_work FROM project p WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind <> 'channel' ORDER BY p.slug`).bind(t.id),
     ctx.db.prepare("SELECT kind, COUNT(*) AS n FROM work_item WHERE tenant_id = ? AND state IN ('open','doing') GROUP BY kind").bind(t.id),
-    ctx.db.prepare(`${EVENTS_SQL} WHERE e.tenant_id = ? ORDER BY e.created_at DESC LIMIT 12`).bind(t.id),
-    ctx.db.prepare(`SELECT m.id, m.subject, m.from_email, m.received_at, pr.slug AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id WHERE m.tenant_id = ? AND m.verdict = 'admitted' ORDER BY m.received_at DESC LIMIT 5`).bind(t.id),
+    ctx.db.prepare(`${EVENTS_SQL} WHERE e.tenant_id = ? AND ${eventAccess.sql} ORDER BY e.created_at DESC LIMIT 12`).bind(t.id, ...eventAccess.bindings),
+    ctx.db.prepare(`SELECT m.id, m.subject, m.from_email, m.received_at, pr.slug AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id WHERE ${access.sql} AND m.verdict = 'admitted' ORDER BY m.received_at DESC LIMIT 5`).bind(...access.bindings),
     ctx.db.prepare("SELECT i.kind, COUNT(*) AS n FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' GROUP BY i.kind").bind(t.id),
   ]);
   const proj = (projects!.results as Array<{ slug: string; display_name: string; kind: string; open_work: number; last_work: number | null }>);
@@ -75,11 +77,12 @@ export async function projectPage(request: Request, env: Env, slug: string): Pro
   const p = await ctx.db.prepare("SELECT id, slug, display_name, kind, state FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel'").bind(t.id, slug)
     .first<{ id: string; slug: string; display_name: string; kind: string; state: string }>();
   if (!p) return notFoundPage(extra);
+  const eventAccess = readableMailEvents(ctx);
   const [byKind, events, open] = await ctx.db.batch([
     ctx.db.prepare("SELECT kind, COUNT(*) AS n FROM work_item WHERE project_id = ? AND state IN ('open','doing') GROUP BY kind").bind(p.id),
     ctx.db.prepare(`${EVENTS_SQL} WHERE e.tenant_id = ? AND ((e.target_kind = 'project' AND e.target_id = ?)
       OR (e.target_kind = 'work_item' AND e.target_id IN (SELECT id FROM work_item WHERE project_id = ?))
-      OR (e.target_kind = 'inbound_mail' AND e.target_id IN (SELECT id FROM inbound_mail WHERE project_id = ?))) ORDER BY e.created_at DESC LIMIT 40`).bind(t.id, p.id, p.id, p.id),
+      OR (e.target_kind = 'inbound_mail' AND e.target_id IN (SELECT id FROM inbound_mail WHERE project_id = ?))) AND ${eventAccess.sql} ORDER BY e.created_at DESC LIMIT 40`).bind(t.id, p.id, p.id, p.id, ...eventAccess.bindings),
     ctx.db.prepare("SELECT number, kind, title, state FROM work_item WHERE project_id = ? AND state IN ('open','doing') ORDER BY CASE kind WHEN 'quest' THEN 0 ELSE 1 END, updated_at DESC LIMIT 12").bind(p.id),
   ]);
   const kinds = new Map((byKind!.results as Array<{ kind: WorkKind; n: number }>).map((r) => [r.kind, r.n]));

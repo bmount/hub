@@ -4,6 +4,7 @@
 import type { Env } from "../env";
 import { esc, htmlResponse, onramp, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
+import { readableMailEvents } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
@@ -35,6 +36,7 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
   const AGENT_WHY = "Agents act on your behalf, so we confirm it's really you before connecting one.";
   const email = who ? decodeURIComponent(who).trim().toLowerCase() : null;
   const tid = ctx.tenant.id;
+  const eventAccess = readableMailEvents(ctx);
   const stmts: D1PreparedStatement[] = [
     ctx.db.prepare(`SELECT i.id, i.display_name, i.email, i.kind, i.is_root, m.role, m.created_at, op.display_name AS sponsor, i.operator_id,
         (SELECT MAX(e.created_at) FROM event e WHERE e.identity_id = i.id AND e.tenant_id = m.tenant_id) AS last_seen,
@@ -43,7 +45,7 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
       WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' ORDER BY i.kind = 'agent', i.display_name`).bind(tid),
     ctx.db.prepare(`SELECT v.id, v.email, v.role, v.display_name, v.created_at, v.expires_at, b.display_name AS by FROM invite v LEFT JOIN identity b ON b.id = v.created_by
       WHERE v.tenant_id = ? AND v.accepted_at IS NULL AND v.revoked_at IS NULL AND v.expires_at > ? AND ? ORDER BY v.created_at DESC`).bind(tid, ctx.now, admin ? 1 : 0),
-    ctx.db.prepare(`SELECT e.summary, e.created_at FROM event e JOIN identity i ON i.id = e.identity_id WHERE e.tenant_id = ? AND i.email = ? ORDER BY e.created_at DESC LIMIT 15`).bind(tid, email ?? ""),
+    ctx.db.prepare(`SELECT e.summary, e.created_at FROM event e JOIN identity i ON i.id = e.identity_id WHERE e.tenant_id = ? AND i.email = ? AND ${eventAccess.sql} ORDER BY e.created_at DESC LIMIT 15`).bind(tid, email ?? "", ...eventAccess.bindings),
   ];
   const [peopleR, invitesR, activityR] = await ctx.db.batch(stmts);
   const people = peopleR!.results as Person[];
