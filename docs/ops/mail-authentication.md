@@ -70,9 +70,14 @@ Key resolution in `src/mail/dkim-dns.ts` uses only
 `https://cloudflare-dns.com/dns-query`, with redirects refused, validated DNS
 names, matching TXT questions and a 16 KiB response limit. At most six actual
 network queries (including CNAME followups) share a five-second per-message
-budget and two-second per-query timeout. Trust is the fixed HTTPS resolver;
-DNSSEC validation is not claimed. No sender-controlled URLs or native DNS
-fallback are used.
+budget and two-second per-query timeout. This is a whole-query deadline,
+including response-body reads: an explicit deadline race bounds even a transport
+which ignores abort. Stalled bodies are cancelled, locks/listeners are released,
+and cancellation completion is never a prerequisite for a limit/abort failure.
+Late responses are disposed without consuming or authorizing their keys. Budget
+exhaustion remains authentication unknown, without receipt, consent or agent wake.
+Trust is the fixed HTTPS resolver; DNSSEC validation is not claimed. No
+sender-controlled URLs or native DNS fallback are used.
 
 Provider-style CNAME key delegation is supported: up to four connected aliases,
 with case/trailing-dot normalization, whether bundled in one recursive response

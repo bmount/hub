@@ -75,15 +75,31 @@ export function createDkimResolver(fetcher: typeof fetch = fetch): DNSResolver {
       const remaining = deadline - Date.now();
       if (++queries > MAX_QUERIES || remaining <= 0) throw new Error("key lookup budget");
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), Math.min(2000, remaining));
+      let timer: ReturnType<typeof setTimeout>;
+      const timedOut = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          // Abort is cooperative; the race also bounds transports which ignore it.
+          reject(new Error("key lookup budget"));
+          controller.abort();
+        }, Math.min(2000, remaining));
+      });
       let answers: Map<string, KeyAnswer>;
       try {
         const url = new URL("https://cloudflare-dns.com/dns-query");
         url.searchParams.set("name", current); url.searchParams.set("type", "TXT");
-        const response = await fetcher(url, { headers: { accept: "application/dns-json" },
-          signal: controller.signal, redirect: "error" });
-        if (!response.ok || !response.headers.get("content-type")?.includes("application/dns-json")) throw new Error("key lookup refused");
-        const bytes = await readBoundedMail(response.body!, 16 * 1024);
+        const load = async () => {
+          const response = await fetcher(url, { headers: { accept: "application/dns-json" },
+            signal: controller.signal, redirect: "error" });
+          if (controller.signal.aborted || !response.ok
+            || !response.headers.get("content-type")?.includes("application/dns-json")) {
+            // Dispose even a late response without trusting/consuming its key.
+            void response.body?.cancel().catch(() => {});
+            throw new Error("key lookup refused");
+          }
+          if (!response.body) throw new Error("key lookup unavailable");
+          return readBoundedMail(response.body, 16 * 1024, controller.signal);
+        };
+        const bytes = await Promise.race([load(), timedOut]);
         if (controller.signal.aborted || Date.now() >= deadline) throw new Error("key lookup budget");
         const data = JSON.parse(new TextDecoder().decode(bytes));
         if (data.Status !== 0 || (data.TC !== undefined && data.TC !== false)
@@ -103,7 +119,7 @@ export function createDkimResolver(fetcher: typeof fetch = fetch): DNSResolver {
           } else throw new Error("unsupported key answer");
           answers.set(owner, entry);
         }
-      } finally { clearTimeout(timer); }
+      } finally { clearTimeout(timer!); }
       // Recursive resolvers may bundle the whole chain (in any answer order) or
       // return only CNAMEs. Every answer must belong to this one connected chain.
       for (;;) {

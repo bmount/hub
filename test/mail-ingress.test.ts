@@ -46,6 +46,31 @@ const page = (w: Awaited<ReturnType<typeof world>>) => inbox(w).list(w.tenant.id
 afterEach(() => { delivery.setTestTransport(null); vi.restoreAllMocks(); });
 
 describe("receipt-free independently authenticated ingress", () => {
+  it("production ingress quarantines stalled DNS body proof without receipt, consent or wake", async () => {
+    const w = await world();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body,
+      { headers: { "content-type": "application/dns-json" } }));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const m = message(fixtures.first, w.bot.agent.identity.email);
+    await handleEmail(m, env, {} as ExecutionContext);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(body.locked).toBe(false);
+    expect(await env.HUB_DB.prepare("SELECT verdict, reason FROM inbound_mail").first()).toMatchObject({
+      verdict: "quarantined", reason: expect.stringContaining("authentication unknown"),
+    });
+    expect(m.reply).not.toHaveBeenCalled();
+    expect(m.setReject).not.toHaveBeenCalled();
+    expect(await count("consent")).toBe(0);
+    expect(await welcome()).toBeNull();
+    expect((await page(w)).items).toHaveLength(0);
+    expect(w.sent).toHaveLength(0);
+    expect(log.mock.calls.at(-1)?.[0]).toContain('"error":null');
+  });
+
   it("admits fully signed outer MIME extensions and wakes once without a receipt", async () => {
     const w = await world();
     const address = w.bot.agent.identity.email;

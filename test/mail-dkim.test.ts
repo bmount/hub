@@ -120,7 +120,7 @@ describe("bounded trusted DKIM DoH", () => {
     const fetcher: typeof fetch = async (_, options) => new Promise((_, reject) => {
       options!.signal!.addEventListener("abort", () => reject(new Error("aborted")));
     });
-    await expect(createDkimResolver(fetcher)(name, "TXT")).rejects.toThrow("aborted");
+    await expect(createDkimResolver(fetcher)(name, "TXT")).rejects.toThrow("key lookup budget");
   });
 });
 
