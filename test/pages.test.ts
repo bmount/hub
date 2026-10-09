@@ -8,7 +8,15 @@ describe("pages", () => {
   it("apex anonymous and signed-in", async () => {
     const anon = await SELF.fetch("https://pimwell.test/");
     expect(anon.status).toBe(200);
-    expect(await anon.text()).toContain("invite link");
+    const landing = await anon.text();
+    expect(landing).toContain("invite link");
+    const signIn = '<nav class="landing-auth" aria-label="Account"><a class="landing-sign-in" href="/login">Sign in</a></nav>';
+    expect(landing).toContain(signIn);
+    expect(landing.indexOf(signIn)).toBeLessThan(landing.indexOf('<section class="street"'));
+    expect(landing).toContain(".landing-auth{position:fixed;");
+    expect(landing).toContain("min-height:44px");
+    expect(landing).toContain(".landing-sign-in:focus-visible");
+    expect((await SELF.fetch("https://pimwell.test/login")).status).toBe(200);
     const t = await seedTenant("acme");
     await seedTenant("blue");
     const h = await seedHuman("a@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
