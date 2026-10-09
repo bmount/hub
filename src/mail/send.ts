@@ -2,13 +2,7 @@ import { EmailMessage } from "cloudflare:email";
 import type { Env } from "../env";
 import { ulid } from "../ids";
 import { normalizeEmail } from "../db/identities";
-import { hasActiveConsent } from "../db/consent";
-
-/** True when this address's most recent consent was withdrawn. */
-async function consentWithdrawn(db: D1Database, email: string): Promise<boolean> {
-  const r = await db.prepare("SELECT revoked_at FROM consent WHERE email = ? ORDER BY granted_at DESC LIMIT 1").bind(email).first<{ revoked_at: number | null }>();
-  return !!r && r.revoked_at !== null;
-}
+import { hasActiveConsent, consentWithdrawn } from "../db/consent";
 import { buildMime, safeMessageId } from "./mime";
 
 /**

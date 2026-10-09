@@ -6,21 +6,23 @@
 //   3. The sender (envelope from) must be an active human member of the organization, or root. Strangers are refused.
 //   4. Per-sender rate limit.
 //   5. Proof the mail really came from that address: a receipt sent through message.reply(), which Cloudflare
-//      permits only for DMARC-passing mail. Sent: admitted. Not sent: quarantined for an admin, unread by agents.
+//      permits only for DMARC-passing mail. Sent and envelope/From bound: admitted.
+//      Not sent: authentication UNKNOWN, quarantined for an admin, unread by agents.
 // Content is stored as evidence. Nothing in it is ever an instruction to anyone.
 import { inboxStub } from "../chat/stubs";
-import PostalMime from "postal-mime";
+import PostalMime, { type Header } from "postal-mime";
 import type { Env } from "../env";
 import { ulid } from "../ids";
 import { isValidSlug, isValidTenantSlug } from "../tenant";
 import { getIdentityByEmail, normalizeEmail } from "../db/identities";
 import { getTenantBySlug } from "../db/tenants";
 import { getMembership } from "../db/memberships";
-import { grantConsent, revokeConsentById } from "../db/consent";
+import { consentWithdrawn, grantConsent, revokeConsentById } from "../db/consent";
 import { recordEvent } from "../db/events";
 import { takeRateDetail } from "../rate";
 import { sendMail } from "./send";
 import { safeMessageId } from "./mime";
+import { envelopeMatchesFrom, proofFromReply, type SenderProof } from "./proof";
 
 export const MAX_MAIL_BYTES = 10 * 1024 * 1024;
 export const MAX_TEXT_CHARS = 400_000;
@@ -54,7 +56,7 @@ export async function resolveMailAddress(db: D1Database, hubDomain: string, to: 
   return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: null, project_slug: null, project_name: null, recipient_id: a.id, recipient_name: a.display_name };
 }
 
-type Parsed = { subject: string; text: string; attachments: Array<{ filename: string | null; mime_type: string; size: number }>; forwarded: boolean; date: string | null; addressed: string[] };
+type Parsed = { headers: Header[]; subject: string; text: string; attachments: Array<{ filename: string | null; mime_type: string; size: number }>; forwarded: boolean; date: string | null; addressed: string[] };
 
 function htmlToText(html: string): string {
   return html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|h\d)>/gi, "\n")
@@ -83,7 +85,7 @@ export async function parseMail(raw: ReadableStream<Uint8Array> | ArrayBuffer | 
   type Addr = { address?: string; group?: Addr[] };
   const flat = (xs: Addr[] | undefined): string[] => (xs ?? []).flatMap((a) => (a.group ? flat(a.group) : a.address ? [a.address.trim().toLowerCase()] : []));
   const addressed = [...new Set([...flat(m.to as Addr[] | undefined), ...flat(m.cc as Addr[] | undefined)])].filter((a) => a.length <= 254).slice(0, 50);
-  return { subject: (m.subject ?? "").slice(0, 300), text, attachments, forwarded: inlineFwd || rfc822.length > 0, date: m.date ?? null, addressed };
+  return { headers: m.headers, subject: (m.subject ?? "").slice(0, 300), text, attachments, forwarded: inlineFwd || rfc822.length > 0, date: m.date ?? null, addressed };
 }
 
 function receipt(target: MailTarget, subject: string): { subject: string; text: string } {
@@ -115,26 +117,40 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
   }
 
   const parsed = await parseMail(message.raw);
-  // The receipt is the proof: Cloudflare lets reply() through only for DMARC-passing mail.
-  const { consent, created } = await grantConsent(env.HUB_DB, {
-    email: from, kind: "inbound_email", source_message_id: safeMessageId(message.headers.get("message-id")),
-    evidence: JSON.stringify({ to: message.to.trim().toLowerCase(), received_at: now }),
-  }, now);
-  let proven = false;
-  try {
-    proven = (await sendMail(env, { to: from, ...receipt(target, parsed.subject) }, now, { replyTo: message })) === "sent";
-  } finally {
-    if (created && !proven) {
-      try { await revokeConsentById(env.HUB_DB, consent.id, now); } catch { /* best effort */ }
+  // A successful reply authenticates the header From domain, not arbitrary
+  // envelope identities. Bind both before granting consent or trying a reply.
+  // This temporary proof path still requires a receipt; independent verified
+  // ingress proof is needed before routine receipts can safely be suppressed.
+  let proof: SenderProof;
+  if (!envelopeMatchesFrom(from, parsed.headers)) {
+    proof = { authentication: "unknown", source: null,
+      reason: "authentication unknown: envelope sender must match exactly one outer From mailbox; no reply attempted" };
+  } else if (await consentWithdrawn(env.HUB_DB, from)) {
+    // Passive project mail is not permission to undo an explicit withdrawal.
+    proof = { authentication: "unknown", source: null,
+      reason: "authentication unknown: reply proof not attempted because consent is revoked" };
+  } else {
+    const { consent, created } = await grantConsent(env.HUB_DB, {
+      email: from, kind: "inbound_email", source_message_id: safeMessageId(message.headers.get("message-id")),
+      evidence: JSON.stringify({ to: message.to.trim().toLowerCase(), received_at: now }),
+    }, now);
+    proof = proofFromReply("failed");
+    try {
+      proof = proofFromReply(await sendMail(env, { to: from, ...receipt(target, parsed.subject) }, now, { replyTo: message }));
+    } finally {
+      if (created && proof.authentication !== "pass") {
+        try { await revokeConsentById(env.HUB_DB, consent.id, now); } catch { /* best effort */ }
+      }
     }
   }
+  const proven = proof.authentication === "pass";
   const verdict = proven ? "admitted" : "quarantined";
   const id = ulid(now);
   await env.HUB_DB.prepare(
     `INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(id, target.tenant_id, target.project_id, target.recipient_id ?? null, identity.id, from, message.to.trim().toLowerCase(), parsed.subject, safeMessageId(message.headers.get("message-id")),
-    parsed.date, now, message.rawSize, verdict, proven ? null : "sender not proven: the receipt could not be sent, so the mail may be forged",
+    parsed.date, now, message.rawSize, verdict, proof.reason,
     parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0,
     JSON.stringify(parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`)))).run();
   await recordEvent(env.HUB_DB, {

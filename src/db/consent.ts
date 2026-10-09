@@ -12,6 +12,17 @@ export async function hasActiveConsent(db: D1Database, email: string): Promise<b
   return (await getActiveConsent(db, email)) !== null;
 }
 
+/** True when the latest consent is revoked. This conservatively includes
+ * failed provisional grants: legacy rows do not distinguish rollback from
+ * withdrawal. Passive project mail must not silently opt the sender back in;
+ * login@ is an explicit request and may establish new consent.
+ */
+export async function consentWithdrawn(db: D1Database, email: string): Promise<boolean> {
+  const row = await db.prepare("SELECT revoked_at FROM consent WHERE email = ? ORDER BY granted_at DESC, id DESC LIMIT 1")
+    .bind(normalizeEmail(email)).first<{ revoked_at: number | null }>();
+  return !!row && row.revoked_at !== null;
+}
+
 export async function grantConsent(
   db: D1Database,
   input: { email: string; kind: string; source_message_id: string | null; evidence: string | null },

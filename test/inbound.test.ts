@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
 import { handleEmail } from "../src/mail/inbound";
-import { hasActiveConsent, listConsent } from "../src/db/consent";
+import { hasActiveConsent, listConsent, revokeConsent } from "../src/db/consent";
 import { createIdentity } from "../src/db/identities";
 import { takeRate } from "../src/rate";
 import { seedHuman } from "./helpers";
@@ -97,7 +97,18 @@ describe("handleEmail", () => {
     expect(await hasActiveConsent(env.HUB_DB, "a@example.com")).toBe(false);
   });
 
-  it("revokes the new consent and records an event when reply throws (no DMARC pass)", async () => {
+  it("allows an explicit login request to establish new consent after withdrawal", async () => {
+    await seedHuman("a@example.com");
+    await handleEmail(fakeMessage("a@example.com", "login@pimwell.test").message, env, ctx);
+    await revokeConsent(env.HUB_DB, "a@example.com", Date.now());
+    const { message, calls } = fakeMessage("a@example.com", "login@pimwell.test");
+    await handleEmail(message, env, ctx);
+    expect(calls.replies).toHaveLength(1);
+    expect(await hasActiveConsent(env.HUB_DB, "a@example.com")).toBe(true);
+    expect(await listConsent(env.HUB_DB, "a@example.com")).toHaveLength(2);
+  });
+
+  it("revokes the new consent and records an event when reply throws (authentication unknown)", async () => {
     await seedHuman("a@example.com");
     const { message, calls } = fakeMessage("a@example.com", "login@pimwell.test", { replyThrows: true });
     await expect(handleEmail(message, env, ctx)).resolves.toBeUndefined();

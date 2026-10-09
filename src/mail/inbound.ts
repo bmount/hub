@@ -11,8 +11,9 @@ import { handleProjectMail } from "./projectMail";
 export const INBOUND_LOCALS = ["login", "signup"] as const;
 export const REJECT_REASON = "This address does not accept mail from you.";
 
-// Spec 6.4. Cloudflare's MX already rejected SPF/DKIM failures; reply() adds
-// the DMARC gate. Authentication-Results is deliberately not read.
+// Sign-in links still require Cloudflare's DMARC-gated reply. A failed
+// reply leaves authentication unknown (it may fail for non-auth reasons).
+// Authentication-Results is deliberately not read.
 export async function handleEmail(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
   const started = Date.now();
   let error: string | null = null;

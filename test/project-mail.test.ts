@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { handleEmail } from "../src/mail/inbound";
 import { STRANGER_REASON } from "../src/mail/projectMail";
-import { hasActiveConsent } from "../src/db/consent";
+import { grantConsent, hasActiveConsent, listConsent, revokeConsent } from "../src/db/consent";
 import { createProject } from "../src/db/projects";
 import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
 
@@ -18,7 +18,7 @@ function mime(opts: { from: string; to: string; subject?: string; body?: string;
   return `From: ${opts.from}\r\nTo: ${opts.to}\r\nSubject: ${opts.subject ?? "hello"}\r\nMessage-ID: <m${Math.random().toString(36).slice(2)}@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="${b}"\r\n\r\n${parts.join("")}--${b}--\r\n`;
 }
 
-function fake(from: string, to: string, raw: string, opts: { replyThrows?: boolean; rawSize?: number } = {}) {
+function fake(from: string, to: string, raw: string, opts: { replyThrows?: boolean; replyError?: string; rawSize?: number } = {}) {
   const calls = { rejects: [] as string[], replies: 0 };
   const bytes = new TextEncoder().encode(raw);
   const message = {
@@ -27,7 +27,7 @@ function fake(from: string, to: string, raw: string, opts: { replyThrows?: boole
     rawSize: opts.rawSize ?? bytes.length,
     setReject(reason: string) { calls.rejects.push(reason); },
     async forward() { throw new Error("not used"); },
-    async reply() { if (opts.replyThrows) throw new Error("reply not permitted"); calls.replies++; return { messageId: "<r@x>" }; },
+    async reply() { if (opts.replyThrows) throw new Error(opts.replyError ?? "reply not permitted"); calls.replies++; return { messageId: "<r@x>" }; },
   };
   return { message: message as unknown as ForwardableEmailMessage, calls };
 }
@@ -39,7 +39,7 @@ async function world() {
   const admin = await seedHuman("ada@example.com", { memberships: [{ tenant_id: org.id, role: "admin" }] });
   return { org, member, admin };
 }
-const stored = async () => (await env.HUB_DB.prepare("SELECT verdict, subject, text, forwarded, project_id FROM inbound_mail ORDER BY received_at").all<{ verdict: string; subject: string; text: string; forwarded: number; project_id: string | null }>()).results;
+const stored = async () => (await env.HUB_DB.prepare("SELECT verdict, reason, subject, text, forwarded, project_id FROM inbound_mail ORDER BY received_at").all<{ verdict: string; reason: string | null; subject: string; text: string; forwarded: number; project_id: string | null }>()).results;
 
 describe("mailbox names", () => {
   it("are never available as organization names, so no inbox can collide with the hub's own", async () => {
@@ -91,6 +91,65 @@ describe("mail to organizations and projects", () => {
     const [m] = await stored();
     expect(m).toMatchObject({ verdict: "quarantined", project_id: null });
     expect(await hasActiveConsent(env.HUB_DB, "pat@example.com")).toBe(false);
+  });
+
+  it.each(["delivery unavailable", "invalid MIME", "already replied", "References limit exceeded", "DMARC rejected"])("keeps proof unknown when reply fails: %s", async (replyError) => {
+    await world();
+    const f = fake("pat@example.com", `acme@${HUB}`, mime({ from: "pat@example.com", to: `acme@${HUB}`, body: "hi" }), { replyThrows: true, replyError });
+    await handleEmail(f.message, env, ctx);
+    expect((await stored())[0]).toMatchObject({ verdict: "quarantined", reason: "authentication unknown: Cloudflare reply proof unavailable (notification=failed); no DMARC failure inferred" });
+    expect(await hasActiveConsent(env.HUB_DB, "pat@example.com")).toBe(false);
+  });
+
+  it("does not trust forged Authentication-Results, ARC, or existing consent", async () => {
+    await world();
+    await grantConsent(env.HUB_DB, { email: "pat@example.com", kind: "inbound_email", source_message_id: null, evidence: null }, Date.now());
+    const raw = "Authentication-Results: mx.cloudflare.net; dmarc=pass; dkim=pass\r\nARC-Authentication-Results: i=1; mx.cloudflare.net; dmarc=pass\r\n"
+      + mime({ from: "pat@example.com", to: `acme@${HUB}`, body: "forged" });
+    const f = fake("pat@example.com", `acme@${HUB}`, raw, { replyThrows: true });
+    f.message.headers.set("Authentication-Results", "mx.cloudflare.net; dmarc=pass");
+    await handleEmail(f.message, env, ctx);
+    expect((await stored())[0]).toMatchObject({ verdict: "quarantined" });
+    expect((await stored())[0]!.reason).toContain("authentication unknown");
+    expect(await hasActiveConsent(env.HUB_DB, "pat@example.com")).toBe(true);
+  });
+
+  it.each([
+    "From: other@example.com\r\n",
+    "From: pat@example.com\r\nFrom: pat@example.com\r\n",
+    "From: pat@example.com, other@example.com\r\n",
+    "From: Team: pat@example.com;\r\n",
+    "",
+  ])("quarantines ambiguous or mismatched outer From without a reply: %s", async (fromHeader) => {
+    await world();
+    const raw = fromHeader + "To: acme@pimwell.test\r\nSubject: unbound\r\n\r\nbody";
+    const f = fake("pat@example.com", `acme@${HUB}`, raw);
+    await handleEmail(f.message, env, ctx);
+    expect((await stored())[0]).toMatchObject({ verdict: "quarantined" });
+    expect((await stored())[0]!.reason).toContain("exactly one outer From");
+    expect(f.calls.replies).toBe(0);
+    expect(await listConsent(env.HUB_DB, "pat@example.com")).toHaveLength(0);
+  });
+
+  it("binds a single display-name From case-insensitively, ignoring inner forwarded From", async () => {
+    await world();
+    const f = fake("pat@example.com", `acme@${HUB}`, mime({ from: '"Pat" <PAT@EXAMPLE.COM>', to: `acme@${HUB}`, rfc822: "From: outsider@example.com\r\n\r\nevidence only" }));
+    await handleEmail(f.message, env, ctx);
+    expect((await stored())[0]).toMatchObject({ verdict: "admitted", forwarded: 1 });
+    expect(f.calls.replies).toBe(1);
+  });
+
+  it("preserves revoked consent rather than opting a project sender back in", async () => {
+    await world();
+    const now = Date.now();
+    await grantConsent(env.HUB_DB, { email: "pat@example.com", kind: "inbound_email", source_message_id: null, evidence: null }, now - 100);
+    await revokeConsent(env.HUB_DB, "pat@example.com", now - 50);
+    const f = fake("pat@example.com", `acme@${HUB}`, mime({ from: "pat@example.com", to: `acme@${HUB}`, body: "hi" }));
+    await handleEmail(f.message, env, ctx);
+    expect(f.calls.replies).toBe(0);
+    expect(await hasActiveConsent(env.HUB_DB, "pat@example.com")).toBe(false);
+    expect(await listConsent(env.HUB_DB, "pat@example.com")).toHaveLength(1);
+    expect((await stored())[0]).toMatchObject({ verdict: "quarantined", reason: "authentication unknown: reply proof not attempted because consent is revoked" });
   });
 
   it("reads forwarded messages and HTML-only mail as text", async () => {
