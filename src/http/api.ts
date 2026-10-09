@@ -12,13 +12,20 @@ import { note } from "../log";
 import { recordEvent } from "../db/events";
 import { esc } from "../html";
 
-async function readBody(request: Request): Promise<{ input: Record<string, unknown>; isForm: boolean }> {
+async function readBody(request: Request, name: string): Promise<{ input: Record<string, unknown>; isForm: boolean }> {
   const ct = request.headers.get("content-type") ?? "";
   const bytes = await readRequestBytes(request, MAX_API_BODY_BYTES);
   if (ct.startsWith("application/x-www-form-urlencoded") || ct.startsWith("multipart/form-data")) {
     const fd = await requestWithBytes(request, bytes).formData();
     const input: Record<string, unknown> = {};
     for (const [k, v] of fd.entries()) input[k] = typeof v === "string" ? v : "";
+    if (name === "mail.set_response_recipients") {
+      // Repeated checkbox values are an array only for this verb. Require an explicit
+      // complete-form marker, including for [] clear; absent controls never imply clear.
+      const present = fd.getAll("_recipients_present");
+      if (present.length !== 1 || present[0] !== "1") throw new HubError(400, "bad_request", "complete recipient selection is required");
+      input.recipients = fd.getAll("recipients");
+    }
     return { input, isForm: true };
   }
   if (ct.startsWith("application/json")) {
@@ -107,7 +114,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
         return finish(ctx, env, res);
       }
     }
-    const body = await readBody(request);
+    const body = await readBody(request, name);
     if (isForm && name === "login.verify") throw new HubError(400, "bad_request", "login.verify does not accept form bodies");
     const params = verb.parse(body.input);
     const result = await verb.run(ctx, params);

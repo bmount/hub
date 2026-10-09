@@ -25,6 +25,7 @@ import { privacyPage, termsPage } from "./http/privacy";
 import { adminModelsPage } from "./http/adminModels";
 import { adminOrgsPage } from "./http/adminOrgs";
 import { mailListPage, mailReadPage } from "./http/mailPages";
+import { mailRecipientsPage } from "./http/mailRecipientsPage";
 import { attentionPage, docketPage, jumpPage, newWorkPage, orgDocketPage, plannedPage, workItemPage } from "./http/workPages";
 import { projectPage } from "./http/orgPages";
 import { peoplePage } from "./http/peoplePages";
@@ -120,6 +121,7 @@ app.post("/c/:slug/t/:seq", (c) => channelPost(c.req.raw, c.env, c.req.param("sl
 app.get("/m/:msg", (c) => permalinkPage(c.req.raw, c.env, c.req.param("msg")));
 app.get("/inbox", (c) => inboxPage(c.req.raw, c.env));
 app.get("/mail", (c) => mailListPage(c.req.raw, c.env));
+app.get("/mail/recipients", (c) => mailRecipientsPage(c.req.raw, c.env));
 app.get("/mail/:id", (c) => mailReadPage(c.req.raw, c.env, c.req.param("id")));
 app.get("/docket", (c) => orgDocketPage(c.req.raw, c.env));
 app.get("/new", (c) => newWorkPage(c.req.raw, c.env));
