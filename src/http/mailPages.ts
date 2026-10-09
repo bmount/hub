@@ -8,6 +8,7 @@ import { canInspectMail, readableMail } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { KINDS, STATES, type WorkKind, type WorkState } from "../work/names";
+import { mailIntentPanel } from "./mailIntentPanel";
 
 const when = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
 const ago = (ms: number, now: number) => {
@@ -56,6 +57,7 @@ ${rows.length ? `<table><thead><tr><th>To</th><th>From</th><th>Subject</th><th>R
   if (m) {
     const atts = JSON.parse(m.attachments) as Array<{ filename: string | null; mime_type: string; size: number }>;
     const filed = filedR!.results as Filed[];
+    const intent = m.recipient_id || m.verdict !== "admitted" ? { html: "", key: "" } : await mailIntentPanel(ctx, m.id);
     const release = m.verdict === "quarantined"
       ? `<div class="planned"><b>Held:</b> ${esc(m.reason ?? "")}<form method="post" action="/api/mail.release"><input type="hidden" name="id" value="${esc(m.id)}"><input type="hidden" name="_back" value="/mail/${esc(m.id)}"><button type="submit">I know who sent this: release it</button></form></div>` : "";
     const propose = m.verdict === "admitted" && rank(ctx.role) >= rank("member")
@@ -67,13 +69,14 @@ ${rows.length ? `<table><thead><tr><th>To</th><th>From</th><th>Subject</th><th>R
 ${release}
 ${filed.length ? `<h2>Filed from this</h2><table><tbody>${filed.map((f) => `<tr data-href="/${esc(f.slug)}/w/${f.number}"><td class="ref">${esc(f.slug)}#${f.number}</td><td class="k-${f.kind}"><span class="kd"></span>${esc(KINDS[f.kind].name)}</td><td><a href="/${esc(f.slug)}/w/${f.number}">${esc(f.title)}</a></td><td>${esc(STATES[f.state])}</td></tr>`).join("")}</tbody></table>` : ""}
 ${propose}
+${intent.html}
 <pre>${esc(m.text)}</pre>
 ${(repliesR!.results as Array<{ text: string; created_at: number; status: string; who: string }>).map((o) => `<h2>Reply from ${esc(o.who)} <small>${when(o.created_at)}${o.status !== "sent" ? ` (${esc(o.status)})` : ""}</small></h2><pre>${esc(o.text)}</pre>`).join("")}
 ${m.verdict === "admitted" && !m.recipient_id && ctx.identity.kind === "human" && rank(ctx.role) >= rank("member")
   ? sendingOn && ctx.now - m.received_at <= 30 * 86_400_000
     ? `<h2>Reply</h2><form method="post" action="/api/mail.reply"><input type="hidden" name="id" value="${esc(m.id)}"><input type="hidden" name="_back" value="/mail/${esc(m.id)}"><label style="display:block"><textarea data-voice name="body" rows="6" required maxlength="20000" style="display:block;width:100%" placeholder="Sent from ${esc(m.to_address)} to ${esc(m.from_email)}"></textarea></label><button type="submit">Send reply</button></form>`
     : `<p class="lede">${sendingOn ? "More than 30 days have passed; Pimwell writes again once they do." : "Replies are off in this organization; an admin can turn them on below."}</p>` : ""}`;
-    key = `mail:${m.id}:${m.verdict}:${filed.length}`;
+    key = `mail:${m.id}:${m.verdict}:${filed.length}${intent.key ? `:${intent.key}` : ""}`;
   } else {
     const toggle = rank(ctx.role) >= rank("admin") ? `<h2>Sending</h2><p>${sendingOn ? "On: members reply from these addresses, and agents from theirs, only to people who wrote in the last 30 days, at most 50 a day each." : "Off: nothing leaves Pimwell except sign-in links and one-time welcome guidance."}</p>
 <form method="post" action="/api/mail.sending"><input type="hidden" name="on" value="${sendingOn ? "0" : "1"}"><input type="hidden" name="_back" value="/mail"><button type="submit"${sendingOn ? ' class="quiet"' : ""}>${sendingOn ? "Turn sending off" : "Turn sending on"}</button></form>` : "";

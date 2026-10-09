@@ -1,0 +1,276 @@
+import { env, SELF } from "cloudflare:test";
+import { beforeAll, describe, expect, it } from "vitest";
+import fixtures from "./fixtures/dkim.json";
+import { registerAllVerbs } from "../src/verbs/index";
+import { getVerb } from "../src/verbs/table";
+import { checkAccess } from "../src/verbs/dispatch";
+import { buildContext } from "../src/auth/context";
+import { storeIndependentMailCandidate, REPLAY_PREFIX } from "../src/mail/replay";
+import { RESPONSE_RECIPIENT_PREFIX } from "../src/mail/responseRecipients";
+import { RESPONSE_INTENT_PREFIX, setResponseIntent } from "../src/mail/responseIntent";
+import { createProject } from "../src/db/projects";
+import { deleteTenant } from "../src/db/tenantDelete";
+import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
+
+const host = "intent.pimwell.test", address = "intent@pimwell.test";
+const now = Date.parse(fixtures.now) + 120_000;
+beforeAll(registerAllVerbs);
+async function world(projectMail = false) {
+  const tenant = await seedTenant("intent"), foreign = await seedTenant("foreign");
+  const admin = await seedHuman("admin@example.com", { memberships: [{ tenant_id: tenant.id, role: "admin" }] });
+  const member = await seedHuman("member@example.com", { memberships: [{ tenant_id: tenant.id, role: "member" }] });
+  const other = await seedHuman("other@example.com", { memberships: [{ tenant_id: tenant.id, role: "member" }] });
+  const reader = await seedHuman("reader@example.com", { memberships: [{ tenant_id: tenant.id, role: "reader" }] });
+  const bot = await seedAgent(tenant, admin.identity);
+  const project = await createProject(env.HUB_DB, { tenant_id: tenant.id, namespace_id: null, slug: "site", display_name: "Site", kind: "tracker" }, Date.now());
+  const to = projectMail ? "intent.site@pimwell.test" : address;
+  const stored = await storeIndependentMailCandidate(env, { bytes: new TextEncoder().encode(fixtures.valid), from: member.identity.email, to }, now, async () => [[fixtures.record]]);
+  if (stored.status !== "stored") throw new Error("signed fixture was not stored");
+  const adminHeaders = cookieHeaders(admin.token, host), headers = cookieHeaders(member.token, host);
+  expect((await apiPost(host, "mail.set_response_recipients", { address: to, recipients: [member.identity.id, other.identity.id], expected_revision: 0 }, adminHeaders)).status).toBe(200);
+  return { tenant, foreign, admin, member, other, reader, bot, project, to, id: stored.mail_id, headers, adminHeaders, requestHost: host,
+    intentKey: `${RESPONSE_INTENT_PREFIX}${tenant.id}:${stored.mail_id}:${member.identity.id}`,
+    prefKey: `${RESPONSE_RECIPIENT_PREFIX}${tenant.id}:${projectMail ? project.id : "org"}` };
+}
+async function read(w: Awaited<ReturnType<typeof world>>, headers = w.headers) {
+  const r = await apiPost(w.requestHost, "mail.response_intent", { id: w.id }, headers);
+  expect(r.status, await r.clone().text()).toBe(200);
+  return (await r.json() as { result: Record<string, any> }).result;
+}
+const set = (w: Awaited<ReturnType<typeof world>>, state = "planned", rev = 0, headers = w.headers) =>
+  apiPost(w.requestHost, "mail.set_response_intent", { id: w.id, state, expected_revision: rev }, headers);
+const count = async () => env.HUB_DB.prepare("SELECT COUNT(*) n FROM event WHERE kind = 'mail.set_response_intent'").first<number>("n");
+
+describe("explicit self-recorded human response intent, not automatic scheduling", () => {
+  it.each([false, true])("records/cancels/replans org/project=%s intent without any delivery, grant, consent or mail mutation", async project => {
+    const w = await world(project);
+    const mail = await env.HUB_DB.prepare("SELECT * FROM inbound_mail").all();
+    const members = await env.HUB_DB.prepare("SELECT * FROM membership").all();
+    expect(await read(w)).toMatchObject({ state: "unset", revision: 0, can_plan: true, automatic_execution: "not_implemented", response_guaranteed: false });
+    expect((await set(w)).status).toBe(200);
+    expect(await read(w)).toMatchObject({ state: "planned", revision: 1, notification: "not_requested", response_guaranteed: false });
+    expect((await set(w, "cancelled", 1)).status).toBe(200);
+    expect(await read(w)).toMatchObject({ state: "cancelled", revision: 2 });
+    expect((await set(w, "planned", 2)).status).toBe(200);
+    expect(await count()).toBe(3);
+    expect((await env.HUB_DB.prepare("SELECT * FROM inbound_mail").all()).results).toEqual(mail.results);
+    expect((await env.HUB_DB.prepare("SELECT * FROM membership").all()).results).toEqual(members.results);
+    for (const table of ["outbound_mail", "attention", "consent", "oauth_grant"]) expect(await env.HUB_DB.prepare(`SELECT COUNT(*) n FROM ${table}`).first("n")).toBe(0);
+    expect((await env.HUB_DB.prepare("SELECT key FROM meta WHERE key GLOB 'mail_welcome:*'").all()).results).toEqual([]);
+  });
+  it("records only the caller's intention, not an admin-selected assignment or another person's status", async () => {
+    const w = await world();
+    expect((await set(w)).status).toBe(200);
+    expect(await read(w, cookieHeaders(w.other.token, host))).toMatchObject({ state: "unset", revision: 0 });
+    expect((await set(w, "planned", 0, cookieHeaders(w.other.token, host))).status).toBe(200);
+    expect(await read(w)).toMatchObject({ state: "planned", revision: 1 });
+    expect(await read(w, w.adminHeaders)).toMatchObject({ state: "unset", can_plan: false });
+    expect((await set(w, "planned", 0, w.adminHeaders)).status).toBe(409);
+    expect(await count()).toBe(2);
+  });
+  it.each([0, 1])("CAS serializes first/later concurrent writes at revision %s, requiring read reconciliation", async rev => {
+    const w = await world();
+    if (rev) expect((await set(w)).status).toBe(200);
+    const state = rev ? "cancelled" : "planned";
+    expect((await Promise.all([set(w, state, rev), set(w, state, rev)])).map(r => r.status).sort()).toEqual([200, 409]);
+    expect((await read(w)).revision).toBe(rev + 1);
+    expect(await count()).toBe(rev + 1);
+    expect((await set(w, state, rev)).status).toBe(409);
+    expect((await set(w, state, rev + 1)).status).toBe(409);
+    expect(await count()).toBe(rev + 1);
+  });
+  it("does not cancel an absent intention or treat preferences as intention", async () => {
+    const w = await world();
+    expect((await set(w, "cancelled")).status).toBe(409);
+    expect(await count()).toBe(0);
+    expect(await read(w)).toMatchObject({ state: "unset", revision: 0 });
+  });
+  it.each(["clear", "corrupt", "rename", "archive"])("observes %s as stale, permits explicit cancellation but refuses replan", async change => {
+    const w = await world(change === "archive");
+    expect((await set(w)).status).toBe(200);
+    if (change === "clear") expect((await apiPost(host, "mail.set_response_recipients", { address: w.to, recipients: [], expected_revision: 1 }, w.adminHeaders)).status).toBe(200);
+    if (change === "corrupt") await env.HUB_DB.prepare("UPDATE meta SET value = '{}' WHERE key = ?").bind(w.prefKey).run();
+    if (change === "rename") {
+      await env.HUB_DB.prepare("UPDATE tenant SET slug = 'renamed' WHERE id = ?").bind(w.tenant.id).run();
+      // Tenant-host authority moves with the slug; do not weaken the old-host denial.
+      w.requestHost = "renamed.pimwell.test";
+      w.headers = cookieHeaders(w.member.token, w.requestHost);
+    }
+    if (change === "archive") await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.project.id).run();
+    expect(await read(w)).toMatchObject({ state: "stale", revision: 1, can_plan: false, response_guaranteed: false });
+    expect((await set(w, "cancelled", 1)).status).toBe(200);
+    expect((await set(w, "planned", 2)).status).toBe(409);
+    expect(await read(w)).toMatchObject({ state: "cancelled", revision: 2 });
+  });
+  it.each(["quarantine", "released", "reason", "legacy", "pending", "corrupt", "identity", "message", "foreign", "private"])("refuses %s evidence even for the administrator", async change => {
+    const w = await world();
+    if (change === "quarantine") await env.HUB_DB.prepare("UPDATE inbound_mail SET verdict = 'quarantined' WHERE id = ?").bind(w.id).run();
+    if (change === "released") await env.HUB_DB.prepare("UPDATE inbound_mail SET released_by = ? WHERE id = ?").bind(w.admin.identity.id, w.id).run();
+    if (change === "reason") await env.HUB_DB.prepare("UPDATE inbound_mail SET reason = 'unknown' WHERE id = ?").bind(w.id).run();
+    if (change === "legacy") await env.HUB_DB.prepare("DELETE FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").run();
+    if (["pending", "corrupt", "identity"].includes(change)) {
+      const replay = (await env.HUB_DB.prepare("SELECT key, value FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").first<{ key: string; value: string }>())!;
+      const v = JSON.parse(replay.value); if (change === "pending") v.status = "pending"; if (change === "identity") v.identity_id = w.admin.identity.id;
+      await env.HUB_DB.prepare("UPDATE meta SET value = ? WHERE key = ?").bind(change === "corrupt" ? "{}" : JSON.stringify(v), replay.key).run();
+    }
+    if (change === "message") await env.HUB_DB.prepare("UPDATE inbound_mail SET message_id = '<different@example.com>' WHERE id = ?").bind(w.id).run();
+    if (change === "foreign") await env.HUB_DB.prepare("UPDATE inbound_mail SET tenant_id = ? WHERE id = ?").bind(w.foreign.id, w.id).run();
+    if (change === "private") await env.HUB_DB.prepare("UPDATE inbound_mail SET recipient_id = ? WHERE id = ?").bind(w.bot.agent.identity.id, w.id).run();
+    for (const headers of [w.headers, w.adminHeaders]) {
+      expect((await apiPost(host, "mail.response_intent", { id: w.id }, headers)).status).toBe(404);
+      expect((await set(w, "planned", 0, headers)).status).toBe(404);
+    }
+    expect(await count()).toBe(0);
+  });
+  it("requires active human member/browser proof and Origin; no MCP/assistant execution", async () => {
+    const w = await world();
+    for (const headers of [{}, cookieHeaders(w.reader.token, host), bearer(w.bot.token), { cookie: w.headers.cookie!, origin: "https://evil.test" }]) expect((await set(w, "planned", 0, headers)).status).not.toBe(200);
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.response_intent`, { headers: bearer(w.bot.token) }), env);
+    for (const name of ["mail.response_intent", "mail.set_response_intent"]) {
+      const verb = getVerb(name)!;
+      expect(verb.mcp).toBeUndefined();
+      expect(() => checkAccess({ ...ctx, role: "admin" }, verb)).toThrow("agents may not");
+    }
+    await env.HUB_DB.prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(Date.now() - 61 * 60_000, w.member.session.id).run();
+    expect((await set(w)).status).toBe(403);
+    expect(await read(w)).toMatchObject({ state: "unset" });
+    expect(await count()).toBe(0);
+  });
+  it.each(["removed", "reader", "archived", "root"])("does not let %s caller authority act as current response eligibility", async change => {
+    const w = await world();
+    if (change === "removed" || change === "root") await env.HUB_DB.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ?").bind(w.member.identity.id).run();
+    if (change === "root") await env.HUB_DB.prepare("UPDATE identity SET is_root = 1 WHERE id = ?").bind(w.member.identity.id).run();
+    if (change === "reader") await env.HUB_DB.prepare("UPDATE membership SET role = 'reader' WHERE identity_id = ?").bind(w.member.identity.id).run();
+    if (change === "archived") await env.HUB_DB.prepare("UPDATE identity SET state = 'archived' WHERE id = ?").bind(w.member.identity.id).run();
+    expect((await set(w)).status).not.toBe(200);
+    expect(await count()).toBe(0);
+  });
+  it.each(["member", "tenant", "project", "preferences", "proof", "mail"])("rechecks %s inside the atomic intent/audit transaction", async change => {
+    const w = await world(true);
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    const original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, key) {
+      if (key !== "batch") { const v = Reflect.get(db, key); return typeof v === "function" ? v.bind(db) : v; }
+      return async (stmts: D1PreparedStatement[]) => {
+        if (change === "member") await env.HUB_DB.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ?").bind(w.member.identity.id).run();
+        if (change === "tenant") await env.HUB_DB.prepare("UPDATE tenant SET state = 'archived' WHERE id = ?").bind(w.tenant.id).run();
+        if (change === "project") await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.project.id).run();
+        if (change === "preferences") await env.HUB_DB.prepare("UPDATE meta SET value = '{}' WHERE key = ?").bind(w.prefKey).run();
+        if (change === "proof") await env.HUB_DB.prepare("DELETE FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").run();
+        if (change === "mail") await env.HUB_DB.prepare("UPDATE inbound_mail SET released_by = ? WHERE id = ?").bind(w.admin.identity.id, w.id).run();
+        return original(stmts);
+      };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "planned", 0)).rejects.toThrow("eligibility changed");
+    expect(await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.intentKey).first()).toBeNull();
+    expect(await count()).toBe(0);
+  });
+  it.each([undefined, null, -1, 1.5, Number.MAX_SAFE_INTEGER, "bad"])("rejects missing/invalid revision %s", async rev => {
+    const w = await world();
+    expect((await apiPost(host, "mail.set_response_intent", { id: w.id, state: "planned", expected_revision: rev }, w.headers)).status).toBe(400);
+    expect(await count()).toBe(0);
+  });
+  it.each(["sent", "unknown", "", null])("rejects unsupported state %s instead of claiming delivery", async state => {
+    const w = await world();
+    expect((await apiPost(host, "mail.set_response_intent", { id: w.id, state, expected_revision: 0 }, w.headers)).status).toBe(400);
+  });
+  it.each(["not-json", "{}", '{"revision":1,"state":"sent"}'])("reports corrupt intent %s without resetting it", async value => {
+    const w = await world();
+    await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").bind(w.intentKey, value).run();
+    expect(await read(w)).toMatchObject({ state: "invalid", revision: null, response_guaranteed: false });
+    expect((await set(w)).status).toBe(409);
+    expect(await count()).toBe(0);
+  });
+  it("reconciles a lost transaction response by reading, without duplicate audits or blind replay", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    const original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, key) {
+      if (key !== "batch") { const v = Reflect.get(db, key); return typeof v === "function" ? v.bind(db) : v; }
+      return async (stmts: D1PreparedStatement[]) => { await original(stmts); throw new Error("lost response"); };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "planned", 0)).rejects.toThrow("lost response");
+    expect(await read(w)).toMatchObject({ state: "planned", revision: 1 });
+    expect((await set(w)).status).toBe(409);
+    expect(await count()).toBe(1);
+  });
+  it("does not resurrect a previously observed intent deleted before the transaction", async () => {
+    const w = await world(); expect((await set(w)).status).toBe(200);
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    const original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, key) {
+      if (key !== "batch") { const v = Reflect.get(db, key); return typeof v === "function" ? v.bind(db) : v; }
+      return async (stmts: D1PreparedStatement[]) => {
+        await env.HUB_DB.prepare("DELETE FROM meta WHERE key = ?").bind(w.intentKey).run(); return original(stmts);
+      };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "cancelled", 1)).rejects.toThrow("eligibility changed");
+    expect(await read(w)).toMatchObject({ state: "unset", revision: 0 });
+    expect(await count()).toBe(1);
+  });
+  it("rolls back the intent if audit fails", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    ctx.session = { ...ctx.session!, id: "missing-session" };
+    await expect(setResponseIntent(ctx, w.id, "planned", 0)).rejects.toThrow();
+    expect(await read(w)).toMatchObject({ state: "unset", revision: 0 });
+    expect(await count()).toBe(0);
+  });
+  it("shows truthful own intention and native revision-checked plan/cancel forms in the mail inspector", async () => {
+    const w = await world();
+    const page = () => SELF.fetch(`https://${host}/mail/${w.id}`, { headers: w.headers });
+    const first = await page();
+    expect(first.headers.get("cache-control")).toBe("no-store");
+    const html = await first.text();
+    expect(html).toContain("My response intention");
+    expect(html).toContain("This does not guarantee a reply");
+    expect(html).toContain('name="expected_revision" value="0"');
+    expect(html).toContain("I intend to respond");
+    const key = html.match(/id="inspector"[^>]*data-key="([^"]*)"/)![1];
+    const body = new URLSearchParams({ id: w.id, state: "planned", expected_revision: "0", _back: `/mail/${w.id}` });
+    const saved = await SELF.fetch(`https://${host}/api/mail.set_response_intent`, { method: "POST", body, headers: w.headers, redirect: "manual" });
+    expect(saved.status).toBe(303); expect(saved.headers.get("location")).toBe(`/mail/${w.id}`);
+    const current = await (await page()).text();
+    expect(current).toContain('name="expected_revision" value="1"');
+    expect(current).toContain("Cancel my intention");
+    expect(current.match(/id="inspector"[^>]*data-key="([^"]*)"/)![1]).not.toBe(key);
+    expect((await SELF.fetch(`https://${host}/api/mail.set_response_intent`, { method: "POST", body, headers: w.headers, redirect: "manual" })).status).toBe(409);
+    body.set("state", "cancelled"); body.set("expected_revision", "1");
+    expect((await SELF.fetch(`https://${host}/api/mail.set_response_intent`, { method: "POST", body, headers: w.headers, redirect: "manual" })).status).toBe(303);
+    expect(await read(w)).toMatchObject({ state: "cancelled", revision: 2 });
+  });
+  it("renders reproof instead of an intent form; a stale-proof form redirects without a write", async () => {
+    const w = await world();
+    await env.HUB_DB.prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(Date.now() - 61 * 60_000, w.member.session.id).run();
+    const html = await (await SELF.fetch(`https://${host}/mail/${w.id}`, { headers: w.headers })).text();
+    expect(html).toContain("recent confirmation");
+    expect(html).not.toContain('action="/api/mail.set_response_intent"');
+    const body = new URLSearchParams({ id: w.id, state: "planned", expected_revision: "0", _back: `/mail/${w.id}` });
+    const r = await SELF.fetch(`https://${host}/api/mail.set_response_intent`, { method: "POST", body, headers: w.headers, redirect: "manual" });
+    expect(r.status).toBe(303); expect(r.headers.get("location")).toContain("/login?reproof=1");
+    expect(await count()).toBe(0);
+  });
+  it.each(["reader", "agent", "legacy", "private", "corrupt", "unselected"])("does not render misleading intent controls for %s", async change => {
+    const w = await world(); let headers = w.headers;
+    if (change === "reader") headers = cookieHeaders(w.reader.token, host);
+    if (change === "agent") headers = bearer(w.bot.token);
+    if (change === "legacy") await env.HUB_DB.prepare("DELETE FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").run();
+    if (change === "private") { await env.HUB_DB.prepare("UPDATE inbound_mail SET recipient_id = ? WHERE id = ?").bind(w.bot.agent.identity.id, w.id).run(); headers = w.adminHeaders; }
+    if (change === "corrupt") await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, '{}')").bind(w.intentKey).run();
+    if (change === "unselected") headers = w.adminHeaders;
+    const r = await SELF.fetch(`https://${host}/mail/${w.id}`, { headers }); expect(r.status).toBe(200);
+    const html = await r.text(); expect(html).not.toContain('action="/api/mail.set_response_intent"');
+    if (change === "corrupt") expect(html).toContain("Stored intention is invalid");
+    if (change === "unselected") expect(html).toContain("Current mailbox preferences do not select you");
+    expect(await count()).toBe(0);
+  });
+  it("cleans only the deleted tenant's intent keys", async () => {
+    const w = await world();
+    expect((await set(w)).status).toBe(200);
+    const keep = `${RESPONSE_INTENT_PREFIX}${w.foreign.id}:keep`;
+    await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, 'keep')").bind(keep).run();
+    await env.HUB_DB.prepare("UPDATE tenant SET state = 'archived' WHERE id = ?").bind(w.tenant.id).run();
+    await deleteTenant(env.HUB_DB, "intent", w.admin.identity.id, Date.now());
+    expect((await env.HUB_DB.prepare("SELECT key FROM meta WHERE key GLOB ?").bind(RESPONSE_INTENT_PREFIX + "*").all()).results).toEqual([{ key: keep }]);
+  });
+});

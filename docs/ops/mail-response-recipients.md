@@ -1,6 +1,10 @@
 # Shared-mailbox response-recipient preferences (#85)
 
-This increment adds **explicit preferences, not response routing or scheduling**.
+Preferences are **not response routing or scheduling**. The separate
+[self-recorded human response intention](mail-response-intent.md) increment lets
+an authorized configured human voluntarily record/cancel their own per-message
+intention. It still does not notify, send, execute automated work, guarantee a
+reply or suppress guidance.
 Receipt-free [independent authentication](mail-authentication.md), quarantine,
 [replay](mail-replay.md), direct-agent mailbox access/wake and
 [one-time welcome](../mail-welcome.md) are unchanged. A configured recipient
@@ -100,8 +104,9 @@ memberships, consents, tokens or grants.
 
 ## Next increments / acceptance not claimed
 
-Explicit independently verified per-message scheduling state, transactional
-notification intent, durable human delivery/ack/reconciliation,
+Self-recorded per-message human intention/cancellation is implemented separately
+(see [contract](mail-response-intent.md)); this is not automated scheduling or
+human notification/delivery. Transactional notification intent, durable human delivery/ack/reconciliation,
 response cancellation/failed/unknown outcomes and conditional setup guidance
 remain #85 work. Scheduling must separately authorize the actual mailbox reader,
 not widen grants from a preference. It must never silently reroute private-agent

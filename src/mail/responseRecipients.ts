@@ -16,7 +16,7 @@ async function targetFor(ctx: Ctx, address: string) {
   if (!target || target.tenant_id !== ctx.tenant!.id || target.recipient_id) throw notFound();
   return target;
 }
-function decode(raw: string | null): Config | null {
+export function decodeResponseRecipients(raw: string | null): Config | null {
   if (raw === null) return null;
   try {
     const c = JSON.parse(raw) as Config;
@@ -36,7 +36,7 @@ async function eligible(ctx: Ctx, ids: string[]) {
 export async function responseRecipients(ctx: Ctx, address: string) {
   const target = await targetFor(ctx, address);
   const raw = (await ctx.db.prepare("SELECT value FROM meta WHERE key = ?").bind(keyFor(target)).first<{ value: string }>())?.value ?? null;
-  const config = decode(raw);
+  const config = decodeResponseRecipients(raw);
   const current = config ? new Set(await eligible(ctx, config.recipients)) : new Set<string>();
   return {
     address: address.trim().toLowerCase(), project_id: target.project_id,
@@ -54,7 +54,7 @@ export async function responseRecipients(ctx: Ctx, address: string) {
 export async function setResponseRecipients(ctx: Ctx, address: string, recipients: string[], expected: number) {
   const target = await targetFor(ctx, address), key = keyFor(target);
   const raw = (await ctx.db.prepare("SELECT value FROM meta WHERE key = ?").bind(key).first<{ value: string }>())?.value ?? null;
-  const old = decode(raw);
+  const old = decodeResponseRecipients(raw);
   if (raw !== null && !old) throw conflict("invalid recipient configuration requires administrator reconciliation");
   if ((old?.revision ?? 0) !== expected) throw conflict("recipient configuration changed; read before editing");
   if ((await eligible(ctx, recipients)).length !== recipients.length) throw conflict("recipients must be active human members of this organization");
