@@ -118,8 +118,10 @@ from an intention or checkbox.
 
 #85 remains open for transactional human notification intent and durable
 notification delivery/ack/failed/unknown reconciliation, genuinely scheduled
-execution/cancellation semantics, and conditional setup guidance. Agent
-responders require a separate bounded access design. Do not activate preferences
+execution/cancellation semantics. Conditional setup guidance within the existing
+one-time welcome is implemented separately (see [contract](../mail-welcome.md));
+no intention suppresses it. Agent responders require a separate bounded access
+design. Do not activate preferences
 as fanout or use intention to promise a response/suppress context. #130's
 one-time welcome and routine receipt suppression remain intact; #134's fresh
 real-provider admission/wake/no-receipt acceptance is still an external

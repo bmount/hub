@@ -3,14 +3,17 @@
 Preferences are **not response routing or scheduling**. The separate
 [self-recorded human response intention](mail-response-intent.md) increment lets
 an authorized configured human voluntarily record/cancel their own per-message
-intention. It still does not notify, send, execute automated work, guarantee a
-reply or suppress guidance.
+intention. It still does not notify, send, execute automated work or guarantee a
+reply.
 Receipt-free [independent authentication](mail-authentication.md), quarantine,
 [replay](mail-replay.md), direct-agent mailbox access/wake and
-[one-time welcome](../mail-welcome.md) are unchanged. A configured recipient
-is not a promised substantive response, evidence of a scheduled response, or
-permission to access a private mailbox. Configuration does not suppress welcome
-or setup guidance. Do not use a nonempty preference list as a response guarantee.
+[one-time welcome](../mail-welcome.md) keep their proof/deduplication boundaries.
+A configured recipient is not a promised substantive response, evidence of a
+scheduled response, or permission to access a private mailbox. The optional
+one-time welcome now includes recipient-setup guidance only for the exact shared
+mailbox's absent/validly empty preferences; nonempty/stale/corrupt/private-agent
+states do not establish absence. Configuration does not suppress the welcome
+itself. Do not use a nonempty preference list as a response guarantee.
 
 ## API
 
@@ -81,7 +84,9 @@ A successful POST redirects back to the selected mailbox with current state;
 a stale or repeated save conflicts. An ambiguous save must be reconciled by
 reloading/reading its revision and selection, **not blindly resubmitted**. Page
 reads and preference saves do not send mail, wake anyone, change membership,
-consent or mailbox grants, schedule responses, or suppress existing guidance.
+consent or mailbox grants, or schedule responses. Current preferences are only
+observed by the optional one-time welcome's conditional setup-guidance path;
+saving/clearing them never triggers a new welcome or recurring setup send.
 The page explicitly discloses that automatic scheduling is not implemented and
 that preferences do not guarantee a reply.
 
@@ -107,12 +112,14 @@ memberships, consents, tokens or grants.
 Self-recorded per-message human intention/cancellation is implemented separately
 (see [contract](mail-response-intent.md)); this is not automated scheduling or
 human notification/delivery. Transactional notification intent, durable human delivery/ack/reconciliation,
-response cancellation/failed/unknown outcomes and conditional setup guidance
-remain #85 work. Scheduling must separately authorize the actual mailbox reader,
+response cancellation/failed/unknown outcomes remain #85 work. Conditional
+setup guidance within the existing one-time welcome is implemented (see
+[contract](../mail-welcome.md)); recurring guidance is not. Scheduling must separately authorize the actual mailbox reader,
 not widen grants from a preference. It must never silently reroute private-agent
 mail or treat an administrator release/unknown proof as cryptographic admission.
-Do not activate preference-driven fanout or suppress guidance until those effects
-have a truthful durable state and boundary tests. Agent responders need a
+Do not activate preference-driven fanout or suppress context on a supposed
+scheduled response until those effects have truthful durable state and boundary
+tests. The welcome's narrow setup-guidance condition is not such a response. Agent responders need a
 separate bounded access/delivery design; this human-only increment does not
 pretend to implement them. Browser preference setup is implemented, but local
 native-Workers form/page acceptance is not a live-admin configuration test or

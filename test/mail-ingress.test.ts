@@ -50,8 +50,8 @@ afterEach(() => { delivery.setTestTransport(null); vi.restoreAllMocks(); });
 describe("receipt-free independently authenticated ingress", () => {
   it("recipient preferences alone do not schedule, wake extra agents, grant access or suppress one-time context", async () => {
     const w = await world();
-    // Persisted preferences are deliberately disconnected until a durable,
-    // independently authorized scheduling implementation exists.
+    // Preferences affect optional setup guidance, never response scheduling,
+    // independent admission, mailbox ownership or agent wake.
     await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?)")
       .bind(`${RESPONSE_RECIPIENT_PREFIX}${w.tenant.id}:org`, JSON.stringify({ revision: 1,
         recipients: [w.human.identity.id], updated_at: now, change_id: w.human.identity.id })).run();
@@ -60,10 +60,34 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(m.reply).not.toHaveBeenCalled();
     expect(w.sent).toHaveLength(1);
     expect(w.sent[0]!.subject).toBe("Welcome to Pimwell");
+    expect(w.sent[0]!.text).not.toContain("/mail/recipients");
+    expect(w.sent[0]!.text).toContain("Delivery does not guarantee");
     expect((await page(w)).items).toHaveLength(0);
     expect(await count("outbound_mail")).toBe(0);
     expect(await env.HUB_DB.prepare("SELECT recipient_id FROM inbound_mail").first()).toEqual({ recipient_id: null });
     expect(await receive(fixtures.second)).toBe("admitted");
+    expect(w.sent).toHaveLength(1);
+  });
+  it.each(["unset", "empty", "configured", "corrupt"])("signed production entry preserves admission/no receipt with %s setup preferences", async mode => {
+    const w = await world();
+    if (mode !== "unset") await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?)")
+      .bind(`${RESPONSE_RECIPIENT_PREFIX}${w.tenant.id}:org`, mode === "corrupt" ? "{bad" : JSON.stringify({
+        revision: 1, recipients: mode === "empty" ? [] : [w.human.identity.id], updated_at: now, change_id: w.human.identity.id })).run();
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const name = "test._domainkey.example.com";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ Status: 0,
+      Question: [{ name, type: 16 }], Answer: [{ name, type: 16,
+        data: fixtures.record.match(/.{1,200}/g)!.map(s => `"${s}"`).join(" ") }] },
+    { headers: { "content-type": "application/dns-json" } }));
+    const m = message(); await handleEmail(m, env, {} as ExecutionContext);
+    expect(m.reply).not.toHaveBeenCalled(); expect(m.setReject).not.toHaveBeenCalled();
+    expect(await env.HUB_DB.prepare("SELECT verdict, reason, recipient_id FROM inbound_mail").first())
+      .toEqual({ verdict: "admitted", reason: null, recipient_id: null });
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]!.text.includes("/mail/recipients")).toBe(mode === "unset" || mode === "empty");
+    expect(w.sent[0]!.text).toContain("Delivery does not guarantee");
+    expect((await page(w)).items).toHaveLength(0);
+    await handleEmail(message(fixtures.second), env, {} as ExecutionContext);
     expect(w.sent).toHaveLength(1);
   });
   it.each([false, true])("production entry verifies observed chunks, not source buffers mutated at EOF (tampered=%s)", async tampered => {

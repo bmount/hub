@@ -156,9 +156,11 @@ ARC forwarding support. Failure/absence/unsupported formats remain unknown.
 Routine receipt suppression and [one-time welcome](../mail-welcome.md) are
 implemented in the ingress integration, with signed native-Workers handler tests.
 [Explicit shared-mailbox response-recipient preferences](mail-response-recipients.md)
-are available to human admins, but are not connected to routing/scheduling or
-conditional guidance. Durable scheduled-response state and setup UI remain
-separate work; setup links and configured recipients do not promise a reply. No held mail is
+and browser setup are available to human admins. The optional one-time welcome
+includes conditional recipient-setup guidance only for absent/validly empty
+shared preferences; it is not response routing/scheduling. Durable automated
+scheduling remains separate work; setup links, configured recipients and
+self-recorded human intentions do not promise a reply. No held mail is
 automatically released or relabeled. No D1 migration, real tenant/membership or
 credential changes are performed by deployment. The inbox adds a non-destructive
 DO-local mail dedup table through its existing initialization path.

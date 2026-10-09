@@ -5,6 +5,7 @@ import { grantConsent, revokeConsent } from "../src/db/consent";
 import { deleteTenant } from "../src/db/tenantDelete";
 import { createProject } from "../src/db/projects";
 import { sendNewcomerWelcome, WELCOME_PREFIX, type WelcomeSource, type WelcomeState } from "../src/mail/welcome";
+import { resolveMailAddress } from "../src/mail/projectMail";
 import type { DkimProof } from "../src/mail/dkim";
 import * as delivery from "../src/mail/send";
 import { seedAgent, seedHuman, seedTenant } from "./helpers";
@@ -17,10 +18,12 @@ async function state(s: WelcomeSource): Promise<WelcomeState | null> {
   return value ? JSON.parse(value) : null;
 }
 async function store(s: WelcomeSource, email: string, to: string) {
+  const target = await resolveMailAddress(env.HUB_DB, env.HUB_DOMAIN, to);
   await env.HUB_DB.prepare(`INSERT INTO inbound_mail
-    (id, tenant_id, identity_id, from_email, to_address, subject, message_id, received_at, size, verdict, text, attachments, forwarded)
-    VALUES (?, ?, ?, ?, ?, 'evidence', ?, ?, 100, 'admitted', 'body', '[]', 0)`)
-    .bind(s.mail_id, s.tenant_id, s.identity_id, email, to, proof.authentication === "pass" ? proof.messageId : "", now).run();
+    (id, tenant_id, identity_id, from_email, to_address, project_id, recipient_id, subject, message_id, received_at, size, verdict, text, attachments, forwarded)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'evidence', ?, ?, 100, 'admitted', 'body', '[]', 0)`)
+    .bind(s.mail_id, s.tenant_id, s.identity_id, email, to, target?.project_id ?? null, target?.recipient_id ?? null,
+      proof.authentication === "pass" ? proof.messageId : "", now).run();
 }
 async function world(opts: { root?: boolean } = {}) {
   const tenant = await seedTenant("welcometest");
@@ -40,7 +43,7 @@ describe("independent-proof newcomer welcome candidate", () => {
     expect(await sendNewcomerWelcome(env, w.source, proof, now)).toBe("sent");
     expect(w.sent).toHaveLength(1);
     expect(w.sent[0]).toMatchObject({ from: "welcometest@pimwell.test", to: "person@example.com", subject: "Welcome to Pimwell" });
-    expect(w.sent[0]!.text).toContain("https://welcometest.pimwell.test/setup");
+    expect(w.sent[0]!.text).toContain("https://welcometest.pimwell.test/mail/recipients?address=welcometest%40pimwell.test");
     expect(w.sent[0]!.text).toContain("Delivery does not guarantee");
     expect(w.sent[0]!.text).not.toContain("Received:");
     expect(await state(w.source)).toMatchObject({ status: "sent", mail_id: w.source.mail_id, reserved_at: now, completed_at: expect.any(Number) });
