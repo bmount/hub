@@ -62,17 +62,26 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       return body.result;
     } finally { requests.delete(controller); clearTimeout(timeout); }
   }
+  function pauseSharing() {
+    opted = false; nextStatus = null;
+    toggle.textContent = 'Share presence in this channel';
+    sharing.textContent = 'Not sharing. Delivery is uncertain; any accepted heartbeat expires within 90 seconds. Share explicitly again after connection recovers.';
+  }
   async function refresh() {
     if (stopped) return;
     if (pending) { queued = true; return; }
     pending = true;
     const startedGeneration = generation;
+    let attemptedHeartbeat = false;
     const current = () => !stopped && navigator.onLine && startedGeneration === generation;
     try {
       if (!navigator.onLine) throw new Error('disconnected');
       const status = nextStatus || (opted && !document.hidden ? 'online' : null);
       nextStatus = null;
-      if (status) await api('chat.heartbeat', { c: channel, status });
+      if (status) {
+        attemptedHeartbeat = true;
+        await api('chat.heartbeat', { c: channel, status });
+      }
       if (!current()) return;
       // Charge the whole round trip against freshness, conservatively: client clock skew or
       // slow transport must never extend the server's expiry window.
@@ -89,6 +98,10 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
         opted = false; nextStatus = null; toggle.disabled = true;
         toggle.textContent = 'Share presence in this channel';
         sharing.textContent = 'Sharing stopped: sign-in or channel access is unavailable.';
+      } else if (attemptedHeartbeat || opted || nextStatus) {
+        // Delivery may have succeeded. Never replay a report (including a queued change)
+        // from this uncertain participation interval; reconcile by querying until new consent.
+        pauseSharing();
       }
       unknown('Disconnected or presence unavailable. Current status is unknown; refresh will retry.');
     } finally {
@@ -108,6 +121,8 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     refresh();
   }
   function offline() {
+    if (stopped) return;
+    if (!toggle.disabled) pauseSharing();
     invalidate('Disconnected or presence unavailable. Current status is unknown; refresh will retry.');
   }
   function suspend() {

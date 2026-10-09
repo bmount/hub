@@ -22,6 +22,7 @@ function client() {
   let time = 0, denied = false;
   const calls: Array<{ name: string; status?: string; signal: AbortSignal }> = [];
   let delayed: Promise<void> | null = null;
+  let failNext = false;
   const intervals = new Map<number, () => void>();
   let entries = [{ handle: '<img src=x onerror=alert(1)>', kind: "agent", via_assistant: false, state: "online", last_seen: 1000, expires_at: 91000 }];
   const fetch = async (url: string, init: { body: string; signal: AbortSignal }) => {
@@ -29,8 +30,10 @@ function client() {
     const result = { entries, observed_at: 1000 };
     const response = { ok: !denied, status: denied ? 404 : 200, json: async () => ({ ok: true, result }) };
     const wait = delayed; delayed = null;
+    const fail = failNext; failNext = false;
     // Deliberately allow late delivery even after abort: generation guards must also work.
     if (wait) await wait;
+    if (fail) throw new Error("ambiguous transport failure");
     return response;
   };
   // Execute the exact shipped asset with small DOM/transport fakes, not a second implementation.
@@ -39,6 +42,7 @@ function client() {
     (fn: () => void, ms: number) => { intervals.set(ms, fn); return ms; }, (id: number) => intervals.delete(id), () => 1, () => {});
   return { connection, sharing, freshness, list, toggle, document, navigator, calls, docEvents, winEvents,
     delayNext: () => { let release!: () => void; delayed = new Promise<void>((resolve) => { release = resolve; }); return release; },
+    failNext: () => { failNext = true; },
     allow: () => { denied = false; },
     state: (state: string, expires_at = 91000) => { entries = [{ ...entries[0]!, state, expires_at }]; },
     elapsed: (ms: number) => { time = ms; intervals.get(1000)?.(); },
@@ -51,6 +55,78 @@ function client() {
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 describe("presence browser asset", () => {
+  it("requires renewed consent after ambiguous heartbeat delivery, polls query-only and does not claim offline", async () => {
+    const c = client(); await settle();
+    c.failNext(); c.toggle.fire("click"); await settle();
+    expect(c.list.children).toEqual([]);
+    expect(c.toggle.disabled).toBe(false);
+    expect(c.toggle.textContent).toBe("Share presence in this channel");
+    expect(c.sharing.textContent).toContain("Share explicitly again");
+    expect(c.sharing.textContent).toContain("expires within 90 seconds");
+    const count = c.calls.length;
+    c.poll(); await settle(); c.winEvents.fire("online"); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence", "/api/chat.presence"]);
+    expect(c.list.children).toHaveLength(1);
+    c.toggle.fire("click"); await settle();
+    expect(c.calls.at(-2)!.status).toBe("online");
+  });
+
+  it("stops consent on disconnect during an opted-in heartbeat and does not republish on reconnection", async () => {
+    const c = client(); await settle(); c.toggle.fire("click"); await settle();
+    const release = c.delayNext(); c.poll(); await settle();
+    const request = c.calls.at(-1)!;
+    c.navigator.onLine = false; c.winEvents.fire("offline");
+    expect(request.signal.aborted).toBe(true);
+    expect(c.toggle.textContent).toBe("Share presence in this channel");
+    expect(c.sharing.textContent).toContain("Share explicitly again");
+    const count = c.calls.length;
+    c.navigator.onLine = true; c.winEvents.fire("online"); release(); await settle();
+    c.poll(); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence", "/api/chat.presence"]);
+    expect(c.list.children).toHaveLength(1);
+    c.toggle.fire("click"); await settle();
+    expect(c.calls.at(-2)!.status).toBe("online");
+  });
+
+  it("never replays queued sharing changes after ambiguous delivery, including stop-sharing failures", async () => {
+    for (const stop of [false, true]) {
+      const c = client(); await settle();
+      if (stop) { c.toggle.fire("click"); await settle(); }
+      c.failNext(); const release = c.delayNext(); c.toggle.fire("click"); await settle();
+      expect(c.calls.at(-1)!.status).toBe(stop ? "offline" : "online");
+      // A click during the pending operation is not permission to retry its ambiguous result.
+      c.toggle.fire("click");
+      const count = c.calls.length;
+      release(); await settle(); c.poll(); await settle();
+      expect(c.calls.slice(count).every(x => x.name === "/api/chat.presence")).toBe(true);
+      expect(c.toggle.textContent).toBe("Share presence in this channel");
+      expect(c.sharing.textContent).toContain("expires within 90 seconds");
+    }
+  });
+
+  it("stops publishing on a failed query while opted in, even if its heartbeat was already accepted", async () => {
+    const c = client(); await settle(); c.toggle.fire("click"); await settle();
+    const release = c.delayNext(); c.poll(); await settle();
+    // The heartbeat is in flight; fail the following query, not that write.
+    c.failNext(); release(); await settle();
+    expect(c.calls.at(-1)!.name).toBe("/api/chat.presence");
+    expect(c.list.children).toEqual([]);
+    expect(c.toggle.textContent).toBe("Share presence in this channel");
+    const count = c.calls.length;
+    c.poll(); await settle();
+    expect(c.calls.slice(count).map(x => x.name)).toEqual(["/api/chat.presence"]);
+  });
+
+  it("ignores a failed old heartbeat after restoration rather than cancelling fresh consent", async () => {
+    const c = client(); await settle();
+    c.failNext(); const release = c.delayNext(); c.toggle.fire("click"); await settle();
+    c.winEvents.fire("pagehide"); c.winEvents.fire("pageshow", { persisted: true });
+    c.toggle.fire("click"); release(); await settle();
+    expect(c.toggle.textContent).toBe("Stop sharing presence");
+    expect(c.calls.filter(x => x.status === "online")).toHaveLength(2);
+    expect(c.list.children).toHaveLength(1);
+  });
+
   it("labels assistant-reported human presence separately", async () => {
     const c = client(); await settle(); c.assistant(); c.poll(); await settle();
     expect(c.list.children[0]!.textContent).toContain("human via-assistant");
@@ -239,7 +315,7 @@ describe("presence browser asset", () => {
     expect(c.list.children).toEqual([]);
     expect(c.connection.textContent).toContain("Current status is unknown");
     c.toggle.fire("click"); await settle(); c.toggle.fire("click"); await settle();
-    expect(c.sharing.textContent).toContain("If the offline update cannot be delivered");
+    expect(c.sharing.textContent).toContain("Delivery is uncertain");
     expect(c.calls.some((x) => x.name === "/api/chat.heartbeat")).toBe(false);
     c.navigator.onLine = true; c.winEvents.fire("online"); await settle();
     expect(c.list.children).toHaveLength(1);

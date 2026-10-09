@@ -93,6 +93,7 @@ try {
   let requests = 0;
   const presenceCalls = [];
   const disconnected = new WeakSet();
+  const dropHeartbeatResponse = new WeakSet();
   async function context(token, viewport) {
     const ctx = await browser.newContext({ viewport, serviceWorkers: 'block' });
     if (token) await ctx.addCookies([{ name: 'pmw_session', value: token, domain: '.pimwell.test', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
@@ -107,6 +108,12 @@ try {
         presenceCalls.push({ name: url.pathname, ...JSON.parse(req.postData() || '{}') });
       }
       const res = await mf.dispatchFetch(req.url(), { method: req.method(), headers: { ...await req.allHeaders(), 'x-local-browser-host': url.host }, body: req.postDataBuffer() || undefined });
+      if (url.pathname === '/api/chat.heartbeat' && dropHeartbeatResponse.has(ctx)) {
+        dropHeartbeatResponse.delete(ctx);
+        expect(res.status).toBe(200); // Write accepted, but the browser cannot know its outcome.
+        await res.arrayBuffer();
+        return route.abort('failed');
+      }
       await route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) });
     });
     return ctx;
@@ -167,20 +174,41 @@ try {
     await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
     await expect(page.locator('[data-presence-connection]')).toContainText('Current status is unknown');
     await expect(page.locator('[data-presence-list] li')).toHaveCount(0);
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
     await page.locator('[data-presence-toggle]').click();
-    await expect(page.locator('[data-presence-sharing]')).toContainText('previous heartbeat expires within 90 seconds');
+    await expect(page.locator('[data-presence-sharing]')).toContainText('any accepted heartbeat expires within 90 seconds');
     await page.locator('[data-chat-presence]').screenshot({ path: path.join(artifacts, `${label}-presence-disconnected.png`) });
+    const reconnectStart = presenceCalls.length;
     disconnected.delete(ctx); await ctx.setOffline(false);
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    await page.clock.fastForward(30001);
+    await expect.poll(() => presenceCalls.slice(reconnectStart).filter(c => c.name.endsWith('presence')).length).toBeGreaterThan(1);
+    expect(presenceCalls.slice(reconnectStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(0);
     await page.locator('[data-presence-toggle]').click();
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
     await page.locator('[data-presence-toggle]').click();
     await expect(page.locator('[data-presence-list]')).toContainText('offline');
     await expect.poll(async () => (await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev').state).toBe('offline');
+    // Prove true ambiguity: the local Worker accepts the write, its response is lost,
+    // and polling must reconcile without renewing that report or claiming offline.
+    dropHeartbeatResponse.add(ctx);
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-sharing]')).toContainText('Delivery is uncertain');
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+    await expect(page.locator('[data-presence-list] li')).toHaveCount(0);
+    expect((await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev').state).toBe('online');
+    const reconcileStart = presenceCalls.length;
+    await page.clock.fastForward(30001);
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(reconcileStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(reconcileStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
     expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(beforeCursor);
     await noOverflow(page);
     await ctx.close();
-    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing and recovery, cursor unchanged`);
+    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery recovery, cursor unchanged`);
   }
   // Playwright routing and its default Chromium flag disable native BFCache.
   // Use an actual loopback HTTP bridge and omit ONLY that flag for this pass.
