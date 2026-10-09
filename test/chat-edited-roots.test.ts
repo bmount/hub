@@ -88,7 +88,8 @@ describe("followed root revision checkpoints", () => {
     await ok(w.lead.token, "chat.retract", { c: "general", msg: root.msg_id });
     expect((await ok(w.dev.token, "chat.catchup", {})).threads[0].root_edited).toBe(false);
     await ok(w.lead.token, "chat.retract", { c: "general", msg: fresh.msg_id });
-    expect((await ok(w.dev.token, "chat.catchup", {})).threads).toEqual([]);
+    expect((await ok(w.dev.token, "chat.catchup", {})).threads[0]).toMatchObject({ root_edited: false, root_retracted: true,
+      replies: 0, edited_replies: 0, retracted_replies: 1, latest: { retracted: true, body: "" } });
   });
 
   it("does not count root creation as a reply but discovers its current edit within the same unread range", async () => {

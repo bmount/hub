@@ -633,15 +633,17 @@ export class Conversation extends DurableObject<Env> {
     );
     const mentions_truncated = mentionRows.length > q.max_items;
     const mentions_me = mentionRows.slice(0, q.max_items).map((r) => this.#view(r));
-    // Followed threads carry incoming revised roots as well as replies, even without mentions.
-    // Roots are not replies; only a revised root with current activity after the cursor participates.
-    // Group once per subscription, count replies separately, and choose current text by activity.
-    const threadRows = this.#q<{ thread_root: string; n: number; edited: number; root_edited: number; newest: number }>(
+    // Followed threads carry incoming revised/retracted roots and replies, even without mentions.
+    // Retractions are body-free current state, never requests or proof of the retracting actor.
+    // Group once per subscription; counts are disjoint and roots never count as replies.
+    const threadRows = this.#q<{ thread_root: string; n: number; edited: number; retracted: number; root_edited: number; root_retracted: number; newest: number }>(
       `SELECT COALESCE(thread_root, msg_id) AS thread_root,
-         SUM(CASE WHEN thread_root IS NOT NULL AND first_seq > ? THEN 1 ELSE 0 END) AS n,
-         SUM(CASE WHEN thread_root IS NOT NULL AND first_seq <= ? THEN 1 ELSE 0 END) AS edited,
-         MAX(CASE WHEN thread_root IS NULL THEN 1 ELSE 0 END) AS root_edited, MAX(last_seq) AS newest
-         FROM msg WHERE kind = 'say' AND retracted = 0 AND last_seq > ? AND author_id <> ?
+         SUM(CASE WHEN thread_root IS NOT NULL AND retracted = 0 AND first_seq > ? THEN 1 ELSE 0 END) AS n,
+         SUM(CASE WHEN thread_root IS NOT NULL AND retracted = 0 AND first_seq <= ? THEN 1 ELSE 0 END) AS edited,
+         SUM(CASE WHEN thread_root IS NOT NULL AND retracted = 1 THEN 1 ELSE 0 END) AS retracted,
+         MAX(CASE WHEN thread_root IS NULL AND retracted = 0 THEN 1 ELSE 0 END) AS root_edited,
+         MAX(CASE WHEN thread_root IS NULL AND retracted = 1 THEN 1 ELSE 0 END) AS root_retracted, MAX(last_seq) AS newest
+         FROM msg WHERE kind = 'say' AND last_seq > ? AND author_id <> ?
          AND (thread_root IS NOT NULL OR last_seq > first_seq)
          AND COALESCE(thread_root, msg_id) IN (SELECT thread_root FROM thread_sub WHERE identity_id = ?)
          GROUP BY COALESCE(thread_root, msg_id) ORDER BY newest LIMIT ?`,
@@ -649,7 +651,8 @@ export class Conversation extends DurableObject<Env> {
     );
     const my_threads_truncated = threadRows.length > q.max_items;
     const my_threads = threadRows.slice(0, q.max_items).map((t) => ({
-      root: this.#view(this.#msg(t.thread_root)!), replies: t.n, edited_replies: t.edited, root_edited: t.root_edited === 1, latest_activity_seq: t.newest,
+      root: this.#view(this.#msg(t.thread_root)!), replies: t.n, edited_replies: t.edited, retracted_replies: t.retracted,
+      root_edited: t.root_edited === 1, root_retracted: t.root_retracted === 1, latest_activity_seq: t.newest,
       newest: this.#view(this.#q<MsgRow>(`${MSG_SELECT} WHERE m.last_seq = ?`, t.newest)[0]!),
     }));
     const threads = this.#q<{ thread_root: string; n: number }>(

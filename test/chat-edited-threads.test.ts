@@ -72,9 +72,10 @@ describe("followed-thread checkpoint activity", () => {
     expect(r.text).toContain("edited:r2");
     expect(r.text).not.toMatch(/^\[#999/m);
     expect(r.conversations[0].new).toBe(1);
-    // Retractions and self-authored revisions are not current incoming reply evidence.
+    // Retractions are body-free current state; self-authored revisions remain excluded.
     const retract = await ok(w.lead.token, "chat.retract", { c: "general", msg: old.msg_id });
-    expect((await tool(w.scout.longLived, "chat_catchup")).structuredContent.threads[0].latest.body).toBe("newer created reply");
+    expect((await tool(w.scout.longLived, "chat_catchup")).structuredContent.threads[0]).toMatchObject({
+      replies: 1, edited_replies: 0, retracted_replies: 1, latest: { body: "", retracted: true } });
     const rootEdit = await ok(w.scout.token, "chat.edit", { c: "general", msg: root.msg_id, body: "own revised root", after: retract.head });
     const own = await ok(w.scout.token, "chat.post", { c: "general", reply_to: root.seq, body: "own reply", after: rootEdit.head });
     await ok(w.scout.token, "chat.mark_read", { c: "general", seq: own.head });
