@@ -52,6 +52,8 @@ export type VersionInput = {
   tenant_id: string; conversation_id: string; now: number; actor: Author; msg: string;
   /** null retracts. */
   body: string | null; body_sha256: string; after: number | null; refs: StoredRef[]; mentions: Mention[];
+  /** Internal Worker-computed parsed message/body digest before ref resolution; never public input. */
+  intent_fingerprint?: string;
   /** Agents this actor operates (may retract their messages). */
   operator_of: string[]; is_admin: boolean; idempotency_key: string | null;
 };

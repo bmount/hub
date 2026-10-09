@@ -5,6 +5,7 @@ import { listAgentsForOperator } from "../db/agents";
 import { MUTE_FOREVER, getControls, listAgentMembers, setAgentMute, type ChannelRow } from "../db/chat";
 import { sha256Hex } from "../ids";
 import { postIntentFingerprint } from "./postIntent";
+import { versionIntentFingerprint } from "./versionIntent";
 import { readableChannel } from "./access";
 import { parseBody, parseRefText, type ParsedBody, type ParsedRef } from "./grammar";
 import { people } from "./handles";
@@ -218,11 +219,16 @@ export async function versionMessage(ctx: Ctx, p: VersionParams): Promise<PostRe
   const shape = retract ? null : structure(p.body!, []);
   const ch = await readableChannel(ctx, p.c);
   const conv = conversationStub(ctx.env, ch.tenant_id, ch.project_id);
-  if (p.idempotency_key) {
-    const prior = (await conv.replay(ch.tenant_id, ch.project_id, author.id, retract ? "retract" : "edit", p.idempotency_key)) as PostOk | null;
-    if (prior) return result(ch, prior, [], 0);
-  }
+  // Reconciliation must retain current posting gates, including the existing mute-only retraction exemption.
   await gate(ctx, ch, author, retract);
+  const intent_fingerprint = await versionIntentFingerprint(p);
+  if (p.idempotency_key) {
+    const prior = (await conv.versionReplay(ch.tenant_id, ch.project_id, author.id, retract ? "retract" : "edit", p.idempotency_key, intent_fingerprint)) as PostOutcome | null;
+    if (prior) {
+      if (prior.refused !== null) throw await refusalError(ctx, author, ch, prior);
+      return result(ch, prior, [], 0);
+    }
+  }
   // An agent's edits count against its per-session window like its posts, so edit loops are limited too. A retraction is
   // exempt from the window and the tripwire (ruling C-8): taking back what it said must always be possible.
   if (author.kind === "agent" && !retract) {
@@ -241,9 +247,9 @@ export async function versionMessage(ctx: Ctx, p: VersionParams): Promise<PostRe
   const o = (await conv.version({
     tenant_id: ch.tenant_id, conversation_id: ch.project_id, now: ctx.now, actor: author, msg: p.msg, body: p.body,
     body_sha256: retract ? "" : await sha256Hex(p.body!), after: retract ? null : p.after, refs: x.resolved, mentions: x.mentions,
-    operator_of: operatorOf, is_admin: rank(ctx.role) >= rank("admin"), idempotency_key: p.idempotency_key,
+    operator_of: operatorOf, is_admin: rank(ctx.role) >= rank("admin"), idempotency_key: p.idempotency_key, intent_fingerprint,
   })) as PostOutcome;
   if (o.refused !== null) throw await refusalError(ctx, author, ch, o);
-  await safeEvents(ctx, ch, author, o, retract ? "chat.retract" : "chat.edit");
+  if (!o.replayed) await safeEvents(ctx, ch, author, o, retract ? "chat.retract" : "chat.edit");
   return result(ch, o, x.unresolved, x.not_waking);
 }

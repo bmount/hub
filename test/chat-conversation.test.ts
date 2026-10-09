@@ -318,7 +318,8 @@ describe("Conversation: fix wave (B-I3, C-4, idempotency, outbox)", () => {
     const first = ok(await conv().post(input(human("H1"), "once", { idempotency_key: "k" })));
     const edited = ok(await conv().version(edit(human("H1"), String(first.seq), "twice", { idempotency_key: "k" })));
     expect([edited.replayed, edited.rev]).toEqual([false, 2]);
-    expect(ok(await conv().version(edit(human("H1"), String(first.seq), "thrice", { idempotency_key: "k" }))).replayed).toBe(true);
+    expect(ok(await conv().version(edit(human("H1"), String(first.seq), "twice", { idempotency_key: "k" }))).replayed).toBe(true);
+    expect((await conv().version(edit(human("H1"), String(first.seq), "thrice", { idempotency_key: "k" }))).refused).toBe("conflict");
     const gone = ok(await conv().version(edit(human("H1"), String(first.seq), null, { idempotency_key: "k" })));
     expect([gone.replayed, gone.rev]).toEqual([false, 3]);
     expect(await conv().replay(T, C, "H1", "post", "k")).toEqual({ ...first, replayed: true });

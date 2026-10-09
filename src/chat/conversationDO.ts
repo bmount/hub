@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { ulid } from "../ids";
 import { postIntentFingerprint } from "./postIntent";
+import { versionIntentFingerprint } from "./versionIntent";
 import { bindOnce, storedBinding } from "./bound";
 import { PRESENCE_TTL_MS, retainedPresence, type PresenceRow, type PresenceStatus } from "./presence";
 import { inboxStub } from "./stubs";
@@ -161,7 +162,7 @@ export class Conversation extends DurableObject<Env> {
     )[0];
     if (!r) return null;
     const stored = JSON.parse(r.result_json) as PostOk | { result: PostOk; fingerprint: string };
-    // Old records and version operations retain their original result-only shape.
+    // Legacy records have no verified intent; bound replay must refuse them.
     return "result" in stored ? stored : { result: stored };
   }
 
@@ -170,11 +171,11 @@ export class Conversation extends DurableObject<Env> {
     return prior ? { ...prior.result, replayed: true } : null;
   }
 
-  #postReplay(identity_id: string, key: string | null, fingerprint: string, now: number): PostOutcome | null {
-    const prior = this.#replayRecord(identity_id, "post", key, now);
+  #intentReplay(identity_id: string, op: Op, key: string | null, fingerprint: string, now: number): PostOutcome | null {
+    const prior = this.#replayRecord(identity_id, op, key, now);
     if (!prior) return null;
     if (!prior.fingerprint || prior.fingerprint !== fingerprint) {
-      return { refused: "conflict", detail: "post intent differs or was not recorded for this key; reconcile authorized history before sending" };
+      return { refused: "conflict", detail: `${op} intent differs or was not recorded for this key; reconcile authorized history before sending` };
     }
     return { ...prior.result, replayed: true };
   }
@@ -334,7 +335,7 @@ export class Conversation extends DurableObject<Env> {
   /** Read-only payload-bound preflight; post repeats it atomically before committing artifacts/outboxes. */
   async postReplay(tenant_id: string, conversation_id: string, identity_id: string, key: string, fingerprint: string): Promise<PostOutcome | null> {
     this.#bind(tenant_id, conversation_id);
-    return this.#postReplay(identity_id, key, fingerprint, Date.now());
+    return this.#intentReplay(identity_id, "post", key, fingerprint, Date.now());
   }
 
   async post(input: PostInput): Promise<PostOutcome> {
@@ -356,7 +357,7 @@ export class Conversation extends DurableObject<Env> {
     }
     // Durable responses must never replay an unrelated ordinary idempotency key.
     if (!p.response) {
-      const prior = this.#postReplay(me.id, p.idempotency_key, p.intent_fingerprint, p.now);
+      const prior = this.#intentReplay(me.id, "post", p.idempotency_key, p.intent_fingerprint, p.now);
       if (prior) return prior;
     }
     if (p.response) {
@@ -480,18 +481,25 @@ export class Conversation extends DurableObject<Env> {
     return result;
   }
 
+  /** Read-only bound preflight; version repeats the intent check in its synchronous transaction. */
+  async versionReplay(tenant_id: string, conversation_id: string, identity_id: string, op: "edit" | "retract", key: string, fingerprint: string): Promise<PostOutcome | null> {
+    this.#bind(tenant_id, conversation_id);
+    return this.#intentReplay(identity_id, op, key, fingerprint, Date.now());
+  }
+
   async version(input: VersionInput): Promise<PostOutcome> {
     this.#bind(input.tenant_id, input.conversation_id);
-    const outcome = this.ctx.storage.transactionSync(() => this.#version(input));
+    const intent_fingerprint = input.intent_fingerprint ?? await versionIntentFingerprint(input);
+    const outcome = this.ctx.storage.transactionSync(() => this.#version({ ...input, intent_fingerprint }));
     await this.#drain();
     return outcome;
   }
 
   /** Spec 4.4: a new artifact with rev + 1. Edits by the author only; retraction also by an agent's operator or an admin. */
-  #version(v: VersionInput): PostOutcome {
+  #version(v: VersionInput & { intent_fingerprint: string }): PostOutcome {
     const me = v.actor;
     const op: Op = v.body === null ? "retract" : "edit";
-    const prior = this.#replay(me.id, op, v.idempotency_key, v.now);
+    const prior = this.#intentReplay(me.id, op, v.idempotency_key, v.intent_fingerprint, v.now);
     if (prior) return prior;
     const m = this.#msg(v.msg);
     if (!m) return { refused: "not_found" };
@@ -524,7 +532,7 @@ export class Conversation extends DurableObject<Env> {
     if (!retract) this.#storeRefs(seq, m.msg_id, rev, v.refs);
     this.#run("UPDATE msg SET last_seq = ?, rev = ?, retracted = ?, updated_at = ? WHERE msg_id = ?", seq, rev, retract ? 1 : 0, v.now, m.msg_id);
     const result: PostOk = { refused: null, seq, msg_id: m.msg_id, rev, hop: m.hop, head: this.#head(), woke: [], suppressed: [], loop_tripped: null, replayed: false };
-    this.#remember(me.id, op, v.idempotency_key, result, v.now);
+    this.#remember(me.id, op, v.idempotency_key, result, v.now, v.intent_fingerprint);
     return result;
   }
 
