@@ -25,10 +25,11 @@ function client() {
   let delayed: Promise<void> | null = null, delayedBody: Promise<void> | null = null;
   let failNext = false, timeoutId = 0;
   const intervals = new Map<number, () => void>(), timeouts = new Map<number, () => void>();
-  let entries = [{ handle: '<img src=x onerror=alert(1)>', kind: "agent", via_assistant: false, state: "online", last_seen: 1000, expires_at: 91000 }];
+  let entries = [{ identity_id: 'agent-1', display_name: 'Agent', handle: '<img src=x onerror=alert(1)>', kind: "agent", via_assistant: false, state: "online", last_seen: 1000, expires_at: 91000 }];
+  let snapshotOverride: Record<string, unknown> | null = null;
   const fetch = async (url: string, init: { body: string; signal: AbortSignal }) => {
     const input = JSON.parse(init.body); calls.push({ name: url, status: input.status, signal: init.signal });
-    const result = { entries, observed_at: 1000 };
+    const result = { channel: 'general', missing: 'unknown', ttl_ms: 90000, entries, observed_at: 1000, ...snapshotOverride };
     const bodyWait = delayedBody; delayedBody = null;
     const response = { ok: !denied, status: denied ? 404 : 200, json: async () => {
       if (bodyWait) await bodyWait;
@@ -46,6 +47,7 @@ function client() {
   start(document, { addEventListener: winEvents.addEventListener.bind(winEvents), removeEventListener: winEvents.removeEventListener.bind(winEvents) }, navigator, fetch, { now: () => time },
     (fn: () => void, ms: number) => { intervals.set(ms, fn); return ms; }, (id: number) => intervals.delete(id), (fn: () => void) => { timeouts.set(++timeoutId, fn); return timeoutId; }, (id: number) => timeouts.delete(id), ClockDate);
   return { connection, sharing, freshness, list, toggle, document, navigator, calls, docEvents, winEvents,
+    snapshot: (value: Record<string, unknown> | null) => { snapshotOverride = value; },
     delayNext: () => { let release!: () => void; delayed = new Promise<void>((resolve) => { release = resolve; }); return release; },
     delayBodyNext: () => { let release!: () => void; delayedBody = new Promise<void>((resolve) => { release = resolve; }); return release; },
     deadline: () => { for (const fn of timeouts.values()) fn(); },
@@ -63,6 +65,51 @@ function client() {
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 describe("presence browser asset", () => {
+  it("rejects an entire malformed or wrong-channel snapshot before painting and recovers query-only", async () => {
+    const entry = { identity_id: 'agent-1', display_name: 'Agent', handle: 'agent', kind: 'agent', via_assistant: false,
+      state: 'online', last_seen: 1000, expires_at: 91000 };
+    const invalid: Record<string, unknown>[] = [
+      { channel: 'private-other-channel' }, { missing: 'offline' }, { ttl_ms: 90001 },
+      { observed_at: NaN }, { observed_at: 8640000000000001 }, { observed_at: 999 },
+      { entries: null }, { entries: {} }, { entries: Array(201).fill(entry) },
+      { entries: [entry, entry] },
+      ...[null, { ...entry, identity_id: '' }, { ...entry, handle: {} }, { ...entry, display_name: null },
+        { ...entry, kind: 'hub' }, { ...entry, via_assistant: 'false' }, { ...entry, state: 'green' },
+        { ...entry, last_seen: -1 }, { ...entry, expires_at: NaN }, { ...entry, expires_at: 1000 },
+        { ...entry, expires_at: 91001 }, { ...entry, state: 'stale' },
+      ].map(e => ({ entries: [entry, e] })),
+      { observed_at: 91000, entries: [entry] },
+    ];
+    for (const snapshot of invalid) {
+      const c = client(); await settle(); c.toggle.fire('click'); await settle();
+      expect(c.list.children).toHaveLength(1);
+      c.snapshot(snapshot); c.poll(); await settle();
+      expect(c.list.children).toEqual([]);
+      expect(c.freshness.textContent).toBe('No current presence snapshot.');
+      expect(c.connection.textContent).toContain('Current status is unknown');
+      expect(c.toggle.textContent).toBe('Share presence in this channel');
+      expect(c.toggle.disabled).toBe(false); // Not an authoritative access denial.
+      c.snapshot(null); const count = c.calls.length; c.poll(); await settle();
+      expect(c.calls.slice(count).map(x => x.name)).toEqual(['/api/chat.presence']);
+      expect(c.list.children).toHaveLength(1);
+      c.toggle.fire('click'); await settle(); expect(c.calls.at(-2)!.status).toBe('online');
+    }
+  });
+
+  it("accepts bounded consistent stale, offline, empty and assistant snapshots without inferring participation", async () => {
+    const c = client(); await settle();
+    const base = { identity_id: 'agent-1', display_name: 'Agent', handle: '<b>agent</b>', kind: 'agent', via_assistant: true,
+      last_seen: 1000, expires_at: 91000 };
+    for (const state of ['stale', 'offline']) {
+      c.snapshot({ observed_at: 91000, entries: [{ ...base, state, expires_at: state === 'offline' ? base.last_seen : base.expires_at }] }); c.poll(); await settle();
+      expect(c.list.children[0]!.textContent).toContain(' · ' + state + ' · ');
+      expect(c.list.children[0]!.textContent).toContain('@<b>agent</b>');
+      expect(c.list.children[0]!.textContent).toContain('via-assistant');
+    }
+    c.snapshot({ entries: [] }); c.poll(); await settle();
+    expect(c.list.children[0]!.textContent).toContain('Presence is unknown');
+    expect(c.calls.every(x => !x.status)).toBe(true);
+  });
   it("releases an aborted headers/body request without waiting for ignored transport, recovers query-only and ignores late denial", async () => {
     for (const body of [false, true]) {
       const c = client(); await settle();

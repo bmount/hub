@@ -95,6 +95,7 @@ try {
   const disconnected = new WeakSet();
   const dropHeartbeatResponse = new WeakSet();
   const overdueHeartbeatResponse = new WeakSet();
+  const wrongChannelSnapshot = new WeakSet();
   async function context(token, viewport) {
     const ctx = await browser.newContext({ viewport, serviceWorkers: 'block' });
     if (token) await ctx.addCookies([{ name: 'pmw_session', value: token, domain: '.pimwell.test', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
@@ -122,6 +123,13 @@ try {
         // Advance wall time without running timeout callbacks. This tests the absolute
         // response guard in a real browser, not native sleep or a real network delay.
         await page.clock.setSystemTime((await page.evaluate(() => Date.now())) + 8000);
+      }
+      if (url.pathname === '/api/chat.presence' && wrongChannelSnapshot.has(ctx)) {
+        wrongChannelSnapshot.delete(ctx);
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        body.result.channel = 'support'; // Fixture-only stale/wrong-channel response, no grants widened.
+        return route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: JSON.stringify(body) });
       }
       await route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) });
     });
@@ -276,14 +284,29 @@ try {
     await expect(page.locator('[data-presence-sharing]')).toContainText('Share explicitly again');
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(gapStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+    const renewedSnapshot = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
     await page.locator('[data-presence-toggle]').click();
+    await (await renewedSnapshot).finished();
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(gapStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
+    wrongChannelSnapshot.add(ctx);
+    await page.clock.fastForward(30000);
+    await expect(page.locator('[data-presence-connection]')).toContainText('Current status is unknown');
+    await expect(page.locator('[data-presence-list] li')).toHaveCount(0);
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+    const invalidStart = presenceCalls.length;
+    await page.clock.fastForward(30000);
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(invalidStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(invalidStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
     expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(beforeCursor);
     await noOverflow(page);
     await ctx.close();
-    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/absolute-deadline/abort-ignoring-transport/timer-gap recovery, cursor unchanged`);
+    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing, query-only reconnect/ambiguous-delivery/absolute-deadline/abort-ignoring-transport/timer-gap/wrong-channel-snapshot recovery, cursor unchanged`);
   }
   // Playwright routing and its default Chromium flag disable native BFCache.
   // Use an actual loopback HTTP bridge and omit ONLY that flag for this pass.

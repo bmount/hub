@@ -97,6 +97,31 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       controller.signal.removeEventListener('abort', onAbort);
     }
   }
+  function validateSnapshot(result) {
+    // Validate the complete snapshot before assigning or rendering any activity. A
+    // stale proxy/wrong-channel response is not evidence about this active channel.
+    const timestamp = value => Number.isSafeInteger(value) && value >= 0 && value <= 8640000000000000;
+    if (!result || result.channel !== channel || result.missing !== 'unknown' || result.ttl_ms !== 90000 ||
+        !timestamp(result.observed_at) || !Array.isArray(result.entries) || result.entries.length > 200) {
+      throw new Error('invalid presence snapshot');
+    }
+    const identities = new Set();
+    for (const entry of result.entries) {
+      if (!entry || typeof entry.identity_id !== 'string' || !entry.identity_id || identities.has(entry.identity_id) ||
+          typeof entry.handle !== 'string' || typeof entry.display_name !== 'string' ||
+          !['human', 'agent'].includes(entry.kind) || typeof entry.via_assistant !== 'boolean' ||
+          !['online', 'away', 'offline', 'stale'].includes(entry.state) ||
+          !timestamp(entry.last_seen) || !timestamp(entry.expires_at) || entry.last_seen > result.observed_at ||
+          entry.expires_at < entry.last_seen || (entry.state !== 'offline' && entry.expires_at === entry.last_seen) ||
+          entry.expires_at - entry.last_seen > result.ttl_ms ||
+          (['online', 'away'].includes(entry.state) && entry.expires_at <= result.observed_at) ||
+          (entry.state === 'stale' && entry.expires_at > result.observed_at)) {
+        throw new Error('invalid presence entry');
+      }
+      identities.add(entry.identity_id);
+    }
+    return result;
+  }
   function pauseSharing() {
     opted = false; queued = false; nextStatus = null; participationAt = null;
     toggle.textContent = 'Share presence in this channel';
@@ -126,6 +151,7 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       const requestedAt = clock();
       const result = await api('chat.presence', { c: channel });
       if (!current()) return;
+      validateSnapshot(result);
       entries = result.entries; observedAt = result.observed_at; snapshotAt = requestedAt; snapshotValid = true;
       connection.textContent = 'Presence snapshot refreshed. Heartbeats expire after 90 seconds; they do not prove reading or work.';
       draw();
