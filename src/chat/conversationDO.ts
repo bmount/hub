@@ -322,16 +322,17 @@ export class Conversation extends DurableObject<Env> {
 
   #post(p: PostInput): PostOutcome {
     const me = p.author;
-    // Durable responses must never replay an unrelated ordinary idempotency key.
-    if (!p.response) {
-      const prior = this.#replay(me.id, "post", p.idempotency_key, p.now);
-      if (prior) return prior;
-    }
-    // The Worker checks these from D1 first; the object refuses too, so a bug or a race there cannot let an agent through.
+    // The Worker checks these from D1 first; repeat supplied controls even for cached successes.
+    // Replay is reconciliation, not permission to bypass a mute or kill switch.
     if (me.kind === "agent") {
       if (!p.audience.agents_enabled) return { refused: "forbidden", detail: "agent posting is switched off in this tenant" };
       if (p.audience.muted_agents.includes(me.id)) return { refused: "forbidden", detail: "this agent is muted" };
       if (p.policy === "muted") return { refused: "forbidden", detail: "this channel takes no agent posts" };
+    }
+    // Durable responses must never replay an unrelated ordinary idempotency key.
+    if (!p.response) {
+      const prior = this.#replay(me.id, "post", p.idempotency_key, p.now);
+      if (prior) return prior;
     }
     if (p.response) {
       if (p.reply_to !== p.response.source.msg_id || p.after === null) return { refused: "conflict", detail: "durable responses require the exact source reply target and a read head" };

@@ -174,11 +174,13 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
     stage: p.response_to.stage ?? "result", fingerprint: await sha256Hex(JSON.stringify({ body: p.body, refs: p.refs })),
   } : undefined;
   if (response && p.reply_to !== response.source.msg_id) throw badRequest("response_to must be the exact reply target");
+  // A cached success is reconciliation, not authority to bypass current posting controls.
+  // Keep this before both replay paths, but before any rate reservation or new post effects.
+  const { audience, policy } = await gate(ctx, ch, author);
   if (!response && p.idempotency_key) {
     const prior = (await conv.replay(ch.tenant_id, ch.project_id, author.id, "post", p.idempotency_key)) as PostOk | null;
     if (prior) return result(ch, prior, [], 0);
   }
-  const { audience, policy } = await gate(ctx, ch, author);
   if (response) {
     const prior = (await conv.responseReplay(ch.tenant_id, ch.project_id, author.id, response)) as PostOutcome | null;
     if (prior) {

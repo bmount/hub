@@ -92,6 +92,19 @@ describe("Conversation: messages and versions", () => {
     expect(await conv().head(T, C)).toBe(1);
   });
 
+  it.each(["channel_muted", "agent_muted", "disabled"])("checks supplied %s controls before ordinary replay inside the transaction", async (control) => {
+    const p = input(agent("A1"), "once with a wake", { idempotency_key: "controls", mentions: [{ identity_id: "A2", kind: "agent" }] });
+    const first = ok(await conv().post(p));
+    const blocked = { ...p, policy: control === "channel_muted" ? "muted" as const : p.policy,
+      audience: { ...AUDIENCE, agents_enabled: control !== "disabled", muted_agents: control === "agent_muted" ? ["A1"] : [] } };
+    const outcomes = await Promise.all(Array.from({ length: 4 }, () => conv().post(blocked)));
+    expect(outcomes.map((o) => o.refused)).toEqual(["forbidden", "forbidden", "forbidden", "forbidden"]);
+    expect(await conv().head(T, C)).toBe(first.head);
+    expect(await items("A2")).toHaveLength(1);
+    expect(ok(await conv().post(p))).toEqual({ ...first, replayed: true });
+    expect(await items("A2")).toHaveLength(1);
+  });
+
   it("refuses a stale view with the missed messages; own and system messages do not count", async () => {
     ok(await conv().post(input(human("H1"), "mine")));
     expect((await conv().post(input(human("H1"), "mine again", { after: 0 }))).refused).toBeNull();

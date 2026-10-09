@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { getChannelBySlug } from "../src/db/chat";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
-import { channelWith, chatWorld, ok } from "./chat-helpers";
+import { call, channelWith, chatWorld, ok } from "./chat-helpers";
 import { connectWithTokens, mcpPost, rpcBody } from "./oauth-helpers";
 import { seedTenant } from "./helpers";
 
@@ -174,6 +174,62 @@ describe("authenticated MCP chat participation", () => {
     expect(refused.content[0].text).toContain({ muted: "muted", mention_only: "forbidden", disabled: "agents_disabled", archived: "conflict" }[policy]!);
     const ch = (await getChannelBySlug(env.HUB_DB, w.acme.id, "general"))!;
     expect(await conversationStub(env, w.acme.id, ch.project_id).head(w.acme.id, ch.project_id)).toBe(0);
+  });
+
+  it.each(["channel_muted", "agent_muted", "disabled", "archived"])("checks current %s controls even for an ordinary committed retry", async (policy) => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const args = { ...post, body: "@tidy persisted ordinary checkpoint" };
+    const first = await tool(w.scout.longLived, "chat_post", args);
+    expect(first.isError).toBeUndefined();
+    if (policy === "channel_muted") await ok(w.lead.token, "channel.set_agent_policy", { c: "general", policy: "muted" });
+    if (policy === "agent_muted") await ok(w.lead.token, "chat.agent_mute", { agent: "scout" });
+    if (policy === "disabled") await ok(w.lead.token, "chat.agents_disable");
+    if (policy === "archived") await ok(w.lead.token, "channel.archive", { c: "general" });
+    const error = policy === "disabled" ? "agents_disabled" : policy === "archived" ? "conflict" : "muted";
+    for (let i = 0; i < 35; i++) {
+      const retry = await tool(w.scout.longLived, "chat_post", args);
+      expect(retry.isError).toBe(true);
+      expect(retry.content[0].text).toContain(error);
+      expect(retry.structuredContent).toBeUndefined();
+    }
+    // Authorized read reconciliation stays available; denial does not undo or resend the committed post.
+    const thread = (await tool(w.scout.longLived, "chat_thread", { c: "general", msg: first.structuredContent.msg_id })).structuredContent;
+    expect(thread.head).toBe(1);
+    expect(thread.messages).toHaveLength(1);
+    const inbox = await inboxStub(env, w.acme.id, w.tidy.agent.identity.id).list(w.acme.id, w.tidy.agent.identity.id, { after: 0, limit: 100, include_acked: true });
+    expect(inbox.items).toHaveLength(1);
+    const events = await env.HUB_DB.prepare("SELECT kind FROM event WHERE tenant_id = ? AND identity_id = ? AND kind IN ('chat.post', 'chat.tripwire')").bind(w.acme.id, w.scout.agent.identity.id).all();
+    expect(events.results.map((e) => e.kind)).toEqual(["chat.post"]);
+    if (policy === "archived") return;
+    if (policy === "channel_muted") await ok(w.lead.token, "channel.set_agent_policy", { c: "general", policy: "open" });
+    if (policy === "agent_muted") await ok(w.lead.token, "chat.agent_unmute", { agent: "scout" });
+    if (policy === "disabled") await ok(w.lead.token, "chat.agents_enable");
+    for (let i = 0; i < 35; i++) {
+      const replay = await tool(w.scout.longLived, "chat_post", args);
+      expect(replay.structuredContent).toMatchObject({ msg_id: first.structuredContent.msg_id, replayed: true });
+    }
+    // Successful replays also preserve the ordinary rate exemption.
+    expect((await tool(w.scout.longLived, "chat_post", { ...post, body: "fresh permitted checkpoint", after: 1, idempotency_key: "fresh" })).isError).toBeUndefined();
+  }, 20_000);
+
+  it("refuses native and OAuth human ordinary retries after archival without blocking authorized history reads", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const nativeArgs = { ...post, body: "native persisted checkpoint" };
+    const native = await ok(w.lead.token, "chat.post", nativeArgs);
+    const access = (await connectWithTokens(w.lead.token, { scope: "read write" })).tokens.access_token;
+    const oauthArgs = { ...post, body: "assistant persisted checkpoint", after: native.head, idempotency_key: "oauth" };
+    const oauth = (await rpcBody(await mcpPost("acme", access, "tools/call", { name: "chat_post", arguments: oauthArgs }))).result;
+    expect(oauth.isError).toBeUndefined();
+    await ok(w.lead.token, "channel.archive", { c: "general" });
+    const response = await call(w.lead.token, "chat.post", nativeArgs);
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe("conflict");
+    const retry = (await rpcBody(await mcpPost("acme", access, "tools/call", { name: "chat_post", arguments: oauthArgs }))).result;
+    expect(retry.isError).toBe(true);
+    expect(retry.content[0].text).toContain("conflict");
+    expect((await tool(w.scout.longLived, "chat_read", { c: "general" })).structuredContent.head).toBe(2);
   });
 
   it("moves only the caller's durable cursors and acknowledges only its inbox; reads remain read-only", async () => {
