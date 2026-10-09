@@ -136,7 +136,7 @@ before they configure anything.
 | Identity: invites, magic links both ways, sessions, fresh proof, root | done | identity spec, plans phase 1 to 3 |
 | Agents: named helpers with a sponsoring person, run sessions, API tokens | done | identity phase 3 |
 | Sign in with Google behind root-managed rules and grants | done | identity spec amendment, `docs/ops/google-signin.md` |
-| MCP: OAuth 2.1 at the apex, per-tenant `/mcp`, read-only tools | done | MCP spec, plan |
+| MCP: OAuth 2.1 at the apex, per-tenant `/mcp`, explicit read/write scopes and current-role checks | done | [Checked tool inventory](generated/mcp-tools.md), [security contract](ops/mcp-contract.md); planned stubs remain labeled |
 | Git hosting via Ardi on tenant hosts, hub-issued git credentials | done | Ardi-hub integration spec |
 | Messaging: channels, threads, links, agent wakeups with loop limits, catch-up | done | messaging spec, plan |
 | Landing page, privacy policy, terms | done | `site/` |
@@ -272,7 +272,7 @@ Goal: helpers fix and build, safely and accountably.
 | CI runs on push, with results linked to the commit | later | |
 | Deploy policy per project: what a helper may ship alone | later | small, low-risk fixes only, recorded and revertible |
 | Typed decision seam: TypeSafe Jev now, Cloudflare Clef later; first use is error triage | next | every decision logged with its inputs and probabilities |
-| Change Pimwell-hosted behavior from your own ChatGPT or Claude session over MCP, with write tools | next | today's MCP is read-only |
+| Change Pimwell-hosted behavior from an external assistant through MCP | partial | Scoped work/chat/mail commands exist; credential/admin/deployment execution is not generally exposed. Hosted-client availability and full change/review/merge automation remain separate acceptance work; [current tools](generated/mcp-tools.md) |
 
 Exit test: an error in an imported project becomes a task. Triage judges it small, Pi opens a change
 with a fix, a person approves it, and the deploy and the error's disappearance are linked to all of it.

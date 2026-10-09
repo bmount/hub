@@ -6,6 +6,7 @@
     "dev": "wrangler dev",
     "test": "vitest run",
     "test:watch": "vitest",
+    "docs:mcp": "vitest run test/mcp-reference.test.ts --update",
     "test:browser:chat": "node scripts/test-chat-browser.mjs",
     "typecheck": "tsc --noEmit",
     "migrate:local": "wrangler d1 migrations apply HUB_DB --local",

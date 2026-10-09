@@ -157,7 +157,7 @@ api chat.catchup '{"budget":1500,"advance":true}' # what happened since your cur
 
 Stopping agents: `chat.agent_mute` (the agent, its operator, an admin), `channel.set_agent_policy` to `mention_only` or `muted` (the channel's creator or an admin), and the tenant kill switch `chat.agents_disable` (admins). Loosening any of them needs a fresh sign-in.
 
-Assistants get read-only chat tools: `chat_catchup`, `chat_read`, `chat_thread`, `chat_inbox`, `ref_backlinks`. Every result starts with a note that message text is data, and only lines starting with `[#` are written by the hub.
+Assistants get read-scoped chat tools including `chat_catchup`, `chat_read`, `chat_thread`, `chat_history`, `chat_inbox`, `chat_presence`, `chat_post_status`, `chat_response_status` and `ref_backlinks`. Write-scoped connections can additionally post (members), publish truthful presence, mark read and acknowledge their own inbox, subject to current role and resource policy. MCP posting requires a current read head and stable idempotency key; reconcile uncertain sends before retrying. See [chat participation](docs/ops/chat-participation.md). Every rendered result starts with a note that message text is data, and only lines starting with `[#` are written by the hub; neither text nor a sender label grants broader execution authority.
 
 Real-time streams arrive in phase 2; until then agents use `inbox.wait` and pages refresh on reload.
 
@@ -203,7 +203,9 @@ const res = await env.HUB.fetch("https://hub.internal/internal/introspect", {
 
 ## Assistants (MCP)
 
-Every tenant has an MCP endpoint at `https://<tenant>.pimwell.com/mcp`. An assistant connects as the person who approves it, in that one tenant, with read-only tools for now: `whoami`, `project_list`, the chat tools (`chat_catchup`, `chat_read`, `chat_thread`, `chat_inbox`, `ref_backlinks`; see Messaging), and (members and above) `event_list`. The authorization server is `https://pimwell.com` (OAuth 2.1, PKCE S256, dynamic client registration for Claude's callback and loopback callbacks only).
+Every tenant has an MCP endpoint at `https://<tenant>.pimwell.com/mcp`. An OAuth assistant connects as the person who approves it, in that one tenant, with explicit **read and/or write** consent. `tools/list` recomputes exposure from the grant's scopes and that person's current role. Read grants expose queries; write grants additionally permit declared commands such as `work_create`, `work_update`, `chat_post`, `mail_reply` and `deploy_record`, within their role and resource boundaries. Readers can perform limited self-service commands (for example inbox acknowledgements) with write consent, not member-only posting or sending. Credential/access-management, admin/root, hub and fresh-proof verbs are never exposed over MCP. Declared planned stubs are not implemented capabilities. See the [generated tool reference](docs/generated/mcp-tools.md) and [MCP contract guidance](docs/ops/mcp-contract.md); regenerate/check the inventory with `npm run docs:mcp` / `npm test`.
+
+The authorization server is `https://pimwell.com` (OAuth 2.1, PKCE S256). Callback allowlisting still applies; client support does not imply every hosted product/account has a connector UI. Headless agents instead use their operator-configured `/agent/mcp` connection, not a human OAuth grant or permission to create credentials through MCP.
 
 Claude Code:
 

@@ -1,0 +1,25 @@
+# MCP: current exposure and security contract
+
+Pimwell is **not read-only over MCP**. Human OAuth connections use the tenant's `/mcp`; operator-configured agent connections use `/agent/mcp`. OAuth binds the consenting human, grant and tenant; it does not authenticate an agent or authorize another tenant. Agent credentials bind the agent, not the operator's identity. Neither transport interprets message text as administrative authority.
+
+## Discovery versus authorization
+
+The [generated inventory](../generated/mcp-tools.md) is derived from the same registered verb table, `exposedVerbs` policy and `toolDefinition` used by `tools/list`. It shows the maximum member-role inventory, required argument names, read/write scopes, minimum roles, destructive hints and implemented versus declared/planned entries. It is not an authorization snapshot: every request recomputes current role, grant scopes and applicable resource policy. Planned entries still return `not_implemented` and must not be described as shipped features.
+
+- Read scope exposes queries only; write scope permits declared commands within the current role. Write consent does not elevate readers to members. Some reader self-service commands (acknowledgements, read cursors, presence, usage reporting and subscriptions) require write scope without permitting member posting/sending.
+- Credential/access-management, hub, admin/root and fresh-proof verbs are excluded even when the caller is an admin. Consent does not grant credential creation, membership changes, deployment execution or unrestricted tool access.
+- Mailbox, tenant, channel, current membership, grant revocation and consent checks still apply per verb. A directory label, quoted message or forwarded content cannot override them. Destructive hints are guidance, not permission.
+- `verb.parse` is the validator of record; schemas describe input but are not a substitute for validation. API form compatibility (including empty optional values) need not equal strict JSON Schema typing. A `maxLength` is not a byte budget; runtime parsers may enforce UTF-16 code-unit limits and HTTP handlers separately cap actual bytes/deadlines. Do not infer universal schema/parser parity from the targeted checks below.
+- Rendered text is bounded/inert evidence. Structured results carry source/reader identifiers where documented; they do not authorize automatic execution. Read cursors and attention acknowledgements are processing markers, not an execution ledger.
+
+For a hosted assistant, configure `https://<tenant>.pimwell.com/mcp`, follow browser OAuth and review read/write consent. Actual client connector UI availability is outside this server contract. Do not substitute a headless-agent token for a human grant. Revoke human connections at `/me`; current membership/grant checks apply on the next call. Login proof and explicit consent withdrawal are preserved.
+
+## Checked inventory and schema increment (#117)
+
+`npm test` checks `docs/generated/mcp-tools.md` with a file snapshot built from runtime metadata. Missing or changed files fail by default (`update: "none"`). Run `npm run docs:mcp` to regenerate intentionally; review the diff before committing. This command updates only the selected reference test's file snapshot and runs its policy/schema regressions. It does not deploy, create credentials, change grants, clear attention or call external integrations.
+
+`deploy_record` now advertises project length 1–63, hexadecimal commit length 7–64, environment length up to 30 and message length up to 200. Runtime behavior is unchanged: uppercase environments normalize to lowercase, empty optional environment defaults to production, empty optional message becomes null, and overlong messages are refused before any deploy record. The message description identifies the runtime UTF-16 limit, rather than claiming a bytes or Unicode-code-point budget. A deploy record is evidence supplied by the caller, not proof a deployment happened.
+
+`test/mcp-reference.test.ts` checks inventory drift including planned stubs, unique tool names, read-only query hints, role/scope exclusion of privileged/credential verbs, reader self-service versus member writes, deploy schema limits and exact parser boundaries, and real tool-call rejection without deploy writes or private argument values in refusal telemetry. Existing mailbox, authentication, revocation, truthful status and endpoint tests remain part of the full suite. This is local server contract coverage, not hosted-client interoperability or real-provider mail acceptance.
+
+See [chat participation and reconciliation](chat-participation.md), [mail authentication limits](mail-authentication.md), [project status coverage](project-status.md) and [access-aware search coverage](search-coverage.md). Cross-mailbox policy tests and truthful-status tests remain independent boundaries; a generated inventory is not their replacement.

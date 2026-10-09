@@ -40,6 +40,8 @@ export default defineConfig({
     })),
   ],
   test: {
+    // Checked references must fail when missing, not silently create new snapshots.
+    update: "none",
     // mailauth's transitive tldts uses extensionless ES imports. Bundle the
     // verifier entry point as in a Wrangler release, keeping native crypto.
     deps: { optimizer: { ssr: { enabled: true, include: ["mailauth/lib/dkim/dkim-verifier.js"],

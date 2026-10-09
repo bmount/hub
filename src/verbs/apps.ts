@@ -144,7 +144,12 @@ export const deployRecord = defineVerb({
   summary: "Record a deploy Pimwell can't see by itself (anything not a Worker reporting through pimwell-tail): project, commit, and environment.",
   mcp: {
     scope: "write", destructive: false, title: "Record a deploy",
-    input: { type: "object", properties: { project: { type: "string" }, commit: { type: "string", description: "Commit id" }, environment: { type: "string", description: "production, staging, …; default production" }, message: { type: "string" } }, required: ["project", "commit"], additionalProperties: false },
+    input: { type: "object", properties: {
+      project: { type: "string", minLength: 1, maxLength: 63 },
+      commit: { type: "string", minLength: 7, maxLength: 64, pattern: "^[0-9a-fA-F]{7,64}$", description: "Hex commit id" },
+      environment: { type: "string", maxLength: 30, description: "Letters, digits and hyphens; normalized to lowercase. production, staging, …; empty/omitted defaults to production." },
+      message: { type: "string", maxLength: 200, description: "Short deploy evidence, at most 200 UTF-16 code units; empty/omitted means no message." },
+    }, required: ["project", "commit"], additionalProperties: false },
   },
   parse: (i) => {
     const commit = reqString(i, "commit", { max: 64 });
