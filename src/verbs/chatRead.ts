@@ -1,6 +1,6 @@
 import { defineVerb, type McpInputSchema } from "./table";
 import { optInt, reqEnum, reqString } from "./params";
-import { notFound } from "../errors";
+import { HubError, notFound } from "../errors";
 import type { Ctx } from "../auth/context";
 import { afterParam, budgetParam, channelParam, msgParam } from "./chatParams";
 import { readableChannel, readableChannels, viewerOf } from "../chat/access";
@@ -144,15 +144,20 @@ export const inboxAck = defineVerb({
 
 export const chatMarkRead = defineVerb({
   name: "chat.mark_read", kind: "command", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Move your durable read cursor in an authorized channel forward to seq (it never moves back). Explicitly mark only activity you have processed; reads do not move cursors.",
+  summary: "Move your durable read cursor in an authorized channel forward to seq (it never moves back). Future sequences above the current channel head are refused. Explicitly mark only processed activity; reads do not move cursors.",
   mcp: {
     scope: "write", destructive: false, title: "Mark channel activity read", render: chatCommandText,
-    input: schema({ c: C, seq: { type: "integer", minimum: 0, description: "Last processed activity cursor; do not skip omitted messages." } }, ["c", "seq"]),
+    input: schema({ c: C, seq: { type: "integer", minimum: 0, description: "Last processed activity cursor, at most the current channel head; do not skip omitted messages." } }, ["c", "seq"]),
   },
   parse: (i) => ({ c: channelParam(i), seq: optInt(i, "seq", { min: 0, max: Number.MAX_SAFE_INTEGER }) ?? 0 }),
   run: async (ctx, p) => {
     const v = viewerOf(ctx);
     const ch = await readableChannel(ctx, p.c);
+    // Validate against this authorized conversation, not its inbox (which only contains selected wakes).
+    // The head is monotonic during normal operation: activity committed after this snapshot cannot be skipped.
+    // Refuse rather than clamp; a guessed future cursor must not acknowledge unseen current activity either.
+    const head = await conversationStub(ctx.env, ch.tenant_id, ch.project_id).head(ch.tenant_id, ch.project_id);
+    if (p.seq > head) throw new HubError(409, "conflict", "seq exceeds the current channel head; read and process activity before marking it read", { head });
     return { channel: ch.slug, read_seq: await inboxStub(ctx.env, v.tenant.id, v.identity.id).markRead(v.tenant.id, v.identity.id, ch.project_id, p.seq) };
   },
 });
