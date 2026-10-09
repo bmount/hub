@@ -114,7 +114,7 @@ export type Digest = {
   head: number; since: number; new_messages: number; agent_messages: number; mentions_me: MsgView[];
   /** The lists were cut at the cap (one more row existed). */
   mentions_truncated: boolean; my_threads_truncated: boolean;
-  /** replies counts new posts; edited_replies counts older replies whose current revision changed after since. */
-  my_threads: Array<{ root: MsgView; replies: number; edited_replies: number; latest_activity_seq: number; newest: MsgView }>; threads: Array<{ root: MsgView; replies: number }>;
+  /** Reply counts exclude roots; root_edited flags an incoming root's current revision after since. */
+  my_threads: Array<{ root: MsgView; replies: number; edited_replies: number; root_edited: boolean; latest_activity_seq: number; newest: MsgView }>; threads: Array<{ root: MsgView; replies: number }>;
   authors: string[]; refs: StoredRef[];
 };

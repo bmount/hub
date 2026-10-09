@@ -626,18 +626,23 @@ export class Conversation extends DurableObject<Env> {
     );
     const mentions_truncated = mentionRows.length > q.max_items;
     const mentions_me = mentionRows.slice(0, q.max_items).map((r) => this.#view(r));
-    // Followed threads also carry revised replies behind the creation cursor, even without a mention.
-    // Count newly created and older edited replies separately; choose current text by activity, not message number.
-    const threadRows = this.#q<{ thread_root: string; n: number; edited: number; newest: number }>(
-      `SELECT thread_root, SUM(CASE WHEN first_seq > ? THEN 1 ELSE 0 END) AS n,
-         SUM(CASE WHEN first_seq <= ? THEN 1 ELSE 0 END) AS edited, MAX(last_seq) AS newest
+    // Followed threads carry incoming revised roots as well as replies, even without mentions.
+    // Roots are not replies; only a revised root with current activity after the cursor participates.
+    // Group once per subscription, count replies separately, and choose current text by activity.
+    const threadRows = this.#q<{ thread_root: string; n: number; edited: number; root_edited: number; newest: number }>(
+      `SELECT COALESCE(thread_root, msg_id) AS thread_root,
+         SUM(CASE WHEN thread_root IS NOT NULL AND first_seq > ? THEN 1 ELSE 0 END) AS n,
+         SUM(CASE WHEN thread_root IS NOT NULL AND first_seq <= ? THEN 1 ELSE 0 END) AS edited,
+         MAX(CASE WHEN thread_root IS NULL THEN 1 ELSE 0 END) AS root_edited, MAX(last_seq) AS newest
          FROM msg WHERE kind = 'say' AND retracted = 0 AND last_seq > ? AND author_id <> ?
-         AND thread_root IN (SELECT thread_root FROM thread_sub WHERE identity_id = ?) GROUP BY thread_root ORDER BY newest LIMIT ?`,
+         AND (thread_root IS NOT NULL OR last_seq > first_seq)
+         AND COALESCE(thread_root, msg_id) IN (SELECT thread_root FROM thread_sub WHERE identity_id = ?)
+         GROUP BY COALESCE(thread_root, msg_id) ORDER BY newest LIMIT ?`,
       since, since, since, q.me, q.me, q.max_items + 1,
     );
     const my_threads_truncated = threadRows.length > q.max_items;
     const my_threads = threadRows.slice(0, q.max_items).map((t) => ({
-      root: this.#view(this.#msg(t.thread_root)!), replies: t.n, edited_replies: t.edited, latest_activity_seq: t.newest,
+      root: this.#view(this.#msg(t.thread_root)!), replies: t.n, edited_replies: t.edited, root_edited: t.root_edited === 1, latest_activity_seq: t.newest,
       newest: this.#view(this.#q<MsgRow>(`${MSG_SELECT} WHERE m.last_seq = ?`, t.newest)[0]!),
     }));
     const threads = this.#q<{ thread_root: string; n: number }>(

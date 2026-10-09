@@ -15,7 +15,7 @@ export type CatchupResult = {
   tenant_id: string;
   budget: number; used_tokens: number; omitted: number; next: string; advanced: boolean;
   for_you: Array<MsgJson & { channel: string }>;
-  threads: Array<{ channel: string; conversation_id: string; root_seq: number; replies: number; edited_replies: number;
+  threads: Array<{ channel: string; conversation_id: string; root_seq: number; replies: number; edited_replies: number; root_edited: boolean;
     latest_seq: number; latest_activity_seq: number; latest_author: string; latest: MsgJson }>;
   conversations: ConvSummary[];
   quiet: Array<{ channel: string; head: number; new: number; agent: number }>;
@@ -128,12 +128,12 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   for (const { ch, t } of mine) {
     const latest = cutText(cleanText(t.newest.retracted ? "(retracted)" : t.newest.body), 120).text;
     const tag = tagOf(t.newest.author_id, t.newest.session_id, t.newest.session_kind);
-    const head = `[#${ch.slug} #${t.root.seq} ${t.replies} new ${t.replies === 1 ? "reply" : "replies"}, ${t.edited_replies} edited, latest activity=${t.latest_activity_seq}]`;
+    const head = `[#${ch.slug} #${t.root.seq} ${t.replies} new ${t.replies === 1 ? "reply" : "replies"}, ${t.edited_replies} edited${t.root_edited ? ", root edited" : ""}, latest activity=${t.latest_activity_seq}]`;
     const latestHeader = header(t.newest, tag, ch.slug);
     if (fits([`${head} latest ${latestHeader} ${JSON.stringify(latest)}`])) {
       const refs = await refsForViewer(ctx.db, v, t.newest.refs);
       out.threads.push({ channel: ch.slug, conversation_id: ch.project_id, root_seq: t.root.seq, replies: t.replies,
-        edited_replies: t.edited_replies, latest_seq: t.newest.seq, latest_activity_seq: t.latest_activity_seq,
+        edited_replies: t.edited_replies, root_edited: t.root_edited, latest_seq: t.newest.seq, latest_activity_seq: t.latest_activity_seq,
         latest_author: tag.handle, latest: msgJson(t.newest, tag, refs) });
     }
     else {
