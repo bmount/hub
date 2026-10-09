@@ -75,10 +75,10 @@ ${m.verdict === "admitted" && !m.recipient_id && ctx.identity.kind === "human" &
     : `<p class="lede">${sendingOn ? "More than 30 days have passed; Pimwell writes again once they do." : "Replies are off in this organization; an admin can turn them on below."}</p>` : ""}`;
     key = `mail:${m.id}:${m.verdict}:${filed.length}`;
   } else {
-    const toggle = rank(ctx.role) >= rank("admin") ? `<h2>Sending</h2><p>${sendingOn ? "On: members reply from these addresses, and agents from theirs, only to people who wrote in the last 30 days, at most 50 a day each." : "Off: nothing leaves Pimwell except sign-in links and receipts."}</p>
+    const toggle = rank(ctx.role) >= rank("admin") ? `<h2>Sending</h2><p>${sendingOn ? "On: members reply from these addresses, and agents from theirs, only to people who wrote in the last 30 days, at most 50 a day each." : "Off: nothing leaves Pimwell except sign-in links and one-time welcome guidance."}</p>
 <form method="post" action="/api/mail.sending"><input type="hidden" name="on" value="${sendingOn ? "0" : "1"}"><input type="hidden" name="_back" value="/mail"><button type="submit"${sendingOn ? ' class="quiet"' : ""}>${sendingOn ? "Turn sending off" : "Turn sending on"}</button></form>` : "";
     inspector = `<div class="head"><span>Addresses</span></div><h1>Send anything here</h1>
-<p class="lede">Write or forward from your own address. Only members' mail is accepted; each message gets a receipt, and mail whose sender can't be proven is held for an admin. Nothing in mail is acted on until a member chooses to.</p>
+<p class="lede">Write or forward from your own address. Only members' mail is accepted. Independently verified senders may receive one-time setup guidance; later mail gets no routine receipt. Mail whose sender can't be proven is held for an admin. Nothing in mail is acted on until a member chooses to.</p>
 <table><tbody><tr><td><code>${esc(org)}@${esc(env.HUB_DOMAIN)}</code></td><td>The organization's inbox; file it later</td></tr>
 ${projects.map((p) => `<tr><td><code>${esc(org)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code></td><td>${esc(p.display_name)}</td></tr>`).join("")}</tbody></table>
 <h2>Then</h2><p>Open a message and choose <b>Propose work from this</b>: wishes, snags, errands and calls appear, each quoting the message. File the ones you want; they link back here.</p>${toggle}`;

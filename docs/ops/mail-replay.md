@@ -1,19 +1,19 @@
-# Independent mail replay/storage candidate (#134)
+# Independent mail replay/storage (#134)
 
 ## Rollout status
 
-`src/mail/replay.ts` is an internal, tested **inactive candidate**. The live
-`handleProjectMail` still uses the receipt-dependent proof path. Neither this
-increment nor the earlier DKIM/welcome candidates completes #134/#85/#130.
-There is no new API, migration, binding, scheduler or deployed data operation.
+`src/mail/replay.ts` is integrated with `handleProjectMail`. Independently
+verified admission no longer depends on outbound acknowledgments. Routine
+`Received` replies are removed; optional one-time welcome follows agent wake.
+There is no new public API, D1 migration, binding or recovery scheduler.
 
 `storeIndependentMailCandidate` takes original bounded bytes plus the transport
 sender/destination, not a caller-supplied proof, tenant, identity, target or replay
 record. It resolves current sender/destination authority and runs the pinned
 mailauth Workers verifier itself. It copies the input before awaiting anything,
 so the bytes authenticated, hashed and parsed cannot diverge through mutation.
-Unknown DKIM proof produces no reservation/admission here; eventual ingress must
-continue its protected quarantine path for unknown proof.
+Unknown DKIM proof produces no reservation/admission here; ingress stores it in
+protected admin-only quarantine without consent, notification or agent wake.
 
 This is **strict, exactly domain-aligned, full-coverage DKIM**, not universal
 DMARC, SPF, ARC, mailbox login proof, proof of fresh SMTP delivery, or a claim that
@@ -35,11 +35,12 @@ body-limited or unsigned-semantic-header signatures are not eligible.
   original-byte SHA-256 and `pending`/`stored` status. No raw mail, headers,
   addresses, credential links or error detail is copied into this state.
 - One transactional D1 batch atomically reserves the unique key, inserts admitted
-  evidence conditional on ownership, and finalizes `stored`. Current active human,
+  evidence conditional on ownership, finalizes `stored`, and inserts one scoped
+  `mail.received` event conditional on this attempt. Current active human,
   root/membership, tenant and exact destination identity/project authority are
   rechecked **inside the write**, not merely before verification. Renaming,
   archiving or replacing a destination cannot redirect the resolved target.
-- Reservation and row storage succeed/roll back together. A lost successful batch
+- Reservation, row storage and audit succeed/roll back together. A lost successful batch
   response is reconciled through another verified invocation as `duplicate`;
   no additional inbound row is inserted. A failed batch can be verified/retried
   after reconciling storage, because it made no outbound or wake effects.
@@ -65,29 +66,38 @@ reviewed admission rule, not a timer deleting dedup records.
 
 ## Consent and side effects
 
-Storage is independent of outbound consent. It does not grant/revoke consent,
-change membership, send a receipt/welcome, write audit events or deliver an agent
-wakeup. An explicit withdrawal remains exactly unchanged, including a latest
+Storage is independent of outbound consent. It atomically writes the admission
+audit, but does not grant/revoke consent, change membership, send mail or wake
+an agent. An explicit withdrawal remains exactly unchanged, including a latest
 withdrawal with an older active consent row. Independent authentication does not
 constitute permission to reinstate outbound consent.
 
-Before enabling this candidate in ingress:
+Ingress preserves recipient/sender refusal, actual bounded reads and rate limits.
+It never falls back to receipt proof or prior consent. Valid-signature collisions,
+legacy/corrupt/pending states and changed authority reject without new evidence
+or side effects rather than upgrading ambiguous proof.
 
-1. Preserve recipient/sender refusal, bounded original reads and ingress rate
-   limits; keep unknown proof quarantined and unread by agents. Never fall back to
-   a receipt as independent proof.
-2. Integrate admitted storage with **idempotent/reconcilable** audit and addressed
-   agent inbox delivery using the stable stored mail id. A lost storage response
-   must not silently lose a wake, and must not blindly replay un-deduplicated
-   side effects. Current candidate returns `stored`/`duplicate` only, not a
-   claim that a wake or audit occurred.
-3. Call the separately atomic one-time welcome only after durable admission;
-   optional welcome failure/consent denial must not quarantine mail or prevent
-   agent delivery. Preserve explicit login proof and substantive replies.
-4. Test the actual handler with signed fixtures for first/concurrent/subsequent
-   mail, replay/collision, all recipient/tenant/agent visibility boundaries,
-   withdrawn/no consent, delivery failures and interruption reconciliation.
-   Replace receipt-based expectations/UI copy truthfully only with that rollout.
+Stored and verified duplicate results reconcile agent delivery by stable
+`mail:<mail id>` key. The tenant/identity-bound inbox now transactionally stores a
+permanent id-only `mail_delivered` tombstone with the visible item. This additive
+DO-local table uses `CREATE TABLE IF NOT EXISTS`; no manual migration is run.
+Dedup survives 30-day acknowledged-item pruning. Only duplicate-key conflicts are
+ignored, not other constraints; failed item insertion rolls back its tombstone.
+A lost wake response is safely reconciled through duplicate ingress. Tombstones
+have no automatic expiry; deleting them would re-enable old signed mail wakes.
+
+There is no scheduled recovery worker in this increment. If an admission or wake
+response is lost and no independent redelivery occurs, administrator reconciliation
+may be needed; do not claim guaranteed eventual wake or external welcome delivery.
+The existing inbox/item tenant binding remains authoritative.
+
+After agent delivery, optional first-ever consent and atomic one-time welcome run
+independently of authentication. Existing consent history prevents passive re-grant.
+Unexpected optional errors log a fixed code and cannot undo admission or the wake.
+Welcome ambiguous/failed states are never automatically retried. Explicit login
+proof and substantive replies are unchanged. See [welcome](../mail-welcome.md).
+Signed-fixture handler tests cover the production DoH path and these interruption,
+concurrency, failure, consent and mailbox isolation contracts.
 
 Native Workers signed-fixture tests cover concurrent reservation, byte collision,
 RSA/Ed25519 proofs, unsigned/tampered/expired/ambiguous mail, key errors, From

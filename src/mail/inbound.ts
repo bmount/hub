@@ -19,9 +19,11 @@ export async function handleEmail(message: ForwardableEmailMessage, env: Env, ct
   let error: string | null = null;
   try {
     await handle(message, env, ctx);
-  } catch (e) {
-    error = e instanceof Error ? `${e.name}: ${e.message}` : "error";
-    console.error(JSON.stringify({ msg: "inbound failed", stack: e instanceof Error ? e.stack ?? null : null }));
+  } catch {
+    // Library, DNS and transport exceptions may contain private values. Keep
+    // diagnostics fixed; never log raw mail, exception names/messages or stacks.
+    error = "inbound processing unavailable";
+    console.error(JSON.stringify({ msg: "inbound failed" }));
   }
   // Who wrote to which address, and how long it took; what happened to it is in inbound_mail and the event log.
   console.log(JSON.stringify({ msg: "mail", to: message.to.trim().toLowerCase(), from: message.from.trim().toLowerCase(), size: message.rawSize, ms: Date.now() - started, error }));
@@ -80,8 +82,8 @@ async function handle(message: ForwardableEmailMessage, env: Env, _ctx: Executio
     if (created && !delivered) {
       try {
         await revokeConsentById(env.HUB_DB, consent.id, now);
-      } catch (e) {
-        console.log("inbound consent revoke failed", e instanceof Error ? e.name : "error");
+      } catch {
+        console.log("inbound consent revoke failed");
       }
     }
   }

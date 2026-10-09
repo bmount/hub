@@ -5,9 +5,9 @@
 //   2. The size must be within limits.
 //   3. The sender (envelope from) must be an active human member of the organization, or root. Strangers are refused.
 //   4. Per-sender rate limit.
-//   5. Proof the mail really came from that address: a receipt sent through message.reply(), which Cloudflare
-//      permits only for DMARC-passing mail. Sent and envelope/From bound: admitted.
-//      Not sent: authentication UNKNOWN, quarantined for an admin, unread by agents.
+//   5. Strict independently verified, aligned DKIM on original bytes, with atomic replay storage.
+//      Unknown proof is quarantined for an admin, unread by agents. No routine receipts.
+//   6. Optional one-time welcome after admission; delivery is never authentication.
 // Content is stored as evidence. Nothing in it is ever an instruction to anyone.
 import { inboxStub } from "../chat/stubs";
 import PostalMime, { type Header } from "postal-mime";
@@ -17,12 +17,12 @@ import { isValidSlug, isValidTenantSlug } from "../tenant";
 import { getIdentityByEmail, normalizeEmail } from "../db/identities";
 import { getTenantBySlug } from "../db/tenants";
 import { getMembership } from "../db/memberships";
-import { consentWithdrawn, grantConsent, revokeConsentById } from "../db/consent";
+import type { DNSResolver } from "mailauth";
 import { recordEvent } from "../db/events";
 import { takeRateDetail } from "../rate";
-import { sendMail } from "./send";
 import { safeMessageId } from "./mime";
-import { envelopeMatchesFrom, proofFromReply, type SenderProof } from "./proof";
+import { storeIndependentMailCandidate } from "./replay";
+import { sendNewcomerWelcome } from "./welcome";
 import { MAX_RAW_MAIL_BYTES, readBoundedMail } from "./raw";
 
 export const MAX_MAIL_BYTES = MAX_RAW_MAIL_BYTES;
@@ -89,17 +89,8 @@ export async function parseMail(raw: ReadableStream<Uint8Array> | ArrayBuffer | 
   return { headers: m.headers, subject: (m.subject ?? "").slice(0, 300), text, attachments, forwarded: inlineFwd || rfc822.length > 0, date: m.date ?? null, addressed };
 }
 
-function receipt(target: MailTarget, subject: string): { subject: string; text: string } {
-  const where = target.recipient_name ? `${target.tenant_name}, for the agent ${target.recipient_name}` : target.project_name ? `${target.tenant_name} / ${target.project_name}` : `${target.tenant_name} (to be filed by project)`;
-  const ascii = (s: string) => s.replace(/[^\x20-\x7e]/g, "?");
-  return {
-    subject: ascii(`Received: ${subject || "(no subject)"}`).slice(0, 200),
-    text: ascii(`Pimwell received your message and filed it under ${where}.`) + "\n\n"
-      + "It is kept as information. Nothing in it will be acted on without a member's confirmation.\n",
-  };
-}
-
-export async function handleProjectMail(message: ForwardableEmailMessage, env: Env, now: number): Promise<"rejected" | "limited" | "admitted" | "quarantined"> {
+export async function handleProjectMail(message: ForwardableEmailMessage, env: Env, now: number,
+  resolver?: DNSResolver): Promise<"rejected" | "limited" | "admitted" | "quarantined"> {
   const target = await resolveMailAddress(env.HUB_DB, env.HUB_DOMAIN, message.to);
   if (!target) { message.setReject("Unknown recipient"); return "rejected"; }
   if (message.rawSize > MAX_MAIL_BYTES) { message.setReject("Message too large"); return "rejected"; }
@@ -120,52 +111,57 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
   let bytes: Uint8Array<ArrayBuffer>;
   try { bytes = await readBoundedMail(message.raw); }
   catch { message.setReject("Message too large or unreadable"); return "rejected"; }
-  const parsed = await parseMail(bytes.buffer);
-  // A successful reply authenticates the header From domain, not arbitrary
-  // envelope identities. Bind both before granting consent or trying a reply.
-  // This temporary proof path still requires a receipt; independent verified
-  // ingress proof is needed before routine receipts can safely be suppressed.
-  let proof: SenderProof;
-  if (!envelopeMatchesFrom(from, parsed.headers)) {
-    proof = { authentication: "unknown", source: null,
-      reason: "authentication unknown: envelope sender must match exactly one outer From mailbox; no reply attempted" };
-  } else if (await consentWithdrawn(env.HUB_DB, from)) {
-    // Passive project mail is not permission to undo an explicit withdrawal.
-    proof = { authentication: "unknown", source: null,
-      reason: "authentication unknown: reply proof not attempted because consent is revoked" };
-  } else {
-    const { consent, created } = await grantConsent(env.HUB_DB, {
-      email: from, kind: "inbound_email", source_message_id: safeMessageId(message.headers.get("message-id")),
-      evidence: JSON.stringify({ to: message.to.trim().toLowerCase(), received_at: now }),
-    }, now);
-    proof = proofFromReply("failed");
-    try {
-      proof = proofFromReply(await sendMail(env, { to: from, ...receipt(target, parsed.subject) }, now, { replyTo: message }));
-    } finally {
-      if (created && proof.authentication !== "pass") {
-        try { await revokeConsentById(env.HUB_DB, consent.id, now); } catch { /* best effort */ }
-      }
+  const result = await storeIndependentMailCandidate(env, { bytes, from, to: message.to }, now, resolver);
+  if (result.status === "stored" || result.status === "duplicate") {
+    // Reconcile a lost storage/wake response using the stable mail id. The inbox
+    // keeps permanent mail delivery tombstones, including after acked-item pruning.
+    if (result.target.recipient_id) {
+      await inboxStub(env, result.target.tenant_id, result.target.recipient_id).deliver(result.target.tenant_id, result.target.recipient_id, [{
+        key: `mail:${result.mail_id}`, kind: "mail", conversation_id: "mail", seq: 0, msg_id: result.mail_id,
+        thread_root: null, hop: 0, author_id: result.identity_id, wake: true, created_at: now,
+      }]);
     }
+    // These are optional effects; even an unexpected failure cannot revoke proof,
+    // roll back admitted evidence, or prevent the already delivered agent wake.
+    try {
+      // Passive verified inbound may establish FIRST consent, never reinstate it.
+      // A single atomic statement handles concurrent messages and withdrawal races.
+      await env.HUB_DB.prepare(`INSERT INTO consent
+        (id, email, tenant_id, kind, granted_at, revoked_at, source_message_id, evidence)
+        SELECT ?, m.from_email, NULL, 'inbound_email', ?, NULL, m.message_id, ?
+        FROM inbound_mail m JOIN identity i ON i.id = m.identity_id JOIN tenant t ON t.id = m.tenant_id
+        WHERE m.id = ? AND m.tenant_id = ? AND m.identity_id = ? AND m.verdict = 'admitted'
+          AND m.reason IS NULL AND m.released_by IS NULL AND i.email = m.from_email
+          AND i.kind = 'human' AND i.state = 'active' AND t.state = 'active'
+          AND (i.is_root = 1 OR EXISTS (SELECT 1 FROM membership p
+            WHERE p.tenant_id = t.id AND p.identity_id = i.id AND p.state = 'active'))
+          AND NOT EXISTS (SELECT 1 FROM consent c WHERE c.email = m.from_email)`)
+        .bind(ulid(now), now, JSON.stringify({ to: message.to.trim().toLowerCase(), received_at: now }),
+          result.mail_id, result.target.tenant_id, result.identity_id).run();
+      await sendNewcomerWelcome(env, { tenant_id: result.target.tenant_id, identity_id: result.identity_id,
+        mail_id: result.mail_id }, result.proof, now);
+    } catch { console.log(JSON.stringify({ msg: "mail optional welcome unavailable" })); }
+    return "admitted";
   }
-  const proven = proof.authentication === "pass";
-  const verdict = proven ? "admitted" : "quarantined";
+  if (result.status !== "unknown") {
+    // Valid-signature byte collisions, legacy/pending/corrupt replay state and
+    // changed authority must not insert new evidence or trigger any effects.
+    message.setReject("Mail admission blocked; requires administrator reconciliation");
+    return "rejected";
+  }
+  const parsed = await parseMail(bytes.buffer);
+  const verdict = "quarantined";
   const id = ulid(now);
   await env.HUB_DB.prepare(
     `INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(id, target.tenant_id, target.project_id, target.recipient_id ?? null, identity.id, from, message.to.trim().toLowerCase(), parsed.subject, safeMessageId(message.headers.get("message-id")),
-    parsed.date, now, bytes.byteLength, verdict, proof.reason,
+    parsed.date, now, bytes.byteLength, verdict, result.proof.authentication === "unknown" ? result.proof.reason : "authentication unknown",
     parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0,
     JSON.stringify(parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`)))).run();
   await recordEvent(env.HUB_DB, {
-    tenant_id: target.tenant_id, identity_id: identity.id, session_id: null, kind: proven ? "mail.received" : "mail.quarantined", target_kind: "inbound_mail", target_id: id,
-    summary: `${proven ? "Mail received" : "Mail quarantined"} for ${target.recipient_name ? `the agent ${target.recipient_name}` : target.project_slug ?? "the organization inbox"}: ${parsed.subject || "(no subject)"}`.slice(0, 300),
+    tenant_id: target.tenant_id, identity_id: identity.id, session_id: null, kind: "mail.quarantined", target_kind: "inbound_mail", target_id: id,
+    summary: `Mail quarantined for ${target.recipient_name ? `the agent ${target.recipient_name}` : target.project_slug ?? "the organization inbox"}: ${parsed.subject || "(no subject)"}`.slice(0, 300),
   }, now);
-  // Admitted mail for an agent wakes it, through the inbox it already waits on (inbox_wait); held mail never does.
-  if (verdict === "admitted" && target.recipient_id) {
-    await inboxStub(env, target.tenant_id, target.recipient_id).deliver(target.tenant_id, target.recipient_id, [{
-      key: `mail:${id}`, kind: "mail", conversation_id: "mail", seq: 0, msg_id: id, thread_root: null, hop: 0, author_id: identity.id, wake: true, created_at: now,
-    }]);
-  }
   return verdict;
 }

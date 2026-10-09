@@ -1,64 +1,74 @@
 # One-time newcomer mail context (#130)
 
-## Current rollout status
+## Rollout contract
 
-`src/mail/welcome.ts` is a tested internal candidate, **not called by the live
-receipt-dependent ingress handler**. Routine `Received` replies are still sent
-for sender proof. Do not claim receipt suppression or receipt-free admission is
-implemented. Enable the welcome only with #134's independent cryptographic proof
-and atomic inbound replay handling; do not use successful/failed welcome delivery
-as sender authentication. The DKIM verifier candidate alone is not an admission
-policy. Never accept proof objects supplied through an API, mail body or header.
+`handleProjectMail` now uses independently verified original-byte DKIM and
+atomic replay/evidence/audit storage before admission. Organization, project and
+agent mail never sends routine `Received` replies, including when proof is
+unknown. Unknown proof stays admin-only quarantine and does not wake agents or
+grant consent. The welcome is optional **after** admission and addressed-agent
+wake. Its delivery result is never sender authentication. There is no API that
+accepts proof objects from mail bodies/headers or external callers.
+
+This is strict, exactly aligned, full-coverage DKIM, **not universal DMARC** or
+proof of a fresh SMTP delivery. Legitimate unsupported mail remains unknown.
+See [authentication](ops/mail-authentication.md) and [replay](ops/mail-replay.md).
+Explicit `login@`/`signup@` proof and substantive replies remain separate flows.
 
 ## State and boundaries
 
-- One reservation per `(tenant_id, human identity_id)`, spanning that human's
-  project, organization and agent-address mail within that organization. Different
-  organizations have independent context. Sender membership/root authority and
-  active organization/identity are checked; agents cannot receive human welcome.
-- Only independently verified mail that is already admitted can supply context.
-  The internal proof must match its stored Message-ID and sender domain; source
-  identity, tenant, email and live destination must agree. Administrative release
-  of unknown mail is not proof and does not qualify.
-- Active consent is required and the latest explicit withdrawal wins, even if an
-  older active row remains. Welcome never creates/reinstates consent. The outbound
-  path rechecks consent; explicit login proof remains a separate flow.
-- Atomic `INSERT ... ON CONFLICT DO NOTHING` in existing D1 `meta` reserves the
-  namespaced key `mail_welcome:v1:<tenant ULID>:<identity ULID>` before sending.
-  No new migration, binding or real data mutation is needed to deploy the
-  inactive candidate. When integration is enabled, records contain only attempt
-  and source-mail ids, timestamps, and fixed status codes.
-- Status is `pending`, `sent`, `failed`, or `no_consent`, independent of inbound
-  authentication/admission. An attempt-bound compare-and-set finalizes status.
-  No exception fields, email contents, authentication links or credentials are
-  retained in delivery diagnostics. Tenant deletion includes these keys in its
-  existing transactional deletion path, without touching other tenants' keys.
+- One atomic reservation per `(tenant_id, human identity_id)`, across that
+  human's organization, project and agent mailbox arrivals. Different humans
+  and organizations have independent context. Active human, organization,
+  membership/root authority, source row and destination are checked.
+- Only independently proven, already admitted, unreleased evidence qualifies.
+  Proof Message-ID/domain must match the stored source. Admin release of unknown
+  mail never qualifies as proof or automatically triggers guidance.
+- Verified inbound can establish **first-ever** outbound consent with a single
+  conditional insert. Any existing consent history prevents passive re-grant,
+  including explicit withdrawal or legacy failed-provisional-grant revocation.
+  Concurrent first arrivals cannot insert multiple grants. The welcome requires
+  active consent, and `sendMail` rechecks the latest withdrawal before delivery.
+- Existing D1 `meta` holds `mail_welcome:v1:<tenant ULID>:<identity ULID>`.
+  `INSERT ... ON CONFLICT DO NOTHING` reserves before attempting delivery. No new
+  D1 migration or binding is needed. State contains only attempt/source-mail ids,
+  timestamps and `pending`, `sent`, `failed` or `no_consent`; finalization is
+  attempt-bound. No exception names/messages, email bodies, login links or
+  credentials are retained in delivery diagnostics.
+- Tenant deletion includes only that tenant's colon-delimited keys in its
+  existing transaction. Deployment does not execute real deletion or membership
+  changes.
 
-## Delivery guarantees
+## Delivery guarantees and interruption
 
-This is **at-most-once automatic attempt**, not exactly-once delivery. Concurrent
-messages cannot send multiple welcomes. A crash can leave `pending` before or
-after transport submission: do not reclaim it on a timer or blindly replay a
-send. `failed` and `no_consent` are terminal for automatic welcome too. Any future
-retry operation must reconcile the external outcome and have its own explicit
-policy; it must not become another routine acknowledgment.
+The guarantee is **at-most-once automatic welcome attempt**, not exactly-once
+external delivery. Concurrent different messages cannot send several welcomes.
+A crash or ambiguous transport outcome can leave `pending` before or after mail
+submission. Never reclaim it on a timer or blindly replay a send. `failed` and
+`no_consent` are terminal for automatic welcome too. Future explicit retries
+require outcome reconciliation and a separately reviewed policy.
 
-The context identifies the mailbox type, links to normal sign-in/workspace setup
-pages (no credential links), and does not promise execution, filing to a project,
-or a substantive response. No routine response is part of this component.
-Substantive replies and login proof are unaffected.
+Unexpected optional consent/welcome failures never undo admission and cannot
+prevent the earlier agent wake. A storage or wake failure is reconciled by
+another independently verified ingress invocation with the stable stored mail
+id; no unbound send is replayed. This release does not add a scheduled recovery
+worker, and an interrupted message not redelivered may need administrator
+reconciliation. See replay documentation for audit and permanent wake dedup.
 
-## Remaining acceptance work
+Context identifies the mailbox type and links to normal sign-in/workspace setup
+pages, not credential-bearing login links. It promises neither execution,
+a substantive reply nor filing into an unaddressed project. Mail UI copy reflects
+one-time context rather than routine acknowledgments.
 
-1. #134 now has an inactive transactional replay/storage candidate in
-   `src/mail/replay.ts`; see `docs/ops/mail-replay.md`. Integrate it and reconcile
-   audit/agent wake effects by stable stored mail id before enabling admission.
-2. Replace the receipt-dependent path with that verified admission path. Unknown
-   proof stays fail-closed; arbitrary Authentication-Results/ARC is not authority.
-3. Call welcome after durable admission, without letting welcome errors quarantine
-   authenticated mail or block addressed-agent delivery/wakeup. Never fall back to
-   a routine receipt as welcome retry.
-4. Handler-level signed-fixture tests must prove first/concurrent/subsequent mail,
-   delivery failure, no consent/withdrawal, duplicate/replayed mail, login proof,
-   tenant/mailbox boundaries and unchanged substantive replies. Only then close
-   #130/#85 or claim suppression is live.
+## Acceptance evidence
+
+Native Workers tests exercise signed first/subsequent and concurrent different
+messages across organization/project/agent mailboxes; concurrent identical replay;
+transport, unexpected welcome, consent-storage and no-consent failures; terminal
+ambiguous welcome; withdrawal and grant races; lost storage/wake responses;
+legacy/byte-collision rejection; identity/tenant scope; forwarded evidence; and
+the production email entry point with the fixed trusted DoH contract. Separate
+welcome, DKIM, mailbox-access, login-proof and substantive-reply suites remain
+regressions. Public release smoke does not claim a real external mailbox delivery
+or universal provider compatibility; source/live version/rollback evidence is
+recorded on the issue after the managed release.

@@ -2,24 +2,24 @@
 // when the organization has sending on, within daily caps, and kept in full.
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
-import { handleEmail } from "../src/mail/inbound";
+import { handleProjectMail } from "../src/mail/projectMail";
+import fixtures from "./fixtures/mail-ingress.json";
 import { setTestTransport, type SentMail } from "../src/mail/send";
 import { buildMime } from "../src/mail/mime";
 import { createProject } from "../src/db/projects";
 import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
-const ctx = {} as ExecutionContext;
 const HOST = "acme.pimwell.test";
 afterEach(() => setTestTransport(null));
 
-function inbound(from: string, to: string, subject: string, cc: string[] = []) {
-  const raw = `From: ${from}\r\nTo: ${to}\r\n${cc.length ? `Cc: ${cc.join(", ")}\r\n` : ""}Subject: ${subject}\r\nMessage-ID: <orig-${Math.random().toString(36).slice(2)}@example.com>\r\nContent-Type: text/plain\r\n\r\nHello\r\n`;
+async function inbound(raw: string, to: string) {
   const bytes = new TextEncoder().encode(raw);
-  return {
-    from, to, headers: new Headers({ "message-id": "<orig@example.com>", subject }), rawSize: bytes.length,
+  const message = {
+    from: "pat@example.com", to, headers: new Headers(), rawSize: bytes.length,
     raw: new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close(); } }),
-    setReject() {}, async forward() {}, async reply() { return { messageId: "<r@x>" }; },
+    setReject() {}, async forward() {}, async reply() { throw new Error("routine reply forbidden"); },
   } as unknown as ForwardableEmailMessage;
+  expect(await handleProjectMail(message, env, Date.now(), async () => [[fixtures.record]])).toBe("admitted");
 }
 
 async function world() {
@@ -28,8 +28,9 @@ async function world() {
   const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
   const ada = await seedHuman("ada@example.com", { memberships: [{ tenant_id: t.id, role: "admin" }] });
   const bot = await seedAgent(t, pat.identity, "scout");
-  await handleEmail(inbound("pat@example.com", "acme.site@pimwell.test", "Prices"), env, ctx);
-  await handleEmail(inbound("pat@example.com", "acme.scout@pimwell.test", "For the agent"), env, ctx);
+  setTestTransport(async () => {});
+  await inbound(fixtures.outProject, "acme.site@pimwell.test");
+  await inbound(fixtures.outAgent, "acme.scout@pimwell.test");
   const ids = (await env.HUB_DB.prepare("SELECT id, to_address FROM inbound_mail ORDER BY to_address").all<{ id: string; to_address: string }>()).results;
   const sent: SentMail[] = [];
   setTestTransport(async (m) => { sent.push(m); });
@@ -103,7 +104,7 @@ describe("outbound mail", () => {
     await seedHuman("kim@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
     await seedHuman("lee@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
     // Pat writes to the agent, copying Kim (a member) and someone outside the organization.
-    await handleEmail(inbound("pat@example.com", "acme.scout@pimwell.test", "Launch plan", ["kim@example.com", "outside@example.org"]), env, ctx);
+    await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
     const copiedMail = (await env.HUB_DB.prepare("SELECT id, copied FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string; copied: string }>())!;
     expect(JSON.parse(copiedMail.copied)).toEqual(["kim@example.com", "outside@example.org"]);
 

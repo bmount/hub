@@ -3,6 +3,8 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { handleEmail } from "../src/mail/inbound";
+import { handleProjectMail } from "../src/mail/projectMail";
+import fixtures from "./fixtures/dkim.json";
 import { admitGoogle } from "../src/auth/googleAdmit";
 import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 import migration from "../migrations/0011_agent_addresses.sql?raw";
@@ -25,7 +27,7 @@ function message(from: string, to: string, subject: string, body: string) {
 
 async function world() {
   const t = await seedTenant("acme");
-  const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+  const pat = await seedHuman("member@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
   const scout = await seedAgent(t, pat.identity, "scout");
   return { t, pat, scout };
 }
@@ -39,17 +41,19 @@ describe("agent mail", () => {
 
   it("stores a member's mail for the agent and wakes its inbox", async () => {
     const w = await world();
-    const { m, calls } = message("pat@example.com", "acme.scout@pimwell.test", "Please check prices", "Metformin looks off.");
-    await handleEmail(m, env, ctx);
+    const { m, calls } = message("member@example.com", "acme.scout@pimwell.test", "Signed fixture", "Original body.");
+    const bytes = new TextEncoder().encode(fixtures.valid);
+    Object.defineProperty(m, "raw", { value: new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close(); } }) });
+    expect(await handleProjectMail(m, env, Date.parse(fixtures.now) + 120_000, async () => [[fixtures.record]])).toBe("admitted");
     expect(calls.rejects).toEqual([]);
-    expect(calls.replies).toBe(1);
+    expect(calls.replies).toBe(0);
     const row = await env.HUB_DB.prepare("SELECT verdict, recipient_id, project_id FROM inbound_mail").first();
     expect(row).toEqual({ verdict: "admitted", recipient_id: w.scout.agent.identity.id, project_id: null });
     const inbox = await (await apiPost(HOST, "chat.inbox", {}, bearer(w.scout.token))).json() as { result: { text: string; items: Array<{ kind: string }> } };
     expect(inbox.result.items.map((i) => i.kind)).toEqual(["mail"]);
     expect(inbox.result.text).toContain("read it with mail_read");
     const mine = await (await apiPost(HOST, "mail.list", { mine: true }, bearer(w.scout.token))).json() as { result: { mail: Array<{ subject: string }> } };
-    expect(mine.result.mail.map((x) => x.subject)).toEqual(["Please check prices"]);
+    expect(mine.result.mail.map((x) => x.subject)).toEqual(["Signed fixture"]);
     const patMine = await (await apiPost(HOST, "mail.list", { mine: true }, cookieHeaders(w.pat.token, HOST))).json() as { result: { mail: unknown[] } };
     expect(patMine.result.mail).toEqual([]);
   });
@@ -77,6 +81,6 @@ describe("agent mail", () => {
     await env.HUB_DB.prepare(update).run();
     await env.HUB_DB.prepare(update).run();
     expect((await env.HUB_DB.prepare("SELECT email FROM identity WHERE id = ?").bind(w.scout.agent.identity.id).first<{ email: string }>())!.email).toBe("acme.scout@pimwell.test");
-    expect((await env.HUB_DB.prepare("SELECT email FROM identity WHERE id = ?").bind(w.pat.identity.id).first<{ email: string }>())!.email).toBe("pat@example.com");
+    expect((await env.HUB_DB.prepare("SELECT email FROM identity WHERE id = ?").bind(w.pat.identity.id).first<{ email: string }>())!.email).toBe("member@example.com");
   });
 });

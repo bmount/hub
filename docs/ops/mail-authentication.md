@@ -1,4 +1,4 @@
-# Mail authentication: #85 increment and remaining dependency
+# Receipt-free mail authentication (#85/#134)
 
 ## Verified platform contract (2026-10-09)
 
@@ -18,17 +18,19 @@ trusted verdict either.
 ## Implemented boundary
 
 Organization, project, and agent mail requires an active human member/root,
-rate and size checks, **exactly one outer From mailbox matching the envelope
-sender**, and successful Cloudflare reply proof before admission. Duplicate,
-multiple, missing, or grouped From headers stay quarantined without consent
-or a reply attempt. Display names and address case are supported through
+rate and actual-byte size checks, **exactly one outer From mailbox matching the
+envelope sender**, and strict independent cryptographic DKIM proof on the
+original bytes. Atomic tenant/sender/exact-mailbox/Message-ID replay storage and
+scoped audit precede admission. Routine receipts are not sent. Duplicate,
+multiple, missing, or grouped From headers stay quarantined without new consent
+or notification. Display names and address case are supported through
 PostalMime's address parser. Inner forwarded From headers are only evidence.
 
-Reply failure is recorded as `authentication unknown` with a bounded local
-notification result, not as forged mail or DMARC failure. Unknown mail stays
-admin-only, never wakes an agent, and does not gain a new active consent.
-Pre-existing consent does not authenticate a later message. No
-Authentication-Results, ARC, or custom header grants admission.
+Unknown proof stays admin-only, never wakes an agent, and does not gain new
+consent. Neither pre-existing consent nor welcome success authenticates mail.
+No Authentication-Results, ARC, or custom header grants admission. Optional
+welcome failure does not downgrade verified evidence. `login@`/`signup@` retain
+successful Cloudflare reply proof; reply failure never implies DMARC failure.
 
 Passive project mail does not reinstate revoked consent. Existing consent
 rows cannot distinguish an explicit withdrawal from rollback of a failed
@@ -37,9 +39,9 @@ explicit request to `login@`/`signup@` can establish new consent only through
 the existing successful reply path. This limitation must remain visible
 until provenance of revocation can be recorded independently.
 
-## #134 independent verifier increment (not yet an admission path)
+## Independent verifier and admission policy
 
-`src/mail/dkim.ts` now produces an independent **DKIM proof candidate** from
+`src/mail/dkim.ts` produces independent **DKIM proof** from
 original bytes using pinned `mailauth@7.1.1` in strict mode. Tests run inside
 the existing Workers pool, not just Node. Native RSA-SHA256 and Ed25519-SHA256
 fixtures pass. A narrow version-pinned adapter translates Node's `rsa-sha256`
@@ -65,31 +67,29 @@ claimed. CNAME key indirection and escaped TXT records are currently unsupported
 and fail closed. Header bytes are capped at 64 KiB, signatures at six and raw
 mail at 10 MiB. No sender-controlled URLs or native DNS fallback are used.
 
-The active inbound handler now bounds **actual** raw stream bytes before MIME
-parsing/consent/reply and records actual byte size. The verifier is deliberately
-not connected to admission yet: a valid signature can be replayed. Tests make
-that limitation explicit. Receipt-based admission and consent withdrawal
-behavior remain unchanged by this increment.
+The handler bounds **actual** raw stream bytes before parsing, verification or
+consent and records actual size. The verifier is connected only through atomic
+replay storage: a valid signature alone is not enough to bypass conflicting,
+legacy or pending state. See [replay](mail-replay.md) for storage, audit and
+permanent agent-wake dedup, including lost-response reconciliation.
 
 This is limited domain-aligned DKIM coverage, **not universal DMARC**, SPF or
 ARC forwarding support. Failure/absence/unsupported formats remain unknown.
 
-## Not completed / next increment
+## Scope and remaining limitations
 
-Routine receipt suppression, one-time verified-user welcome (#130), explicit
-response-recipient configuration, and scheduled-response state are **not**
-implemented by this increment. Configured recipients must never be presented
-as a promise that a response will be sent.
+Routine receipt suppression and [one-time welcome](../mail-welcome.md) are
+implemented in the ingress integration, with signed native-Workers handler tests.
+Explicit response-recipient configuration and scheduled-response state remain
+separate work; setup links do not promise a substantive reply. No held mail is
+automatically released or relabeled. No D1 migration, real tenant/membership or
+credential changes are performed by deployment. The inbox adds a non-destructive
+DO-local mail dedup table through its existing initialization path.
 
-Next: connect the verified candidate only after atomic, tenant/mailbox-bound
-Message-ID replay reservation/deduplication is implemented and tested, then
-remove routine Received replies. Verify that admission does not depend on an
-optional welcome's delivery, that repeated delivery neither grants consent
-again nor wakes an agent twice, and that revoked consent is never reinstated.
-Finish one-time welcome/context under #130 separately. Missing proof must
-stay unknown, not fall back to prior consent or an attacker-supplied
-Authentication-Results header. No held mail may be automatically released.
-
-No schema, tenant, membership, credential, or infrastructure changes are
-required or performed by this increment. Existing held mail is not released
-or relabeled automatically.
+Proof remains deliberately limited: no universal DMARC, SPF/ARC forwarding,
+CNAME/escaped-TXT DKIM key support or fresh-delivery guarantee. Unsupported proof
+is accurately unknown and fail-closed. Real provider compatibility and external
+mail delivery require separate observations; public deployment smoke tests do
+not prove them. Interrupted effects can require administrator reconciliation if
+there is no independently verified redelivery; this release adds no recovery
+scheduler. Never retry an ambiguous welcome automatically.

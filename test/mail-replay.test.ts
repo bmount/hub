@@ -32,7 +32,7 @@ function wrappedBatch(batch: D1Database["batch"]): Env {
 afterEach(() => vi.restoreAllMocks());
 
 describe("atomic independent-proof storage candidate", () => {
-  it("stores signed original evidence and proof-bound Message-ID, without sending or waking", async () => {
+  it("stores signed evidence, proof-bound Message-ID and atomic audit without sending or waking", async () => {
     const w = await world();
     const send = vi.spyOn(delivery, "sendMail");
     const r = await store(fixtures.valid, " REPLAYTEST@PIMWELL.TEST ", "MEMBER@EXAMPLE.COM");
@@ -43,7 +43,7 @@ describe("atomic independent-proof storage candidate", () => {
     expect(JSON.parse((await states())[0]!.value)).toMatchObject({ status: "stored", raw_sha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect(send).not.toHaveBeenCalled();
     expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM consent").first("n")).toBe(0);
-    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM event").first("n")).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT kind, target_id FROM event").first()).toEqual({ kind: "mail.received", target_id: r.status === "stored" ? r.mail_id : "" });
   });
 
   it("atomically selects one winner for concurrent arrivals and reconciles subsequent duplicates", async () => {
@@ -52,7 +52,8 @@ describe("atomic independent-proof storage candidate", () => {
     expect(results.filter((r) => r.status === "stored")).toHaveLength(1);
     expect(results.filter((r) => r.status === "duplicate")).toHaveLength(11);
     const row = (await rows())[0]!;
-    expect(await store()).toEqual({ status: "duplicate", mail_id: row.id });
+    expect(await store()).toMatchObject({ status: "duplicate", mail_id: row.id });
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM event WHERE kind = 'mail.received'").first("n")).toBe(1);
     expect(await rows()).toHaveLength(1);
     expect(await states()).toHaveLength(1);
   });
@@ -145,6 +146,17 @@ describe("atomic independent-proof storage candidate", () => {
     expect(await states()).toHaveLength(0);
     await env.HUB_DB.exec("DROP TRIGGER fail_inbound");
     expect((await store()).status).toBe("stored");
+  });
+
+  it("rolls admission and replay state back if its atomic audit fails", async () => {
+    await world();
+    await env.HUB_DB.exec("CREATE TRIGGER fail_mail_audit BEFORE INSERT ON event BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END");
+    await expect(store()).rejects.toThrow();
+    expect(await rows()).toHaveLength(0);
+    expect(await states()).toHaveLength(0);
+    await env.HUB_DB.exec("DROP TRIGGER fail_mail_audit");
+    expect((await store()).status).toBe("stored");
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM event").first("n")).toBe(1);
   });
 
   it("rolls evidence and reservation back if finalization fails", async () => {

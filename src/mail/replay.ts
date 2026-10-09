@@ -6,8 +6,8 @@ import { getIdentityByEmail, normalizeEmail } from "../db/identities";
 import { verifyIndependentDkim, MAX_DKIM_BYTES, type DkimProof } from "./dkim";
 import { parseMail, resolveMailAddress, type MailTarget } from "./projectMail";
 
-// Inactive until the ingress integration is accepted. No API accepts proof or
-// replay state supplied by a caller; this entry point verifies original bytes.
+// No API accepts proof or replay state supplied by a caller; this entry point
+// verifies original bytes before durable admission.
 export const REPLAY_PREFIX = "mail_replay:v1:";
 type Pass = Extract<DkimProof, { authentication: "pass" }>;
 export type ReplayState = {
@@ -16,7 +16,7 @@ export type ReplayState = {
 };
 export type IndependentStoreResult =
   | { status: "stored"; mail_id: string; identity_id: string; target: MailTarget; proof: Pass }
-  | { status: "duplicate"; mail_id: string }
+  | { status: "duplicate"; mail_id: string; identity_id: string; target: MailTarget; proof: Pass }
   | { status: "unknown"; proof: DkimProof }
   | { status: "ineligible" | "collision" | "blocked" };
 
@@ -37,13 +37,13 @@ const ELIGIBLE = `EXISTS (SELECT 1 FROM identity i JOIN tenant t ON t.id = ?
 const LEGACY = `EXISTS (SELECT 1 FROM inbound_mail
   WHERE tenant_id = ? AND from_email = ? AND to_address = ? AND message_id = ?)`;
 
-/** Durable admission-storage candidate, with no consent, outbound, audit or wake
- * effects. D1's transactional batch reserves, inserts the evidence and finalizes
- * together: a failed statement rolls ALL three back. A lost batch response is
+/** Durable admission storage, with no consent, outbound or wake effects.
+ * D1's transactional batch reserves, inserts evidence, finalizes and audits
+ * together: a failed statement rolls all writes back. A lost batch response is
  * reconciled by another cryptographically verified invocation, never by a send.
  * Conflicting bytes, legacy rows, corrupt state or a dangling reservation block
  * automatic replay. There is no lease expiry/reclaim and no delete-on-failure.
- * Callers still need ingress rate limits and post-storage delivery integration.
+ * Callers enforce ingress rate limits and reconcile post-storage delivery.
  */
 export async function storeIndependentMailCandidate(env: Env,
   input: { bytes: Uint8Array; from: string; to: string }, now: number,
@@ -87,6 +87,13 @@ export async function storeIndependentMailCandidate(env: Env,
       AND EXISTS (SELECT 1 FROM inbound_mail WHERE id = ? AND tenant_id = ? AND identity_id = ?
         AND from_email = ? AND to_address = ? AND message_id = ? AND verdict = 'admitted' AND reason IS NULL)`)
       .bind(stored, key, pending, state.mail_id, target.tenant_id, identity.id, from, to, proof.messageId),
+    env.HUB_DB.prepare(`INSERT INTO event
+      (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
+      SELECT ?, ?, ?, NULL, 'mail.received', 'inbound_mail', ?, ?, ?
+      FROM meta WHERE key = ? AND value = ?`)
+      .bind(ulid(now), target.tenant_id, identity.id, state.mail_id,
+        `Mail received for ${target.recipient_name ? `the agent ${target.recipient_name}` : target.project_slug ?? "the organization inbox"}: ${parsed.subject || "(no subject)"}`.slice(0, 300),
+        now, key, stored),
   ]);
   if (results[1]!.meta.changes === 1 && results[2]!.meta.changes === 1) {
     return { status: "stored", mail_id: state.mail_id, identity_id: identity.id, target, proof };
@@ -108,5 +115,5 @@ export async function storeIndependentMailCandidate(env: Env,
     AND project_id IS ? AND recipient_id IS ? AND verdict = 'admitted' AND reason IS NULL AND released_by IS NULL`)
     .bind(existing.mail_id, ...[target.tenant_id, identity.id, from, to, proof.messageId], target.project_id,
       target.recipient_id ?? null).first<{ id: string }>();
-  return row ? { status: "duplicate", mail_id: row.id } : { status: "blocked" };
+  return row ? { status: "duplicate", mail_id: row.id, identity_id: identity.id, target, proof } : { status: "blocked" };
 }

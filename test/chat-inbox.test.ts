@@ -95,6 +95,25 @@ describe("Inbox object", () => {
     expect(all.head).toBe(3);
   });
 
+  it("never re-wakes replayed mail after acknowledged items are pruned", async () => {
+    const mail = item(1, { kind: "mail", key: "mail:M1", conversation_id: "mail" });
+    expect(await box().deliver(T, "I1", [mail])).toBe(1);
+    await box().ack(T, "I1", 1, Date.now() - 31 * 86_400_000);
+    expect(await box().deliver(T, "I1", [mail])).toBe(0);
+    expect((await box().list(T, "I1", { after: 0, limit: 10, include_acked: true })).items).toEqual([]);
+    expect(await box("I2").deliver(T, "I2", [mail])).toBe(1);
+  });
+
+  it("rolls back a mail delivery tombstone when inbox storage fails", async () => {
+    await box().head(T, "I1");
+    await inDO(box(), async (obj: Inbox) => {
+      // Simulate an atomic insertion failure with an invalid required field.
+      const mail = item(1, { kind: "mail", key: "mail:M1", author_id: null as unknown as string });
+      await expect(obj.deliver(T, "I1", [mail])).rejects.toThrow();
+      expect(await obj.deliver(T, "I1", [{ ...mail, author_id: "H1" }])).toBe(1);
+    });
+  });
+
   it("returns the newest open wake hop per scope, its thread root or its own message", async () => {
     await box().deliver(T, "I1", [item(1, { hop: 0 }), item(2, { hop: 1, thread_root: "M1" }), item(3, { hop: 2, thread_root: "M3x" }), item(4, { hop: 0, wake: false })]);
     const r = await box().reserve(T, "I1", { session_id: "S1", is_agent: true, conversation_id: "C1", now: Date.now() });

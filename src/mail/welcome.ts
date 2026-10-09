@@ -4,8 +4,8 @@ import type { DkimProof } from "./dkim";
 import { resolveMailAddress } from "./projectMail";
 import { sendMail } from "./send";
 
-// Candidate for the independent-proof admission path, NOT called by the current
-// receipt-dependent handler. No API/verb may accept caller-supplied proof.
+// Optional context after independent-proof admission. No API/verb may accept
+// caller-supplied proof. Welcome delivery never supplies sender authentication.
 // Existing D1 meta provides atomic durable reservation without a schema rollout.
 // Once per human per organization, across its project and agent addresses.
 export const WELCOME_PREFIX = "mail_welcome:v1:";

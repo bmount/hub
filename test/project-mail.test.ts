@@ -72,16 +72,16 @@ describe("mail to organizations and projects", () => {
     expect(await stored()).toHaveLength(0);
   });
 
-  it("admits a member's proven mail to a project, with a receipt", async () => {
+  it("holds unsigned member mail without routine receipts or consent", async () => {
     await world();
     const f = fake("pat@example.com", `acme.site@${HUB}`, mime({ from: "pat@example.com", to: `acme.site@${HUB}`, subject: "Checkout broke", body: "Users say checkout fails." }));
     await handleEmail(f.message, env, ctx);
-    expect(f.calls.replies).toBe(1);
+    expect(f.calls.replies).toBe(0);
     const [m] = await stored();
-    expect(m).toMatchObject({ verdict: "admitted", subject: "Checkout broke", forwarded: 0 });
+    expect(m).toMatchObject({ verdict: "quarantined", subject: "Checkout broke", forwarded: 0 });
     expect(m!.text).toContain("checkout fails");
     expect(m!.project_id).not.toBeNull();
-    expect(await hasActiveConsent(env.HUB_DB, "pat@example.com")).toBe(true);
+    expect(await hasActiveConsent(env.HUB_DB, "pat@example.com")).toBe(false);
   });
 
   it("quarantines mail whose sender cannot be proven, and keeps no consent", async () => {
@@ -97,7 +97,8 @@ describe("mail to organizations and projects", () => {
     await world();
     const f = fake("pat@example.com", `acme@${HUB}`, mime({ from: "pat@example.com", to: `acme@${HUB}`, body: "hi" }), { replyThrows: true, replyError });
     await handleEmail(f.message, env, ctx);
-    expect((await stored())[0]).toMatchObject({ verdict: "quarantined", reason: "authentication unknown: Cloudflare reply proof unavailable (notification=failed); no DMARC failure inferred" });
+    expect(f.calls.replies).toBe(0);
+    expect((await stored())[0]).toMatchObject({ verdict: "quarantined", reason: "authentication unknown: independent DKIM signature count" });
     expect(await hasActiveConsent(env.HUB_DB, "pat@example.com")).toBe(false);
   });
 
@@ -126,7 +127,7 @@ describe("mail to organizations and projects", () => {
     const f = fake("pat@example.com", `acme@${HUB}`, raw);
     await handleEmail(f.message, env, ctx);
     expect((await stored())[0]).toMatchObject({ verdict: "quarantined" });
-    expect((await stored())[0]!.reason).toContain("exactly one outer From");
+    expect((await stored())[0]!.reason).toContain("From/envelope mismatch");
     expect(f.calls.replies).toBe(0);
     expect(await listConsent(env.HUB_DB, "pat@example.com")).toHaveLength(0);
   });
@@ -135,8 +136,8 @@ describe("mail to organizations and projects", () => {
     await world();
     const f = fake("pat@example.com", `acme@${HUB}`, mime({ from: '"Pat" <PAT@EXAMPLE.COM>', to: `acme@${HUB}`, rfc822: "From: outsider@example.com\r\n\r\nevidence only" }));
     await handleEmail(f.message, env, ctx);
-    expect((await stored())[0]).toMatchObject({ verdict: "admitted", forwarded: 1 });
-    expect(f.calls.replies).toBe(1);
+    expect((await stored())[0]).toMatchObject({ verdict: "quarantined", forwarded: 1 });
+    expect(f.calls.replies).toBe(0);
   });
 
   it("preserves revoked consent rather than opting a project sender back in", async () => {
@@ -149,7 +150,7 @@ describe("mail to organizations and projects", () => {
     expect(f.calls.replies).toBe(0);
     expect(await hasActiveConsent(env.HUB_DB, "pat@example.com")).toBe(false);
     expect(await listConsent(env.HUB_DB, "pat@example.com")).toHaveLength(1);
-    expect((await stored())[0]).toMatchObject({ verdict: "quarantined", reason: "authentication unknown: reply proof not attempted because consent is revoked" });
+    expect((await stored())[0]).toMatchObject({ verdict: "quarantined", reason: "authentication unknown: independent DKIM signature count" });
   });
 
   it("reads forwarded messages and HTML-only mail as text", async () => {
@@ -193,6 +194,9 @@ describe("mail to organizations and projects", () => {
     await handleEmail(fake("pat@example.com", `acme.site@${HUB}`, mime({ from: "pat@example.com", to: `acme.site@${HUB}`, subject: "ok one", body: "a" })).message, env, ctx);
     await handleEmail(fake("pat@example.com", `acme@${HUB}`, mime({ from: "pat@example.com", to: `acme@${HUB}`, subject: "held one", body: "b" }), { replyThrows: true }).message, env, ctx);
     const host = `acme.${HUB}`;
+    // Administrative release exercises visibility only, never cryptographic proof.
+    const first = await env.HUB_DB.prepare("SELECT id FROM inbound_mail WHERE subject = 'ok one'").first<{ id: string }>();
+    expect((await apiPost(host, "mail.release", { id: first!.id }, cookieHeaders(w.admin.token, host))).status).toBe(200);
     const memberList = await (await apiPost(host, "mail.list", {}, cookieHeaders(w.member.token, host))).json() as { result: { mail: Array<{ subject: string }> } };
     expect(memberList.result.mail.map((m) => m.subject)).toEqual(["ok one"]);
     expect((await apiPost(host, "mail.list", { quarantined: true }, cookieHeaders(w.member.token, host))).status).toBe(404);

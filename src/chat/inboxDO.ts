@@ -11,6 +11,8 @@ const SCHEMA = [
      author_id TEXT NOT NULL, wake INTEGER NOT NULL, created_at INTEGER NOT NULL, acked_at INTEGER)`,
   // The prune in deliver() looks up acked rows by age; partial, so unacked rows cost nothing. DO-local schema: IF NOT EXISTS guards an existing object.
   "CREATE INDEX IF NOT EXISTS item_acked ON item (acked_at) WHERE acked_at IS NOT NULL",
+  // Mail replay protection must outlive visible acked items. Keys contain ids only.
+  "CREATE TABLE IF NOT EXISTS mail_delivered (key TEXT PRIMARY KEY)",
   "CREATE TABLE IF NOT EXISTS cursor (conversation_id TEXT PRIMARY KEY, read_seq INTEGER NOT NULL)",
   "CREATE TABLE IF NOT EXISTS stamp (scope TEXT NOT NULL, at INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS stamp_scope ON stamp (scope, at)",
@@ -71,12 +73,20 @@ export class Inbox extends DurableObject<Env> {
     this.ctx.storage.sql.exec("DELETE FROM item WHERE acked_at IS NOT NULL AND acked_at < ?", Date.now() - LIMITS.INBOX_ACKED_KEEP_MS);
     let added = 0;
     for (const it of items) {
-      added += this.#q<{ item_seq: number }>(
-        // OR IGNORE settles a duplicate key; the NOT EXISTS keeps a duplicate from using up an item number.
-        `INSERT OR IGNORE INTO item (key, kind, conversation_id, seq, msg_id, thread_root, hop, author_id, wake, created_at)
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE NOT EXISTS (SELECT 1 FROM item WHERE key = ?1) RETURNING item_seq`,
-        it.key, it.kind, it.conversation_id, it.seq, it.msg_id, it.thread_root, it.hop, it.author_id, it.wake ? 1 : 0, it.created_at,
-      ).length;
+      added += this.ctx.storage.transactionSync(() => {
+        if (it.kind === "mail") {
+          const fresh = this.#q<{ key: string }>("INSERT OR IGNORE INTO mail_delivered (key) VALUES (?) RETURNING key", it.key);
+          if (!fresh.length) return 0;
+        }
+        return this.#q<{ item_seq: number }>(
+          // Only duplicate keys are ignored; a storage/constraint failure must roll
+          // back the mail tombstone rather than claim delivery without an item.
+          `INSERT INTO item (key, kind, conversation_id, seq, msg_id, thread_root, hop, author_id, wake, created_at)
+           SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE NOT EXISTS (SELECT 1 FROM item WHERE key = ?1)
+           ON CONFLICT(key) DO NOTHING RETURNING item_seq`,
+          it.key, it.kind, it.conversation_id, it.seq, it.msg_id, it.thread_root, it.hop, it.author_id, it.wake ? 1 : 0, it.created_at,
+        ).length;
+      });
     }
     if (added > 0) for (const wake of [...this.#waiters]) wake();
     return added;
