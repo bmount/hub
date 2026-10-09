@@ -109,11 +109,42 @@ and multipart framing, not decoded character counts or just uploaded file size.
 Oversized requests return 413 without running verbs, creating clients or
 executing tools. API form refusals render an inert readable page. Stream errors
 or request cancellation return safe 400 errors without reflecting arbitrary
-stream exceptions. Cancellation is best-effort and never delays a refusal;
+stream exceptions. Whole-original-body read expiration returns safe 408 errors
+before parsing or executing the request; it never substitutes an empty form. Cancellation is best-effort and never delays a refusal;
 reader locks/listeners are released. Buffer growth is bounded, copies source
 chunks immediately, and stores no unbounded per-chunk list. Downstream form/SDK
 requests are rebuilt only from bounded bytes; forged length/transfer framing
 headers are removed. Original requests remain the authentication/logging source.
+
+## Whole-original-body deadlines
+
+All of the above bounded readers use one ten-second budget from the start of
+body reading through EOF and owned-buffer assembly. `/voice/transcribe` uses a
+separate sixty-second budget to accommodate its 15 MiB recording allowance;
+voice correction retains ten seconds. These are whole-read budgets, not timers
+reset by each chunk or an inactivity timeout. Existing authentication, Origin,
+media and rate refusals still precede establishing the body timer.
+
+A timer rejects a pending read even if the producer or its cancellation never
+settles. Monotonic checks also refuse late chunks (including empty chunks), EOF
+and assembly when timer dispatch is delayed. Cancellation is best-effort;
+locks, abort listeners and timers are cleaned on success and every refusal.
+Only the current pending read retains a failure callback; repeated tiny chunks
+do not accumulate reactions on an unresolved shared abort promise. Complete
+bytes arriving just inside the budget still use the existing parsers and
+semantic/decoded limits. An expired request cannot exchange/revoke a grant,
+consume/approve a pending consent, create a sign-in link/send mail, post a
+message or dispatch a model/tool. Prior rate accounting is not undone; normal
+safe refusal telemetry remains. OAuth endpoints preserve their protocol error
+bodies with HTTP 408, internal service refusals remain `{ ok: false }`, and voice
+reports `request_timeout`. Clients must not treat any transport error as a
+blanket authorization to replay unrelated writes.
+
+This is **not** a total request/credential/D1/model/tool/SDK/form-parsing deadline.
+JavaScript cannot preempt synchronous blocking work; monotonic checkpoints
+refuse late results when control returns. The budgets start after pre-read gates,
+not at network arrival. Git smart HTTP forwarding and independent incoming-mail
+read budgets are unchanged. No automatic retry/resend or background job is added.
 
 ## Remaining work and limits
 
@@ -123,11 +154,10 @@ endpoint budgets. Do not apply a 1 MiB global middleware cap to Git smart HTTP
 forwarded to Ardi or voice uploads with their separate recording allowance.
 Incoming mail uses its separate original-byte cap.
 
-No body deadline is introduced here: an under-limit stalled stream can still
-wait until client/platform cancellation. Whole-request read deadlines and
-pre-credential API abuse controls are separate followups; this increment puts
-rate/auth refusals before parsing without claiming protection against every
-credential-validation load. No schema, membership, consent or infrastructure
+Original-body read deadlines are now enforced as described above. Total-handler
+and downstream-provider deadlines and pre-credential API abuse controls remain
+separate followups; this increment puts rate/auth refusals before parsing without
+claiming protection against every credential-validation load. No schema, membership, consent or infrastructure
 changes are needed.
 
 Native-Workers tests cover chunked absent/forged lengths, exact limits, UTF-8,
@@ -159,5 +189,13 @@ Origin/header/media/rate denials, forged/absent framing, UTF-8, read errors/
 aborts and stalled cancellation. Refusals leave model calls, usage ledger,
 conversation storage and events untouched. Valid calls still record usage;
 no real provider invocation is needed for these native-Workers fixtures.
+Whole-read regressions additionally cover empty/partial/full-without-EOF stalls,
+one budget across chunks, continuously fulfilled and empty chunks, late EOF/
+assembly before timer dispatch, cancellation errors/stalls, cleanup, abort/size/
+source-error precedence, and successful bytes just inside both budgets. Actual
+production router tests refuse late bytes across API JSON/forms, MCP, OAuth
+registration/token/revoke/consent/login, browser chat/Assistant/Playground,
+internal service/eval and voice routes without grant/pending/work/conversation/
+model/send effects; timer-driven stalls are covered for API/MCP/voice recording.
 The full suite guards existing tenant, mailbox, grant, cookie and login-proof
 boundaries.

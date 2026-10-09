@@ -21,13 +21,18 @@ export const MAX_VOICE_RECORDING_BODY_BYTES = MAX_VOICE_AUDIO_BYTES + 64 * 1024;
 // Accommodate the existing 40,000 UTF-16-unit envelope in UTF-8, without
 // increasing the decoded transcript/context limits.
 export const MAX_VOICE_CORRECTION_BODY_BYTES = 128 * 1024;
+// Whole original-body reads, not inactivity or downstream handler deadlines.
+export const MAX_REQUEST_BODY_READ_MS = 10_000;
+export const MAX_VOICE_RECORDING_READ_MS = 60_000;
 
 /** Content-Length is only an early rejection hint. Bound actual bytes before
  * JSON/form parsers or SDK classification. Do not retain source-owned chunks or
  * an unbounded list of tiny chunks. Cancellation must never delay a refusal.
  */
-export async function readRequestBytes(request: Request, maximum: number): Promise<Uint8Array<ArrayBuffer>> {
+export async function readRequestBytes(request: Request, maximum: number,
+  readMs = MAX_REQUEST_BODY_READ_MS): Promise<Uint8Array<ArrayBuffer>> {
   if (!Number.isSafeInteger(maximum) || maximum < 1) throw new RangeError("invalid body limit");
+  if (!Number.isSafeInteger(readMs) || readMs < 1) throw new RangeError("invalid body deadline");
   const tooLarge = () => new HubError(413, "too_large", `request body exceeds ${maximum} bytes`);
   const declared = request.headers.get("content-length");
   if (declared && /^\d+$/.test(declared) && Number(declared) > maximum) {
@@ -38,18 +43,38 @@ export async function readRequestBytes(request: Request, maximum: number): Promi
   const reader = request.body.getReader();
   const cancel = () => { void reader.cancel().catch(() => {}); };
   const signal = request.signal;
-  let onAbort!: () => void;
-  const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => { reject(new HubError(400, "bad_request", "request body aborted")); cancel(); };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
+  const deadline = performance.now() + readMs;
+  let failure: HubError | undefined;
+  let rejectRead: ((e: HubError) => void) | undefined;
+  const stop = (e: HubError) => {
+    if (failure) return;
+    failure = e;
+    rejectRead?.(e);
+    cancel();
+  };
+  const timeout = () => new HubError(408, "request_timeout", "request body read timed out");
+  const onAbort = () => stop(new HubError(400, "bad_request", "request body aborted"));
+  signal.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => stop(timeout()), readMs);
+  const check = () => {
+    if (signal.aborted) onAbort();
+    // A delayed timer must not authorize late chunks, EOF or buffer assembly.
+    if (!failure && performance.now() >= deadline) stop(timeout());
+    if (failure) throw failure;
+  };
   let buffer: Uint8Array<ArrayBuffer> = new Uint8Array(Math.min(8192, maximum));
   let size = 0;
   try {
-    if (signal.aborted) throw new HubError(400, "bad_request", "request body aborted");
+    check();
     for (;;) {
-      const { value, done } = await Promise.race([reader.read(), aborted]);
-      if (signal.aborted) throw new HubError(400, "bad_request", "request body aborted");
+      // Only the pending read has a rejection callback: unlike repeatedly racing
+      // one unresolved abort promise, tiny chunks retain no per-chunk handlers.
+      const { value, done } = await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+        rejectRead = reject;
+        reader.read().then(resolve, reject);
+      });
+      rejectRead = undefined;
+      check();
       if (done) break;
       if (!(value instanceof Uint8Array)) throw new HubError(400, "bad_request", "invalid request body stream");
       const next = size + value.byteLength;
@@ -62,12 +87,16 @@ export async function readRequestBytes(request: Request, maximum: number): Promi
       buffer.set(value, size);
       size = next;
     }
-    return buffer.slice(0, size);
+    const bytes = buffer.slice(0, size);
+    check();
+    return bytes;
   } catch (e) {
     cancel();
     if (e instanceof HubError) throw e;
     throw new HubError(400, "bad_request", "request body could not be read");
   } finally {
+    clearTimeout(timer);
+    rejectRead = undefined;
     signal.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
@@ -77,8 +106,9 @@ export async function readRequestBytes(request: Request, maximum: number): Promi
  * callers may preserve their neutral form handling, but must return 413/400 for
  * a refused body rather than silently proceeding with an empty form.
  */
-export async function readRequestForm(request: Request, maximum: number): Promise<FormData | null> {
-  const bytes = await readRequestBytes(request, maximum);
+export async function readRequestForm(request: Request, maximum: number,
+  readMs = MAX_REQUEST_BODY_READ_MS): Promise<FormData | null> {
+  const bytes = await readRequestBytes(request, maximum, readMs);
   return requestWithBytes(request, bytes).formData().catch(() => null);
 }
 

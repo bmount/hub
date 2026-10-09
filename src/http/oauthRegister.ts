@@ -27,7 +27,7 @@ export async function registerEndpoint(request: Request, env: Env, ectx: Executi
   try { text = new TextDecoder().decode(await readRequestBytes(request, REGISTER_BODY_MAX)); }
   catch (e) {
     if (e instanceof HubError && e.status === 413) return tooLarge();
-    if (e instanceof HubError) return oauthJson({ error: "invalid_client_metadata", error_description: "body could not be read" }, 400);
+    if (e instanceof HubError) return oauthJson({ error: "invalid_client_metadata", error_description: "body could not be read" }, e.status);
     throw e;
   }
   let meta: Record<string, unknown>;

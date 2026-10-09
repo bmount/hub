@@ -12,7 +12,7 @@ import { takeRateDetail } from "../rate";
 import { note } from "../log";
 import { HubError } from "../errors";
 import { ask, transcribe } from "../models/ask";
-import { MAX_VOICE_AUDIO_BYTES, MAX_VOICE_RECORDING_BODY_BYTES, MAX_VOICE_CORRECTION_BODY_BYTES, readRequestBytes, readRequestForm } from "./body";
+import { MAX_VOICE_AUDIO_BYTES, MAX_VOICE_RECORDING_BODY_BYTES, MAX_VOICE_CORRECTION_BODY_BYTES, MAX_VOICE_RECORDING_READ_MS, readRequestBytes, readRequestForm } from "./body";
 
 export const VOICE_HEADER = "x-pimwell-voice";
 const MAX_CONTEXT = 2400;
@@ -114,8 +114,9 @@ export async function voiceTranscribe(request: Request, env: Env, waitUntil?: (p
   if (g instanceof Response) return g;
   const ctx = g;
   let form: FormData | null;
-  try { form = await readRequestForm(request, MAX_VOICE_RECORDING_BODY_BYTES); } catch (e) {
+  try { form = await readRequestForm(request, MAX_VOICE_RECORDING_BODY_BYTES, MAX_VOICE_RECORDING_READ_MS); } catch (e) {
     if (!(e instanceof HubError)) throw e;
+    if (e.status === 408) return json({ error: "request_timeout", reason: "recording upload timed out" }, 408);
     return e.status === 413
       ? json({ error: "too_large", reason: "that recording request is too large; keep audio under 15 MiB" }, 413)
       : json({ error: "bad_request", reason: "expected a recording" }, 400);
@@ -147,7 +148,7 @@ export async function voiceCorrect(request: Request, env: Env, waitUntil?: (p: P
   let raw: string;
   try { raw = new TextDecoder().decode(await readRequestBytes(request, MAX_VOICE_CORRECTION_BODY_BYTES)); } catch (e) {
     if (!(e instanceof HubError)) throw e;
-    return json({ error: e.status === 413 ? "too_large" : "bad_request" }, e.status);
+    return json({ error: e.status === 413 ? "too_large" : e.status === 408 ? "request_timeout" : "bad_request" }, e.status);
   }
   if (raw.length > 40_000) return json({ error: "too_large" }, 413);
   let b: { text?: unknown; context?: unknown };
