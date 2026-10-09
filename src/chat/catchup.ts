@@ -2,7 +2,7 @@ import type { Ctx } from "../auth/context";
 import { HubError, badRequest, notFound } from "../errors";
 import { DATA_NOTE, cleanText, cutText } from "../mcp/render";
 import { readableChannels, viewerOf } from "./access";
-import { CHAT_NOTE, messageBlock, refShort, textBudget } from "./compact";
+import { CHAT_NOTE, header, messageBlock, refShort, textBudget } from "./compact";
 import { nameTags, people } from "./handles";
 import { msgJson, type MsgJson } from "./present";
 import { refsForViewer } from "./refs";
@@ -15,7 +15,8 @@ export type CatchupResult = {
   tenant_id: string;
   budget: number; used_tokens: number; omitted: number; next: string; advanced: boolean;
   for_you: Array<MsgJson & { channel: string }>;
-  threads: Array<{ channel: string; root_seq: number; replies: number; latest_seq: number; latest_author: string }>;
+  threads: Array<{ channel: string; conversation_id: string; root_seq: number; replies: number; edited_replies: number;
+    latest_seq: number; latest_activity_seq: number; latest_author: string; latest: MsgJson }>;
   conversations: ConvSummary[];
   quiet: Array<{ channel: string; head: number; new: number; agent: number }>;
   text: string;
@@ -116,9 +117,15 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   if (mine.length > 0) fits(["## Your threads"]);
   for (const { ch, t } of mine) {
     const latest = cutText(cleanText(t.newest.retracted ? "(retracted)" : t.newest.body), 120).text;
-    const by = handle(t.newest.author_id);
-    const head = `[#${ch.slug} #${t.root.seq} ${t.replies} new ${t.replies === 1 ? "reply" : "replies"}, latest #${t.newest.seq} by @${by}]`;
-    if (fits([`${head} ${JSON.stringify(latest)}`])) out.threads.push({ channel: ch.slug, root_seq: t.root.seq, replies: t.replies, latest_seq: t.newest.seq, latest_author: by });
+    const tag = tagOf(t.newest.author_id, t.newest.session_id, t.newest.session_kind);
+    const head = `[#${ch.slug} #${t.root.seq} ${t.replies} new ${t.replies === 1 ? "reply" : "replies"}, ${t.edited_replies} edited, latest activity=${t.latest_activity_seq}]`;
+    const latestHeader = header(t.newest, tag, ch.slug);
+    if (fits([`${head} latest ${latestHeader} ${JSON.stringify(latest)}`])) {
+      const refs = await refsForViewer(ctx.db, v, t.newest.refs);
+      out.threads.push({ channel: ch.slug, conversation_id: ch.project_id, root_seq: t.root.seq, replies: t.replies,
+        edited_replies: t.edited_replies, latest_seq: t.newest.seq, latest_activity_seq: t.latest_activity_seq,
+        latest_author: tag.handle, latest: msgJson(t.newest, tag, refs) });
+    }
     else {
       omitted++;
       incomplete.add(ch.project_id);

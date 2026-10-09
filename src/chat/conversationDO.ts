@@ -604,13 +604,20 @@ export class Conversation extends DurableObject<Env> {
     );
     const mentions_truncated = mentionRows.length > q.max_items;
     const mentions_me = mentionRows.slice(0, q.max_items).map((r) => this.#view(r));
-    const threadRows = this.#q<{ thread_root: string; n: number; newest: number }>(
-      `SELECT thread_root, COUNT(*) AS n, MAX(first_seq) AS newest FROM msg WHERE kind = 'say' AND retracted = 0 AND first_seq > ? AND author_id <> ?
-         AND thread_root IN (SELECT thread_root FROM thread_sub WHERE identity_id = ?) GROUP BY thread_root ORDER BY newest DESC LIMIT ?`,
-      since, q.me, q.me, q.max_items + 1,
+    // Followed threads also carry revised replies behind the creation cursor, even without a mention.
+    // Count newly created and older edited replies separately; choose current text by activity, not message number.
+    const threadRows = this.#q<{ thread_root: string; n: number; edited: number; newest: number }>(
+      `SELECT thread_root, SUM(CASE WHEN first_seq > ? THEN 1 ELSE 0 END) AS n,
+         SUM(CASE WHEN first_seq <= ? THEN 1 ELSE 0 END) AS edited, MAX(last_seq) AS newest
+         FROM msg WHERE kind = 'say' AND retracted = 0 AND last_seq > ? AND author_id <> ?
+         AND thread_root IN (SELECT thread_root FROM thread_sub WHERE identity_id = ?) GROUP BY thread_root ORDER BY newest LIMIT ?`,
+      since, since, since, q.me, q.me, q.max_items + 1,
     );
     const my_threads_truncated = threadRows.length > q.max_items;
-    const my_threads = threadRows.slice(0, q.max_items).map((t) => ({ root: this.#view(this.#msg(t.thread_root)!), replies: t.n, newest: this.#view(this.#msg(String(t.newest))!) }));
+    const my_threads = threadRows.slice(0, q.max_items).map((t) => ({
+      root: this.#view(this.#msg(t.thread_root)!), replies: t.n, edited_replies: t.edited, latest_activity_seq: t.newest,
+      newest: this.#view(this.#q<MsgRow>(`${MSG_SELECT} WHERE m.last_seq = ?`, t.newest)[0]!),
+    }));
     const threads = this.#q<{ thread_root: string; n: number }>(
       "SELECT thread_root, COUNT(*) AS n FROM msg WHERE kind = 'say' AND retracted = 0 AND first_seq > ? AND thread_root IS NOT NULL GROUP BY thread_root ORDER BY n DESC, thread_root LIMIT 5", since,
     ).map((t) => ({ root: this.#view(this.#msg(t.thread_root)!), replies: t.n }));

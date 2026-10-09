@@ -41,7 +41,9 @@ describe("chat.catchup", () => {
     expect(text.indexOf("## For you")).toBeLessThan(text.indexOf("## Your threads"));
     expect(text.indexOf("## Your threads")).toBeLessThan(text.indexOf("## Channels"));
     expect(r.for_you.map((m: { channel: string; seq: number; body: string }) => [m.channel, m.seq, m.body])).toEqual([["general", 4, "@dev please review"]]);
-    expect(r.threads).toEqual([{ channel: "general", root_seq: 1, replies: 2, latest_seq: 3, latest_author: "scout" }]);
+    expect(r.threads).toHaveLength(1);
+    expect(r.threads[0]).toMatchObject({ channel: "general", root_seq: 1, replies: 2, edited_replies: 0,
+      latest_seq: 3, latest_activity_seq: 3, latest_author: "scout", latest: { seq: 3, body: "reply two", author: { identity_id: w.scout.agent.identity.id, kind: "agent" } } });
     expect(r.conversations.map((c: { channel: string; new: number; agent: number }) => [c.channel, c.new, c.agent])).toEqual([["general", 3, 1], ["ops", 3, 0]]);
     expect(r.conversations[0].refs).toEqual([]);
     expect(r.omitted).toBe(0);
