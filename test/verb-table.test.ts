@@ -93,6 +93,7 @@ const TABLE: Record<string, Decl> = {
   "inbox.wait": T("tenant", "reader", null), "inbox.ack": T("tenant", "reader", null), "chat.mark_read": T("tenant", "reader", null),
   "ref.backlinks": T("tenant", "reader", null, { mcp: "read" }),
   "chat.conversations": T("tenant", "reader", null),
+  "chat.heartbeat": T("tenant", "reader", null), "chat.presence": T("tenant", "reader", null),
   "chat.agent_mute": T("tenant", "reader", null), "chat.agent_unmute": T("tenant", "member", 60, { humanOnly: true }),
   "chat.agents_disable": T("tenant", "admin", null), "chat.agents_enable": T("tenant", "admin", 60),
   "oauth.grant.approve": T("hub", "public", 600, { humanOnly: true }),
@@ -181,7 +182,7 @@ describe("verb table", () => {
       idempotency_key: "k", refs: [], state: "active", prefix: false,
     };
     // Where one name means different things to different verbs.
-    const OVERRIDE: Record<string, Record<string, unknown>> = { "chat.post": { kind: "say" } };
+    const OVERRIDE: Record<string, Record<string, unknown>> = { "chat.post": { kind: "say" }, "chat.heartbeat": { status: "online" } };
     const AUTHORISH = ["author", "author_id", "as", "identity", "identity_id", "display_name_override", "session_id", "name_tag", "via", "by", "handle", "avatar", "on_behalf_of"];
     const planted = Object.fromEntries(AUTHORISH.map((k) => [k, "01PLANTED0000000000000000000"]));
     const keysDeep = (v: unknown): string[] => (v && typeof v === "object" ? Object.entries(v).flatMap(([k, x]) => [k, ...keysDeep(x)]) : []);

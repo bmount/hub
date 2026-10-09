@@ -3,6 +3,7 @@
 import { THEME_CSS } from "./theme";
 import { COMPONENTS_CSS } from "./styles";
 import { WORKBENCH_JS } from "./workbenchScript";
+import { CHAT_PRESENCE_JS } from "./chatPresenceScript";
 
 function hash(s: string): string {
   let h = 0x811c9dc5;
@@ -14,6 +15,7 @@ const css = THEME_CSS + COMPONENTS_CSS;
 export const ASSETS = {
   css: { path: `/assets/app.${hash(css)}.css`, body: css, type: "text/css; charset=utf-8" },
   js: { path: `/assets/wb.${hash(WORKBENCH_JS)}.js`, body: WORKBENCH_JS, type: "text/javascript; charset=utf-8" },
+  presence: { path: `/assets/presence.${hash(CHAT_PRESENCE_JS)}.js`, body: CHAT_PRESENCE_JS, type: "text/javascript; charset=utf-8" },
 };
 
 /** GET /assets/<name>: the current file, cached for a year; an old name gets 404 so nothing stale is served forever. */

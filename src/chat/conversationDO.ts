@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { ulid } from "../ids";
 import { bindOnce, storedBinding } from "./bound";
+import { PRESENCE_TTL_MS, retainedPresence, type PresenceRow, type PresenceStatus } from "./presence";
 import { inboxStub } from "./stubs";
 import { getControls } from "../db/chat";
 import { LIMITS, computeHop, gateRefuses, nextAgentRun, pairTrip, wakesAllowed } from "./rules";
@@ -224,6 +225,23 @@ export class Conversation extends DurableObject<Env> {
   async notice(tenant_id: string, conversation_id: string, body: string, now: number): Promise<{ seq: number; msg_id: string }> {
     this.#bind(tenant_id, conversation_id);
     return this.ctx.storage.transactionSync(() => this.#system(body, null, {}, now));
+  }
+
+  /** Ephemeral, bounded KV state; no message, wake, cursor or activity-ledger side effects. */
+  async heartbeat(tenant_id: string, conversation_id: string, identity_id: string, status: PresenceStatus): Promise<PresenceRow> {
+    this.#bind(tenant_id, conversation_id);
+    const now = Date.now();
+    const row: PresenceRow = { identity_id, status, last_seen: now, expires_at: status === "offline" ? now : now + PRESENCE_TTL_MS };
+    await this.ctx.storage.transaction(async (tx) => {
+      const rows = (await tx.get<PresenceRow[]>("presence:v1")) ?? [];
+      await tx.put("presence:v1", retainedPresence([row, ...rows.filter((r) => r.identity_id !== identity_id)], now));
+    });
+    return row;
+  }
+
+  async presence(tenant_id: string, conversation_id: string): Promise<PresenceRow[]> {
+    this.#bind(tenant_id, conversation_id);
+    return retainedPresence((await this.ctx.storage.get<PresenceRow[]>("presence:v1")) ?? [], Date.now());
   }
 
   async head(tenant_id: string, conversation_id: string): Promise<number> {

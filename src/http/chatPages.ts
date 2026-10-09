@@ -1,4 +1,5 @@
 import { sameOrigin } from "./login";
+import { ASSETS } from "../assets";
 import type { Env } from "../env";
 import { shellFor } from "./shell";
 import { buildContext, rank, type Ctx } from "../auth/context";
@@ -59,6 +60,12 @@ function channelLink(c: Conversation, active = ""): string {
 function workspace(channels: Conversation[], active: string, content: string): string {
   const rail = `<aside class="channel-rail" aria-label="Chat workspace"><h2>Chat</h2>${NAV}<nav aria-label="Channels"><ul>${channels.map((c) => channelLink(c, active)).join("") || "<li>No active channels.</li>"}</ul></nav></aside>`;
   return `<div class="chat-workspace">${rail}<section class="channel-content" aria-label="${esc(active ? `#${active}` : "Channel discovery")}">${content}</section></div>`;
+}
+
+function presencePanel(slug: string, channels: Conversation[]): string {
+  // Archived channels still have readable history, but must not publish or display live presence.
+  if (!channels.some((c) => c.channel === slug)) return "";
+  return `<section data-chat-presence="${esc(slug)}" aria-label="Channel presence"><h2>Presence</h2><p data-presence-connection role="status">Presence not connected. Current status is unknown.</p><p data-presence-sharing>Not sharing. Loading or reading this page does not publish a heartbeat.</p><button type="button" data-presence-toggle>Share presence in this channel</button><ul data-presence-list></ul><noscript>Live presence needs JavaScript; no heartbeat is published without it.</noscript></section><script defer src="${ASSETS.presence.path}"></script>`;
 }
 
 function markRead(slug: string, head: number, back: string): string {
@@ -126,7 +133,7 @@ export async function channelPage(request: Request, env: Env, slug: string, draf
     const older = r.next_before !== null ? `<p><a href="/c/${esc(r.channel)}?before=${r.next_before}">older messages</a></p>` : "";
     const channels = await conversations(pc.ctx);
     const current = channels.find((c) => c.channel === r.channel);
-    const body = `<header class="channel-header"><h1>#${esc(r.channel)}</h1><p class="lede">${esc(current?.topic ?? "")}</p><a class="chip" href="/c/${esc(r.channel)}">Refresh</a> ${markRead(r.channel, r.head, `/c/${r.channel}`)}</header>${older}`
+    const body = `<header class="channel-header"><h1>#${esc(r.channel)}</h1><p class="lede">${esc(current?.topic ?? "")}</p><a class="chip" href="/c/${esc(r.channel)}">Refresh</a> ${markRead(r.channel, r.head, `/c/${r.channel}`)}</header>${presencePanel(r.channel, channels)}${older}`
       + `<div class="channel-messages">${r.messages.map((m) => msgHtml(r.channel, m, false)).join("") || '<p class="lede">No messages yet. Start a conversation.</p>'}</div>`
       + (rank(pc.ctx.role) >= rank("member") ? compose(`/c/${r.channel}`, r.head, draft, notice, "Post") : '<p class="lede">You have read-only access.</p>');
     return htmlResponse(page(`#${r.channel}`, workspace(channels, r.channel, body), shellFor(pc.ctx, env, "chat")), 200, pc.extra);
@@ -144,7 +151,7 @@ export async function threadPage(request: Request, env: Env, slug: string, seq: 
     const r = await verb<ReadResult>(pc.ctx, "chat.thread", { c: slug, msg: seq, budget: 8000, ...(after && /^\d{1,12}$/.test(after) ? { after } : {}) });
     const root = r.messages[0]!;
     const channels = await conversations(pc.ctx);
-    const body = `<header class="channel-header"><p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p><h1>Thread #${root.seq}</h1><a class="chip" href="/c/${esc(r.channel)}/t/${root.seq}">Refresh thread</a></header>`
+    const body = `<header class="channel-header"><p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p><h1>Thread #${root.seq}</h1><a class="chip" href="/c/${esc(r.channel)}/t/${root.seq}">Refresh thread</a></header>${presencePanel(r.channel, channels)}`
       + `<div class="channel-messages">${r.messages.map((m) => msgHtml(r.channel, m, true)).join("")}</div>`
       + (r.next_after !== null ? `<p><a href="/c/${esc(r.channel)}/t/${root.seq}?after=${r.next_after}">More replies</a></p>` : "")
       + (rank(pc.ctx.role) >= rank("member") ? compose(`/c/${r.channel}/t/${root.seq}`, r.head, draft, notice, "Reply") : '<p class="lede">You have read-only access.</p>');
