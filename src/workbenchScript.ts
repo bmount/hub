@@ -43,7 +43,11 @@ export const WORKBENCH_JS = String.raw`
       // refresh, same-channel posts and stale drafts must replace them even when
       // the title is unchanged. Only explicitly keyed two-pane lists keep state.
       var key = b && b.getAttribute("data-key") || "";
-      if (a && b && (key.indexOf("page:") === 0 || a.getAttribute("data-key") !== key || id === "inspector")) { a.replaceWith(b); revive(b); voiceUp(b); }
+      if (a && b && (key.indexOf("page:") === 0 || a.getAttribute("data-key") !== key || id === "inspector")) {
+        // Enhanced pane clients must stop timers/listeners before their DOM is detached.
+        document.dispatchEvent(new CustomEvent("wb:before-replace", { detail: a }));
+        a.replaceWith(b); revive(b); voiceUp(b);
+      }
     });
     cur.className = next.className;
     var rail = $("#rail"), nrail = doc.getElementById("rail");

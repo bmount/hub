@@ -3,7 +3,7 @@ export const PRESENCE_TTL_MS = 90_000;
 export const PRESENCE_RETENTION_MS = 24 * 60 * 60_000;
 export const PRESENCE_MAX = 200;
 export type PresenceStatus = "online" | "away" | "offline";
-export type PresenceRow = { identity_id: string; status: PresenceStatus; last_seen: number; expires_at: number };
+export type PresenceRow = { identity_id: string; status: PresenceStatus; last_seen: number; expires_at: number; via_assistant?: boolean };
 export type PresenceState = PresenceStatus | "stale";
 
 export function presenceState(row: PresenceRow, now: number): PresenceState {

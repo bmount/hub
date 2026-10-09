@@ -228,10 +228,10 @@ export class Conversation extends DurableObject<Env> {
   }
 
   /** Ephemeral, bounded KV state; no message, wake, cursor or activity-ledger side effects. */
-  async heartbeat(tenant_id: string, conversation_id: string, identity_id: string, status: PresenceStatus): Promise<PresenceRow> {
+  async heartbeat(tenant_id: string, conversation_id: string, identity_id: string, status: PresenceStatus, via_assistant = false): Promise<PresenceRow> {
     this.#bind(tenant_id, conversation_id);
     const now = Date.now();
-    const row: PresenceRow = { identity_id, status, last_seen: now, expires_at: status === "offline" ? now : now + PRESENCE_TTL_MS };
+    const row: PresenceRow = { identity_id, status, via_assistant, last_seen: now, expires_at: status === "offline" ? now : now + PRESENCE_TTL_MS };
     await this.ctx.storage.transaction(async (tx) => {
       const rows = (await tx.get<PresenceRow[]>("presence:v1")) ?? [];
       await tx.put("presence:v1", retainedPresence([row, ...rows.filter((r) => r.identity_id !== identity_id)], now));

@@ -166,7 +166,7 @@ describe("chat pages", () => {
     expect(older).toContain("updated body");
     expect(older).not.toContain('id="unread"');
     expect((await ok(w.dev.token, "chat.conversations")).conversations[0].read_seq).toBe(root.seq);
-  });
+  }, 15_000); // 50 serial API writes plus page reads; not a 5-second latency assertion.
 
   it("filters discovery by name/topic with inert rendering and excludes archived or other-tenant channels", async () => {
     const w = await chatWorld();
@@ -214,7 +214,7 @@ describe("chat pages", () => {
     expect(next).toContain("reply-49 ");
     expect(next).not.toContain("reply-0 ");
     expect(next).toContain('aria-current="page">#general');
-  });
+  }, 15_000); // 50 serial API writes; keep all paging and isolation assertions.
 
   it("gives readers navigation and unread controls but no posting or membership-management forms", async () => {
     const w = await chatWorld();

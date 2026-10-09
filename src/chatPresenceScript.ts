@@ -36,7 +36,7 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       const li = document.createElement('li');
       const expired = elapsed >= Math.max(0, entry.expires_at - observedAt);
       const state = expired && (entry.state === 'online' || entry.state === 'away') ? 'stale' : entry.state;
-      li.textContent = '@' + entry.handle + ' · ' + entry.kind + ' · ' + state + ' · last heartbeat ' + new Date(entry.last_seen).toISOString();
+      li.textContent = '@' + entry.handle + ' · ' + entry.kind + (entry.via_assistant ? ' via-assistant' : '') + ' · ' + state + ' · last heartbeat ' + new Date(entry.last_seen).toISOString();
       list.append(li);
     }
     if (!entries.length) {
@@ -102,25 +102,41 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     sharing.textContent = opted ? 'Sharing while this channel is visible; hidden pages stop renewing online status.' : 'Not sharing. If the offline update cannot be delivered, the previous heartbeat expires within 90 seconds.';
     refresh();
   });
-  document.addEventListener('visibilitychange', () => {
+  function visibilityChanged() {
     if (opted) nextStatus = document.hidden ? 'away' : 'online';
     refresh();
-  });
-  window.addEventListener('online', refresh);
-  window.addEventListener('offline', () => {
+  }
+  function offline() {
     invalidate('Disconnected or presence unavailable. Current status is unknown; refresh will retry.');
-  });
-  window.addEventListener('pagehide', () => {
+  }
+  function pagehide() {
     stopped = true;
     invalidate('Page suspended. Current status is unknown.');
     clearInterval(timer); clearInterval(expiryTimer);
-  });
+  }
+  function dispose(event) {
+    if (!event.detail || !event.detail.contains(box)) return;
+    // Pane navigation is not a pagehide. Stop the old channel client before replacement;
+    // abort is ambiguous delivery, so do not claim/send offline or auto-retry a heartbeat.
+    pagehide(); opted = false;
+    document.removeEventListener('visibilitychange', visibilityChanged);
+    document.removeEventListener('wb:before-replace', dispose);
+    window.removeEventListener('online', refresh);
+    window.removeEventListener('offline', offline);
+    window.removeEventListener('pagehide', pagehide);
+    window.removeEventListener('pageshow', pageshow);
+  }
+  document.addEventListener('visibilitychange', visibilityChanged);
+  document.addEventListener('wb:before-replace', dispose);
+  window.addEventListener('online', refresh);
+  window.addEventListener('offline', offline);
+  window.addEventListener('pagehide', pagehide);
   function startTimers() {
     clearInterval(timer); clearInterval(expiryTimer);
     timer = setInterval(refresh, 30000);
     expiryTimer = setInterval(draw, 1000);
   }
-  window.addEventListener('pageshow', (event) => {
+  function pageshow(event) {
     if (!event.persisted) return;
     // A back/forward-cache restore is a new view, not evidence of uninterrupted presence.
     invalidate('Page restored. Current status is unknown until refreshed.');
@@ -128,7 +144,8 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
     toggle.textContent = 'Share presence in this channel';
     sharing.textContent = 'Not sharing. Share explicitly again after returning to this page.';
     startTimers(); refresh();
-  });
+  }
+  window.addEventListener('pageshow', pageshow);
   startTimers();
   refresh();
 })();`;

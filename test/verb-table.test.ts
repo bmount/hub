@@ -93,7 +93,7 @@ const TABLE: Record<string, Decl> = {
   "inbox.wait": T("tenant", "reader", null), "inbox.ack": T("tenant", "reader", null, { mcp: "write" }), "chat.mark_read": T("tenant", "reader", null, { mcp: "write" }),
   "ref.backlinks": T("tenant", "reader", null, { mcp: "read" }),
   "chat.conversations": T("tenant", "reader", null),
-  "chat.heartbeat": T("tenant", "reader", null), "chat.presence": T("tenant", "reader", null),
+  "chat.heartbeat": T("tenant", "reader", null, { mcp: "write" }), "chat.presence": T("tenant", "reader", null, { mcp: "read" }),
   "chat.agent_mute": T("tenant", "reader", null), "chat.agent_unmute": T("tenant", "member", 60, { humanOnly: true }),
   "chat.agents_disable": T("tenant", "admin", null), "chat.agents_enable": T("tenant", "admin", 60),
   "oauth.grant.approve": T("hub", "public", 600, { humanOnly: true }),

@@ -5,24 +5,25 @@ class Element {
   textContent = "";
   disabled = false;
   children: Element[] = [];
-  listeners = new Map<string, (event?: { persisted: boolean }) => void>();
+  listeners = new Map<string, (event?: { persisted?: boolean; detail?: { contains: (el: unknown) => boolean } }) => void>();
   replaceChildren() { this.children = []; }
   append(el: Element) { this.children.push(el); }
-  addEventListener(name: string, fn: (event?: { persisted: boolean }) => void) { this.listeners.set(name, fn); }
-  fire(name: string, event?: { persisted: boolean }) { this.listeners.get(name)?.(event); }
+  addEventListener(name: string, fn: (event?: { persisted?: boolean; detail?: { contains: (el: unknown) => boolean } }) => void) { this.listeners.set(name, fn); }
+  removeEventListener(name: string) { this.listeners.delete(name); }
+  fire(name: string, event?: { persisted?: boolean; detail?: { contains: (el: unknown) => boolean } }) { this.listeners.get(name)?.(event); }
 }
 
 function client() {
   const connection = new Element(), sharing = new Element(), freshness = new Element(), list = new Element(), toggle = new Element();
   const selectors: Record<string, Element> = { "[data-presence-connection]": connection, "[data-presence-sharing]": sharing, "[data-presence-freshness]": freshness, "[data-presence-list]": list, "[data-presence-toggle]": toggle };
   const docEvents = new Element(), winEvents = new Element();
-  const document = { hidden: false, querySelector: () => ({ dataset: { chatPresence: "general" }, querySelector: (s: string) => selectors[s] }), createElement: () => new Element(), addEventListener: docEvents.addEventListener.bind(docEvents) };
+  const document = { hidden: false, querySelector: () => ({ dataset: { chatPresence: "general" }, querySelector: (s: string) => selectors[s] }), createElement: () => new Element(), addEventListener: docEvents.addEventListener.bind(docEvents), removeEventListener: docEvents.removeEventListener.bind(docEvents) };
   const navigator = { onLine: true };
   let time = 0, denied = false;
   const calls: Array<{ name: string; status?: string; signal: AbortSignal }> = [];
   let delayed: Promise<void> | null = null;
   const intervals = new Map<number, () => void>();
-  let entries = [{ handle: '<img src=x onerror=alert(1)>', kind: "agent", state: "online", last_seen: 1000, expires_at: 91000 }];
+  let entries = [{ handle: '<img src=x onerror=alert(1)>', kind: "agent", via_assistant: false, state: "online", last_seen: 1000, expires_at: 91000 }];
   const fetch = async (url: string, init: { body: string; signal: AbortSignal }) => {
     const input = JSON.parse(init.body); calls.push({ name: url, status: input.status, signal: init.signal });
     const result = { entries, observed_at: 1000 };
@@ -34,7 +35,7 @@ function client() {
   };
   // Execute the exact shipped asset with small DOM/transport fakes, not a second implementation.
   const start = new Function("document", "window", "navigator", "fetch", "performance", "setInterval", "clearInterval", "setTimeout", "clearTimeout", CHAT_PRESENCE_JS);
-  start(document, { addEventListener: winEvents.addEventListener.bind(winEvents) }, navigator, fetch, { now: () => time },
+  start(document, { addEventListener: winEvents.addEventListener.bind(winEvents), removeEventListener: winEvents.removeEventListener.bind(winEvents) }, navigator, fetch, { now: () => time },
     (fn: () => void, ms: number) => { intervals.set(ms, fn); return ms; }, (id: number) => intervals.delete(id), () => 1, () => {});
   return { connection, sharing, freshness, list, toggle, document, navigator, calls, docEvents, winEvents,
     delayNext: () => { let release!: () => void; delayed = new Promise<void>((resolve) => { release = resolve; }); return release; },
@@ -43,11 +44,35 @@ function client() {
     elapsed: (ms: number) => { time = ms; intervals.get(1000)?.(); },
     poll: () => intervals.get(30000)?.(), deny: () => { denied = true; },
     empty: () => { entries = []; },
+    assistant: () => { entries = [{ ...entries[0]!, kind: "human", via_assistant: true }]; },
+    dispose: () => docEvents.fire("wb:before-replace", { detail: { contains: () => true } }),
   };
 }
 const settle = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 
 describe("presence browser asset", () => {
+  it("labels assistant-reported human presence separately", async () => {
+    const c = client(); await settle(); c.assistant(); c.poll(); await settle();
+    expect(c.list.children[0]!.textContent).toContain("human via-assistant");
+  });
+
+  it("disposes the old channel on pane replacement, aborts transport and never resumes publishing on later events", async () => {
+    const c = client(); await settle();
+    c.toggle.fire("click"); await settle();
+    const release = c.delayNext(); c.poll(); await settle();
+    const request = c.calls.at(-1)!;
+    c.dispose();
+    expect(request.signal.aborted).toBe(true);
+    expect(c.list.children).toEqual([]);
+    const count = c.calls.length;
+    release(); await settle();
+    c.poll(); c.elapsed(120000); c.winEvents.fire("online");
+    c.winEvents.fire("pageshow", { persisted: true }); c.docEvents.fire("visibilitychange"); await settle();
+    expect(c.calls).toHaveLength(count);
+    expect(c.list.children).toEqual([]);
+    expect(c.docEvents.listeners.size).toBe(0);
+    expect(c.winEvents.listeners.size).toBe(0);
+  });
   it("only reads until explicit opt-in, renders names as text and expires cached online status with a monotonic clock", async () => {
     const c = client(); await settle();
     expect(c.calls.map((x) => x.name)).toEqual(["/api/chat.presence"]);

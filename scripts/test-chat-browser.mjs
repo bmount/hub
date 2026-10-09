@@ -90,15 +90,21 @@ try {
   await verb(member, 'chat.post', { c: 'general', body: 'New top-level activity' });
   browser = await chromium.launch({ headless: true });
   let requests = 0;
+  const presenceCalls = [];
+  const disconnected = new WeakSet();
   async function context(token, viewport) {
     const ctx = await browser.newContext({ viewport, serviceWorkers: 'block' });
     if (token) await ctx.addCookies([{ name: 'pmw_session', value: token, domain: '.pimwell.test', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
     await ctx.route('**/*', async route => {
+      if (disconnected.has(ctx)) return route.abort('internetdisconnected');
       const req = route.request();
       const url = new URL(req.url());
       // Never allow requests to the network, even if a rendered link/script changes.
       if (!['pimwell.test', host, 'other.pimwell.test'].includes(url.hostname)) return route.abort('blockedbyclient');
       requests++;
+      if (/\/api\/chat\.(heartbeat|presence)$/.test(url.pathname)) {
+        presenceCalls.push({ name: url.pathname, ...JSON.parse(req.postData() || '{}') });
+      }
       const res = await mf.dispatchFetch(req.url(), { method: req.method(), headers: { ...await req.allHeaders(), 'x-local-browser-host': url.host }, body: req.postDataBuffer() || undefined });
       await route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) });
     });
@@ -120,6 +126,60 @@ try {
       }
     }
     throw new Error(`Keyboard could not reach ${selector}`);
+  }
+  // Real Chromium + shipped assets + authentic synthetic browser sessions; no
+  // production credentials. Network-disconnect tests use Chromium's offline mode.
+  for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }], ['narrow', { width: 320, height: 740 }]]) {
+    const ctx = await context(member, viewport);
+    const page = await ctx.newPage();
+    await page.clock.install();
+    const start = presenceCalls.length;
+    await page.goto(`${base}/c/general`);
+    const box = page.getByRole('region', { name: 'Channel presence' });
+    const toggle = box.getByRole('button', { name: 'Share presence in this channel', exact: true });
+    await expect(box.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    expect(presenceCalls.slice(start).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(0);
+    const beforeCursor = (await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq;
+    await tabTo(page, '[data-presence-toggle]');
+    await page.keyboard.press('Enter');
+    await expect(box.locator('[data-presence-list]')).toContainText('online');
+    await expect(toggle).toHaveCount(0);
+    expect((await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev')).toMatchObject({ state: 'online', via_assistant: false });
+    await noOverflow(page);
+    await box.screenshot({ path: path.join(artifacts, `${label}-presence-online.png`) });
+    // Pane replacement (not a document load/pagehide) must retire old publishers.
+    const navStart = presenceCalls.length;
+    await page.locator('.channel-rail a[href="/c/support"]').click();
+    await expect(page.locator('[data-chat-presence]')).toHaveAttribute('data-chat-presence', 'support');
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+    await page.clock.fastForward(30001);
+    await expect.poll(() => presenceCalls.slice(navStart).filter(c => c.name.endsWith('presence') && c.c === 'support').length).toBeGreaterThan(1);
+    expect(presenceCalls.slice(navStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(0);
+    await page.goBack();
+    await expect(page.locator('[data-chat-presence]')).toHaveAttribute('data-chat-presence', 'general');
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
+    // Back in the channel, sharing requires another explicit action.
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-list]')).toContainText('online');
+    disconnected.add(ctx); await ctx.setOffline(true);
+    await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+    await expect(page.locator('[data-presence-connection]')).toContainText('Current status is unknown');
+    await expect(page.locator('[data-presence-list] li')).toHaveCount(0);
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-sharing]')).toContainText('previous heartbeat expires within 90 seconds');
+    await page.locator('[data-chat-presence]').screenshot({ path: path.join(artifacts, `${label}-presence-disconnected.png`) });
+    disconnected.delete(ctx); await ctx.setOffline(false);
+    await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
+    await page.locator('[data-presence-toggle]').click();
+    await expect(page.locator('[data-presence-list]')).toContainText('offline');
+    await expect.poll(async () => (await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev').state).toBe('offline');
+    expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(beforeCursor);
+    await noOverflow(page);
+    await ctx.close();
+    console.log(`PASS ${label}: explicit presence opt-in/stop, keyboard/focus, pane disposal/back navigation, genuine Chromium offline clearing and recovery, cursor unchanged`);
   }
   let lastRead = 0;
   for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }], ['narrow', { width: 320, height: 740 }]]) {
