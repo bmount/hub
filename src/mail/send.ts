@@ -32,8 +32,8 @@ export async function sendMail(env: Env, mail: Outbound, now: number, opts: { re
   const cc = reply ? [] : (mail.cc ?? []).map(normalizeEmail);
   try {
     for (const r of [to, ...cc]) {
-      if (!reply && mail.basis === "member") { if (await consentWithdrawn(env.HUB_DB, r)) return "no_consent"; }
-      else if (!(await hasActiveConsent(env.HUB_DB, r))) return "no_consent";
+      if (await consentWithdrawn(env.HUB_DB, r)) return "no_consent";
+      if ((reply || mail.basis !== "member") && !(await hasActiveConsent(env.HUB_DB, r))) return "no_consent";
     }
     const from = reply ? reply.to.trim().toLowerCase() : mail.from ?? senderAddress(env);
     const raw = buildMime({
@@ -48,8 +48,9 @@ export async function sendMail(env: Env, mail: Outbound, now: number, opts: { re
       else await env.MAIL.send(new EmailMessage(from, r, raw));
     }
     return "sent";
-  } catch (e) {
-    console.log("mail delivery failed", reply ? "reply" : "send", e instanceof Error ? e.name : "unknown");
+  } catch {
+    // Transport errors can contain credentials in any field (including name).
+    console.log("mail delivery failed", reply ? "reply" : "send");
     return "failed";
   }
 }
