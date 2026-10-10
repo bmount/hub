@@ -181,8 +181,11 @@ export async function threadPage(request: Request, env: Env, slug: string, seq: 
     const r = await verb<ReadResult>(pc.ctx, "chat.thread", { c: slug, msg: seq, budget: 8000, ...(after && /^\d{1,12}$/.test(after) ? { after } : {}) });
     const root = r.messages[0]!;
     const messages = new Map(r.messages.map((m) => [m.msg_id, m]));
+    const missing = r.messages.some((m) => m.seq === Number(seq)) ? ""
+      : `<p class="lede" role="status">Message #${Number(seq)} is not shown on this page. This is a partial thread view; continue paging or inspect its history.</p>`;
+    const partial = after ? '<p class="lede">Earlier reply activity may be omitted. The root is context, not proof that the named message is shown or that the thread was processed.</p>' : "";
     const channels = await conversations(pc.ctx);
-    const body = `<header class="channel-header"><p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p><h1>Thread #${root.seq}</h1><a class="chip" href="/c/${esc(r.channel)}/t/${root.seq}">Refresh thread</a></header>${presencePanel(r.channel, channels)}`
+    const body = `<header class="channel-header"><p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p><h1>Thread #${root.seq}</h1><a class="chip" href="/c/${esc(r.channel)}/t/${root.seq}">Refresh thread</a></header>${presencePanel(r.channel, channels)}${missing}${partial}`
       + `<section class="thread-root" aria-labelledby="thread-original"><h2 id="thread-original">Original message</h2>${msgHtml(r.channel, root, true, undefined, messages)}</section>`
       + `<section aria-labelledby="thread-replies"><h2 id="thread-replies">Replies${after ? " (continued)" : ""}</h2><div class="channel-messages">${r.messages.slice(1).map((m) => msgHtml(r.channel, m, true, undefined, messages)).join("") || '<p class="lede">No replies shown.</p>'}</div></section>`
       + (r.next_after !== null ? `<p><a href="/c/${esc(r.channel)}/t/${root.seq}?after=${r.next_after}">More replies</a></p>` : "")
@@ -227,12 +230,16 @@ export async function permalinkPage(request: Request, env: Env, msgId: string): 
   const ch = row ? await getChannelById(env.HUB_DB, pc.ctx.tenant!.id, row.conversation_id) : null;
   if (!ch) return notFoundPage(pc.extra);
   try {
-    const h = await verb<{ channel: string; seq: number; versions: Array<{ rev: number; author: AuthorJson; body: string; retracted: boolean; created_at: number }> }>(
+    const h = await verb<{ channel: string; seq: number; versions: Array<{ rev: number; seq: number; author: AuthorJson; body: string; retracted: boolean; created_at: number }> }>(
       pc.ctx, "chat.history", { c: ch.slug, msg: msgId },
     );
     const versions = h.versions.map((x) => `<article><p>r${x.rev} ${when(x.created_at)} ${tagHtml(x.author)}${x.retracted ? " <em>retracted</em>" : ""}</p>`
       + `${x.retracted ? "" : `<pre style="white-space:pre-wrap;margin:.25rem 0">${esc(x.body)}</pre>`}</article>`).join("");
-    const body = `<h1>#${esc(h.channel)} message #${h.seq}</h1>${NAV}<p><a href="/c/${esc(h.channel)}/t/${h.seq}">in context</a></p>${versions}`;
+    // Threads page by current activity, not creation: place the named message first after root context.
+    // This is navigation from a history snapshot, never an acknowledgement or a frozen source revision.
+    const activity = h.versions.at(-1)!.seq;
+    const thread = `/c/${esc(h.channel)}/t/${h.seq}`;
+    const body = `<h1>#${esc(h.channel)} message #${h.seq}</h1>${NAV}<p><a href="${thread}?after=${activity - 1}#m${h.seq}">Latest message in context</a> · <a href="${thread}">Thread from start</a></p>${versions}`;
     return htmlResponse(page(`#${h.channel} #${h.seq}`, body, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);

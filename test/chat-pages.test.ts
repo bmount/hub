@@ -1,4 +1,4 @@
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { cookieHeaders, seedHuman, seedTenant } from "./helpers";
 import { HOST, channelWith, chatWorld, ok } from "./chat-helpers";
@@ -203,7 +203,11 @@ describe("chat pages", () => {
     await channelWith(w, "general", []);
     const root = await ok(w.lead.token, "chat.post", { c: "general", body: "thread root" });
     // Two human authors stay within the unchanged 30-posts/minute per-identity limit.
-    for (let i = 0; i < 50; i++) await ok(i % 2 ? w.dev.token : w.lead.token, "chat.post", { c: "general", reply_to: root.seq, body: `reply-${i} ${"x".repeat(1000)}` });
+    let source: { seq: number; msg_id: string } | undefined;
+    for (let i = 0; i < 50; i++) {
+      const reply = await ok(i % 2 ? w.dev.token : w.lead.token, "chat.post", { c: "general", reply_to: root.seq, body: `reply-${i} ${"x".repeat(1000)}` });
+      if (i === 0) source = reply;
+    }
     const first = await (await get(`/c/general/t/${root.seq}`, w.dev.token)).text();
     const link = first.match(/href="(\/c\/general\/t\/1\?after=\d+)">More replies/);
     expect(link).not.toBeNull();
@@ -214,7 +218,72 @@ describe("chat pages", () => {
     expect(next).toContain("reply-49 ");
     expect(next).not.toContain("reply-0 ");
     expect(next).toContain('aria-current="page">#general');
-  }, 15_000); // 50 serial API writes; keep all paging and isolation assertions.
+
+    const edit = await ok(w.lead.token, "chat.edit", { c: "general", msg: source!.seq, body: "exact revised <script>source</script>" });
+    const omitted = await (await get(`/c/general/t/${source!.seq}`, w.dev.token)).text();
+    expect(omitted).not.toContain(`id="m${source!.seq}"`);
+    expect(omitted).toContain(`Message #${source!.seq} is not shown on this page.`);
+    const history = await (await get(`/m/${source!.msg_id}`, w.dev.token)).text();
+    const focus = `/c/general/t/${source!.seq}?after=${edit.seq - 1}#m${source!.seq}`;
+    expect(history).toContain(`href="${focus}">Latest message in context`);
+    expect(history).toContain(`href="/c/general/t/${source!.seq}">Thread from start`);
+    const reader = await seedHuman("context-reader@example.com", { memberships: [{ tenant_id: w.acme.id, role: "reader" }] });
+    const inboxBefore = (await ok(w.dev.token, "chat.inbox")).items;
+    for (const token of [w.dev.token, reader.token]) {
+      const focused = await get(focus, token);
+      expect(focused.status).toBe(200);
+      expect(focused.headers.get("cache-control")).toBe("no-store");
+      const html = await focused.text();
+      expect(html).toContain(`id="m${source!.seq}"`);
+      expect(html).toContain("exact revised &lt;script&gt;source&lt;/script&gt;");
+      expect(html).not.toContain("<script>source</script>");
+      expect(html).toContain("thread root");
+      expect(html).not.toContain("reply-49 ");
+      expect(html).not.toContain("is not shown on this page");
+      expect(html).toContain("Earlier reply activity may be omitted");
+      expect((await ok(token, "chat.conversations")).conversations[0].read_seq).toBe(0);
+    }
+    const retract = await ok(w.lead.token, "chat.retract", { c: "general", msg: source!.seq });
+    const retractedHistory = await (await get(`/m/${source!.msg_id}`, reader.token)).text();
+    const retractedFocus = `/c/general/t/${source!.seq}?after=${retract.seq - 1}#m${source!.seq}`;
+    expect(retractedHistory).toContain(`href="${retractedFocus}"`);
+    const retracted = await (await get(retractedFocus, reader.token)).text();
+    expect(retracted).toContain(`id="m${source!.seq}"`);
+    expect(retracted).toContain("<em>retracted</em>");
+    expect(retracted).not.toContain("exact revised");
+    expect((await ok(w.dev.token, "chat.inbox")).items).toEqual(inboxBefore);
+    expect((await ok(w.dev.token, "chat.thread", { c: "general", msg: root.seq })).head).toBe(retract.head);
+    const other = await seedTenant("other");
+    const outsider = await seedHuman("context-outsider@example.com", { memberships: [{ tenant_id: other.id, role: "admin" }] });
+    await env.HUB_DB.prepare("DELETE FROM membership WHERE tenant_id = ? AND identity_id = ?").bind(w.acme.id, reader.identity.id).run();
+    for (const token of [outsider.token, reader.token]) {
+      for (const path of [focus, `/m/${source!.msg_id}`]) {
+        const denied = await get(path, token);
+        expect(denied.status).toBe(404);
+        expect(await denied.text()).not.toContain(source!.msg_id);
+      }
+    }
+  }, 20_000); // Serial writes and authorized navigation through edited/retracted activity.
+
+  it("identifies a named message omitted by an explicit thread continuation without treating the root as that source", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const root = await ok(w.lead.token, "chat.post", { c: "general", body: "root context" });
+    const source = await ok(w.lead.token, "chat.post", { c: "general", reply_to: root.seq, body: "exact source" });
+    await ok(w.dev.token, "chat.post", { c: "general", reply_to: source.seq, body: "later reply" });
+    const html = await (await get(`/c/general/t/${source.seq}?after=${source.head}`, w.dev.token)).text();
+    expect(html).toContain(`Message #${source.seq} is not shown on this page.`);
+    expect(html).toContain("continue paging or inspect its history");
+    expect(html).toContain("root context");
+    expect(html).toContain("later reply");
+    expect(html).not.toContain("exact source");
+    const full = await (await get(`/c/general/t/${source.seq}`, w.dev.token)).text();
+    expect(full).toContain("exact source");
+    expect(full).not.toContain("is not shown on this page");
+    const rootHistory = await (await get(`/m/${root.msg_id}`, w.dev.token)).text();
+    expect(rootHistory).toContain(`href="/c/general/t/${root.seq}?after=0#m${root.seq}">Latest message in context`);
+    expect((await ok(w.dev.token, "chat.conversations")).conversations[0].read_seq).toBe(0);
+  });
 
   it("gives readers navigation and unread controls but no posting or membership-management forms", async () => {
     const w = await chatWorld();
