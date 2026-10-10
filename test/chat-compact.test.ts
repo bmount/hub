@@ -12,7 +12,7 @@ const AT = Date.UTC(2026, 9, 6, 9, 14);
 
 function msg(seq: number, body: string, over: Partial<MsgView> = {}): MsgView {
   return {
-    seq, msg_id: `M${seq}`, rev: 1, kind: "say", thread_root: null, root_seq: null, author_id: "H1", author_kind: "human", session_id: "S1",
+    seq, activity_seq: seq, msg_id: `M${seq}`, rev: 1, kind: "say", thread_root: null, root_seq: null, author_id: "H1", author_kind: "human", session_id: "S1",
     session_kind: "browser", hop: 0, body, edited: false, retracted: false, reply_count: 0, last_reply_seq: null, refs: [], mentions: [],
     hop_limited: false, created_at: AT, updated_at: AT, ...over,
   };

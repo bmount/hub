@@ -11,6 +11,8 @@ export type AuthorJson = {
   identity_id: string; handle: string; display_name: string; kind: NameTag["kind"]; operator: string | null; session_id: string | null; session_kind: NameTag["session_kind"]; run: string | null; via_assistant: boolean;
 };
 export type MsgJson = {
+  /** Latest artifact of this exact message; differs from whole-thread scan cursors. */
+  activity_seq: number;
   seq: number; msg_id: string; rev: number; root_seq: number | null; author: AuthorJson; hop: number; body: string; edited: boolean;
   retracted: boolean; system: boolean; reply_count: number; last_reply_seq: number | null; refs: ViewRef[]; created_at: number; updated_at: number;
   response_to: ResponseAttribution | null;
@@ -22,7 +24,7 @@ export function authorJson(t: NameTag): AuthorJson {
 
 export function msgJson(m: MsgView, t: NameTag, refs: ViewRef[]): MsgJson {
   return {
-    seq: m.seq, msg_id: m.msg_id, rev: m.rev, root_seq: m.root_seq, author: authorJson(t), hop: m.hop, body: m.retracted ? "" : m.body, edited: m.edited,
+    seq: m.seq, activity_seq: m.activity_seq, msg_id: m.msg_id, rev: m.rev, root_seq: m.root_seq, author: authorJson(t), hop: m.hop, body: m.retracted ? "" : m.body, edited: m.edited,
     retracted: m.retracted, system: m.kind === "system", reply_count: m.reply_count, last_reply_seq: m.last_reply_seq, refs, created_at: m.created_at, updated_at: m.updated_at,
     response_to: m.response_to ?? null,
   };

@@ -111,7 +111,7 @@ export class Conversation extends DurableObject<Env> {
     const refs = this.#q<{ kind: string; key: string; title: string | null }>("SELECT kind, key, title_snapshot AS title FROM ref WHERE seq = ? ORDER BY rowid", r.last_seq)
       .map((x) => ({ kind: x.kind as StoredRef["kind"], key: x.key, title: x.title }));
     return {
-      seq: r.first_seq, msg_id: r.msg_id, rev: r.rev, kind: r.kind === "system" ? "system" : "say", thread_root: r.thread_root, root_seq: root,
+      seq: r.first_seq, activity_seq: r.last_seq, msg_id: r.msg_id, rev: r.rev, kind: r.kind === "system" ? "system" : "say", thread_root: r.thread_root, root_seq: root,
       author_id: r.author_id, author_kind: r.author_kind as AuthorKind, session_id: r.current_session_id, session_kind: r.current_session_kind as ChatSessionKind,
       hop: r.hop, body: r.body, edited: r.rev > 1 && r.retracted === 0, retracted: r.retracted === 1, reply_count: r.reply_count,
       last_reply_seq: r.last_reply_seq, refs, mentions: meta.mentions ?? [], hop_limited: meta.hop_limited === true,

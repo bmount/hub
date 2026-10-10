@@ -73,6 +73,8 @@ export type VersionInput = {
 };
 
 export type MsgView = {
+  /** Current message artifact sequence, not collapsed thread activity or processing proof. */
+  activity_seq: number;
   seq: number; msg_id: string; rev: number; kind: "say" | "system"; thread_root: string | null; root_seq: number | null;
   author_id: string; author_kind: AuthorKind; session_id: string | null; session_kind: ChatSessionKind; hop: number;
   body: string; edited: boolean; retracted: boolean; reply_count: number; last_reply_seq: number | null;

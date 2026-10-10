@@ -94,14 +94,18 @@ describe("checkpoint discovery of current edited mentions", () => {
     const ch = (await getChannelBySlug(env.HUB_DB, w.acme.id, "general"))!;
     const r = await ok(w.dev.token, "chat.catchup", { advance: true, budget: 8000 });
     expect(r.for_you.map((m: any) => m.seq)).toEqual([...sources].reverse().slice(0, 20).map((s) => s.seq));
+    expect(r.for_you.map((m: any) => m.activity_seq)).toEqual(Array.from({ length: 20 }, (_, i) => 23 + i));
     expect(r.omitted).toBeGreaterThanOrEqual(1);
     expect(r.conversations[0].new).toBe(0);
     expect(decodeCursors(r.next)[ch.project_id]).toBe(22);
     expect((await inboxStub(env, w.acme.id, w.dev.identity.id).cursors(w.acme.id, w.dev.identity.id))[ch.project_id]).toBe(22);
     // A caller that actually processed the first 20 activities explicitly advances to their activity seq.
-    await ok(w.dev.token, "chat.mark_read", { c: "general", seq: 42 });
+    const lastShownActivity = r.for_you.at(-1).activity_seq;
+    expect(lastShownActivity).toBe(42);
+    await ok(w.dev.token, "chat.mark_read", { c: "general", seq: lastShownActivity });
     const tail = await ok(w.dev.token, "chat.catchup", { budget: 8000 });
     expect(tail.for_you.map((m: any) => m.seq)).toEqual([2, 1]);
+    expect(tail.for_you.map((m: any) => m.activity_seq)).toEqual([43, 44]);
     expect(tail.omitted).toBe(0);
     expect(decodeCursors(tail.next)[ch.project_id]).toBe(44);
   }, 20_000);
