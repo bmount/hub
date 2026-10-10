@@ -54,7 +54,7 @@ describe("outbound mail", () => {
     expect(w.sent[0]).toMatchObject({ from: "acme.site@pimwell.test", to: "pat@example.com", subject: "Re: Prices" });
     expect(w.sent[0]!.raw).toContain("In-Reply-To: <");
     expect(w.sent[0]!.raw).toContain("Content-Transfer-Encoding: base64");
-    expect((await env.HUB_DB.prepare("SELECT status, in_reply_to FROM outbound_mail").first())).toEqual({ status: "sent", in_reply_to: w.projectMail });
+    expect((await env.HUB_DB.prepare("SELECT status, in_reply_to FROM outbound_mail WHERE status = 'sent'").first())).toEqual({ status: "sent", in_reply_to: w.projectMail });
   });
 
   it("lets an agent answer only its own mail, and people only the organization's and projects'", async () => {

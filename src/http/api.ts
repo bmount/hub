@@ -11,6 +11,7 @@ import { getVerb } from "../verbs/table";
 import { note } from "../log";
 import { recordEvent } from "../db/events";
 import { esc } from "../html";
+import { mailDeliveryNotice, type DeliveryNotice } from "./mailDeliveryNotice";
 
 async function readBody(request: Request, name: string): Promise<{ input: Record<string, unknown>; isForm: boolean }> {
   const ct = request.headers.get("content-type") ?? "";
@@ -151,13 +152,18 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
         const next = ctx?.tenant ? `&next=${encodeURIComponent(ctx.tenant.slug + path)}` : "";
         return finish(ctx, env, new Response(null, { status: 303, headers: { location: `https://${env.HUB_DOMAIN}/login?reproof=1${next}`, "cache-control": "no-store" } }));
       }
-      if (isForm) return finish(ctx, env, htmlResponse(page("Not done", formError(e, request)), e.status));
+      if (isForm) {
+        const delivery = ctx && (name === "mail.reply" || name === "mail.send") && e.data?.mail_delivery;
+        return finish(ctx, env, htmlResponse(page("Not done", delivery
+          ? `<h1>Mail not confirmed</h1>${mailDeliveryNotice(ctx!, delivery as DeliveryNotice)}${reference(request)}`
+          : formError(e, request)), e.status));
+      }
       return finish(ctx, env, json({ ok: false, error: e.reason, detail: e.detail ?? null, ...(e.data ? { data: e.data } : {}) }, e.status));
     }
     if (e instanceof SyntaxError) return finish(ctx, env, json({ ok: false, error: "bad_request", detail: "invalid JSON" }, 400));
     note(request, { error: { reason: "internal", detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e) } });
     console.error(JSON.stringify({ msg: "verb failed", verb: name, ray: request.headers.get("cf-ray"), stack: e instanceof Error ? e.stack ?? null : null }));
-    if (isForm) return finish(ctx, env, htmlResponse(page("Not done", `<h1>That didn't work</h1><p>Something went wrong on our side, and it is in the log. Nothing was changed.</p><p><a href="javascript:history.back()">Go back</a></p>${reference(request)}`), 500));
+    if (isForm) return finish(ctx, env, htmlResponse(page("Not done", `<h1>That didn't work</h1><p>${name === "mail.reply" || name === "mail.send" ? 'Mail delivery is uncertain. Check Mail and confirm with recipients before sending again; a retry could duplicate delivery. <a href="/mail">Review Mail</a>.' : "Something went wrong on our side, and it is in the log. Nothing was changed."}</p><p><a href="javascript:history.back()">Go back</a></p>${reference(request)}`), 500));
     return finish(ctx, env, json({ ok: false, error: "internal", detail: null }, 500));
   }
 }

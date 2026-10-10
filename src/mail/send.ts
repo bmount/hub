@@ -10,7 +10,7 @@ import { buildMime, safeMessageId } from "./mime";
  * but never to anyone who has withdrawn consent.
  */
 export type Outbound = { to: string; cc?: string[]; subject: string; text: string; from?: string; inReplyTo?: string | null; references?: string[]; utf8?: boolean; basis?: "consent" | "member" };
-export type SendResult = "sent" | "no_consent" | "failed";
+export type SendResult = "sent" | "no_consent" | "failed" | "unknown";
 export type SentMail = { from: string; to: string; subject: string; text: string; raw: string };
 
 let testTransport: ((m: SentMail) => Promise<void>) | null = null;
@@ -30,6 +30,7 @@ export async function sendMail(env: Env, mail: Outbound, now: number, opts: { re
   const reply = opts.replyTo ?? null;
   const to = normalizeEmail(reply ? reply.from : mail.to);
   const cc = reply ? [] : (mail.cc ?? []).map(normalizeEmail);
+  let attempted = false;
   try {
     for (const r of [to, ...cc]) {
       if (await consentWithdrawn(env.HUB_DB, r)) return "no_consent";
@@ -41,16 +42,23 @@ export async function sendMail(env: Env, mail: Outbound, now: number, opts: { re
       messageId: `<${ulid(now)}@${env.HUB_DOMAIN}>`, date: new Date(now),
       inReplyTo: reply ? safeMessageId(reply.headers.get("message-id")) : mail.inReplyTo ?? null, references: mail.references, utf8: mail.utf8,
     });
-    if (reply) await reply.reply(new EmailMessage(from, reply.from, raw));
+    if (reply) {
+      const message = new EmailMessage(from, reply.from, raw);
+      attempted = true;
+      await reply.reply(message);
+    }
     // One message, every recipient in its headers; one envelope per recipient.
     else for (const r of [to, ...cc]) {
+      const message = new EmailMessage(from, r, raw);
+      attempted = true;
       if (testTransport) await testTransport({ from, to: r, subject: mail.subject, text: mail.text, raw });
-      else await env.MAIL.send(new EmailMessage(from, r, raw));
+      else await env.MAIL.send(message);
     }
     return "sent";
   } catch {
     // Transport errors can contain credentials in any field (including name).
     console.log("mail delivery failed", reply ? "reply" : "send");
-    return "failed";
+    // A rejected transport call may already have delivered, including earlier Cc envelopes.
+    return attempted ? "unknown" : "failed";
   }
 }

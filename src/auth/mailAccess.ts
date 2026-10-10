@@ -26,18 +26,30 @@ export function readableMail(ctx: Ctx, alias = "m"): SqlFilter {
   };
 }
 
+/** Outgoing mail shares the reply's read boundary; new messages stay with their sender/operator/admin. */
+export function readableOutgoingMail(ctx: Ctx, alias = "o"): SqlFilter {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias)) throw new Error("invalid outgoing SQL alias");
+  if (!ctx.tenant || !ctx.identity || rank(ctx.role) < rank("reader")) return { sql: "0 = 1", bindings: [] };
+  const mail = readableMail(ctx);
+  return {
+    sql: `(${alias}.tenant_id = ? AND (? = 1 OR ${alias}.sent_by = ? OR
+      (? = 1 AND EXISTS (SELECT 1 FROM identity mail_sender WHERE mail_sender.id = ${alias}.sent_by
+        AND mail_sender.kind = 'agent' AND mail_sender.operator_id = ?)) OR
+      EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = ${alias}.in_reply_to AND ${mail.sql})))`,
+    bindings: [ctx.tenant.id, canInspectMail(ctx) ? 1 : 0, ctx.identity.id, ctx.identity.kind === "human" ? 1 : 0, ctx.identity.id, ...mail.bindings],
+  };
+}
+
 /** Mail event summaries contain subjects/addresses and must obey the same boundary as the record. */
 export function readableMailEvents(ctx: Ctx, alias = "e"): SqlFilter {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias)) throw new Error("invalid event SQL alias");
   if (!ctx.tenant || !ctx.identity || rank(ctx.role) < rank("reader")) return { sql: "0 = 1", bindings: [] };
   const mail = readableMail(ctx);
+  const outgoing = readableOutgoingMail(ctx);
   return {
     sql: `(${alias}.target_kind NOT IN ('inbound_mail', 'outbound_mail') OR
       (${alias}.target_kind = 'inbound_mail' AND EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = ${alias}.target_id AND ${mail.sql})) OR
-      (${alias}.target_kind = 'outbound_mail' AND EXISTS (SELECT 1 FROM outbound_mail o WHERE o.id = ${alias}.target_id AND o.tenant_id = ? AND
-        (? = 1 OR o.sent_by = ? OR (? = 1 AND EXISTS (SELECT 1 FROM identity mail_sender WHERE mail_sender.id = o.sent_by
-          AND mail_sender.kind = 'agent' AND mail_sender.operator_id = ?)) OR
-          EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = o.in_reply_to AND ${mail.sql})))))`,
-    bindings: [...mail.bindings, ctx.tenant.id, canInspectMail(ctx) ? 1 : 0, ctx.identity.id, ctx.identity.kind === "human" ? 1 : 0, ctx.identity.id, ...mail.bindings],
+      (${alias}.target_kind = 'outbound_mail' AND EXISTS (SELECT 1 FROM outbound_mail o WHERE o.id = ${alias}.target_id AND ${outgoing.sql})))`,
+    bindings: [...mail.bindings, ...outgoing.bindings],
   };
 }

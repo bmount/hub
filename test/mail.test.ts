@@ -71,11 +71,27 @@ describe("sendMail", () => {
     expect(sent).toHaveLength(1);
   });
 
-  it("reports failure without throwing", async () => {
+  it("distinguishes uncertain transport delivery from failure before transport", async () => {
     setTestTransport(async () => { throw new Error("boom"); });
     await consent("a@example.com");
-    expect(await sendMail(env, { to: "a@example.com", subject: "s", text: "t" }, Date.now())).toBe("failed");
+    expect(await sendMail(env, { to: "a@example.com", subject: "s", text: "t" }, Date.now())).toBe("unknown");
     expect(await sendMail(env, { to: "a@example.com", subject: "café", text: "t" }, Date.now())).toBe("failed");
+  });
+
+  it("keeps partial multi-recipient delivery uncertain without trying later envelopes", async () => {
+    await consent("a@example.com");
+    await consent("b@example.com");
+    await consent("c@example.com");
+    const attempted: string[] = [];
+    setTestTransport(async m => { attempted.push(m.to); if (m.to === "b@example.com") throw new Error("secret transport diagnostic"); });
+    expect(await sendMail(env, { to: "a@example.com", cc: ["b@example.com", "c@example.com"], subject: "s", text: "t" }, Date.now())).toBe("unknown");
+    expect(attempted).toEqual(["a@example.com", "b@example.com"]);
+  });
+
+  it("keeps reply transport failure unknown rather than inferring DMARC failure", async () => {
+    await consent("a@example.com");
+    const message = { from: "a@example.com", to: "signup@pimwell.test", headers: new Headers(), reply: async () => { throw new Error("References limit exceeded"); } } as unknown as ForwardableEmailMessage;
+    expect(await sendMail(env, { to: "a@example.com", subject: "s", text: "t" }, Date.now(), { replyTo: message })).toBe("unknown");
   });
 
   it("replies through the inbound message from the receiving address, gated by the same consent check", async () => {
