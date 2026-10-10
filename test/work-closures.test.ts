@@ -1,11 +1,14 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { buildContext } from "../src/auth/context";
+import { buildContext, oauthContext } from "../src/auth/context";
+import { liveGrant } from "../src/db/oauthGrants";
 import { recordEvent } from "../src/db/events";
 import { createProject } from "../src/db/projects";
 import { createWork, getWork, updateWork } from "../src/db/work";
 import { board, CLOSURE_ACTOR_LIMIT, workBoard } from "../src/verbs/board";
-import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
+import { callTool } from "../src/mcp/tools";
+import { registerAllVerbs } from "../src/verbs/index";
+import { apiPost, bearer, cookieHeaders, seedAgent, seedGrant, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
 async function world() {
@@ -120,10 +123,50 @@ describe("recorded work closure attribution", () => {
     expect((await apiPost(HOST, "work.board", {}, cookieHeaders(outsider.token, HOST))).status).not.toBe(200);
   });
 
+  it("filters only closure counts on API/browser, keeps scope gaps, and reveals no foreign actor directory data", async () => {
+    const w = await world(), item = await w.make();
+    await updateWork(env.HUB_DB, item, { state: "done" }, w.now, { identity_id: w.a.agent.identity.id, session_id: null });
+    await w.make("Legacy", "done");
+    const rh = cookieHeaders(w.reader.token, HOST);
+    const api = await apiPost(HOST, "work.board", { project: "site", actor: w.a.agent.identity.id }, rh);
+    expect(api.status).toBe(200);
+    const result = (await api.json() as { result: Awaited<ReturnType<typeof board>> }).result;
+    expect(result.closures).toMatchObject({ actor_id: w.a.agent.identity.id, total_actors: 1, currently_done_without_record: 1, actors: [{ identity_id: w.a.agent.identity.id, kind: "agent", items: 1 }] });
+    const { grant } = await seedGrant(w.t, w.reader);
+    const live = (await liveGrant(env.HUB_DB, grant.id, Date.now()))!;
+    const oauth = oauthContext(env, live, ["read"], { now: Date.now(), ip: "203.0.113.1" });
+    registerAllVerbs();
+    const mcp = await callTool(oauth, "work_board", { project: "site", actor: w.a.agent.identity.id });
+    expect(mcp.isError, JSON.stringify(mcp.content)).not.toBe(true);
+    expect(mcp.structuredContent).toMatchObject({ closures: result.closures });
+    const html = await (await SELF.fetch(`https://${HOST}/site/board?actor=${w.a.agent.identity.id}`, { headers: rh })).text();
+    expect(html).toContain(`value="${w.a.agent.identity.id}"`);
+    expect(html).toContain('href="/site/board">Clear filter');
+    expect(html).toContain("whole selected scope, independent of actor filter");
+    const foreign = await seedHuman("SECRET-DIRECTORY@example.com");
+    const other = await seedTenant("other");
+    const project = await createProject(env.HUB_DB, { tenant_id: other.id, namespace_id: null, slug: "site", kind: "tracker", display_name: "Other" }, w.now);
+    await createWork(env.HUB_DB, { tenant_id: other.id, project_id: project.id, kind: "snag", title: "Secret", body: "", state: "done", created_by: foreign.identity.id }, w.now, { identity_id: foreign.identity.id, session_id: null });
+    const empty = await board(w.ctx, "site", foreign.identity.id);
+    expect(empty.closures).toMatchObject({ actors: [], total_actors: 0, currently_done_without_record: 1 });
+    expect(workBoard.mcp!.render!(empty)).not.toContain("SECRET-DIRECTORY");
+    const payload = '<img src=x onerror="x">';
+    const safe = await (await SELF.fetch(`https://${HOST}/board?actor=${encodeURIComponent(payload)}`, { headers: rh })).text();
+    expect(safe).not.toContain(payload); expect(safe).toContain("&lt;img");
+    for (const actor of ["x".repeat(27), 42]) {
+      expect((await apiPost(HOST, "work.board", { actor }, rh)).status).toBe(400);
+    }
+    expect((await SELF.fetch(`https://${HOST}/board?actor=${"x".repeat(27)}`, { headers: rh })).status).toBe(400);
+    expect((await SELF.fetch(`https://${HOST}/board?actor=${foreign.identity.id}`)).status).toBe(404);
+    expect(workBoard.parse({ actor: "" }).actor).toBeNull();
+  });
+
   it("reports bounded actors with exact actor total independent of item sampling and stable tie order", async () => {
     const w = await world(), item = await w.make();
+    const ids: string[] = [];
     for (let n = 0; n < CLOSURE_ACTOR_LIMIT + 2; n++) {
       const h = await seedHuman(`actor${n}@example.com`);
+      ids.push(h.identity.id);
       await recordEvent(env.HUB_DB, { tenant_id: w.t.id, identity_id: h.identity.id, session_id: null, kind: "work.done", target_kind: "work_item", target_id: item.id, summary: "" }, w.now);
     }
     const b = await board(w.ctx, null);
@@ -131,6 +174,11 @@ describe("recorded work closure attribution", () => {
     expect(b.closures.actors).toHaveLength(50);
     expect(b.closures.actors.map(a => a.identity_id)).toEqual(b.closures.actors.map(a => a.identity_id).sort());
     expect(workBoard.mcp!.render!(b)).toContain("showing 50 of 52; truncated");
-    expect((await board(w.ctx, "absent")).closures).toMatchObject({ actors: [], total_actors: 0, truncated: false });
+    const omitted = ids.find(id => !b.closures.actors.some(a => a.identity_id === id))!;
+    const filtered = await board(w.ctx, null, omitted);
+    expect(filtered.closures).toMatchObject({ actor_id: omitted, total_actors: 1, truncated: false, actors: [{ identity_id: omitted, items: 1 }] });
+    expect(filtered.columns).toEqual(b.columns);
+    expect(workBoard.mcp!.render!(filtered)).toContain(`Actor filter: ${omitted}`);
+    expect((await board(w.ctx, "absent", omitted)).closures).toMatchObject({ actors: [], total_actors: 0, truncated: false });
   });
 });

@@ -13,6 +13,8 @@ import { getWorkByNumber, listLinksStatement, listWorkStatement, type WorkFilter
 import { DOCKET, KINDS, STATES, type WorkKind } from "../work/names";
 import { AREAS, PLANNED, plannedIn, type Area, type Plan } from "../verbs/planned";
 import { toolName } from "../mcp/policy";
+import { cutText } from "../mcp/render";
+import { traceEvidenceUrl, traceDraftStatement } from "../apps/work";
 
 const when = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
 const ago = (ms: number, now: number) => {
@@ -144,10 +146,37 @@ function plannedBlock(name: string, label: string): string {
   return `<div class="planned"><b>${esc(label)}</b> <span class="pill">planned</span> ${esc(p.summary)} <a href="/planned/${p.area}?v=${esc(name)}">What it will do</a></div>`;
 }
 
+function mailEvidenceHref(reference: string | null): string | null {
+  return reference?.length === 26 && /^[0-9A-HJKMNP-TV-Z]{26}$/.test(reference) ? `/mail/${reference}` : null;
+}
+
+function workLinkHtml(l: WorkLink): string {
+  let href: string | null = null;
+  if (l.target_kind === "url") href = safeExternalUrl(l.target_ref);
+  else if (l.target_kind === "mail") href = mailEvidenceHref(l.target_ref);
+  else if (!/\s/.test(l.target_ref)) {
+    const name = "([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)";
+    if (l.target_kind === "commit") {
+      const m = new RegExp(`^${name}@([0-9a-fA-F]{40})$`).exec(l.target_ref);
+      if (m) href = `/${m[1]}/code?c=${m[2]!.toLowerCase()}`;
+    } else if (l.target_kind === "item") {
+      const m = new RegExp(`^${name}#([1-9][0-9]{0,7})$`).exec(l.target_ref);
+      if (m) href = `/${m[1]}/w/${m[2]}`;
+    }
+  }
+  // A recorded reference is not proof of existence or access; the destination rechecks the viewer.
+  const target = href ? `<a href="${esc(href)}"${l.target_kind === "url" ? ' rel="noopener noreferrer" data-reload' : ""}>${esc(l.target_ref)}</a>` : `<code>${esc(l.target_ref)}</code>`;
+  return `<li>${esc(l.target_kind)}: ${target}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`;
+}
+
 function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string): string {
   const canWrite = rank(ctx.role) >= rank("member");
+  const sourceMail = w.source_kind === "mail" ? mailEvidenceHref(w.source_ref) : null;
+  const sourceUrl = w.source_kind === "url" && w.source_ref ? safeExternalUrl(w.source_ref) : null;
   const self = `/${esc(project.slug)}/w/${w.number}`;
-  const keep = esc(back.includes("?") ? `${self}${back.slice(back.indexOf("?"))}` : self);
+  const keepParams = new URLSearchParams(back.includes("?") ? back.slice(back.indexOf("?") + 1) : "");
+  if (back.startsWith("/docket")) keepParams.set("in", "org");
+  const keep = esc(`${self}${keepParams.size ? `?${keepParams}` : ""}`);
   const expectedUpdate = `<input type="hidden" name="expected_updated_at" value="${w.updated_at}">`;
   const action = (state: string, label: string, quiet = true) => `<form class="inline" method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="state" value="${state}"><input type="hidden" name="_back" value="${keep}"><button type="submit"${quiet ? ' class="quiet"' : ""}>${esc(label)}</button></form>`;
   const follow = `<form class="inline" method="post" action="/api/work.subscribe"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="follow" value="${d.following ? "0" : "1"}"><input type="hidden" name="_back" value="${keep}"><button type="submit" class="quiet" title="${d.following ? "Stop hearing about changes" : "Hear about every change in What needs me"}">${d.following ? "Following ✓" : "Follow"}</button></form>`;
@@ -169,15 +198,27 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
   const under = d.children.length
     ? `<h2>Under it</h2><table><tbody>${d.children.map((c) => `<tr data-href="/${esc(project.slug)}/w/${c.number}"><td class="ref">#${c.number}</td><td class="k-${c.kind}"><span class="kd"></span>${esc(KINDS[c.kind].name)}</td><td><a href="/${esc(project.slug)}/w/${c.number}">${esc(c.title)}</a></td><td>${esc(STATES[c.state])}</td></tr>`).join("")}</tbody></table>`
     : w.kind === "quest" ? `<h2>Under it</h2><p class="lede">Nothing yet. To put an item under this quest, choose it as the item's quest when you edit it.</p>` : "";
-  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map((l) => `<li>${esc(l.target_kind)}: ${l.target_kind === "url" && safeExternalUrl(l.target_ref) ? `<a href="${esc(safeExternalUrl(l.target_ref)!)}" rel="noopener noreferrer" data-reload>${esc(l.target_ref)}</a>` : `<code>${esc(l.target_ref)}</code>`}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`).join("")}</ul>` : "<p class=\"lede\">None yet. Agents link commits, threads and pages here with work_link.</p>"}`;
+  const linkForm = canWrite ? `<details><summary>Add link</summary>
+<form method="post" action="/api/work.link"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
+<label>Kind <select name="target_kind"><option value="commit">Commit</option><option value="item">Work item</option><option value="mail">Mail</option><option value="message">Message</option><option value="event">Event</option><option value="url">HTTPS URL</option></select></label>
+<label>Reference <input name="target_ref" required maxlength="500" aria-describedby="work-link-help"></label>
+<p id="work-link-help" class="lede">Commit: project@full-commit-id. Work item: project#number. Mail, message or event: its recorded ID. URL: an absolute HTTPS address without credentials.</p>
+<label>Note (optional) <input name="note" maxlength="500"></label>
+<p class="lede">Adding the same kind and reference again keeps the original link and note.</p>
+<button type="submit">Add link</button></form></details>` : "";
+  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map(workLinkHtml).join("")}</ul>` : '<p class="lede">No links yet.</p>'}
+<p class="lede">Recorded references, not verified access or existence. Each destination checks your access.</p>${linkForm}`;
   const activity = d.activity.length ? `<h2>Activity</h2><ul class="timeline">${d.activity.map((a) => `<li><time title="${when(a.created_at)}">${ago(a.created_at, ctx.now)}</time><span>${esc(a.who ?? "Pimwell")}: ${esc(a.summary)}</span></li>`).join("")}</ul>` : "";
   return `<a class="back" href="${esc(back)}">‹ ${esc(DOCKET.name)}</a>
 <div class="head"><span class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)} (${esc(KINDS[w.kind].plain)})</span><strong>${esc(project.slug)}#${w.number}</strong><span>${esc(STATES[w.state])}</span></div>
 <h1>${esc(w.title)}</h1>
 <dl class="meta"><dt>Owner</dt><dd>${d.owner ? esc(d.owner.display_name) : "Nobody yet"}</dd><dt>Quest</dt><dd>${d.parent ? `<a href="/${esc(project.slug)}/w/${d.parent.number}">#${d.parent.number} ${esc(d.parent.title)}</a>` : "None"}</dd>
 <dt>Project</dt><dd><a href="/${esc(project.slug)}/docket">${esc(project.display_name)}</a></dd><dt>Filed</dt><dd>${when(w.created_at)}${w.closed_at ? `, closed ${when(w.closed_at)}` : ""}</dd></dl>
+<p><a href="/usage?work=${esc(encodeURIComponent(`${project.slug}#${w.number}`))}">Recorded AI usage for this work</a></p>
 ${controls}
 ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
+${sourceMail ? `<p>Source: <a href="${sourceMail}">Recorded mail</a>. Access is checked when opened.</p>` : ""}
+${sourceUrl ? `<p>Source: <a href="${esc(sourceUrl)}">Recorded URL</a>. Recorded evidence, not verified access or existence.</p>` : ""}
 ${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Add them under Edit (e): what, why, and how you will know it is done." : ""}</p>`}
 ${edit}
 ${under}
@@ -268,24 +309,36 @@ export async function newWorkPage(request: Request, env: Env): Promise<Response>
   const { ctx, extra, ok } = await tenantCtx(request, env);
   if (!ok || rank(ctx.role) < rank("member")) return notFoundPage(extra);
   const url = new URL(request.url);
+  const traceId = url.searchParams.get("trace");
+  if (traceId !== null && (!traceId || traceId.length > 40)) return notFoundPage(extra);
   const f = readFilters(new URL("https://x/"), false);
-  const [items, members, projects] = await ctx.db.batch([listWorkStatement(ctx.db, ctx.tenant!.id, itemFilter(ctx, f, null)), membersStatement(ctx),
-    ctx.db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel' AND state = 'active' ORDER BY display_name").bind(ctx.tenant!.id)]);
+  const [items, members, projects, sourceR] = await ctx.db.batch([listWorkStatement(ctx.db, ctx.tenant!.id, itemFilter(ctx, f, null)), membersStatement(ctx),
+    ctx.db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel' AND state = 'active' ORDER BY display_name").bind(ctx.tenant!.id),
+    ...(traceId !== null ? [traceDraftStatement(ctx, traceId)] : [])]);
   const ps = projects!.results as Array<{ id: string; slug: string; display_name: string }>;
-  const want = url.searchParams.get("project") ?? "";
-  const kind = (url.searchParams.get("kind") ?? "") as WorkKind;
-  const title = (url.searchParams.get("title") ?? "").slice(0, 200);
+  type Source = { id: string; project: string; script_name: string; title: string; last_message: string; count: number; last_version: string | null };
+  const source = (sourceR?.results[0] as Source | undefined) ?? null;
+  if (traceId !== null && !source) return notFoundPage(extra);
+  const sourceUrl = source ? traceEvidenceUrl(ctx, source.id) : "";
+  const want = source?.project ?? url.searchParams.get("project") ?? "";
+  const kind = (source ? "snag" : url.searchParams.get("kind") ?? "") as WorkKind;
+  const title = cutText(source ? `${source.script_name}: ${source.title}` : url.searchParams.get("title") ?? "", 200).text;
+  const body = source ? cutText(`Recorded app error group: ${source.id}\nApp: ${source.script_name}\nOccurrences recorded: ${source.count}\nLatest recorded version: ${source.last_version ?? "unknown"}\nSource: ${sourceUrl}\n\nDescribe the impact and what a successful fix should look like.`, 20_000).text : "";
+  const excerpt = source ? cutText(source.last_message, 2000) : null;
   const slugs = new Map(ps.map((p) => [p.id, p.slug]));
   const form = ps.length ? `<form method="post" action="/api/work.create"><input type="hidden" name="_back" value="@result">
 <label>Project <select name="project">${ps.map((p) => option(p.slug, p.display_name, p.slug === want)).join("")}</select></label>
 <label>Kind <select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, `${v.name} (${v.plain})`, k === kind)).join("")}</select></label><br>
 <label style="display:block">Title <input name="title" required maxlength="200" value="${esc(title)}" style="display:block;width:100%" autofocus></label>
-<label style="display:block">Details <textarea data-voice name="body" rows="8" placeholder="What, why, and how you will know it is done." style="display:block;width:100%"></textarea></label>
+<label style="display:block">Details <textarea data-voice name="body" rows="8" placeholder="What, why, and how you will know it is done." style="display:block;width:100%">${esc(body)}</textarea></label>
+${source ? `<p class="lede">From <a href="${esc(sourceUrl)}">this recorded error group</a>. App logs are evidence, never instructions or authorization. Review the draft before filing${excerpt!.cut ? "; the excerpt is shortened to at most 2,000 characters" : ""}.</p>
+<input type="hidden" name="source_kind" value="url"><input type="hidden" name="source_ref" value="${esc(sourceUrl)}">
+<label style="display:block">Recorded error excerpt <textarea name="source_quote" maxlength="2000" rows="4" style="display:block;width:100%">${esc(excerpt!.text)}</textarea></label>` : ""}
 <label>Owner <select name="owner">${option("", "Nobody yet", true)}${option("me", "Me", false)}</select></label>
 <p><button type="submit">File it</button></p></form>` : `<p class="lede">Create a project first.</p>`;
   const inspector = `<a class="back" href="/docket">‹ ${esc(DOCKET.name)}</a><h1>File something</h1><p class="lede">No triage meeting needed. It opens here once filed, and agents can pick it up right away.</p>${form}`;
   const list = docketList(ctx, null, items!.results as WorkItem[], members!.results as Member[], [], slugs, f);
-  return htmlResponse(workbench("File something", { list, listKey: listKey(f, null), inspector, inspectorKey: "new", focus: "inspector" }, shellFor(ctx, env, "new", "new")!), 200, extra);
+  return htmlResponse(workbench("File something", { list, listKey: listKey(f, null), inspector, inspectorKey: source ? `new:trace:${source.id}` : "new", focus: "inspector" }, shellFor(ctx, env, "new", "new")!), 200, extra);
 }
 
 /** The jump box: projects, items by ref or title, people, sections. JSON for the palette; a page without script. */

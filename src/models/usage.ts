@@ -36,6 +36,30 @@ export function usageStatement(db: D1Database, r: UsageRow): D1PreparedStatement
   );
 }
 
+export type UsageMoney = {
+  calls: number; cost_micros: number | null; unpriced: number;
+  reported_micros: number | null; estimated_micros: number | null; unclassified_micros: number | null;
+  reported_calls: number; estimated_calls: number; unclassified_calls: number;
+};
+
+export const USAGE_MONEY_COLUMNS = `COUNT(*) AS calls, SUM(m.cost_micros) AS cost_micros, COALESCE(SUM(m.cost_micros IS NULL), 0) AS unpriced,
+  SUM(CASE WHEN m.cost_source = 'reported' THEN m.cost_micros END) AS reported_micros,
+  SUM(CASE WHEN m.cost_source = 'price' THEN m.cost_micros END) AS estimated_micros,
+  SUM(CASE WHEN m.cost_source IS NULL THEN m.cost_micros END) AS unclassified_micros,
+  COALESCE(SUM(m.cost_source = 'reported' AND m.cost_micros IS NOT NULL), 0) AS reported_calls,
+  COALESCE(SUM(m.cost_source = 'price' AND m.cost_micros IS NOT NULL), 0) AS estimated_calls,
+  COALESCE(SUM(m.cost_source IS NULL AND m.cost_micros IS NOT NULL), 0) AS unclassified_calls`;
+
+export function usageMoney(g: UsageMoney): string {
+  const parts = [
+    `Reported amounts: ${g.reported_calls ? fmtUsd(g.reported_micros) : "none recorded"} (${g.reported_calls} ${g.reported_calls === 1 ? "call" : "calls"})`,
+    `API-rate estimates: ${g.estimated_calls ? fmtUsd(g.estimated_micros) : "none recorded"} (${g.estimated_calls} ${g.estimated_calls === 1 ? "call" : "calls"})`,
+  ];
+  if (g.unclassified_calls) parts.push(`Unclassified amounts: ${fmtUsd(g.unclassified_micros)} (${g.unclassified_calls} ${g.unclassified_calls === 1 ? "call" : "calls"})`);
+  parts.push(g.unpriced ? `price unknown (${g.unpriced} unpriced)` : "Unpriced: 0 calls");
+  return parts.join("; ");
+}
+
 export const dollars = (micros: number | null | undefined) => micros === null || micros === undefined ? null : micros / 1_000_000;
 export const fmtUsd = (micros: number | null | undefined) => {
   if (micros === null || micros === undefined) return "price unknown";

@@ -125,6 +125,7 @@ body.wb{height:100vh;height:100dvh;display:grid;grid-template-columns:var(--rail
 .rail{grid-area:rail;overflow:auto;background:var(--sunk);border-right:1px solid var(--line);padding:8px 6px 16px;font-size:var(--fs-md)}
 .rail ul{list-style:none;margin:0 0 6px;padding:0}.rail li{display:flex;align-items:center;border-radius:var(--r-sm)}
 .rail li a{flex:1;padding:3px 8px;color:var(--ink);text-decoration:none;border-radius:var(--r-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail li.account-details{display:block;padding:3px 8px;color:var(--muted);font-size:var(--fs-sm);overflow-wrap:anywhere}.account-details span{display:block}
 .rail li:hover{background:var(--line)}.rail li a[aria-current]{font-weight:700}.rail li:has(a[aria-current]){background:var(--panel);box-shadow:inset 2px 0 0 var(--accent)}
 .rail .n{color:var(--muted);font-size:12px;padding-right:8px}.rail h4{margin:10px 8px 2px;font-size:11px;color:var(--faint);font-weight:650;letter-spacing:.02em}
 .rail .close{display:none}

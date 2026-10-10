@@ -99,6 +99,7 @@ export const attentionList = defineVerb({
       return [DATA_NOTE, NOTE, "", ...x.entries.map((e) => `- ${e.done_at ? "(done) " : ""}[${e.reason}] ${e.slug ? `**${e.slug}#${e.number}** ` : ""}${cleanText(e.summary)} (id ${e.id})`)].join("\n");
     },
   },
+  quietPoll: (r: { entries: Entry[] }) => Array.isArray(r.entries) && r.entries.length === 0,
   parse: (i) => ({ include_done: i.include_done === true || i.include_done === "1" }),
   run: async (ctx, p) => ({ entries: (await attentionQuery(ctx, p.include_done, 100).all<Entry>()).results }),
 });

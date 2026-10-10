@@ -60,21 +60,36 @@ async function capsAndSwitch(ctx: Ctx): Promise<void> {
       (SELECT COUNT(*) FROM outbound_mail WHERE sent_by = ? AND status = 'sent' AND created_at > ?) AS mine,
       (SELECT COUNT(*) FROM outbound_mail WHERE tenant_id = t.id AND status = 'sent' AND created_at > ?) AS ours
     FROM tenant t WHERE t.id = ?`).bind(ctx.identity!.id, ctx.now - 86_400_000, ctx.now - 86_400_000, ctx.tenant!.id).first<{ mail_out: number; mine: number; ours: number }>();
-  if (!r || r.mail_out !== 1) throw forbidden("sending mail is off in this organization; an admin can turn it on under Mail");
-  if (r.mine >= SENDER_DAILY) throw new HubError(429, "too_many_requests", `at most ${SENDER_DAILY} messages a day per sender`);
-  if (r.ours >= TENANT_DAILY) throw new HubError(429, "too_many_requests", `at most ${TENANT_DAILY} messages a day per organization`);
+  if (!r || r.mail_out !== 1) throw new HubError(403, "forbidden", "sending mail is off in this organization; an admin can turn it on under Mail", { mail_block: "sending_off" });
+  if (r.mine >= SENDER_DAILY) throw new HubError(429, "too_many_requests", `at most ${SENDER_DAILY} messages a day per sender`, { mail_block: "sender_limit" });
+  if (r.ours >= TENANT_DAILY) throw new HubError(429, "too_many_requests", `at most ${TENANT_DAILY} messages a day per organization`, { mail_block: "tenant_limit" });
 }
 
-async function deliver(ctx: Ctx, g: Gate, subject: string, body: string, references: string[]): Promise<{ id: string; status: string }> {
+async function recordOutgoing(ctx: Ctx, g: Gate, subject: string, body: string, status: string, error: string | null): Promise<string> {
   const id = ulid(ctx.now);
-  const result = await sendMail(ctx.env, { to: g.to, cc: g.cc, from: g.from, subject, text: body, inReplyTo: g.message_id, references, utf8: true, basis: g.basis }, ctx.now);
   const all = [g.to, ...(g.cc ?? [])].join(", ");
-  const status = result === "sent" ? "sent" : result === "no_consent" ? "refused" : "failed";
   await ctx.db.prepare(`INSERT INTO outbound_mail (id, tenant_id, from_address, to_address, subject, text, in_reply_to, sent_by, session_id, status, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(id, ctx.tenant!.id, g.from, all, subject, body, g.inbound_id, ctx.identity!.id, ctx.session?.id ?? null, status, result === "sent" ? null : result, ctx.now).run();
+    .bind(id, ctx.tenant!.id, g.from, all, subject, body, g.inbound_id, ctx.identity!.id, ctx.session?.id ?? null, status, error, ctx.now).run();
   await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: status === "sent" ? "mail.sent" : "mail.not_sent",
     target_kind: "outbound_mail", target_id: id, summary: `${status === "sent" ? "Mailed" : "Could not mail"} ${all} from ${g.from}: ${subject}`.slice(0, 300) }, ctx.now);
-  if (status !== "sent") throw new HubError(status === "refused" ? 403 : 502, status === "refused" ? "forbidden" : "unavailable", status === "refused" ? "that address has withdrawn consent" : "the mail service did not accept it; try again later");
+  return id;
+}
+
+async function deliver(ctx: Ctx, g: Gate, subject: string, body: string, references: string[], policy: () => Promise<void>): Promise<{ id: string; status: string }> {
+  // Authorization and mailbox ownership are checked before this point. Only valid attempts are recorded.
+  try { await policy(); } catch (e) {
+    if (!(e instanceof HubError) || !e.data?.mail_block) throw e;
+    const id = await recordOutgoing(ctx, g, subject, body, "refused", String(e.data.mail_block));
+    e.data = { ...e.data, mail_delivery: { id, to_address: [g.to, ...(g.cc ?? [])].join(", "), in_reply_to: g.inbound_id, status: "refused", error: e.data.mail_block } };
+    throw e;
+  }
+  const result = await sendMail(ctx.env, { to: g.to, cc: g.cc, from: g.from, subject, text: body, inReplyTo: g.message_id, references, utf8: true, basis: g.basis }, ctx.now);
+  const status = result === "sent" ? "sent" : result === "no_consent" ? "refused" : "failed";
+  const error = result === "sent" ? null : result === "failed" ? "pre_transport_failure" : result;
+  const id = await recordOutgoing(ctx, g, subject, body, status, error);
+  if (status !== "sent") throw new HubError(status === "refused" ? 403 : 502, status === "refused" ? "forbidden" : "unavailable",
+    status === "refused" ? "recipient consent is unavailable or withdrawn; no mail was sent" : result === "unknown" ? "mail transport failed; delivery is uncertain; check with recipients before sending again" : "mail preparation failed before transport; no mail was sent",
+    { mail_delivery: { id, to_address: [g.to, ...(g.cc ?? [])].join(", "), in_reply_to: g.inbound_id, status, error } });
   return { id, status };
 }
 
@@ -103,19 +118,22 @@ export const mailReply = defineVerb({
     let cc: string[] = [];
     let skipped: string[] = [];
     if (agent) {
-      const refused = await agentRecipientRefusals(ctx, [m.from_email]);
-      if (refused.length) throw forbidden(`agents write only to members who wrote to them or were copied on mail to them: ${refused.join("; ")}`);
       // Reply all: the others it was addressed to, if they are members; anyone else is left out and named.
       if (p.all) {
         let others: string[] = [];
         try { others = (JSON.parse(m.copied ?? "[]") as string[]).filter((a) => a !== m.from_email && a !== ctx.identity!.email.toLowerCase()); } catch { others = []; }
         for (const a of others.slice(0, MAX_RECIPIENTS - 1)) ((await agentRecipientRefusals(ctx, [a])).length ? skipped : cc).push(a);
       }
-    } else if (ctx.now - m.received_at > REPLY_WINDOW_MS) throw forbidden("it has been more than 30 days; wait for them to write again");
-    await capsAndSwitch(ctx);
+    }
     const subject = /^re:/i.test(m.subject) ? m.subject : `Re: ${m.subject || "your message"}`;
     const earlier = (await ctx.db.prepare("SELECT o.id FROM outbound_mail o WHERE o.in_reply_to = ? AND o.status = 'sent' ORDER BY o.created_at").bind(m.id).all<{ id: string }>()).results.map((o) => `<${o.id}@${ctx.env.HUB_DOMAIN}>`);
-    const r = await deliver(ctx, { from: m.to_address, to: m.from_email, cc, inbound_id: m.id, message_id: m.message_id, basis: agent ? "member" : "consent" }, subject.slice(0, 200), p.body, [...(m.message_id ? [m.message_id] : []), ...earlier]);
+    const r = await deliver(ctx, { from: m.to_address, to: m.from_email, cc, inbound_id: m.id, message_id: m.message_id, basis: agent ? "member" : "consent" }, subject.slice(0, 200), p.body, [...(m.message_id ? [m.message_id] : []), ...earlier], async () => {
+      if (agent) {
+        const refused = await agentRecipientRefusals(ctx, [m.from_email]);
+        if (refused.length) throw new HubError(403, "forbidden", `agents write only to members who wrote to them or were copied on mail to them: ${refused.join("; ")}`, { mail_block: "recipient_policy" });
+      } else if (ctx.now - m.received_at > REPLY_WINDOW_MS) throw new HubError(403, "forbidden", "it has been more than 30 days; wait for them to write again", { mail_block: "reply_window" });
+      await capsAndSwitch(ctx);
+    });
     return { ...r, to: [m.from_email, ...cc].join(", "), from: m.to_address, ...(skipped.length ? { left_out: skipped, why: "not members of this organization" } : {}) };
   },
 });
@@ -150,19 +168,21 @@ export const mailSend = defineVerb({
       from = `${ctx.tenant!.slug}.${pr.slug}@${ctx.env.HUB_DOMAIN}`;
     }
     if (ctx.identity!.kind === "agent") {
-      const refused = await agentRecipientRefusals(ctx, [...p.to, ...p.cc]);
-      if (refused.length) throw forbidden(`agents write only to members who wrote to them or were copied on mail to them: ${refused.join("; ")}`);
-      await capsAndSwitch(ctx);
-      const r = await deliver(ctx, { from, to: p.to[0]!, cc: [...p.to.slice(1), ...p.cc], inbound_id: null, message_id: null, basis: "member" }, p.subject, p.body, []);
+      const r = await deliver(ctx, { from, to: p.to[0]!, cc: [...p.to.slice(1), ...p.cc], inbound_id: null, message_id: null, basis: "member" }, p.subject, p.body, [], async () => {
+        const refused = await agentRecipientRefusals(ctx, [...p.to, ...p.cc]);
+        if (refused.length) throw new HubError(403, "forbidden", `agents write only to members who wrote to them or were copied on mail to them: ${refused.join("; ")}`, { mail_block: "recipient_policy" });
+        await capsAndSwitch(ctx);
+      });
       return { ...r, to: [...p.to, ...p.cc].join(", "), from };
     }
     if (p.to.length > 1 || p.cc.length) throw badRequest("people send to one address at a time");
     const one = p.to[0]!;
-    const wrote = await ctx.db.prepare("SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND from_email = ? AND to_address = ? AND verdict = 'admitted' AND received_at > ? LIMIT 1")
-      .bind(ctx.tenant!.id, one, from, ctx.now - REPLY_WINDOW_MS).first();
-    if (!wrote) throw forbidden(`Pimwell writes only to people who wrote to ${from} in the last 30 days`);
-    await capsAndSwitch(ctx);
-    const r = await deliver(ctx, { from, to: one, inbound_id: null, message_id: null }, p.subject, p.body, []);
+    const r = await deliver(ctx, { from, to: one, inbound_id: null, message_id: null }, p.subject, p.body, [], async () => {
+      const wrote = await ctx.db.prepare("SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND from_email = ? AND to_address = ? AND verdict = 'admitted' AND received_at > ? LIMIT 1")
+        .bind(ctx.tenant!.id, one, from, ctx.now - REPLY_WINDOW_MS).first();
+      if (!wrote) throw new HubError(403, "forbidden", `Pimwell writes only to people who wrote to ${from} in the last 30 days`, { mail_block: "reply_window" });
+      await capsAndSwitch(ctx);
+    });
     return { ...r, to: one, from };
   },
 });

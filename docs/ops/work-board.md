@@ -1,7 +1,5 @@
 # Work board counts and list reads
 
-Increment for `pimwell#109`.
-
 ## Board contract
 
 `work.board` (API and MCP `work_board`) returns:
@@ -20,12 +18,28 @@ Browser badges and MCP headings show exact totals. Browser cards are further cap
 
 `work.list` gets project slugs in its item query, instead of one serial slug lookup per distinct project in the sample. The shared filter builder keeps the existing state, kind, owner, parent, timestamp, limit and ordering behavior. The joined variant requires the project's tenant to match the work row and excludes channel projects **before** applying LIMIT; malformed rows cannot consume the sample or expose another tenant's project slug. API/MCP still return the same work fields, `project` and `ref`.
 
-Native-Workers regression tests meter one item-query round trip for an unfiltered list spanning 25 distinct projects. A project-filtered list uses two trips (project validation and the joined item query), with no per-item or per-project follow-ups. These measurements exclude request authentication/context reads; they are not production latency benchmarks.
+## Request-local aggregation
 
-## Evidence and remaining scope
+Quest progress aggregates direct children once per board read, grouping by parent and project. Both children and quests must match the requested tenant/project and exclude channel projects. Empty and dropped-only quests report zero. Nested quests count as one direct child; done children count regardless of age or closing time. Quest results remain uncapped.
 
-- `test/board-counts.test.ts`: more than 500 items, all stalled/recent-done items outside the sample, strict time boundaries, empty/exactly-500 completeness, deterministic ties, browser/API/MCP reporting and tenant/project/channel/quest-child boundaries.
-- `test/work-list-reads.test.ts`: constant query count across 25 projects, full fields/references, filter parity, parent filters, and malformed rows before LIMIT.
-- Existing work/page/performance-budget tests cover compatibility of the default non-joined shared statement.
+The signed-in browser rail reads one statement in the sign-in batch. A materialized per-project work aggregate supplies both project badges and organization open/mine totals. Work and project tenants must match. Project links show at most 60 active non-channel projects, sorted by display name then slug; organization totals remain uncapped and retain work in archived and channel projects. Held-mail counts retain the unreleased-quarantine predicate; Needs me counts only the current identity's unfinished attention in this tenant. Existing authentication and membership checks gate attaching rail data to the request.
 
-`#109` is **not complete** with this increment: rail aggregate caching/materialization and invalidation, large-tenant query-plan/latency benchmarks, and evaluation of quest-query scaling remain. Quest results retain their existing uncapped behavior. Counts require independent reads over matching data; do not describe this as a demonstrated production speedup or indexed large-tenant redesign. No schema migration, cache, membership/data mutation, mail-auth policy change or scheduler change is required by this increment.
+Materialization is temporary inside each SQL statement, not a persistent cache or table. State, ownership, project, mail and attention changes are reflected on the next read. Session, identity or membership revocation cannot reuse a previous rail snapshot. This avoids cross-request cache invalidation machinery and needs no migration.
+
+These queries still read matching rows and may use temporary grouping tables. Local query-plan/read-work benchmarks cover single-project and many-project fixtures; they are not production latency measurements or a universal speedup guarantee.
+
+## Work inspector evidence links
+
+The inspector opens recorded `commit` references (`project@` plus a full 40-character hex ID) in the commit view, and `item` references (`project#number`) in the work view. Work numbers are positive and at most eight digits. These links stay on the current tenant host; each destination checks the viewer's access. Rendering does not fetch target titles or verify that the target exists.
+
+Members can use **Add link** in the inspector to record a commit, work item, mail, message, event or HTTPS URL, with an optional note. The form uses the existing audited `work.link` command and returns to the same item and Docket filters. References and notes are limited to 500 characters. Repeating a kind/reference pair keeps the original link, note and author; it does not edit the existing evidence. Readers can view links but cannot add them.
+
+Short commit IDs, malformed references and other reference kinds remain escaped plain text. External `url` links still require a safe HTTPS URL without credentials. Notes are escaped, and the inspector distinguishes recorded references from verified access or existence. Safe HTTPS `url` sources also open from the inspector without fetching the target; unsafe sources are non-navigable. [App error views](app-work.md) show work recorded against their canonical URLs.
+
+## Mail evidence navigation
+
+Work inspectors open `mail` links and recorded mail sources when the reference is a canonical 26-character uppercase ULID. Malformed references stay inert. Rendering does not fetch the mail or imply that the viewer can read it; the destination applies the existing mailbox, tenant and quarantine checks.
+
+Authorized mail reads show work filed from the message or explicitly linked to it. The page distinguishes **Filed from this** from **Linked to this**; an item with both associations appears once as filed. API/MCP `mail_read` returns `relatedWork` and `relatedWorkCoverage`. These are recorded associations, not proof that a message authorized execution.
+
+Related work must have a matching tenant and non-channel project. The same mail-read predicate gates the association query. At most 50 items are shown across both association types, newest filing first with item ID as the tie-breaker. One extra item detects truncation, and both surfaces report coverage. Invalid tenant/project/channel rows are excluded before the limit. No mail is sent or model invoked by this navigation.

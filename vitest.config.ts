@@ -1,10 +1,10 @@
 import path from "node:path";
-import { defineConfig } from "vitest/config";
+import { defineConfig, defineProject } from "vitest/config";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
 
 // Storage is isolated per test file by the pool; test/apply-migrations.ts resets D1 and KV before every test,
 // so each test still starts from an empty, migrated database.
-export default defineConfig({
+const workers = defineProject({
   plugins: [
     cloudflareTest(async () => ({
       wrangler: { configPath: "./wrangler.jsonc" },
@@ -40,14 +40,24 @@ export default defineConfig({
     })),
   ],
   test: {
-    // Checked references must fail when missing, not silently create new snapshots.
-    update: "none",
     // mailauth's transitive tldts uses extensionless ES imports. Bundle the
     // verifier entry point as in a Wrangler release, keeping native crypto.
     deps: { optimizer: { ssr: { enabled: true, include: ["mailauth/lib/dkim/dkim-verifier.js"],
       rolldownOptions: { external: [/^node:/, "buffer", "string_decoder"] } } } },
     // Only this checkout's tests: worktrees under .claude/worktrees hold other copies of test/.
+    name: "workers",
     include: ["test/**/*.test.ts"],
+    exclude: ["test/browser/**"],
     setupFiles: ["./test/apply-migrations.ts"],
+  },
+});
+
+export default defineConfig({
+  test: {
+    // Checked references must fail when missing, not silently create new snapshots.
+    update: "none",
+    projects: [workers, {
+      test: { name: "browser", include: ["test/browser/**/*.test.ts"], testTimeout: 30000, hookTimeout: 60000 },
+    }],
   },
 });

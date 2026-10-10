@@ -27,7 +27,7 @@ function tipFor(key: string): string {
 export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = active): Shell | undefined {
   if (!ctx.identity) return undefined;
   const hub = `https://${env.HUB_DOMAIN}/`;
-  const me = { name: ctx.identity.display_name, href: `${hub}me` };
+  const me = { name: ctx.identity.display_name, email: ctx.identity.email, role: ctx.role, href: `${hub}me` };
   if (ctx.host.kind === "tenant" && ctx.tenant && ctx.role) {
     const r = ctx.rail;
     const link = (href: string, label: string, section: Section | null, count?: number) => ({ href, label, active: section === active, ...(count !== undefined ? { count } : {}) });

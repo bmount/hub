@@ -94,6 +94,185 @@ describe("work item editing", () => {
     const html = await (await w.get(`/site/w/${item.number}`, w.rae.token)).text();
     expect(html).toContain("Idea");
     expect(html).not.toContain('<details class="edit">');
+    expect(html).not.toContain('action="/api/work.link"');
+  });
+});
+
+describe("recorded URL sources", () => {
+  it("opens safe HTTPS sources without turning unsafe or credential-bearing references into links", async () => {
+    const w = await world();
+    const url = "https://example.test/apps?g=unknown&other=1";
+    const item = await w.create({ kind: "snag", title: "URL evidence", source_kind: "url", source_ref: url });
+    const page = await (await w.get(`/site/w/${item.number}`, w.rae.token)).text();
+    expect(page).toContain('<a href="https://example.test/apps?g=unknown&amp;other=1">Recorded URL</a>');
+    expect(page).toContain("Recorded evidence, not verified access or existence");
+    for (const source_ref of ["javascript:alert(1)", "http://example.test", "//example.test", "https://user:pass@example.test", "https://example.test\n/path", "/apps?g=unknown"]) {
+      const bad = await w.create({ kind: "snag", title: "Unsafe source", source_kind: "url", source_ref });
+      expect(await (await w.get(`/site/w/${bad.number}`)).text()).not.toContain(">Recorded URL</a>");
+    }
+  });
+});
+
+describe("browser work evidence creation", () => {
+  it("renders a bounded member form and returns to the same filtered item after an audited link", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "errand", title: "Evidence from a browser" });
+    const path = `/site/w/${item.number}?in=org&kind=errand&owner=me`;
+    const before = await (await w.get(path)).text();
+    const form = before.match(/<form method="post" action="\/api\/work\.link">([\s\S]*?)<\/form>/)![1]!;
+    expect(form).toContain(`name="id" value="${item.id}"`);
+    const returnTo = form.match(/name="_back" value="([^"]*)"/)![1]!.replaceAll("&amp;", "&");
+    expect(new URL(returnTo, `https://${HOST}`).pathname).toBe(`/site/w/${item.number}`);
+    expect(Object.fromEntries(new URL(returnTo, `https://${HOST}`).searchParams)).toEqual({ in: "org", kind: "errand", owner: "me" });
+    expect(form).toContain('name="target_ref" required maxlength="500" aria-describedby="work-link-help"');
+    expect(form).toContain('name="note" maxlength="500"');
+    expect([...form.matchAll(/<option value="([^"]+)">/g)].map(m => m[1])).toEqual(["commit", "item", "mail", "message", "event", "url"]);
+    expect(form).toContain("keeps the original link and note");
+    const ref = `site@${"a".repeat(40)}`;
+    const note = '<script>untrusted</script> & "evidence"';
+    const r = await w.form("work.link", { id: item.id, _back: returnTo, target_kind: "commit", target_ref: ref, note });
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe(returnTo);
+    const after = await (await w.get(r.headers.get("location")!)).text();
+    expect(after).toContain(`<a href="/site/code?c=${"a".repeat(40)}">${ref}</a>`);
+    expect(after).toContain("&lt;script&gt;untrusted&lt;/script&gt; &amp; &quot;evidence&quot;");
+    expect(after).not.toContain(note);
+    const paneKey = (html: string) => html.match(/id="list"[^>]*data-key="([^"]*)"/)![1];
+    expect(paneKey(after)).toBe(paneKey(before));
+    expect(await env.HUB_DB.prepare("SELECT identity_id, session_id, target_id FROM event WHERE kind = 'work.link'").first()).toEqual({ identity_id: w.pat.identity.id, session_id: w.pat.session.id, target_id: item.id });
+  });
+
+  it("submits every offered kind and preserves original evidence on a repeated form", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "errand", title: "All evidence kinds" });
+    const refs = [["commit", `site@${"a".repeat(40)}`], ["item", "site#1"], ["mail", "mail-id"], ["message", "message-id"], ["event", "event-id"], ["url", "HTTPS://EXAMPLE.COM:443/evidence?a=1&b=2"]];
+    for (const [target_kind, target_ref] of refs) {
+      const fields = { id: item.id, _back: `/site/w/${item.number}`, target_kind: target_kind!, target_ref: target_ref!, note: "Original evidence" };
+      expect((await w.form("work.link", fields)).status).toBe(303);
+      expect((await w.form("work.link", { ...fields, note: "Do not replace the original" })).status).toBe(303);
+    }
+    const links = (await env.HUB_DB.prepare("SELECT target_kind, target_ref, note, created_by FROM work_link WHERE item_id = ? ORDER BY target_kind").bind(item.id).all()).results;
+    expect(links).toHaveLength(refs.length);
+    expect(links.every(l => l.note === "Original evidence" && l.created_by === w.pat.identity.id)).toBe(true);
+    expect(links.find(l => l.target_kind === "url")!.target_ref).toBe("https://example.com/evidence?a=1&b=2");
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'work.link'").first("n")).toBe(refs.length);
+  });
+
+  it("refuses reader, anonymous, cross-origin and cross-tenant form writes without creating evidence", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "errand", title: "Scoped evidence" });
+    const other = await seedTenant("bravo");
+    const outsider = await seedHuman("outsider@example.com", { memberships: [{ tenant_id: other.id, role: "member" }] });
+    const body = new URLSearchParams({ id: item.id, target_kind: "item", target_ref: "site#1" }).toString();
+    const cases = [
+      { token: w.rae.token, host: HOST, origin: `https://${HOST}`, status: 403 },
+      { token: "", host: HOST, origin: `https://${HOST}`, status: 404 },
+      { token: w.pat.token, host: HOST, origin: "https://evil.test", status: 403 },
+      { token: w.pat.token, host: HOST, origin: "", status: 403 },
+      { token: outsider.token, host: "bravo.pimwell.test", origin: "https://bravo.pimwell.test", status: 404 },
+      { token: outsider.token, host: HOST, origin: `https://${HOST}`, status: 404 },
+    ];
+    for (const c of cases) {
+      const r = await SELF.fetch(`https://${c.host}/api/work.link`, { method: "POST", redirect: "manual", headers: { ...(c.token ? { cookie: `pmw_session=${c.token}` } : {}), ...(c.origin ? { origin: c.origin } : {}), "content-type": "application/x-www-form-urlencoded" }, body });
+      expect(r.status, JSON.stringify(c)).toBe(c.status);
+      expect(await r.text()).toContain("Not done");
+    }
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_link").first("n")).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'work.link'").first("n")).toBe(0);
+  });
+
+  it("rejects invalid form evidence and never redirects to the supplied external target", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "errand", title: "Safe evidence forms" });
+    const base = { id: item.id, target_kind: "url", target_ref: "https://example.com/evidence" };
+    const invalid: Array<Record<string, string>> = [
+      { target_kind: "unknown" }, { target_ref: "" }, { target_kind: "item", target_ref: "   " },
+      ...["javascript:alert(1)", "http://example.com", "//evil.test", "https://user:password@example.com", "https://example.com/%0a", " https://example.com"].map(target_ref => ({ target_ref })),
+      { target_ref: "x".repeat(501) }, { note: "x".repeat(501) },
+    ];
+    for (const fields of invalid) {
+      const r = await w.form("work.link", { ...base, ...fields });
+      expect(r.status).toBe(400);
+      expect(await r.text()).toContain("Not done");
+    }
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_link").first("n")).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'work.link'").first("n")).toBe(0);
+    const r = await w.form("work.link", { ...base, _back: "https://evil.test" });
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe("/");
+  });
+});
+
+describe("recorded work evidence navigation", () => {
+  it("opens full commit IDs and numbered work references without looking up or claiming their targets", async () => {
+    const w = await world();
+    const source = await w.create({ kind: "errand", title: "Source work" });
+    const target = await w.create({ kind: "snag", title: "Target work" });
+    const oid = "ABCDEF0123456789".repeat(2) + "ABCDEF01";
+    for (const [kind, ref] of [["commit", `site@${oid}`], ["item", `site#${target.number}`], ["item", "missing#99999999"]]) {
+      const r = await apiPost(HOST, "work.link", { id: source.id, target_kind: kind, target_ref: ref, note: '<b>recorded & unverified</b>' }, cookieHeaders(w.pat.token, HOST));
+      expect(r.status).toBe(200);
+    }
+    const html = await (await w.get(`/site/w/${source.number}`, w.rae.token)).text();
+    expect(html).toContain(`<a href="/site/code?c=${oid.toLowerCase()}">site@${oid}</a>`);
+    expect(html).toContain(`<a href="/site/w/${target.number}">site#${target.number}</a>`);
+    expect(html).toContain('<a href="/missing/w/99999999">missing#99999999</a>');
+    expect(html).toContain("Recorded references, not verified access or existence.");
+    expect(html).toContain("&lt;b&gt;recorded &amp; unverified&lt;/b&gt;");
+    expect(html.split("<h2>Links</h2>")[1]!.split("<h2>Activity</h2>")[0]!).not.toContain("Target work");
+    expect(await (await w.get(`/site/w/${target.number}`, w.rae.token)).text()).toContain("Target work");
+    expect((await w.get("/missing/w/99999999", w.rae.token)).status).toBe(404);
+  });
+
+  it("keeps short, malformed, unsupported and injection-shaped references inert", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "errand", title: "Legacy references" });
+    const oid = "a".repeat(40);
+    const refs = [
+      ["commit", "site@abcdef0"], ["commit", `site@${oid}0`], ["commit", `site@${oid}\n`],
+      ["commit", `../site@${oid}`], ["commit", `//evil.test@${oid}`], ["commit", `site@${oid}?x=1`],
+      ["commit", `${"s".repeat(64)}@${oid}`], ["commit", `-site@${oid}`], ["commit", `site-@${oid}`],
+      ["item", "site#0"], ["item", "site#01"], ["item", "site#100000000"], ["item", "site#1\n"],
+      ["item", "site#1?x=1"], ["item", "site#1/../../mail"], ["item", "site#1\" onclick=\"alert(1)"],
+      ["item", "https://evil.test/site#1"], ["message", "site#1"], ["event", `site@${oid}`],
+      ["mail", "javascript:alert(1)"], ["mail", "//evil.test"], ["mail", "../mail"],
+      ["mail", "0".repeat(26) + "\n"], ["mail", "0".repeat(26) + "/../"], ["mail", "i".repeat(26)],
+    ];
+    for (const [i, [kind, ref]] of refs.entries()) {
+      await env.HUB_DB.prepare("INSERT INTO work_link (id, item_id, target_kind, target_ref, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(`legacy-${i}`, item.id, kind, ref, w.pat.identity.id, Date.now()).run();
+    }
+    const html = await (await w.get(`/site/w/${item.number}`)).text();
+    const links = html.split("<h2>Links</h2>")[1]!.split("<h2>Activity</h2>")[0]!;
+    expect(links).not.toContain("<a ");
+    expect(links.match(/<code>/g)).toHaveLength(refs.length);
+    expect(links).toContain("&quot; onclick=&quot;alert(1)");
+    expect(links).not.toContain(' onclick="');
+  });
+
+  it("keeps navigation on the current tenant and rechecks destination membership", async () => {
+    const w = await world();
+    const source = await w.create({ kind: "errand", title: "Tenant reference" });
+    const foreign = await seedTenant("other");
+    await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "hidden", kind: "repo", display_name: "Foreign repo" }, Date.now());
+    const outsider = await seedHuman("outsider@example.com", { memberships: [{ tenant_id: foreign.id, role: "member" }] });
+    const foreignItem = await apiPost("other.pimwell.test", "work.create", { project: "hidden", kind: "errand", title: "Private foreign title" }, cookieHeaders(outsider.token, "other.pimwell.test"));
+    expect(foreignItem.status).toBe(200);
+    for (const [kind, ref] of [["item", "hidden#1"], ["commit", `hidden@${"a".repeat(40)}`]]) {
+      expect((await apiPost(HOST, "work.link", { id: source.id, target_kind: kind, target_ref: ref }, cookieHeaders(w.pat.token, HOST))).status).toBe(200);
+    }
+    const html = await (await w.get(`/site/w/${source.number}`)).text();
+    expect(html).toContain('<a href="/hidden/w/1">hidden#1</a>');
+    expect(html).not.toContain("Private foreign title");
+    expect(html).not.toContain("Foreign repo");
+    for (const path of ["/hidden/w/1", `/hidden/code?c=${"a".repeat(40)}`]) {
+      expect((await w.get(path)).status).toBe(404);
+      expect((await SELF.fetch(`https://other.pimwell.test${path}`, { headers: cookieHeaders(w.pat.token, "other.pimwell.test") })).status).toBe(404);
+    }
+    for (const path of [`/site/w/${source.number}`, "/site/w/1", `/site/code?c=${"a".repeat(40)}`]) {
+      expect((await SELF.fetch(`https://${HOST}${path}`)).status).toBe(404);
+      expect((await w.get(path, outsider.token)).status).toBe(404);
+    }
   });
 });
 

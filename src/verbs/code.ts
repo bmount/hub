@@ -23,7 +23,7 @@ export async function repoProject(ctx: Ctx, slug: string): Promise<{ id: string;
 
 function rev(v: string | null, fallback = "HEAD"): string {
   const r = (v ?? fallback).trim();
-  const full = /^[\w.-]+$/.test(r) && !OID_RE.test(r) && r !== "HEAD" ? `refs/heads/${r}` : r;
+  const full = /^[\w./-]+$/.test(r) && !r.startsWith("refs/") && !OID_RE.test(r) && r !== "HEAD" ? `refs/heads/${r}` : r;
   if (!REF_RE.test(full)) throw badRequest("give a branch, a tag (refs/tags/…), HEAD, or a full commit id");
   return full;
 }

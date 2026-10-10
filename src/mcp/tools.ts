@@ -107,7 +107,13 @@ export function toolResult(verb: VerbDef<unknown, unknown>, result: unknown): Ca
   return { content: [{ type: "text", text: cutText(text, MCP_TEXT_LIMIT).text }], structuredContent: cleanDeep(result) as Record<string, unknown> };
 }
 
-/** One tools/call: run the verb through the dispatcher as the grant's session, and record it either way (MCP spec 8.5, 9). */
+/** Conservative opt-in: a malformed result or classifier failure keeps the normal audit. Commands never qualify. */
+export function isQuietPoll(verb: VerbDef<unknown, unknown>, result: unknown): boolean {
+  if (verb.kind !== "query" || !verb.quietPoll) return false;
+  try { return verb.quietPoll(result) === true; } catch { return false; }
+}
+
+/** Run as the grant's session. All failures/denials and nonempty calls are audited; confirmed-empty polls log debug. */
 export async function callTool(ctx: Ctx, name: string, args: Record<string, unknown>): Promise<CallToolResult> {
   const verb = toolsFor(ctx).find((v) => toolName(v.name) === name);
   const call = ctx.playground ? "playground.call" : "mcp.call";
@@ -118,8 +124,13 @@ export async function callTool(ctx: Ctx, name: string, args: Record<string, unkn
   }
   try {
     const result = await runVerb(ctx, verb, args);
-    await audit(ctx, call, verb.name, "ok", args, verb, false);
-    return toolResult(verb, result);
+    // Render before classifying success: a rendering failure must still receive its failure audit.
+    const rendered = toolResult(verb, result);
+    if (isQuietPoll(verb, result)) {
+      // Only fixed metadata, never arguments, results, cursors, mailbox or message content.
+      console.debug(JSON.stringify({ msg: "mcp.poll", via: ctx.playground ? "playground" : "mcp", verb: verb.name, outcome: "empty" }));
+    } else await audit(ctx, call, verb.name, "ok", args, verb, false);
+    return rendered;
   } catch (e) {
     if (!(e instanceof HubError)) console.error("tool failed", verb.name, e instanceof Error ? e.name : "error");
     const reason = e instanceof HubError ? e.reason : "internal";

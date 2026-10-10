@@ -39,6 +39,9 @@ export type VerbDef<P, R> = {
   formBack?: (result: R) => string;
   /** Exposed as an MCP tool to assistant connections holding this scope. */
   mcp?: McpDecl;
+  /** Opt-in: a successful query result proves an empty routine poll. MCP logs debug, not a D1 activity event.
+   * Never suppress failures, commands, partial coverage or cursor changes; results themselves are never logged. */
+  quietPoll?: (result: R) => boolean;
   parse: (input: Record<string, unknown>) => P;
   run: (ctx: Ctx, params: P) => Promise<R>;
 };

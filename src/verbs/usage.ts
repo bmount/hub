@@ -1,13 +1,14 @@
 // AI usage accounting (migration 0012): report usage from any tool, see it summed, and keep prices.
 import { defineVerb } from "./table";
 import { optString, reqString } from "./params";
-import { badRequest, forbidden } from "../errors";
-import { rank } from "../auth/context";
+import { badRequest, forbidden, notFound } from "../errors";
+import { rank, type Ctx } from "../auth/context";
 import { ulid } from "../ids";
 import { recordEvent } from "../db/events";
 import { DATA_NOTE, cleanText } from "../mcp/render";
-import { fmtUsd, usageStatement } from "../models/usage";
+import { USAGE_MONEY_COLUMNS, usageMoney, usageStatement, type UsageMoney } from "../models/usage";
 import { itemRef } from "./work";
+import { isValidSlug } from "../tenant";
 
 const MAX_TOKENS = 50_000_000;
 const tokens = (v: unknown, name: string, required: boolean): number | null => {
@@ -81,48 +82,98 @@ export const usageReport = defineVerb({
       session_id: ctx.session?.id ?? null, project_id: c.work ? items.get(c.work)!.project_id : null, work_item_id: c.work ? items.get(c.work)!.id : null,
       client: c.client, ok: true, ms: 0, input_tokens: c.input_tokens, output_tokens: c.output_tokens, cached_tokens: c.cached_tokens, reported_cost_micros: c.cost_micros, created_at: c.at ?? ctx.now,
     })));
-    const sum = await ctx.db.prepare(`SELECT SUM(cost_micros) AS c, SUM(cost_micros IS NULL) AS unknown FROM model_call WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).first<{ c: number | null; unknown: number }>();
-    return { recorded: calls.length, cost_micros: sum?.c ?? null, unpriced: sum?.unknown ?? 0, cost: sum?.unknown ? `${fmtUsd(sum?.c ?? 0)} known, ${sum.unknown} unpriced` : fmtUsd(sum?.c ?? 0) };
+    const sum = (await ctx.db.prepare(`SELECT ${USAGE_MONEY_COLUMNS} FROM model_call m WHERE m.tenant_id = ? AND m.identity_id = ? AND m.id IN (${ids.map(() => "?").join(",")})`).bind(ctx.tenant!.id, ctx.identity!.id, ...ids).first<UsageMoney>())!;
+    return { recorded: calls.length, ...sum, cost: usageMoney(sum) };
   },
 });
 
-type Group = { key: string; label: string; calls: number; input_tokens: number; output_tokens: number; cost_micros: number | null; unpriced: number };
+export type Group = UsageMoney & { key: string; label: string; input_tokens: number; output_tokens: number; cached_tokens: number; input_known: number; output_known: number };
+export type WorkGroup = Group & { ref: string | null };
+const WORK_GROUP_LIMIT = 50;
 
-export function usageQueries(db: D1Database, tenant_id: string, since: number, identity_id: string | null) {
-  const where = `m.tenant_id = ? AND m.created_at >= ? AND (? IS NULL OR m.identity_id = ?)`;
-  const args = [tenant_id, since, identity_id, identity_id];
-  const cols = "COUNT(*) AS calls, COALESCE(SUM(m.input_tokens), 0) AS input_tokens, COALESCE(SUM(m.output_tokens), 0) AS output_tokens, SUM(m.cost_micros) AS cost_micros, SUM(m.cost_micros IS NULL) AS unpriced";
+export function usageWorkGroups(rows: WorkGroup[]) {
+  const byWork = rows.slice(0, WORK_GROUP_LIMIT);
+  return { byWork, byWorkCoverage: { limit: WORK_GROUP_LIMIT, shown: byWork.length, truncated: rows.length > WORK_GROUP_LIMIT } };
+}
+
+export type UsageWork = { id: string; project_id: string; ref: string };
+
+export async function resolveUsageWork(ctx: Ctx, reference: string | null): Promise<UsageWork | null> {
+  if (reference === null || reference === "") return null;
+  if (reference.length > 80) throw badRequest("work is too long");
+  const item = await itemRef(ctx, { id: reference });
+  const work = await ctx.db.prepare(`SELECT w.id, w.project_id, p.slug || '#' || w.number AS ref
+    FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind <> 'channel'
+    WHERE w.id = ? AND w.tenant_id = ?`).bind(item.id, ctx.tenant!.id).first<UsageWork>();
+  if (!work) throw notFound("no such work item");
+  return work;
+}
+
+export type UsageProject = { id: string; ref: string };
+
+export async function resolveUsageProject(ctx: Ctx, reference: string | null, work: UsageWork | null): Promise<UsageProject | null> {
+  if (reference === null || reference.trim() === "") return null;
+  if (reference.length > 127) throw badRequest("project is too long");
+  const parts = reference.trim().toLowerCase().split("/");
+  const slug = parts.at(-1)!;
+  const namespace = parts.length === 2 ? parts[0]! : null;
+  if (parts.length > 2 || parts.some(p => !isValidSlug(p))) throw notFound("no such project");
+  const project = await ctx.db.prepare(`SELECT p.id, CASE WHEN n.id IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END AS ref
+    FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id
+    WHERE p.tenant_id = ? AND p.kind <> 'channel' AND p.slug = ?
+      AND ((? IS NULL AND p.namespace_id IS NULL) OR n.slug = ?)`)
+    .bind(ctx.tenant!.id, slug, namespace, namespace).first<UsageProject>();
+  if (!project) throw notFound("no such project");
+  if (work && work.project_id !== project.id) throw badRequest("work does not belong to project");
+  return project;
+}
+
+export function usageQueries(db: D1Database, tenant_id: string, since: number, identity_id: string | null, work: UsageWork | null = null, project: UsageProject | null = null) {
+  const where = `m.tenant_id = ? AND m.created_at >= ? AND (? IS NULL OR m.identity_id = ?)
+    AND (? IS NULL OR (m.work_item_id = ? AND m.project_id = ?)) AND (? IS NULL OR m.project_id = ?)`;
+  const args = [tenant_id, since, identity_id, identity_id, work?.id ?? null, work?.id ?? null, work?.project_id ?? null, project?.id ?? null, project?.id ?? null];
+  const cols = `${USAGE_MONEY_COLUMNS}, COALESCE(SUM(m.input_tokens), 0) AS input_tokens, COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
+    COALESCE(SUM(m.cached_tokens), 0) AS cached_tokens, COUNT(m.input_tokens) AS input_known, COUNT(m.output_tokens) AS output_known`;
   return {
     total: db.prepare(`SELECT 'all' AS key, 'All' AS label, ${cols} FROM model_call m WHERE ${where}`).bind(...args),
     byWho: db.prepare(`SELECT COALESCE(i.email, 'pimwell') AS key, COALESCE(i.display_name, 'Pimwell') AS label, ${cols} FROM model_call m LEFT JOIN identity i ON i.id = m.identity_id WHERE ${where} GROUP BY m.identity_id ORDER BY SUM(m.cost_micros) DESC, calls DESC LIMIT 50`).bind(...args),
     byModel: db.prepare(`SELECT m.provider || '/' || m.model AS key, m.model AS label, ${cols} FROM model_call m WHERE ${where} GROUP BY m.provider, m.model ORDER BY SUM(m.cost_micros) DESC, calls DESC LIMIT 30`).bind(...args),
     bySource: db.prepare(`SELECT m.source || ':' || COALESCE(m.client, '') AS key, COALESCE(m.client, m.source) AS label, ${cols} FROM model_call m WHERE ${where} GROUP BY m.source, m.client ORDER BY calls DESC LIMIT 30`).bind(...args),
     byDay: db.prepare(`SELECT strftime('%Y-%m-%d', m.created_at / 1000, 'unixepoch') AS key, strftime('%m-%d', m.created_at / 1000, 'unixepoch') AS label, ${cols} FROM model_call m WHERE ${where} GROUP BY key ORDER BY key`).bind(...args),
+    byWork: db.prepare(`SELECT CASE WHEN p.id IS NULL THEN 'unmatched' ELSE w.id END AS key,
+        CASE WHEN p.id IS NULL THEN 'No matching work item' ELSE p.slug || '#' || w.number END AS label,
+        CASE WHEN p.id IS NULL THEN NULL ELSE p.slug || '#' || w.number END AS ref, ${cols}
+      FROM model_call m
+      LEFT JOIN work_item w ON w.id = m.work_item_id AND w.tenant_id = m.tenant_id AND w.project_id = m.project_id
+      LEFT JOIN project p ON p.id = w.project_id AND p.tenant_id = m.tenant_id AND p.kind <> 'channel'
+      WHERE ${where} GROUP BY key ORDER BY cost_micros DESC, calls DESC, key LIMIT ${WORK_GROUP_LIMIT + 1}`).bind(...args),
   };
 }
 
 export const usageSummary = defineVerb({
   name: "usage.summary", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "AI usage and cost over a period: totals, and by person or agent, model, tool, and day. Yours by default; admins can see the whole organization.",
+  summary: "Recorded AI usage and cost over a period: totals, and by person or agent, model, tool, day and work item (up to 50 groups, with coverage). Yours by default; admins can see the whole organization. Optionally narrow to a project or work item.",
   mcp: {
     scope: "read", destructive: false, title: "AI usage",
-    input: { type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 90, description: "Default 30" }, everyone: { type: "boolean", description: "Admins: the whole organization" } }, additionalProperties: false },
+    input: { type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 90, description: "Default 30" }, everyone: { type: "boolean", description: "Admins: the whole organization" }, work: { type: "string", maxLength: 80, description: "Optional work item reference or ID, like pimwell#1. Narrows the existing caller/organization scope." }, project: { type: "string", maxLength: 127, description: "Optional project path, like pimwell or team/site. Includes recorded calls without work items; never widens caller scope." } }, additionalProperties: false },
     render: (r) => {
-      const x = r as { days: number; scope: string; total: Group; byWho: Group[]; byModel: Group[] };
-      const line = (g: Group) => `- ${cleanText(g.label)}: ${g.calls} calls, ${g.input_tokens} in / ${g.output_tokens} out, ${fmtUsd(g.cost_micros)}${g.unpriced ? ` (${g.unpriced} unpriced)` : ""}`;
-      return [DATA_NOTE, "", `**AI usage, last ${x.days} days (${x.scope})**`, line(x.total), "", "By person or agent:", ...x.byWho.map(line), "", "By model:", ...x.byModel.map(line)].join("\n");
+      const x = r as { days: number; scope: string; work: string | null; project: string | null; total: Group; byWho: Group[]; byModel: Group[]; byWork: WorkGroup[]; byWorkCoverage: { limit: number; shown: number; truncated: boolean } };
+      const line = (g: Group) => `- ${cleanText(g.label)}: ${g.calls} calls, ${g.input_tokens} in / ${g.output_tokens} out (${g.input_known}/${g.calls} input and ${g.output_known}/${g.calls} output counts known), ${usageMoney(g)}`;
+      return [DATA_NOTE, "", `**AI usage, last ${x.days} days (${x.scope})${x.work ? ` for ${cleanText(x.work)}` : ""}${x.project ? ` in project ${cleanText(x.project)}` : ""}**`, line(x.total), "", "By person or agent:", ...x.byWho.map(line), "", "By model:", ...x.byModel.map(line), "", `By work item (${x.byWorkCoverage.shown} groups shown${x.byWorkCoverage.truncated ? `; capped at ${x.byWorkCoverage.limit}, more groups omitted` : "; complete for recorded calls in this scope"}):`, ...x.byWork.map(line), "Recorded calls only, not the full cost of the work. Unpriced calls are not zero-cost calls. Amounts are USD. Reported amounts are not audited invoices; API-rate estimates are not charges. Billing mode is unknown: the ledger does not record API/subscription evidence. Subscription fees are not configured here or allocated to calls. Rate-tier coverage (batch, long context, cache writes) is unknown."].join("\n");
     },
   },
   parse: (i) => {
     const d = i.days === undefined || i.days === "" ? 30 : Number(i.days);
     if (!Number.isInteger(d) || d < 1 || d > 90) throw badRequest("days must be from 1 to 90");
-    return { days: d, everyone: i.everyone === true || i.everyone === "1" || i.everyone === "true" };
+    return { days: d, everyone: i.everyone === true || i.everyone === "1" || i.everyone === "true", work: optString(i, "work", { max: 80 }), project: optString(i, "project", { max: 127 }) };
   },
   run: async (ctx, p) => {
     if (p.everyone && rank(ctx.role) < rank("admin")) throw forbidden("only admins see everyone's usage");
-    const q = usageQueries(ctx.db, ctx.tenant!.id, ctx.now - p.days * 86_400_000, p.everyone ? null : ctx.identity!.id);
-    const [t, w, m, s, d] = await ctx.db.batch([q.total, q.byWho, q.byModel, q.bySource, q.byDay]);
-    return { days: p.days, scope: p.everyone ? "everyone" : "you", total: t!.results[0] as Group, byWho: w!.results as Group[], byModel: m!.results as Group[], bySource: s!.results as Group[], byDay: d!.results as Group[] };
+    const selectedWork = await resolveUsageWork(ctx, p.work);
+    const selectedProject = await resolveUsageProject(ctx, p.project, selectedWork);
+    const q = usageQueries(ctx.db, ctx.tenant!.id, ctx.now - p.days * 86_400_000, p.everyone ? null : ctx.identity!.id, selectedWork, selectedProject);
+    const [t, w, m, s, d, work] = await ctx.db.batch([q.total, q.byWho, q.byModel, q.bySource, q.byDay, q.byWork]);
+    return { days: p.days, scope: p.everyone ? "everyone" : "you", work: selectedWork?.ref ?? null, project: selectedProject?.ref ?? null, total: t!.results[0] as Group, byWho: w!.results as Group[], byModel: m!.results as Group[], bySource: s!.results as Group[], byDay: d!.results as Group[], ...usageWorkGroups(work!.results as WorkGroup[]) };
   },
 });
 

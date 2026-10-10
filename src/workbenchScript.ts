@@ -37,6 +37,9 @@ export const WORKBENCH_JS = String.raw`
   function swap(doc, url, push) {
     var cur = $("main.panes"), next = doc.querySelector("main.panes");
     if (!cur || !next) { location.href = url; return; }
+    var me = $(".bar .me"), nme = doc.querySelector(".bar .me");
+    // Another tab can switch the shared cookie. Don't retain the old account's panes or header.
+    if (!me || !nme || me.textContent !== nme.textContent) { location.href = url; return; }
     ["list", "inspector"].forEach(function (id) {
       var a = document.getElementById(id), b = doc.getElementById(id);
       // Generic one-pane pages have a title key, not a content revision. Search,
