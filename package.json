@@ -4,11 +4,12 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "test": "npm run test:dependencies && vitest run",
+    "test": "npm run test:dependencies && npm run test:browser:deadlines && vitest run",
     "test:dependencies": "node --test scripts/test-dev-dependencies.mjs",
     "test:watch": "vitest",
     "docs:mcp": "vitest run test/mcp-reference.test.ts --update",
     "test:browser:chat": "node scripts/test-chat-browser.mjs",
+    "test:browser:deadlines": "node --test scripts/test-browser-deadline.mjs",
     "typecheck": "tsc --noEmit",
     "migrate:local": "wrangler d1 migrations apply HUB_DB --local",
     "migrate:remote": "scripts/cf/with-deploy-token.sh wrangler d1 migrations apply HUB_DB --remote",

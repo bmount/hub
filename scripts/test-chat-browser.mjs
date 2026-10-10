@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { chromium, expect } from '@playwright/test';
+import { finishedResponse } from './browser-deadline.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const temp = await mkdtemp(path.join(tmpdir(), 'pimwell-chat-browser-'));
@@ -101,6 +102,10 @@ try {
   const repeatedSnapshot = new WeakMap();
   async function context(token, viewport) {
     const ctx = await browser.newContext({ viewport, serviceWorkers: 'block' });
+    // Standalone Playwright has no action/event timeout by default. Bound fixture
+    // waits too: a missing response is a failed acceptance, not endless polling.
+    ctx.setDefaultTimeout(15_000);
+    ctx.setDefaultNavigationTimeout(30_000);
     if (token) await ctx.addCookies([{ name: 'pmw_session', value: token, domain: '.pimwell.test', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
     await ctx.route('**/*', async route => {
       if (disconnected.has(ctx)) return route.abort('internetdisconnected');
@@ -285,9 +290,10 @@ try {
     await page.clock.fastForward(30001);
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(deniedStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+    console.log(`CHECK ${label}: overdue denial recovery`);
     const deniedRecovery = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
     await page.locator('[data-presence-toggle]').click();
-    await (await deniedRecovery).finished();
+    await finishedResponse(await deniedRecovery, `${label}: overdue denial recovery`);
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
     expect(presenceCalls.slice(deniedStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
     // Model an abort-ignoring transport after a real Worker-accepted write. Keep
@@ -335,9 +341,10 @@ try {
     await expect(page.locator('[data-presence-sharing]')).toContainText('Share explicitly again');
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(gapStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+    console.log(`CHECK ${label}: timer-gap recovery`);
     const renewedSnapshot = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
     await page.locator('[data-presence-toggle]').click();
-    await (await renewedSnapshot).finished();
+    await finishedResponse(await renewedSnapshot, `${label}: timer-gap recovery`);
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(gapStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
@@ -350,9 +357,10 @@ try {
     await page.clock.fastForward(30000);
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(invalidStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+    console.log(`CHECK ${label}: wrong-channel recovery`);
     const invalidRecovery = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
     await page.locator('[data-presence-toggle]').click();
-    await (await invalidRecovery).finished();
+    await finishedResponse(await invalidRecovery, `${label}: wrong-channel recovery`);
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     expect(presenceCalls.slice(invalidStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
@@ -369,9 +377,10 @@ try {
       await page.clock.fastForward(30000);
       await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
       expect(presenceCalls.slice(boundedStart).map(c => c.name)).toEqual(['/api/chat.presence']);
+      console.log(`CHECK ${label}: oversized ${endpoint} recovery`);
       const boundedRecovery = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
       await page.locator('[data-presence-toggle]').click();
-      await (await boundedRecovery).finished();
+      await finishedResponse(await boundedRecovery, `${label}: oversized ${endpoint} recovery`);
       await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
       await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
       expect(presenceCalls.slice(boundedStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
@@ -379,20 +388,21 @@ try {
     // Repeated successful snapshots must not restart their age, even as actual
     // heartbeat writes succeed. This is fixture replay, not a production proxy claim.
     repeatedSnapshot.set(ctx, null);
+    console.log(`CHECK ${label}: replay capture/expiry`);
     const captured = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
     await page.clock.fastForward(30000);
-    await (await captured).finished();
+    await finishedResponse(await captured, `${label}: replay capture`);
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     for (const seconds of [30, 60]) {
       const repeat = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
       await page.clock.fastForward(30000);
-      await (await repeat).finished();
+      await finishedResponse(await repeat, `${label}: replay age ${seconds}s`);
       await expect(page.locator('[data-presence-freshness]')).toContainText(`at least ${seconds} seconds old`);
     }
     const expiryStart = presenceCalls.length;
     const expiryQuery = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
     await page.clock.fastForward(30000);
-    await (await expiryQuery).finished();
+    await finishedResponse(await expiryQuery, `${label}: replay expiry`);
     await expect(page.locator('[data-presence-connection]')).toContainText('Current status is unknown');
     await expect(page.locator('[data-presence-list] li')).toHaveCount(0);
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
@@ -408,9 +418,10 @@ try {
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
     expect(presenceCalls.slice(replayStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(0);
+    console.log(`CHECK ${label}: replay recovery`);
     const replayRecovery = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
     await page.locator('[data-presence-toggle]').click();
-    await (await replayRecovery).finished();
+    await finishedResponse(await replayRecovery, `${label}: replay recovery`);
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
     expect(presenceCalls.slice(replayStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
     expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(beforeCursor);
@@ -460,6 +471,8 @@ try {
   });
   for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }]]) {
     const cacheCtx = await cacheBrowser.newContext({ viewport, serviceWorkers: 'block' });
+    cacheCtx.setDefaultTimeout(15_000);
+    cacheCtx.setDefaultNavigationTimeout(30_000);
     await cacheCtx.addCookies([{ name: 'pmw_session', value: member, url: cacheBase, httpOnly: true, sameSite: 'Lax' }]);
     const cachePage = await cacheCtx.newPage();
     const cacheDiagnostics = await cacheCtx.newCDPSession(cachePage);
