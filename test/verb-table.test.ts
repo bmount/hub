@@ -93,6 +93,7 @@ const TABLE: Record<string, Decl> = {
   "chat.post": T("tenant", "member", null, { mcp: "write" }), "chat.edit": T("tenant", "member", null), "chat.retract": T("tenant", "member", null),
   "chat.read": T("tenant", "reader", null, { mcp: "read" }), "chat.thread": T("tenant", "reader", null, { mcp: "read" }),
   "chat.response_status": T("tenant", "reader", null, { mcp: "read" }),
+  "chat.run_claim": T("tenant", "member", null, { mcp: "write" }), "chat.run_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.post_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.read_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.catchup": T("tenant", "reader", null, { mcp: "read" }),
@@ -197,7 +198,8 @@ describe("verb table", () => {
       idempotency_key: "k", refs: [], state: "active", prefix: false,
     };
     // Where one name means different things to different verbs.
-    const OVERRIDE: Record<string, Record<string, unknown>> = { "chat.post": { kind: "say" }, "chat.heartbeat": { status: "online" }, "chat.history": { limit: 2 } };
+    const OVERRIDE: Record<string, Record<string, unknown>> = { "chat.post": { kind: "say" }, "chat.heartbeat": { status: "online" }, "chat.history": { limit: 2 },
+      "chat.run_claim": { source: { msg_id: "01M4FAKTZN5K8R70YEK82B5S8S", rev: 1, author_id: "01M4AF980SG4A68Q7VNA21WX92" }, run_key: "stable-run" } };
     const AUTHORISH = ["author", "author_id", "as", "identity", "identity_id", "display_name_override", "session_id", "name_tag", "via", "by", "handle", "avatar", "on_behalf_of"];
     const planted = Object.fromEntries(AUTHORISH.map((k) => [k, "01PLANTED0000000000000000000"]));
     const keysDeep = (v: unknown): string[] => (v && typeof v === "object" ? Object.entries(v).flatMap(([k, x]) => [k, ...keysDeep(x)]) : []);
@@ -211,7 +213,9 @@ describe("verb table", () => {
         input.items = [1];
       }
       const parsed = v.parse(input);
-      const leaked = keysDeep(parsed).filter((k) => AUTHORISH.includes(k));
+      // A claim's nested source is verified evidence, never the authenticated run actor.
+      const actorParams = v.name === "chat.run_claim" ? { ...parsed as object, source: undefined } : parsed;
+      const leaked = keysDeep(actorParams).filter((k) => AUTHORISH.includes(k));
       expect({ verb: v.name, leaked }).toEqual({ verb: v.name, leaked: [] });
       expect(JSON.stringify(parsed)).not.toContain("PLANTED");
     }
