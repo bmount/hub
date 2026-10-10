@@ -4,7 +4,7 @@ import { DATA_NOTE, cleanText, cutText } from "../mcp/render";
 import { readableChannels, viewerOf } from "./access";
 import { CHAT_NOTE, header, messageBlock, refShort, textBudget } from "./compact";
 import { nameTags, people } from "./handles";
-import { msgJson, type MsgJson } from "./present";
+import { messageActors, msgJson, type MsgJson } from "./present";
 import { refsForViewer } from "./refs";
 import { conversationStub, inboxStub } from "./stubs";
 import type { Digest, MsgView } from "./types";
@@ -84,7 +84,7 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   }
   const active = chans.map((ch, i) => ({ ch, d: digests[i]! })).filter((x) => x.d.head > x.d.since);
   const views: MsgView[] = active.flatMap(({ d }) => [...d.mentions_me, ...d.my_threads.flatMap((t) => [t.root, t.newest]), ...d.threads.map((t) => t.root)]);
-  const tagOf = await nameTags(ctx.db, v.tenant.id, views.map((m) => ({ author_id: m.author_id, session_id: m.session_id, session_kind: m.session_kind })));
+  const tagOf = await nameTags(ctx.db, v.tenant.id, views.flatMap(messageActors));
   const dir = await people(ctx.db, v.tenant.id);
   const handle = (id: string) => (id === "hub" ? "hub" : dir.get(id)?.handle ?? "unknown");
 
@@ -116,7 +116,7 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   for (const { ch, m } of mentions) {
     const refs = await refsForViewer(ctx.db, v, m.refs);
     const tag = tagOf(m.author_id, m.session_id, m.session_kind);
-    if (fits(messageBlock(m, tag, { c: ch.slug, channel: true, cut: 400, refs }))) out.for_you.push({ ...msgJson(m, tag, refs), channel: ch.slug, conversation_id: ch.project_id });
+    if (fits(messageBlock(m, tag, { c: ch.slug, channel: true, cut: 400, refs }))) out.for_you.push({ ...msgJson(m, tag, refs, tagOf), channel: ch.slug, conversation_id: ch.project_id });
     else {
       omitted++;
       incomplete.add(ch.project_id);
@@ -135,7 +135,7 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
       out.threads.push({ channel: ch.slug, conversation_id: ch.project_id, root_seq: t.root.seq, replies: t.replies,
         edited_replies: t.edited_replies, retracted_replies: t.retracted_replies, root_edited: t.root_edited, root_retracted: t.root_retracted,
         latest_seq: t.newest.seq, latest_activity_seq: t.latest_activity_seq,
-        latest_author: tag.handle, latest: msgJson(t.newest, tag, refs) });
+        latest_author: tag.handle, latest: msgJson(t.newest, tag, refs, tagOf) });
     }
     else {
       omitted++;

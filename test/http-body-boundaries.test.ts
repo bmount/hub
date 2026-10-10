@@ -78,6 +78,8 @@ describe("API bounded parsing", () => {
   it("rate-denies anonymous public calls before reading, even with invalid credentials", async () => {
     const ip = "198.51.100.201";
     const now = Date.now();
+    // Seed and request must observe the same fixed window, even if these awaits cross a minute.
+    vi.spyOn(Date, "now").mockReturnValue(now);
     for (let n = 0; n < 60; n++) await takeRateDetail(env.RATE, "api_anon_ip", ip, now);
     const req = chunked("https://pimwell.test/api/test.body", enc.encode("not JSON"), { "cf-connecting-ip": ip, authorization: "Bearer pmw_forged" });
     const res = await handleApi(req, env);

@@ -16,24 +16,33 @@ export type MsgJson = {
   seq: number; msg_id: string; rev: number; root_seq: number | null; author: AuthorJson; hop: number; body: string; edited: boolean;
   retracted: boolean; system: boolean; reply_count: number; last_reply_seq: number | null; refs: ViewRef[]; created_at: number; updated_at: number;
   response_to: ResponseAttribution | null;
+  /** Actual current edit/retraction actor, not the original owner. Null means absent actor evidence. */
+  revision_author: AuthorJson | null;
 };
 
 export function authorJson(t: NameTag): AuthorJson {
   return { identity_id: t.identity_id, handle: t.handle, display_name: t.display_name, kind: t.kind, operator: t.operator_handle, session_id: t.session_id, session_kind: t.session_kind, run: t.session_label, via_assistant: t.via_assistant };
 }
 
-export function msgJson(m: MsgView, t: NameTag, refs: ViewRef[]): MsgJson {
+/** Include both owner and immutable revision actor in directory display lookups. */
+export function messageActors(m: MsgView) {
+  const owner = { author_id: m.author_id, session_id: m.session_id, session_kind: m.session_kind };
+  return m.revision_author_id ? [owner, { ...owner, author_id: m.revision_author_id }] : [owner];
+}
+
+export function msgJson(m: MsgView, t: NameTag, refs: ViewRef[], tagOf: TagOf): MsgJson {
   return {
     seq: m.seq, activity_seq: m.activity_seq, msg_id: m.msg_id, rev: m.rev, root_seq: m.root_seq, author: authorJson(t), hop: m.hop, body: m.retracted ? "" : m.body, edited: m.edited,
     retracted: m.retracted, system: m.kind === "system", reply_count: m.reply_count, last_reply_seq: m.last_reply_seq, refs, created_at: m.created_at, updated_at: m.updated_at,
     response_to: m.response_to ?? null,
+    revision_author: m.revision_author_id ? authorJson(tagOf(m.revision_author_id, m.session_id, m.session_kind)) : null,
   };
 }
 
 /** Name tags and per-viewer refs for a set of messages (spec 4.6, 5.2). */
 export async function present(ctx: Ctx, msgs: MsgView[]): Promise<{ tagOf: TagOf; refs: Map<number, ViewRef[]> }> {
   const v = viewerOf(ctx);
-  const tagOf = await nameTags(ctx.db, v.tenant.id, msgs.map((m) => ({ author_id: m.author_id, session_id: m.session_id, session_kind: m.session_kind })));
+  const tagOf = await nameTags(ctx.db, v.tenant.id, msgs.flatMap(messageActors));
   const refs = new Map<number, ViewRef[]>();
   for (const m of msgs) if (m.refs.length > 0) refs.set(m.seq, await refsForViewer(ctx.db, v, m.refs));
   return { tagOf, refs };
@@ -58,14 +67,14 @@ export async function readResult(
     return shown.has(m.seq) && m.seq !== o.context && activity_seq !== undefined
       ? [{ msg_id: m.msg_id, seq: m.seq, activity_seq }] : [];
   }) : [];
-  const target = o.target ? msgJson(o.target, tagOf(o.target.author_id, o.target.session_id, o.target.session_kind), refs.get(o.target.seq) ?? []) : undefined;
+  const target = o.target ? msgJson(o.target, tagOf(o.target.author_id, o.target.session_id, o.target.session_kind), refs.get(o.target.seq) ?? [], tagOf) : undefined;
   const targetText = o.target ? [
     "", `Exact named target: #${o.target.seq} r${o.target.rev}; full body in structured target. Snapshot evidence, not page progress or execution authority.`,
     ...(!shown.has(o.target.seq) ? messageBlock(o.target, tagOf(o.target.author_id, o.target.session_id, o.target.session_kind), { c: ch.slug, refs: refs.get(o.target.seq) }) : []),
   ].join("\n") : "";
   return {
     tenant_id: ch.tenant_id, identity_id: viewerOf(ctx).identity.id, conversation_id: ch.project_id, channel: ch.slug, head: o.head,
-    messages: msgs.filter((m) => shown.has(m.seq)).map((m) => msgJson(m, tagOf(m.author_id, m.session_id, m.session_kind), refs.get(m.seq) ?? [])),
+    messages: msgs.filter((m) => shown.has(m.seq)).map((m) => msgJson(m, tagOf(m.author_id, m.session_id, m.session_kind), refs.get(m.seq) ?? [], tagOf)),
     activity_cursors, next_after: r.next_after, next_before: r.next_before, text: r.text + targetText, ...(target ? { target } : {}),
   };
 }
