@@ -121,7 +121,7 @@ export class ArtifactsRest {
     const upstream = new URL(`${this.remote(namespace, repo)}/${tail}`);
     upstream.search = new URL(request.url).search;
     const headers = new Headers();
-    for (const name of ["content-type", "accept", "git-protocol", "user-agent"]) {
+    for (const name of ["content-type", "content-encoding", "accept", "git-protocol", "user-agent"]) {
       const value = request.headers.get(name);if (value) headers.set(name, value);
     }
     headers.set("authorization", `Bearer ${await this.repoToken(namespace, repo, write ? "write" : "read")}`);

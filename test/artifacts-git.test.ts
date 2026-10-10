@@ -118,10 +118,11 @@ describe("Artifacts REST transport", () => {
       if (String(url).startsWith("https://api.cloudflare.com/")) return Response.json({ success: true, result: token });
       const headers = new Headers(init?.headers);
       expect(headers.get("authorization")).toBe(`Bearer ${token.plaintext}`);
+      expect(headers.get("content-encoding")).toBe("gzip");
       for (const name of ["cookie", "x-ardi-principal", "x-hub-internal"]) expect(headers.get(name)).toBeNull();
       expect(init?.redirect).toBe("manual");return new Response("synthetic Git response");
     });
-    const request = new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: "Basic client", cookie: "private", "x-ardi-principal": "admin", "x-hub-internal": "forged" } });
+    const request = new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: "Basic client", cookie: "private", "content-encoding": "gzip", "x-ardi-principal": "admin", "x-hub-internal": "forged" } });
     const response = await configured().git("acme", "site", "info/refs", request, null, false);
     expect(await response.text()).toBe("synthetic Git response");expect(String(fake.mock.calls[1]![0])).toBe(`https://${account}.artifacts.cloudflare.net/git/acme/site.git/info/refs?service=git-upload-pack`);
   });
