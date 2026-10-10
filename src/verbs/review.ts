@@ -61,17 +61,31 @@ export const reviewRequest = defineVerb({
     }
     const id = ulid(ctx.now);
     const title = p.title ?? head.summary;
-    await ctx.db.batch([
+    // One D1 transaction includes every request effect and the response snapshot.
+    // A later attention/event/read failure must not leave a review behind an error.
+    // This is not lost-response idempotency: callers must still reconcile before retrying.
+    const results = await ctx.db.batch<Review>([
       ctx.db.prepare(`INSERT INTO review (id, tenant_id, project_id, number, branch, base, head_oid, title, summary, status, author_id, created_at, updated_at)
         SELECT ?, ?, ?, COALESCE(MAX(number), 0) + 1, ?, ?, ?, ?, ?, 'open', ?, ?, ? FROM review WHERE project_id = ?`)
         .bind(id, ctx.tenant!.id, pr.id, p.branch, p.base, head.oid, title, p.summary, ctx.identity!.id, ctx.now, ctx.now, pr.id),
-      ...ids.map((rid) => ctx.db.prepare("INSERT OR IGNORE INTO review_reviewer (review_id, identity_id) VALUES (?, ?)").bind(id, rid)),
+      ...[...new Set(ids)].map((rid) => ctx.db.prepare("INSERT INTO review_reviewer (review_id, identity_id) VALUES (?, ?)").bind(id, rid)),
+      ...[...new Set(ids)].filter((rid) => rid !== ctx.identity!.id).map((rid) => ctx.db.prepare(`
+        INSERT INTO attention (id, tenant_id, identity_id, reason, item_id, actor_id, summary, created_at, href)
+        SELECT ?, r.tenant_id, ?, 'assigned', NULL, ?, substr(? || p.slug || '!' || r.number || ': ' || r.title, 1, 300), ?,
+          '/' || p.slug || '/reviews/' || r.number
+        FROM review r JOIN project p ON p.id = r.project_id WHERE r.tenant_id = ? AND r.id = ?`)
+        .bind(ulid(ctx.now), rid, ctx.identity!.id, `${ctx.identity!.display_name} asked you to review `, ctx.now, ctx.tenant!.id, id)),
+      ctx.db.prepare(`INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
+        SELECT ?, r.tenant_id, ?, ?, 'review.request', 'review', r.id,
+          'Opened review ' || p.slug || '!' || r.number || ' (' || r.branch || ' into ' || r.base || '): ' || r.title, ?
+        FROM review r JOIN project p ON p.id = r.project_id WHERE r.tenant_id = ? AND r.id = ?`)
+        .bind(ulid(ctx.now), ctx.identity!.id, ctx.session?.id ?? null, ctx.now, ctx.tenant!.id, id),
+      ctx.db.prepare(`SELECT r.*, p.slug, i.display_name AS author FROM review r
+        JOIN project p ON p.id = r.project_id JOIN identity i ON i.id = r.author_id
+        WHERE r.tenant_id = ? AND r.id = ?`).bind(ctx.tenant!.id, id),
     ]);
-    const r = await reviewRef(ctx, id);
-    const ref = `${pr.slug}!${r.number}`;
-    await ctx.db.batch(attentionFor(ctx, ids, `/${pr.slug}/reviews/${r.number}`, `${ctx.identity!.display_name} asked you to review ${ref}: ${title}`));
-    await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "review.request", target_kind: "review", target_id: id, summary: `Opened review ${ref} (${p.branch} into ${p.base}): ${title}` }, ctx.now);
-    return { ref, review: r };
+    const r = results[results.length - 1]!.results[0]!;
+    return { ref: `${pr.slug}!${r.number}`, review: r };
   },
 });
 
