@@ -4,7 +4,8 @@
 //   - authority is the signed-in person's current role, narrowed by the chosen scopes, through the same exposure
 //     and access checks as /mcp (toolsFor, callTool, checkAccess);
 //   - only same-origin JSON POSTs carrying the Playground header, from a browser session, are accepted;
-//   - every call is recorded like an MCP call, as playground.call, with the session id.
+//   - calls are recorded like MCP calls, as playground.call, with the session id; confirmed-empty routine
+//     polls log debug instead (docs/ops/logging.md). Commands, failures and nonempty queries remain audited.
 import type { Env } from "../env";
 import { esc, htmlResponse, page } from "../html";
 import { buildContext, type Ctx } from "../auth/context";
@@ -51,7 +52,7 @@ export async function playgroundPage(request: Request, env: Env): Promise<Respon
 <div class="out" hidden></div></details>`).join("");
   const body = `<div class="chips"><a class="chip" href="/assistant${threadQuery}">Chat</a><a class="chip" href="/assistant/tools${threadQuery}" aria-current="true">Tools</a></div>
 <h1>Tools</h1>
-<p class="lede">Run any tool directly, exactly as an assistant connected to ${esc(ctx.tenant!.display_name)} would: same tools, same checks, same answers. It acts as you, in this organization only, and every call is on the record.</p>
+<p class="lede">Run any tool directly, exactly as an assistant connected to ${esc(ctx.tenant!.display_name)} would: same tools, same checks, same answers. It acts as you, in this organization only, and changes, failures and nonempty tool calls are on the record. Confirmed-empty routine polls log only at debug level.</p>
 <div class="chips"><a class="chip" href="?scopes=read${scopeQuery}"${set === "read" ? ' aria-current="true"' : ""}>Read only</a><a class="chip" href="?scopes=write${scopeQuery}"${set === "write" ? ' aria-current="true"' : ""}>Read and write</a></div>
 <p><small>${tools.length} tools with ${set === "read" ? "the read scope" : "the read and write scopes"} at your role (${esc(ctx.role!)}). Write tools change real data.</small></p>
 ${cards || `<p class="lede">No tools for this scope at your role.</p>`}

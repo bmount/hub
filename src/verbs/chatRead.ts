@@ -158,6 +158,8 @@ export const chatInbox = defineVerb({
     scope: "read", destructive: false, title: "Inbox", render: chatText,
     input: schema({ after: { type: "integer", minimum: 0, description: "Only items after this item number; continue with next_after from the last scanned page, not the global head. Must not exceed the inbox's allocated sequence (retained head can decrease after pruning)." }, limit: { type: "integer", minimum: 1, maximum: 100, description: "Items to scan before permission filtering, default 50." } }),
   },
+  // Permission-filtered empty pages may still need a continuation, so retain their activity audit.
+  quietPoll: (r: Awaited<ReturnType<typeof inboxView>>) => Array.isArray(r.items) && r.items.length === 0 && r.has_more === false,
   parse: (i) => ({ after: optInt(i, "after", { min: 0, max: Number.MAX_SAFE_INTEGER }) ?? 0, limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 50 }),
   run: async (ctx, p) => {
     const { box, v } = await validatedInbox(ctx, p.after);

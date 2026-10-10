@@ -26,6 +26,27 @@ Crashes add a separate `msg: "exception"` or `msg: "verb failed"` line with the 
 **Never stored:** Cloudflare's own invocation entries are off, because they record full URLs. Live `tail` still shows full URLs, but it isn't stored. Also never logged: tokens, cookies, request bodies and query values. `/invite/<token>` and `/auth/<token>` become
 `/invite/:token` and `/auth/:token`, and a query keeps only its key names (`/docket?owner=…`).
 
+## Confirmed-empty tool polling (#99 increment)
+
+MCP (human and agent) and Playground calls normally record `mcp.call` / `playground.call` activity.
+Four query verbs opt in to an exception through typed `quietPoll` metadata: `mail.list`, `attention.list`,
+`chat.inbox`, and `chat.catchup`. Only a successfully run **and rendered**, confirmed-empty result skips that
+D1 activity event. It emits a debug line with `msg: "mcp.poll"`, transport, fixed verb name and `outcome: "empty"`.
+No arguments, results, cursors, message bodies or mailbox identifiers go in that line.
+
+Nonempty results, compact catch-up summaries (`quiet`), omitted coverage, inbox continuation pages, and
+catch-up cursor advancement retain normal activity auditing. Commands never qualify. A missing/invalid
+result or failing classifier defaults to normal auditing. All tool failures and denials retain their existing
+D1 audit; authorization and current mailbox/channel/grant checks still precede classification. Polling never
+acknowledges attention or advances read cursors. Existing authentication/session health touches are unchanged
+and coalesced; debug output is not durable processing or execution proof.
+
+This increment removes empty-tool event inflation, not all polling noise: generic HTTP request lines still
+log at their usual status-based levels, other queries still audit, and repeated *nonempty* reads are not
+silently deduplicated. API/UI polling and externally managed runner logging have not been demoted here.
+This is intentionally narrower than changing request middleware or weakening the audit of writes/failures.
+The prior all-calls audit design is qualified only by this explicit empty-query exception.
+
 ## Looking at logs
 
 - **Dashboard:** Workers & Pages → pimwell-hub → Logs. Filter by `$metadata.message`, or by fields such as
