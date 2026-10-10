@@ -26,6 +26,8 @@ Native-Workers regression tests meter one item-query round trip for an unfiltere
 
 The inspector opens recorded `commit` references (`project@` plus a full 40-character hex ID) in the commit view, and `item` references (`project#number`) in the work view. Work numbers are positive and at most eight digits. These links stay on the current tenant host; each destination checks the viewer's access. Rendering does not fetch target titles or verify that the target exists.
 
+Members can use **Add link** in the inspector to record a commit, work item, mail, message, event or HTTPS URL, with an optional note. The form uses the existing audited `work.link` command and returns to the same item and Docket filters. References and notes are limited to 500 characters. Repeating a kind/reference pair keeps the original link, note and author; it does not edit the existing evidence. Readers can view links but cannot add them.
+
 Short commit IDs, malformed references and other reference kinds remain escaped plain text. External `url` links still require a safe HTTPS URL without credentials. Notes are escaped, and the inspector distinguishes recorded references from verified access or existence.
 
 ## Evidence and remaining scope

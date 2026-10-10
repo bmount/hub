@@ -165,7 +165,9 @@ function workLinkHtml(l: WorkLink): string {
 function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string): string {
   const canWrite = rank(ctx.role) >= rank("member");
   const self = `/${esc(project.slug)}/w/${w.number}`;
-  const keep = esc(back.includes("?") ? `${self}${back.slice(back.indexOf("?"))}` : self);
+  const keepParams = new URLSearchParams(back.includes("?") ? back.slice(back.indexOf("?") + 1) : "");
+  if (back.startsWith("/docket")) keepParams.set("in", "org");
+  const keep = esc(`${self}${keepParams.size ? `?${keepParams}` : ""}`);
   const expectedUpdate = `<input type="hidden" name="expected_updated_at" value="${w.updated_at}">`;
   const action = (state: string, label: string, quiet = true) => `<form class="inline" method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="state" value="${state}"><input type="hidden" name="_back" value="${keep}"><button type="submit"${quiet ? ' class="quiet"' : ""}>${esc(label)}</button></form>`;
   const follow = `<form class="inline" method="post" action="/api/work.subscribe"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="follow" value="${d.following ? "0" : "1"}"><input type="hidden" name="_back" value="${keep}"><button type="submit" class="quiet" title="${d.following ? "Stop hearing about changes" : "Hear about every change in What needs me"}">${d.following ? "Following ✓" : "Follow"}</button></form>`;
@@ -187,7 +189,16 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
   const under = d.children.length
     ? `<h2>Under it</h2><table><tbody>${d.children.map((c) => `<tr data-href="/${esc(project.slug)}/w/${c.number}"><td class="ref">#${c.number}</td><td class="k-${c.kind}"><span class="kd"></span>${esc(KINDS[c.kind].name)}</td><td><a href="/${esc(project.slug)}/w/${c.number}">${esc(c.title)}</a></td><td>${esc(STATES[c.state])}</td></tr>`).join("")}</tbody></table>`
     : w.kind === "quest" ? `<h2>Under it</h2><p class="lede">Nothing yet. To put an item under this quest, choose it as the item's quest when you edit it.</p>` : "";
-  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map(workLinkHtml).join("")}</ul><p class="lede">Recorded references, not verified access or existence. Each destination checks your access.</p>` : "<p class=\"lede\">None yet. Agents link commits, threads and pages here with work_link.</p>"}`;
+  const linkForm = canWrite ? `<details><summary>Add link</summary>
+<form method="post" action="/api/work.link"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
+<label>Kind <select name="target_kind"><option value="commit">Commit</option><option value="item">Work item</option><option value="mail">Mail</option><option value="message">Message</option><option value="event">Event</option><option value="url">HTTPS URL</option></select></label>
+<label>Reference <input name="target_ref" required maxlength="500" aria-describedby="work-link-help"></label>
+<p id="work-link-help" class="lede">Commit: project@full-commit-id. Work item: project#number. Mail, message or event: its recorded ID. URL: an absolute HTTPS address without credentials.</p>
+<label>Note (optional) <input name="note" maxlength="500"></label>
+<p class="lede">Adding the same kind and reference again keeps the original link and note.</p>
+<button type="submit">Add link</button></form></details>` : "";
+  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map(workLinkHtml).join("")}</ul>` : '<p class="lede">No links yet.</p>'}
+<p class="lede">Recorded references, not verified access or existence. Each destination checks your access.</p>${linkForm}`;
   const activity = d.activity.length ? `<h2>Activity</h2><ul class="timeline">${d.activity.map((a) => `<li><time title="${when(a.created_at)}">${ago(a.created_at, ctx.now)}</time><span>${esc(a.who ?? "Pimwell")}: ${esc(a.summary)}</span></li>`).join("")}</ul>` : "";
   return `<a class="back" href="${esc(back)}">‹ ${esc(DOCKET.name)}</a>
 <div class="head"><span class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)} (${esc(KINDS[w.kind].plain)})</span><strong>${esc(project.slug)}#${w.number}</strong><span>${esc(STATES[w.state])}</span></div>

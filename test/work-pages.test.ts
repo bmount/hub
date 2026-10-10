@@ -94,6 +94,97 @@ describe("work item editing", () => {
     const html = await (await w.get(`/site/w/${item.number}`, w.rae.token)).text();
     expect(html).toContain("Idea");
     expect(html).not.toContain('<details class="edit">');
+    expect(html).not.toContain('action="/api/work.link"');
+  });
+});
+
+describe("browser work evidence creation", () => {
+  it("renders a bounded member form and returns to the same filtered item after an audited link", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "errand", title: "Evidence from a browser" });
+    const path = `/site/w/${item.number}?in=org&kind=errand&owner=me`;
+    const before = await (await w.get(path)).text();
+    const form = before.match(/<form method="post" action="\/api\/work\.link">([\s\S]*?)<\/form>/)![1]!;
+    expect(form).toContain(`name="id" value="${item.id}"`);
+    const returnTo = form.match(/name="_back" value="([^"]*)"/)![1]!.replaceAll("&amp;", "&");
+    expect(new URL(returnTo, `https://${HOST}`).pathname).toBe(`/site/w/${item.number}`);
+    expect(Object.fromEntries(new URL(returnTo, `https://${HOST}`).searchParams)).toEqual({ in: "org", kind: "errand", owner: "me" });
+    expect(form).toContain('name="target_ref" required maxlength="500" aria-describedby="work-link-help"');
+    expect(form).toContain('name="note" maxlength="500"');
+    expect([...form.matchAll(/<option value="([^"]+)">/g)].map(m => m[1])).toEqual(["commit", "item", "mail", "message", "event", "url"]);
+    expect(form).toContain("keeps the original link and note");
+    const ref = `site@${"a".repeat(40)}`;
+    const note = '<script>untrusted</script> & "evidence"';
+    const r = await w.form("work.link", { id: item.id, _back: returnTo, target_kind: "commit", target_ref: ref, note });
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe(returnTo);
+    const after = await (await w.get(r.headers.get("location")!)).text();
+    expect(after).toContain(`<a href="/site/code?c=${"a".repeat(40)}">${ref}</a>`);
+    expect(after).toContain("&lt;script&gt;untrusted&lt;/script&gt; &amp; &quot;evidence&quot;");
+    expect(after).not.toContain(note);
+    const paneKey = (html: string) => html.match(/id="list"[^>]*data-key="([^"]*)"/)![1];
+    expect(paneKey(after)).toBe(paneKey(before));
+    expect(await env.HUB_DB.prepare("SELECT identity_id, session_id, target_id FROM event WHERE kind = 'work.link'").first()).toEqual({ identity_id: w.pat.identity.id, session_id: w.pat.session.id, target_id: item.id });
+  });
+
+  it("submits every offered kind and preserves original evidence on a repeated form", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "errand", title: "All evidence kinds" });
+    const refs = [["commit", `site@${"a".repeat(40)}`], ["item", "site#1"], ["mail", "mail-id"], ["message", "message-id"], ["event", "event-id"], ["url", "HTTPS://EXAMPLE.COM:443/evidence?a=1&b=2"]];
+    for (const [target_kind, target_ref] of refs) {
+      const fields = { id: item.id, _back: `/site/w/${item.number}`, target_kind: target_kind!, target_ref: target_ref!, note: "Original evidence" };
+      expect((await w.form("work.link", fields)).status).toBe(303);
+      expect((await w.form("work.link", { ...fields, note: "Do not replace the original" })).status).toBe(303);
+    }
+    const links = (await env.HUB_DB.prepare("SELECT target_kind, target_ref, note, created_by FROM work_link WHERE item_id = ? ORDER BY target_kind").bind(item.id).all()).results;
+    expect(links).toHaveLength(refs.length);
+    expect(links.every(l => l.note === "Original evidence" && l.created_by === w.pat.identity.id)).toBe(true);
+    expect(links.find(l => l.target_kind === "url")!.target_ref).toBe("https://example.com/evidence?a=1&b=2");
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'work.link'").first("n")).toBe(refs.length);
+  });
+
+  it("refuses reader, anonymous, cross-origin and cross-tenant form writes without creating evidence", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "errand", title: "Scoped evidence" });
+    const other = await seedTenant("bravo");
+    const outsider = await seedHuman("outsider@example.com", { memberships: [{ tenant_id: other.id, role: "member" }] });
+    const body = new URLSearchParams({ id: item.id, target_kind: "item", target_ref: "site#1" }).toString();
+    const cases = [
+      { token: w.rae.token, host: HOST, origin: `https://${HOST}`, status: 403 },
+      { token: "", host: HOST, origin: `https://${HOST}`, status: 404 },
+      { token: w.pat.token, host: HOST, origin: "https://evil.test", status: 403 },
+      { token: w.pat.token, host: HOST, origin: "", status: 403 },
+      { token: outsider.token, host: "bravo.pimwell.test", origin: "https://bravo.pimwell.test", status: 404 },
+      { token: outsider.token, host: HOST, origin: `https://${HOST}`, status: 404 },
+    ];
+    for (const c of cases) {
+      const r = await SELF.fetch(`https://${c.host}/api/work.link`, { method: "POST", redirect: "manual", headers: { ...(c.token ? { cookie: `pmw_session=${c.token}` } : {}), ...(c.origin ? { origin: c.origin } : {}), "content-type": "application/x-www-form-urlencoded" }, body });
+      expect(r.status, JSON.stringify(c)).toBe(c.status);
+      expect(await r.text()).toContain("Not done");
+    }
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_link").first("n")).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'work.link'").first("n")).toBe(0);
+  });
+
+  it("rejects invalid form evidence and never redirects to the supplied external target", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "errand", title: "Safe evidence forms" });
+    const base = { id: item.id, target_kind: "url", target_ref: "https://example.com/evidence" };
+    const invalid: Array<Record<string, string>> = [
+      { target_kind: "unknown" }, { target_ref: "" }, { target_kind: "item", target_ref: "   " },
+      ...["javascript:alert(1)", "http://example.com", "//evil.test", "https://user:password@example.com", "https://example.com/%0a", " https://example.com"].map(target_ref => ({ target_ref })),
+      { target_ref: "x".repeat(501) }, { note: "x".repeat(501) },
+    ];
+    for (const fields of invalid) {
+      const r = await w.form("work.link", { ...base, ...fields });
+      expect(r.status).toBe(400);
+      expect(await r.text()).toContain("Not done");
+    }
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_link").first("n")).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'work.link'").first("n")).toBe(0);
+    const r = await w.form("work.link", { ...base, _back: "https://evil.test" });
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe("/");
   });
 });
 
