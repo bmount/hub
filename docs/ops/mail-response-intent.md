@@ -196,12 +196,27 @@ observation. The browser's **Own recorded reply evidence** panel uses fixed
 truthful wording and includes the observation in its pane invalidation key.
 Existing canonical readable-reply rendering remains separate and unchanged.
 
-The final bounded query anchors the outbound selection to active human/member
-and tenant authority, exact shared source identity/destination/verdict, and the
-exact independent replay and intention snapshots. A source/authority/revision
-change during this read refuses the observation rather than leaking stale
-attempt details. This is a bounded database observation, not a future authority
-lock. Unset/invalid/cancelled/completed intentions expose no reply record.
+The final bounded query runs for **every intention state**, anchoring the entire
+returned intention and control eligibility to active human/member and tenant
+authority, exact shared source identity/destination/verdict, exact independent
+replay and intention snapshots, and exact recipient-preference snapshot.
+Missing intention/preferences require continued absence, not just a null value
+comparison. When the preference snapshot selects the caller, the query also
+rechecks current organization/project address availability against the observed
+`can_plan` value; this detects both loss and restoration of eligibility.
+Stable unselected/invalid/absent preferences and archived destinations remain
+readable under existing source authority, without granting plan eligibility.
+
+A source/authority/revision/preference or relevant address-availability change
+during this read refuses the whole observation with `conflict`; reload and
+reconcile, never use stale forms or infer an effect. This closes the prior early
+return for unset/invalid/cancelled/completed intentions and obsolete preference
+controls on planned reads. It is one final bounded database observation, not a
+future authority lock: changes after that query are still possible, and write
+CAS/authority checks remain mandatory. It neither refreshes browser proof nor
+reserves a reply or re-runs original cryptography. Unset/invalid/cancelled/completed
+intentions never select or expose a reply record, despite receiving the same
+final authority/snapshot check.
 Completion closes this revision's bounded comparison; it does not erase canonical
 outbound history or attest to an outbound record. It never triggers a resend.
 
@@ -220,7 +235,13 @@ this read cannot repair the existing post-transport recording gap. Durable
 pre-send reservation and content/action binding remain separate #105/#85 work.
 Native Workers tests cover stored and actual test-transport reply records,
 metadata-only rendering, revision ranges, transaction-time boundary changes,
-and absence/failure ambiguity; they are not live-provider delivery acceptance.
+and absence/failure ambiguity. All-state interleaving regressions mutate actor,
+tenant, private/released/source/replay evidence, own intention, preferences or
+address availability after the preference read; stale states/controls refuse
+rather than returning old evidence. Positive repeated reads preserve every
+state without writes, and terminal/invalid states reveal no outbound metadata.
+These tests are not live-provider delivery acceptance or native-browser race
+acceptance.
 
 ## Not implemented / acceptance remaining
 

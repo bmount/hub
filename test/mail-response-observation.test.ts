@@ -50,6 +50,119 @@ async function attempt(w: World, patch: Partial<{ id: string; tenant_id: string;
 }
 const observe = async (w: World) => (await responseIntent(w.ctx, w.id)).reply_observation;
 
+// Interleave AFTER preferences have been observed, not only when an outbound
+// query happens: the old implementation skipped that query for terminal states.
+function afterPreferenceRead(w: World, change: () => Promise<void>) {
+  const db = w.ctx.db;
+  let fired = false;
+  w.ctx.db = new Proxy(db, { get(target, key) {
+    if (key !== "prepare") { const v = Reflect.get(target, key); return typeof v === "function" ? v.bind(target) : v; }
+    return (sql: string) => {
+      const stmt = target.prepare(sql);
+      if (sql !== "SELECT value FROM meta WHERE key = ?") return stmt;
+      return new Proxy(stmt, { get(s, key) {
+        if (key !== "bind") { const v = Reflect.get(s, key); return typeof v === "function" ? v.bind(s) : v; }
+        return (...args: unknown[]) => {
+          const bound = s.bind(...args);
+          return new Proxy(bound, { get(b, key) {
+            if (key !== "first" || args[0] !== w.prefKey) { const v = Reflect.get(b, key); return typeof v === "function" ? v.bind(b) : v; }
+            return async () => {
+              const result = await bound.first();
+              if (!fired) { fired = true; await change(); }
+              return result;
+            };
+          } });
+        };
+      } });
+    };
+  } });
+}
+
+describe("all-state intention read snapshots and control eligibility", () => {
+  const states = ["unset", "invalid", "cancelled", "completed", "planned"] as const;
+  async function atState(state: typeof states[number], project = false) {
+    const w = await world(project);
+    if (state === "unset") await env.HUB_DB.prepare("DELETE FROM meta WHERE key = ?").bind(w.key).run();
+    if (state === "invalid") await env.HUB_DB.prepare("UPDATE meta SET value = '{}' WHERE key = ?").bind(w.key).run();
+    if (state === "cancelled" || state === "completed") await setResponseIntent(w.ctx, w.id, state, 1);
+    await attempt(w);
+    return w;
+  }
+  it.each(states)("revalidates %s without outbound or other read effects", async state => {
+    const w = await atState(state);
+    const tables = ["meta", "event", "inbound_mail", "outbound_mail", "consent", "attention", "membership", "oauth_grant"];
+    const snapshot = async () => (await env.HUB_DB.batch(tables.map(t => env.HUB_DB.prepare(`SELECT * FROM ${t}`)))).map(r => r.results);
+    const before = await snapshot();
+    for (let n = 0; n < 3; n++) {
+      const r = await responseIntent(w.ctx, w.id);
+      expect(r.state).toBe(state);
+      expect(r.reply_observation.state).toBe(state === "planned" ? "transport_accepted" : "not_applicable");
+      expect(r.reply_observation.outbound_id === null).toBe(state !== "planned");
+      expect(r.response_guaranteed).toBe(false);
+    }
+    expect(await snapshot()).toEqual(before);
+  });
+  it.each(states.flatMap(state => ["member", "identity", "tenant", "private", "released", "source", "replay", "intent", "preferences"].map(change => ({ state, change }))))(
+    "refuses obsolete $state state after $change changes during read", async ({ state, change }) => {
+      const w = await atState(state);
+      afterPreferenceRead(w, async () => {
+        if (change === "member") await env.HUB_DB.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ?").bind(w.member.identity.id).run();
+        if (change === "identity") await env.HUB_DB.prepare("UPDATE identity SET state = 'disabled' WHERE id = ?").bind(w.member.identity.id).run();
+        if (change === "tenant") await env.HUB_DB.prepare("UPDATE tenant SET state = 'archived' WHERE id = ?").bind(w.tenant.id).run();
+        if (change === "private") await env.HUB_DB.prepare("UPDATE inbound_mail SET recipient_id = ? WHERE id = ?").bind(w.bot.agent.identity.id, w.id).run();
+        if (change === "released") await env.HUB_DB.prepare("UPDATE inbound_mail SET released_by = ? WHERE id = ?").bind(w.admin.identity.id, w.id).run();
+        if (change === "source") await env.HUB_DB.prepare("UPDATE inbound_mail SET to_address = 'changed@pimwell.test' WHERE id = ?").bind(w.id).run();
+        if (change === "replay") await env.HUB_DB.prepare("DELETE FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").run();
+        if (change === "intent") {
+          // Includes absent -> inserted, invalid -> replaced and terminal -> replaced.
+          await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, '{}') ON CONFLICT(key) DO UPDATE SET value = 'changed'").bind(w.key).run();
+        }
+        if (change === "preferences") await env.HUB_DB.prepare("DELETE FROM meta WHERE key = ?").bind(w.prefKey).run();
+      });
+      await expect(responseIntent(w.ctx, w.id)).rejects.toThrow("reply evidence changed");
+    });
+  it.each([false, true].flatMap(project => states.map(state => ({ project, state }))))(
+    "rechecks org/project=$project address availability for $state", async ({ project, state }) => {
+      const w = await atState(state, project);
+      afterPreferenceRead(w, async () => {
+        await env.HUB_DB.prepare(project ? "UPDATE project SET state = 'archived' WHERE id = ?" : "UPDATE tenant SET slug = 'renamed' WHERE id = ?")
+          .bind(project ? w.project.id : w.tenant.id).run();
+      });
+      await expect(responseIntent(w.ctx, w.id)).rejects.toThrow("reply evidence changed");
+      const fresh = await responseIntent(w.ctx, w.id);
+      expect(fresh.can_plan).toBe(false);
+      expect(fresh.state).toBe(state === "planned" ? "stale" : state);
+      if (state === "completed") expect(fresh.completion_evidence).toBe("self_reported");
+    });
+  it.each(["unset", "empty", "invalid", "unselected"])("refuses a changed %s preference snapshot, including absent -> inserted", async pref => {
+    const w = await atState("unset");
+    const selected = await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.prefKey).first<string>("value");
+    if (pref === "unset") await env.HUB_DB.prepare("DELETE FROM meta WHERE key = ?").bind(w.prefKey).run();
+    else {
+      const value = pref === "invalid" ? "{}" : JSON.stringify({ ...JSON.parse(selected!), recipients: pref === "empty" ? [] : [w.other.identity.id] });
+      await env.HUB_DB.prepare("UPDATE meta SET value = ? WHERE key = ?").bind(value, w.prefKey).run();
+    }
+    afterPreferenceRead(w, async () => { await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(w.prefKey, selected).run(); });
+    await expect(responseIntent(w.ctx, w.id)).rejects.toThrow("reply evidence changed");
+    expect((await responseIntent(w.ctx, w.id)).can_plan).toBe(true);
+  });
+  it("refuses a pane rather than rendering obsolete completion or plan controls", async () => {
+    const w = await atState("completed");
+    afterPreferenceRead(w, async () => { await env.HUB_DB.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ?").bind(w.member.identity.id).run(); });
+    await expect(mailIntentPanel(w.ctx, w.id)).rejects.toThrow("reply evidence changed");
+  });
+  it("detects destination restoration, while stable unselected or archived snapshots stay readable", async () => {
+    const w = await atState("cancelled", true);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.project.id).run();
+    expect(await responseIntent(w.ctx, w.id)).toMatchObject({ state: "cancelled", can_plan: false });
+    afterPreferenceRead(w, async () => { await env.HUB_DB.prepare("UPDATE project SET state = 'active' WHERE id = ?").bind(w.project.id).run(); });
+    await expect(responseIntent(w.ctx, w.id)).rejects.toThrow("reply evidence changed");
+    expect(await responseIntent(w.ctx, w.id)).toMatchObject({ state: "cancelled", can_plan: true });
+    await env.HUB_DB.prepare("DELETE FROM meta WHERE key = ?").bind(w.prefKey).run();
+    expect(await responseIntent(w.ctx, w.id)).toMatchObject({ state: "cancelled", can_plan: false });
+  });
+});
+
 describe("bounded own reply-record observations, not delivery or intention fulfillment", () => {
   it.each([false, true])("observes org/project=%s transport acceptance without completing intent or any write", async project => {
     const w = await world(project), id = await attempt(w);

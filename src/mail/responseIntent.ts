@@ -57,9 +57,10 @@ async function preference(ctx: Ctx, row: Evidence) {
   const target = await resolveMailAddress(ctx.db, ctx.env.HUB_DOMAIN, row.to_address);
   const key = `${RESPONSE_RECIPIENT_PREFIX}${row.tenant_id}:${row.project_id ?? "org"}`;
   const raw = await valueAt(ctx, key), config = decodeResponseRecipients(raw);
+  const selected = !!config?.recipients.includes(ctx.identity!.id);
   const eligible = !!target && target.tenant_id === row.tenant_id && target.project_id === row.project_id
-    && !target.recipient_id && !!config?.recipients.includes(ctx.identity!.id);
-  return { key, raw, eligible };
+    && !target.recipient_id && selected;
+  return { key, raw, selected, eligible };
 }
 type ReplyObservation = {
   state: "not_applicable" | "no_record" | "transport_accepted" | "consent_refused" | "outcome_unknown";
@@ -69,27 +70,42 @@ type ReplyObservation = {
 };
 
 /** Stored attempt evidence only. Absence/transport failure cannot prove that nothing was sent. */
-async function replyObservation(ctx: Ctx, e: Awaited<ReturnType<typeof evidence>>, raw: string | null, intent: Intent | null): Promise<ReplyObservation> {
+async function replyObservation(ctx: Ctx, e: Awaited<ReturnType<typeof evidence>>, raw: string | null, intent: Intent | null,
+  p: Awaited<ReturnType<typeof preference>>): Promise<ReplyObservation> {
   const observation: ReplyObservation = { state: "not_applicable", outbound_id: null, recorded_at: null,
     recipient_delivery: "not_observed", fulfillment: "not_inferred",
     coverage: "latest_recorded_matching_own_reply_since_revision_time" };
-  if (!intent || intent.state !== "planned") return observation;
-  // Anchor the bounded latest-attempt query to current read authority and the exact
-  // source/replay/intent snapshots. Do not expose an attempt after authority changes.
+  const planned = intent?.state === "planned";
+  // Revalidate ALL states, not just those with outbound comparisons. This single
+  // final query binds the returned intention and controls to the same current
+  // authority/source/replay/intent/preference snapshot. Nonplanned states never
+  // select an outbound record.
   const r = await ctx.db.prepare(`SELECT o.id, o.status, o.created_at FROM inbound_mail m
     LEFT JOIN outbound_mail o ON o.id = (SELECT attempt.id FROM outbound_mail attempt
-      WHERE attempt.tenant_id = m.tenant_id AND attempt.in_reply_to = m.id AND attempt.sent_by = ?
+      WHERE ? = 1 AND attempt.tenant_id = m.tenant_id AND attempt.in_reply_to = m.id AND attempt.sent_by = ?
         AND attempt.from_address = m.to_address AND attempt.to_address = m.from_email AND attempt.created_at >= ?
       ORDER BY attempt.created_at DESC, attempt.id DESC LIMIT 1)
     WHERE ${BASE} AND m.project_id IS ? AND m.identity_id = ? AND m.from_email = ? AND m.to_address = ? AND m.message_id = ?
       AND EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)
-      AND EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)`)
-    .bind(ctx.identity!.id, intent.updated_at, ...e.bindings, e.row.project_id, e.row.identity_id,
-      e.row.from_email, e.row.to_address, e.row.message_id, e.replayKey, e.replayRaw, keyFor(ctx, e.row.id), raw)
+      AND ((? IS NULL AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?))
+        OR EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?))
+      AND ((? IS NULL AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?))
+        OR EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?))
+      AND (? AND (
+        m.project_id IS NULL AND EXISTS (SELECT 1 FROM tenant t WHERE t.id = m.tenant_id AND m.to_address = t.slug || '@' || ?)
+        OR EXISTS (SELECT 1 FROM project pr JOIN tenant t ON t.id = pr.tenant_id
+          WHERE pr.id = m.project_id AND pr.tenant_id = m.tenant_id AND pr.state = 'active' AND pr.kind <> 'channel'
+            AND m.to_address = t.slug || '.' || pr.slug || '@' || ?))) = ?`)
+    .bind(planned ? 1 : 0, ctx.identity!.id, intent?.updated_at ?? 0, ...e.bindings, e.row.project_id, e.row.identity_id,
+      e.row.from_email, e.row.to_address, e.row.message_id, e.replayKey, e.replayRaw,
+      raw, keyFor(ctx, e.row.id), keyFor(ctx, e.row.id), raw,
+      p.raw, p.key, p.key, p.raw, p.selected ? 1 : 0,
+      ctx.env.HUB_DOMAIN.toLowerCase(), ctx.env.HUB_DOMAIN.toLowerCase(), p.eligible ? 1 : 0)
     .first<{ id: string | null; status: string | null; created_at: number | null }>();
   if (!r) throw conflict("response intention or reply evidence changed; read again");
+  if (!planned) return observation;
   if (r.id === null) return { ...observation, state: "no_record" };
-  if (!recipientId(r.id) || !Number.isSafeInteger(r.created_at) || r.created_at! < intent.updated_at
+  if (!recipientId(r.id) || !Number.isSafeInteger(r.created_at) || r.created_at! < intent!.updated_at
     || r.created_at! > ctx.now || r.created_at! >= UTC_FORMAT_END) return { ...observation, state: "outcome_unknown" };
   return { ...observation, outbound_id: r.id, recorded_at: r.created_at,
     state: r.status === "sent" ? "transport_accepted" : r.status === "refused" ? "consent_refused" : "outcome_unknown" };
@@ -103,7 +119,7 @@ export async function responseIntent(ctx: Ctx, id: string) {
     updated_at: state?.updated_at ?? null, respond_by: state?.respond_by ?? null, can_plan: p.eligible,
     can_complete: state?.state === "planned", completion_evidence: state?.state === "completed" ? "self_reported" : "not_reported",
     recipient_delivery: "not_observed",
-    reply_observation: await replyObservation(ctx, e, raw, state),
+    reply_observation: await replyObservation(ctx, e, raw, state, p),
     automatic_execution: "not_implemented", notification: "not_requested", response_guaranteed: false };
 }
 export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["state"], expected: number, respondBy: number | null = null) {
