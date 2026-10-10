@@ -43,6 +43,7 @@ ${rows.length ? `<table><tbody>${rows.map((r) => `<tr data-href="/${esc(r.slug)}
     const me = v.reviewers.find((x) => x.identity_id === ctx.identity!.id);
     inspector = `<a class="back" href="${back}">‹ Reviews</a><div class="head"><strong>${esc(r.slug)}!${r.number}</strong><span>${esc(STATUS[r.status] ?? r.status)}</span><code>${esc(r.branch)}</code><span>into</span><code>${esc(r.base)}</code></div>
 <h1>${esc(r.title)}</h1>${r.summary ? `<div class="prose">${esc(r.summary)}</div>` : ""}
+${canWrite ? `<p><a class="button" href="/new?review=${esc(encodeURIComponent(`${r.slug}!${r.number}`))}">File work from this review</a></p>` : ""}
 <h2>Recorded work</h2>
 <p class="lede">${v.relatedWorkCommit ? `Commit associations use ${esc(v.relatedWorkCommit)}, not the moving branch tip.` : "No supported full recorded commit; only explicit review URL associations are matched."} Recorded associations are not proof that this work was reviewed, approved or completed.</p>
 ${v.relatedWork.length ? `<table><tbody>${v.relatedWork.map(w => `<tr><td class="ref">${esc(w.ref)}</td><td>${esc(KINDS[w.kind].name)}</td><td><a href="/${esc(encodeURIComponent(w.project))}/w/${w.number}">${esc(w.title)}</a></td><td>${esc(STATES[w.state])}</td><td>${w.relationship}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">No work associations recorded for this review.</p>`}

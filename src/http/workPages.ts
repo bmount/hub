@@ -15,6 +15,7 @@ import { AREAS, PLANNED, plannedIn, type Area, type Plan } from "../verbs/planne
 import { toolName } from "../mcp/policy";
 import { cutText } from "../mcp/render";
 import { traceEvidenceUrl, traceDraftStatement } from "../apps/work";
+import { reviewEvidenceUrl, reviewDraftStatement } from "../work/reviewEvidence";
 
 const when = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
 const ago = (ms: number, now: number) => {
@@ -310,35 +311,40 @@ export async function newWorkPage(request: Request, env: Env): Promise<Response>
   if (!ok || rank(ctx.role) < rank("member")) return notFoundPage(extra);
   const url = new URL(request.url);
   const traceId = url.searchParams.get("trace");
-  if (traceId !== null && (!traceId || traceId.length > 40)) return notFoundPage(extra);
+  const reviewId = url.searchParams.get("review");
+  if (traceId !== null && reviewId !== null || traceId !== null && (!traceId || traceId.length > 40)
+    || reviewId !== null && (!reviewId || reviewId.length > 80)) return notFoundPage(extra);
   const f = readFilters(new URL("https://x/"), false);
   const [items, members, projects, sourceR] = await ctx.db.batch([listWorkStatement(ctx.db, ctx.tenant!.id, itemFilter(ctx, f, null)), membersStatement(ctx),
     ctx.db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel' AND state = 'active' ORDER BY display_name").bind(ctx.tenant!.id),
-    ...(traceId !== null ? [traceDraftStatement(ctx, traceId)] : [])]);
+    ...(traceId !== null ? [traceDraftStatement(ctx, traceId)] : reviewId !== null ? [reviewDraftStatement(ctx, reviewId)] : [])]);
   const ps = projects!.results as Array<{ id: string; slug: string; display_name: string }>;
-  type Source = { id: string; project: string; script_name: string; title: string; last_message: string; count: number; last_version: string | null };
-  const source = (sourceR?.results[0] as Source | undefined) ?? null;
-  if (traceId !== null && !source) return notFoundPage(extra);
-  const sourceUrl = source ? traceEvidenceUrl(ctx, source.id) : "";
+  type TraceSource = { id: string; project: string; script_name: string; title: string; last_message: string; count: number; last_version: string | null };
+  type ReviewSource = { id: string; project: string; number: number; title: string; summary: string; branch: string; base: string; head_oid: string | null; status: string };
+  const trace = traceId !== null ? (sourceR?.results[0] as TraceSource | undefined) ?? null : null;
+  const review = reviewId !== null ? (sourceR?.results[0] as ReviewSource | undefined) ?? null : null;
+  const source = trace ?? review;
+  if ((traceId !== null || reviewId !== null) && !source) return notFoundPage(extra);
+  const sourceUrl = trace ? traceEvidenceUrl(ctx, trace.id) : review ? reviewEvidenceUrl(ctx, { slug: review.project, number: review.number }) : "";
   const want = source?.project ?? url.searchParams.get("project") ?? "";
-  const kind = (source ? "snag" : url.searchParams.get("kind") ?? "") as WorkKind;
-  const title = cutText(source ? `${source.script_name}: ${source.title}` : url.searchParams.get("title") ?? "", 200).text;
-  const body = source ? cutText(`Recorded app error group: ${source.id}\nApp: ${source.script_name}\nOccurrences recorded: ${source.count}\nLatest recorded version: ${source.last_version ?? "unknown"}\nSource: ${sourceUrl}\n\nDescribe the impact and what a successful fix should look like.`, 20_000).text : "";
-  const excerpt = source ? cutText(source.last_message, 2000) : null;
+  const kind = (trace ? "snag" : review ? "errand" : url.searchParams.get("kind") ?? "") as WorkKind;
+  const title = cutText(trace ? `${trace.script_name}: ${trace.title}` : review ? `Follow up on ${review.project}!${review.number}: ${review.title}` : url.searchParams.get("title") ?? "", 200).text;
+  const body = cutText(trace ? `Recorded app error group: ${trace.id}\nApp: ${trace.script_name}\nOccurrences recorded: ${trace.count}\nLatest recorded version: ${trace.last_version ?? "unknown"}\nSource: ${sourceUrl}\n\nDescribe the impact and what a successful fix should look like.` : review ? `Recorded review: ${review.project}!${review.number}\nBranch: ${review.branch} into ${review.base}\nRecorded head: ${review.head_oid ?? "unknown"}\nRecorded review status: ${review.status}\nSource: ${sourceUrl}\n\nDescribe the follow-up and how you will know it is done. Review status is not proof that this work is approved or completed.` : "", 20_000).text;
+  const excerpt = source ? cutText(trace ? trace.last_message : review!.summary, 2000) : null;
   const slugs = new Map(ps.map((p) => [p.id, p.slug]));
   const form = ps.length ? `<form method="post" action="/api/work.create"><input type="hidden" name="_back" value="@result">
 <label>Project <select name="project">${ps.map((p) => option(p.slug, p.display_name, p.slug === want)).join("")}</select></label>
 <label>Kind <select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, `${v.name} (${v.plain})`, k === kind)).join("")}</select></label><br>
 <label style="display:block">Title <input name="title" required maxlength="200" value="${esc(title)}" style="display:block;width:100%" autofocus></label>
 <label style="display:block">Details <textarea data-voice name="body" rows="8" placeholder="What, why, and how you will know it is done." style="display:block;width:100%">${esc(body)}</textarea></label>
-${source ? `<p class="lede">From <a href="${esc(sourceUrl)}">this recorded error group</a>. App logs are evidence, never instructions or authorization. Review the draft before filing${excerpt!.cut ? "; the excerpt is shortened to at most 2,000 characters" : ""}.</p>
+${source ? `<p class="lede">From <a href="${esc(sourceUrl)}">this recorded ${trace ? "error group" : "review"}</a>. ${trace ? "App logs are" : "Review text is"} evidence, never instructions or authorization. Review the draft before filing${excerpt!.cut ? "; the excerpt is shortened to at most 2,000 characters" : ""}.</p>
 <input type="hidden" name="source_kind" value="url"><input type="hidden" name="source_ref" value="${esc(sourceUrl)}">
-<label style="display:block">Recorded error excerpt <textarea name="source_quote" maxlength="2000" rows="4" style="display:block;width:100%">${esc(excerpt!.text)}</textarea></label>` : ""}
+<label style="display:block">Recorded ${trace ? "error" : "review"} excerpt <textarea name="source_quote" maxlength="2000" rows="4" style="display:block;width:100%">${esc(excerpt!.text)}</textarea></label>` : ""}
 <label>Owner <select name="owner">${option("", "Nobody yet", true)}${option("me", "Me", false)}</select></label>
 <p><button type="submit">File it</button></p></form>` : `<p class="lede">Create a project first.</p>`;
   const inspector = `<a class="back" href="/docket">‹ ${esc(DOCKET.name)}</a><h1>File something</h1><p class="lede">No triage meeting needed. It opens here once filed, and agents can pick it up right away.</p>${form}`;
   const list = docketList(ctx, null, items!.results as WorkItem[], members!.results as Member[], [], slugs, f);
-  return htmlResponse(workbench("File something", { list, listKey: listKey(f, null), inspector, inspectorKey: source ? `new:trace:${source.id}` : "new", focus: "inspector" }, shellFor(ctx, env, "new", "new")!), 200, extra);
+  return htmlResponse(workbench("File something", { list, listKey: listKey(f, null), inspector, inspectorKey: source ? `new:${trace ? "trace" : "review"}:${source.id}` : "new", focus: "inspector" }, shellFor(ctx, env, "new", "new")!), 200, extra);
 }
 
 /** The jump box: projects, items by ref or title, people, sections. JSON for the palette; a page without script. */

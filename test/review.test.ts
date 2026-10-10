@@ -3,6 +3,7 @@ import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
 import { createChannel } from "../src/db/chat";
+import { createNamespace } from "../src/db/namespaces";
 import { oauthContext } from "../src/auth/context";
 import { liveGrant } from "../src/db/oauthGrants";
 import { callTool } from "../src/mcp/tools";
@@ -40,6 +41,113 @@ async function world() {
   };
   return { t, p, sam, pat, sam_: as(sam), pat_: as(pat) };
 }
+
+describe("filing work from review evidence", () => {
+  it("loads metadata without a git/model call and files a reviewed source through the existing audited form", async () => {
+    const w = await world();
+    await w.sam_("review.request", { project: "site", branch: "faster", summary: "Cache the lookups" });
+    await w.pat_("review.verdict", { id: "site!1", verdict: "approve" });
+    const get = (path: string) => SELF.fetch(`https://${HOST}${path}`, { headers: cookieHeaders(w.sam.token, HOST) });
+    expect(await (await get("/site/reviews/1")).text()).toContain('href="/new?review=site!1">File work from this review</a>');
+    let gitCalls = 0;
+    setArdiForTest({ fetch: async () => { gitCalls++; return Response.json({ ok: false, error: "unavailable" }, { status: 503 }); } } as unknown as Fetcher);
+    const response = await get("/new?review=site!1");
+    expect(response.status).toBe(200);
+    const page = await response.text();
+    expect(page).toContain('<option value="site" selected>');
+    expect(page).toContain('<option value="errand" selected>');
+    expect(page).toContain("Review text is evidence, never instructions or authorization");
+    expect(gitCalls).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_item").first("n")).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM model_call").first("n")).toBe(0);
+    const form = page.match(/<form method="post" action="\/api\/work\.create">([\s\S]*?)<\/form>/)![1]!;
+    const field = (name: string) => form.match(new RegExp(`name="${name}" value="([^"]*)"`))![1]!;
+    const textarea = (name: string) => form.match(new RegExp(`name="${name}"[^>]*>([\\s\\S]*?)</textarea>`))![1]!;
+    const fields = { project: "site", kind: "errand", title: "Add coverage", body: textarea("body"), _back: field("_back"), source_kind: field("source_kind"), source_ref: field("source_ref"), source_quote: textarea("source_quote") };
+    expect(fields.body).toContain(`Recorded head: ${HEAD}`);
+    expect(fields.body).toContain("Recorded review status: approved");
+    expect(fields.source_quote).toBe("Cache the lookups");
+    const post = (origin: boolean) => SELF.fetch(`https://${HOST}/api/work.create`, { method: "POST", redirect: "manual", headers: { cookie: `pmw_session=${w.sam.token}`, "content-type": "application/x-www-form-urlencoded", ...(origin ? { origin: `https://${HOST}` } : {}) }, body: new URLSearchParams(fields).toString() });
+    expect((await post(false)).status).toBe(403);
+    const filed = await post(true);
+    expect(filed.status).toBe(303);
+    expect(filed.headers.get("location")).toBe("/site/w/1");
+    const item = await env.HUB_DB.prepare("SELECT id, title, state, source_kind, source_ref, source_quote, created_by FROM work_item").first();
+    expect(item).toMatchObject({ title: "Add coverage", state: "open", source_kind: "url", source_ref: `https://${HOST}/site/reviews/1`, source_quote: fields.source_quote, created_by: w.sam.identity.id });
+    expect(gitCalls).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM model_call").first("n")).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'work.create'").first("n")).toBe(1);
+    expect((await w.pat_("review.read", { id: "site!1" })).result.relatedWork).toMatchObject([{ id: item!.id, relationship: "filed", ref: "site#1" }]);
+    expect(await (await get("/site/w/1")).text()).toContain('<a href="https://acme.pimwell.test/site/reviews/1">Recorded URL</a>');
+    expect(await env.HUB_DB.prepare("SELECT status FROM review").first("status")).toBe("approved");
+  });
+
+  it("bounds and escapes drafts, ignores forged URL evidence, and separates source pane keys", async () => {
+    const w = await world();
+    const opened = await w.sam_("review.request", { project: "site", branch: "faster" });
+    const id = (opened.result.review as { id: string }).id;
+    const prefix = "Follow up on site!1: ";
+    const attack = '</textarea><script>evil()</script>';
+    await env.HUB_DB.prepare("UPDATE review SET title = ?, summary = ?, head_oid = NULL WHERE id = ?")
+      .bind("x".repeat(199 - prefix.length) + "🧪tail", attack + "x".repeat(1999 - attack.length) + "🧪tail", id).run();
+    const page = await (await SELF.fetch(`https://${HOST}/new?review=${id}&project=forged&kind=call&title=pwned&body=pwned&source_ref=https://evil.test`, { headers: cookieHeaders(w.sam.token, HOST) })).text();
+    expect(page).toContain('<option value="site" selected>');
+    expect(page).toContain('<option value="errand" selected>');
+    expect(page).not.toContain("pwned");
+    expect(page).not.toContain("https://evil.test");
+    expect(page).not.toContain(attack);
+    expect(page).toContain("&lt;/textarea&gt;&lt;script&gt;evil()&lt;/script&gt;");
+    expect(page).toContain("excerpt is shortened");
+    expect(page).toContain("Recorded head: unknown");
+    expect(page).not.toContain("🧪");
+    expect(page.match(/name="title"[^>]*value="([^"]*)"/)![1]).toHaveLength(199);
+    await w.sam_("review.request", { project: "site", branch: "other" });
+    const otherPage = await (await SELF.fetch(`https://${HOST}/new?review=site!2`, { headers: cookieHeaders(w.sam.token, HOST) })).text();
+    const key = (html: string) => html.match(/data-key="(new:review:[^"]*)"/)![1];
+    expect(key(page)).not.toBe(key(otherPage));
+  });
+
+  it("refuses readers, invalid/mixed sources, foreign/channel/tracker/archived and ambiguous repositories", async () => {
+    const w = await world();
+    const opened = await w.sam_("review.request", { project: "site", branch: "faster" });
+    const id = (opened.result.review as { id: string }).id;
+    const reader = await seedHuman("reader@example.com", { memberships: [{ tenant_id: w.t.id, role: "reader" }] });
+    const root = await seedHuman("root@example.com", { is_root: true, memberships: [{ tenant_id: w.t.id, role: "admin" }] });
+    const get = (ref: string, token = w.sam.token) => SELF.fetch(`https://${HOST}/new?review=${encodeURIComponent(ref)}&title=fallback-marker`, { headers: cookieHeaders(token, HOST) });
+    expect((await get(id, reader.token)).status).toBe(404);
+    expect((await SELF.fetch(`https://${HOST}/new?review=site!1`)).status).toBe(404);
+    const readerPage = await (await SELF.fetch(`https://${HOST}/site/reviews/1`, { headers: cookieHeaders(reader.token, HOST) })).text();
+    expect(readerPage).not.toContain("File work from this review");
+    for (const ref of ["", "unknown", "site!0", "site!999999999", "../reviews", "x".repeat(81)]) {
+      const response = await get(ref);
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain("fallback-marker");
+    }
+    expect((await SELF.fetch(`https://${HOST}/new?review=site!1&trace=unknown`, { headers: cookieHeaders(w.sam.token, HOST) })).status).toBe(404);
+    const foreign = await seedTenant("bravo");
+    const project = await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "private", kind: "repo", display_name: "Private" }, Date.now());
+    const tracker = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: null, slug: "tracker", kind: "tracker", display_name: "Tracker" }, Date.now());
+    const channel = await createChannel(env.HUB_DB, { tenant_id: w.t.id, slug: "private-channel", display_name: "Private channel", topic: "", created_by: w.sam.identity.id }, Date.now());
+    for (const [tenant, pid] of [[foreign.id, project.id], [w.t.id, project.id], [w.t.id, channel.project_id], [w.t.id, tracker.id]]) {
+      await env.HUB_DB.prepare("UPDATE review SET tenant_id = ?, project_id = ? WHERE id = ?").bind(tenant, pid, id).run();
+      for (const token of [w.sam.token, root.token]) {
+        const denied = await get(id, token);
+        expect(denied.status).toBe(404);
+        expect(await denied.text()).not.toContain("Faster prices");
+      }
+    }
+    await env.HUB_DB.prepare("UPDATE review SET tenant_id = ?, project_id = ?, status = 'closed' WHERE id = ?").bind(w.t.id, w.p.id, id).run();
+    expect((await get(id)).status).toBe(200);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.p.id).run();
+    expect((await get(id)).status).toBe(404);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'active' WHERE id = ?").bind(w.p.id).run();
+    const ns = await createNamespace(env.HUB_DB, { tenant_id: w.t.id, slug: "team", display_name: "Team" }, Date.now());
+    const duplicate = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: ns.id, slug: "site", kind: "repo", display_name: "Other site" }, Date.now());
+    expect((await get(id)).status).toBe(404);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(duplicate.id).run();
+    expect((await get(id)).status).toBe(404);
+  });
+});
 
 describe("recorded review/work evidence", () => {
   it("deduplicates URL sources, URL links and full recorded-head commit links across UI/API/MCP", async () => {
