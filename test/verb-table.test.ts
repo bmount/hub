@@ -94,6 +94,7 @@ const TABLE: Record<string, Decl> = {
   "chat.read": T("tenant", "reader", null, { mcp: "read" }), "chat.thread": T("tenant", "reader", null, { mcp: "read" }),
   "chat.response_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.post_status": T("tenant", "reader", null, { mcp: "read" }),
+  "chat.version_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.read_status": T("tenant", "reader", null, { mcp: "read" }),
   "chat.catchup": T("tenant", "reader", null, { mcp: "read" }),
   "chat.history": T("tenant", "reader", null, { mcp: "read" }), "chat.inbox": T("tenant", "reader", null, { mcp: "read" }),
@@ -194,7 +195,7 @@ describe("verb table", () => {
     const SAMPLE: Record<string, unknown> = {
       c: "general", body: "hi", msg: "1", agent: "scout", slug: "general", display_name: "General", topic: "t", policy: "open", kind: "ticket",
       key: "site#k7q2", through: 1, seq: 1, after: 0, before: 5, limit: 10, wait_s: 1, budget: 500, minutes: 5, reason: "r", reply_to: "1", thread: "1",
-      idempotency_key: "k", refs: [], state: "active", prefix: false,
+      idempotency_key: "k", operation: "edit", refs: [], state: "active", prefix: false,
     };
     // Where one name means different things to different verbs.
     const OVERRIDE: Record<string, Record<string, unknown>> = { "chat.post": { kind: "say" }, "chat.heartbeat": { status: "online" }, "chat.history": { limit: 2 } };

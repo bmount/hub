@@ -10,7 +10,7 @@ import { getControls } from "../db/chat";
 import { LIMITS, computeHop, gateRefuses, nextAgentRun, pairTrip, wakesAllowed } from "./rules";
 import type {
   AuthorKind, ChatSessionKind, Digest, DigestQuery, MsgView, PostInput, PostOk, PostOutcome, ReadPage, ReadQuery, StoredRef, Suppressed,
-  ResponseAttribution, ResponseIntent, ResponseSlot, ResponseStatus, PostStatus, Version, VersionInput, WakeItem, WakeKind,
+  ResponseAttribution, ResponseIntent, ResponseSlot, ResponseStatus, PostStatus, VersionStatus, Version, VersionInput, WakeItem, WakeKind,
 } from "./types";
 
 const SCHEMA = [
@@ -342,8 +342,19 @@ export class Conversation extends DurableObject<Env> {
   /** Read-only caller/key reconciliation. Missing includes expired/untracked sends; never authorizes a resend. */
   async postStatus(tenant_id: string, conversation_id: string, identity_id: string, key: string, fingerprint?: string): Promise<PostStatus> {
     this.#bind(tenant_id, conversation_id);
+    return this.#keyStatus(identity_id, "post", key, fingerprint);
+  }
+
+  /** Fixed version-operation namespace; reads do not reauthorize or replay a version write. */
+  async versionStatus(tenant_id: string, conversation_id: string, identity_id: string, operation: "edit" | "retract", key: string): Promise<VersionStatus> {
+    this.#bind(tenant_id, conversation_id);
+    if (operation !== "edit" && operation !== "retract") throw new Error("invalid version status operation");
+    return { operation, ...this.#keyStatus(identity_id, operation, key) };
+  }
+
+  #keyStatus(identity_id: string, op: Op, key: string, fingerprint?: string): PostStatus {
     const now = Date.now();
-    const prior = this.#replayRecord(identity_id, "post", key, now);
+    const prior = this.#replayRecord(identity_id, op, key, now);
     const current = prior ? this.#msg(prior.result.msg_id) : null;
     // Synchronous SQL snapshot, with no drain, pruning, rate reservation or cursor writes.
     return { head: this.#head(), observed_at: now, record: prior ? {

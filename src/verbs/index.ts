@@ -37,6 +37,7 @@ import {
 import { chatCatchup } from "./chatCatchup";
 import { chatResponseStatus } from "./chatResponse";
 import { chatPostStatus } from "./chatPostStatus";
+import { chatVersionStatus } from "./chatVersionStatus";
 import { chatHeartbeat, chatPresence } from "./chatPresence";
 import { chatHistory, chatInbox, chatMarkRead, chatRead, chatReadStatus, chatThread, inboxAck, inboxAckStatus, inboxWait, refBacklinks } from "./chatRead";
 import { chatEdit, chatPost, chatRetract } from "./chatWrite";
@@ -74,7 +75,7 @@ export function registerAllVerbs(): void {
     oauthGrantApprove,
     channelCreate, channelSetTopic, channelAddAgent, channelRemoveAgent, channelSetAgentPolicy, channelArchive, channelUnarchive,
     chatPost, chatEdit, chatRetract,
-    chatRead, chatThread, chatHistory, chatResponseStatus, chatPostStatus, chatInbox, inboxWait, inboxAck, inboxAckStatus, chatMarkRead, chatReadStatus, refBacklinks,
+    chatRead, chatThread, chatHistory, chatResponseStatus, chatPostStatus, chatVersionStatus, chatInbox, inboxWait, inboxAck, inboxAckStatus, chatMarkRead, chatReadStatus, refBacklinks,
     chatConversations, chatCatchup, chatHeartbeat, chatPresence, chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable,
   ]);
 }
