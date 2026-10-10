@@ -1,7 +1,7 @@
 import { defineVerb } from "./table";
 import { optBool, optString } from "./params";
 import { budgetParam } from "./chatParams";
-import { catchup } from "../chat/catchup";
+import { catchup, type CatchupResult } from "../chat/catchup";
 import { chatText } from "../chat/compact";
 import { LIMITS } from "../chat/rules";
 
@@ -20,6 +20,9 @@ export const chatCatchup = defineVerb({
       additionalProperties: false,
     },
   },
+  // "quiet" contains compact summaries of actual activity, not idle channels.
+  quietPoll: (r: CatchupResult) => r.advanced === false && r.omitted === 0 &&
+    [r.for_you, r.threads, r.conversations, r.quiet].every(a => Array.isArray(a) && a.length === 0),
   parse: (i) => ({ since: optString(i, "since", { max: 8192 }), budget: budgetParam(i), scope: optString(i, "scope", { max: 64 }), advance: optBool(i, "advance") ?? false }),
   run: (ctx, p) => catchup(ctx, p),
 });

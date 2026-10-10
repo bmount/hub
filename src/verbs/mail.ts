@@ -42,6 +42,7 @@ export const mailList = defineVerb({
         ...rows.map((m) => `- \`${m.id}\` ${new Date(m.received_at).toISOString().slice(0, 16)} from ${cleanText(m.from_email)} to ${m.project ?? m.to_address}: ${cleanText(m.subject || "(no subject)")}${m.forwarded ? " [forwarded]" : ""}${m.verdict === "quarantined" ? " [quarantined]" : ""}`)].join("\n");
     },
   },
+  quietPoll: (r: { mail: MailRow[] }) => Array.isArray(r.mail) && r.mail.length === 0,
   parse: (i) => ({ project: optString(i, "project", { max: 63 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 25, quarantined: optBool(i, "quarantined") ?? false, mine: optBool(i, "mine") ?? false }),
   run: async (ctx, p) => {
     if (p.quarantined && !canInspectMail(ctx)) throw notFound();
