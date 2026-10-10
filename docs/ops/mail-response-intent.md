@@ -240,12 +240,25 @@ conflict the whole observation, rather than returning stale reconciliation.
 This is an observation, not a lock against later changes. Database failures
 propagate rather than becoming `no_record`. No outbound record is selected.
 
+The browser inspector gives each native save form a visible, read-only request
+ID. Preserve it with the expected revision, intended state and exact UTC time
+(or blank) before saving. **Check this exact edit only** submits those same fields
+to the read-only status query, not the save command. The separate preserved-edit
+form also works with stale proof. It requires the original values; a newly
+rendered save form has a new ID and is not evidence about an earlier edit.
+There is no automatic browser payload storage or retry.
+
+The receipt page distinguishes exact matches, different edits, missing/invalid
+receipts and whether the original intention is still current. It never offers a
+resend. An internal save error says the outcome is unknown, not that nothing
+changed: even a failed transaction response can follow a successful commit.
+Read the receipt and current intention before making a new explicit decision.
+
 Tests use native Workers fixtures for lost responses, later revisions, exact
-payload comparison, concurrency, rollback/collisions, authority loss, source/
-receipt/intention/preference interleavings and tenant cleanup. They are not real
-human interaction, live-provider acceptance, scheduled execution, notification
-or delivery evidence. The browser inspector has no new status/retry UI in this
-increment; API clients must preserve their intended payload explicitly.
+payload comparison, native forms, concurrency, rollback/collisions, authority
+loss, source/receipt/intention/preference interleavings and tenant cleanup. They
+are not browser-engine interaction, live-provider acceptance, scheduled
+execution, notification or delivery evidence.
 
 ## Bounded own recorded reply evidence
 

@@ -157,7 +157,9 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     if (e instanceof SyntaxError) return finish(ctx, env, json({ ok: false, error: "bad_request", detail: "invalid JSON" }, 400));
     note(request, { error: { reason: "internal", detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e) } });
     console.error(JSON.stringify({ msg: "verb failed", verb: name, ray: request.headers.get("cf-ray"), stack: e instanceof Error ? e.stack ?? null : null }));
-    if (isForm) return finish(ctx, env, htmlResponse(page("Not done", `<h1>That didn't work</h1><p>Something went wrong on our side, and it is in the log. Nothing was changed.</p><p><a href="javascript:history.back()">Go back</a></p>${reference(request)}`), 500));
+    if (isForm) return finish(ctx, env, htmlResponse(page(name === "mail.set_response_intent" ? "Save outcome unknown" : "Not done", name === "mail.set_response_intent"
+      ? `<h1>Save outcome unknown</h1><p>We could not confirm the result. Your intention edit may already have committed; do not blindly submit it again.</p><p>Use the original request ID, expected revision, intended state and exact UTC time (or blank) with the read-only receipt check on the mail page. A missing receipt does not prove that nothing changed. If you did not preserve these values, read your current intention and reconcile before deciding on a new edit.</p><p><a href="/mail" data-reload>Open mail</a></p>${reference(request)}`
+      : `<h1>That didn't work</h1><p>Something went wrong on our side, and it is in the log. Nothing was changed.</p><p><a href="javascript:history.back()">Go back</a></p>${reference(request)}`), 500));
     return finish(ctx, env, json({ ok: false, error: "internal", detail: null }, 500));
   }
 }

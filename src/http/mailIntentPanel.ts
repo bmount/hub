@@ -2,6 +2,7 @@ import type { Ctx } from "../auth/context";
 import { rank } from "../auth/context";
 import { HubError } from "../errors";
 import { esc } from "../html";
+import { ulid } from "../ids";
 import { responseIntent } from "../mail/responseIntent";
 import { extraCheck, proofFresh } from "./extraCheck";
 
@@ -40,9 +41,12 @@ export async function mailIntentPanel(ctx: Ctx, id: string): Promise<{ html: str
     : transitions.map(t => `<form method="post" action="/api/mail.set_response_intent" data-reload>
 <input type="hidden" name="id" value="${esc(id)}"><input type="hidden" name="state" value="${t.state}">
 <input type="hidden" name="expected_revision" value="${intent.revision}"><input type="hidden" name="_back" value="${esc(path)}">
+<label>Request ID (keep with your exact edit)<input name="request_id" value="${ulid(ctx.now)}" readonly></label>
+<p>Expected revision: ${intent.revision}. Intended state: ${t.state}. Preserve these values and the exact UTC time (or blank) before saving. The ID is a reconciliation alias, not permission to retry.</p>
 ${t.state === "planned" ? `<label>Optional respond-by (UTC)<input type="datetime-local" name="respond_by_utc" step="60" value="${esc(due)}"></label>
 <p>Enter a future UTC minute within 30 days of receiving this message. Blank records no deadline (or clears your existing deadline). This is not a timer, reminder or automatic send.</p>` : t.state === "completed" ? `<p>Record only if you have completed your intended response. This records your own assertion; it does not send mail, verify the response or prove recipient delivery.</p>` : ""}
-<button type="submit">${t.label}</button></form>`).join("");
+<button type="submit">${t.label}</button>
+<button type="submit" formaction="/api/mail.response_intent_write_status" class="quiet">Check this exact edit only</button></form>`).join("");
   return { html: `<section><h2>My response intention</h2><p>${labels[intent.state]} Revision: ${intent.revision ?? "unavailable"}.</p>
 ${intent.respond_by !== null ? `<p>Intended respond-by: ${esc(new Date(intent.respond_by).toISOString())} (UTC).</p>` : ""}
 <p>Self-recorded intention only: no mail, notification or automated work is requested. This does not guarantee a reply. Actual replies and delivery status are separate.</p>
@@ -50,5 +54,14 @@ ${intent.respond_by !== null ? `<p>Intended respond-by: ${esc(new Date(intent.re
 ${reply.outbound_id !== null ? `<p>Outbound record: ${esc(reply.outbound_id)}. Recorded at ${esc(new Date(reply.recorded_at!).toISOString())}.</p>` : ""}
 <p>Only the latest exact mailbox/sender/source match since this revision's timestamp is observed, not a complete send history or causal link to the intention. Recipient delivery is not observed; no intention is automatically completed.</p>
 ${controls}${!intent.can_plan && intent.state !== "invalid" ? "<p>Current mailbox preferences do not select you. An admin can manage shared-mailbox preferences; this page does not grant access or assign anyone else.</p>" : ""}
-<p>If a save's outcome is unknown, reload to reconcile the revision; do not blindly resubmit.</p></section>`, key: JSON.stringify([intent, fresh]) };
+<details><summary>Check a preserved intention edit</summary>
+<p>This is a read-only check of your own request receipt. Use the exact original values, not a new form's ID or the current revision. Changing values checks a different edit.</p>
+<form method="post" action="/api/mail.response_intent_write_status" data-reload>
+<input type="hidden" name="id" value="${esc(id)}">
+<label>Original request ID<input name="request_id" required maxlength="26" pattern="[0-9A-HJKMNP-TV-Z]{26}"></label>
+<label>Original expected revision<input type="number" name="expected_revision" required min="0" max="9007199254740989" step="1"></label>
+<label>Original intended state<select name="state"><option value="planned">planned</option><option value="cancelled">cancelled</option><option value="completed">completed</option></select></label>
+<label>Original respond-by (UTC; blank if none)<input type="datetime-local" name="respond_by_utc" step="60"></label>
+<button type="submit">Check preserved edit only</button></form></details>
+<p>If a save's outcome is unknown, check the preserved exact edit; do not blindly resubmit. A missing receipt does not prove that nothing changed. No edit is automatically retried.</p></section>`, key: JSON.stringify([intent, fresh]) };
 }

@@ -1,6 +1,7 @@
 import { defineVerb } from "./table";
 import { optInt, optString, reqEnum, reqString } from "./params";
 import { badRequest } from "../errors";
+import { esc } from "../html";
 import { recipientId } from "../mail/responseRecipients";
 import { responseAgenda, responseIntent, responseIntentWriteStatus, setResponseIntent } from "../mail/responseIntent";
 
@@ -58,6 +59,15 @@ export const mailResponseIntentWriteStatus = defineVerb({
     return { ...editParams(i), request };
   },
   run: (ctx, p) => responseIntentWriteStatus(ctx, p.id, p.request, p.state, p.expected, p.due),
+  renderForm: r => `<h1>Own intention edit receipt</h1>
+<p>Request ID: <code>${esc(r.request_id)}</code>. ${r.status === "committed"
+    ? r.matches ? "The original recorded edit matches your submitted values." : "This ID was recorded for a different edit. Your submitted values do not match."
+    : r.status === "no_record" ? "No receipt is currently recorded for this ID. This does not prove that nothing changed or that a concurrent write cannot still commit."
+    : "The stored receipt or source binding is invalid. Reconciliation is required; do not reset or retry it."}</p>
+<p>Original committed revision: ${r.committed_revision ?? "unavailable"}. Current own revision: ${r.current_revision ?? "unavailable"}.
+${r.still_current === true ? "The original recorded intention is still current." : r.still_current === false ? "The original recorded intention is no longer current." : "No valid original intention is available to compare."}</p>
+<p>This read-only observation is not retry authorization, a send, notification, scheduled execution or a response guarantee. No edit was retried. Recipient delivery is not observed.</p>
+<p><a href="/mail/${esc(r.mail_id)}" data-reload>Read current intention</a> before making any new explicit edit.</p>`,
 });
 export const mailSetResponseIntent = defineVerb({
   name: "mail.set_response_intent", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: 60, humanOnly: true,

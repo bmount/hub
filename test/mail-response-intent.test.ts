@@ -5,6 +5,7 @@ import { registerAllVerbs } from "../src/verbs/index";
 import { getVerb } from "../src/verbs/table";
 import { checkAccess } from "../src/verbs/dispatch";
 import { buildContext } from "../src/auth/context";
+import { handleApi } from "../src/http/api";
 import { storeIndependentMailCandidate, REPLAY_PREFIX } from "../src/mail/replay";
 import { RESPONSE_RECIPIENT_PREFIX } from "../src/mail/responseRecipients";
 import { RESPONSE_INTENT_PREFIX, RESPONSE_INTENT_WRITE_PREFIX, responseIntent, responseIntentWriteStatus, setResponseIntent } from "../src/mail/responseIntent";
@@ -594,6 +595,100 @@ describe("explicit self-recorded human response intent, not automatic scheduling
     await env.HUB_DB.prepare("UPDATE tenant SET state = 'archived' WHERE id = ?").bind(w.tenant.id).run();
     await deleteTenant(env.HUB_DB, "intent", w.admin.identity.id, Date.now());
     expect((await env.HUB_DB.prepare("SELECT key FROM meta WHERE key GLOB ?").bind(RESPONSE_INTENT_PREFIX + "*").all()).results).toEqual([{ key: keep }]);
+  });
+});
+
+describe("browser exact intention receipt checks", () => {
+  const form = (w: Awaited<ReturnType<typeof world>>, request = ulid()) => new URLSearchParams({
+    id: w.id, request_id: request, state: "planned", expected_revision: "0", respond_by_utc: "", _back: `/mail/${w.id}`,
+  });
+  const post = (w: Awaited<ReturnType<typeof world>>, verb: string, body: URLSearchParams, headers = w.headers) =>
+    SELF.fetch(`https://${host}/api/${verb}`, { method: "POST", body, headers, redirect: "manual" });
+  it.each([false, true])("renders keyed native forms and checks exact org/project=%s edits without replay", async project => {
+    const w = await world(project);
+    const html = await (await SELF.fetch(`https://${host}/mail/${w.id}`, { headers: w.headers })).text();
+    const request = html.match(/name="request_id" value="([0-9A-Z]{26})" readonly/)![1];
+    expect(html).toContain('formaction="/api/mail.response_intent_write_status"');
+    expect(html).toContain('action="/api/mail.response_intent_write_status" data-reload');
+    expect(html).toContain("Preserve these values and the exact UTC time");
+    const body = form(w, request);
+    const absent = await post(w, "mail.response_intent_write_status", body);
+    expect(absent.status).toBe(200); expect(absent.headers.get("cache-control")).toBe("no-store");
+    expect(await absent.text()).toContain("This does not prove that nothing changed");
+    expect(await count()).toBe(0);
+    expect((await post(w, "mail.set_response_intent", body)).status).toBe(303);
+    const exact = await post(w, "mail.response_intent_write_status", body);
+    const checked = await exact.text(); expect(checked).toContain("original recorded edit matches your submitted values");
+    expect(checked).toContain("original recorded intention is still current");
+    expect(checked).toContain(`href="/mail/${w.id}"`);
+    expect(checked).not.toContain('action="/api/mail.set_response_intent"');
+    body.set("state", "cancelled");
+    expect(await (await post(w, "mail.response_intent_write_status", body)).text()).toContain("recorded for a different edit");
+    expect(await count()).toBe(1);
+    for (const table of ["outbound_mail", "attention", "consent", "oauth_grant"]) expect(await env.HUB_DB.prepare(`SELECT COUNT(*) n FROM ${table}`).first("n")).toBe(0);
+  });
+  it("lets stale-proof humans read preserved receipts after later edits without refreshing proof", async () => {
+    const w = await world(), body = form(w);
+    expect((await post(w, "mail.set_response_intent", body)).status).toBe(303);
+    expect((await set(w, "completed", 1)).status).toBe(200);
+    const time = Date.now() - 61 * 60_000;
+    await env.HUB_DB.prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(time, w.member.session.id).run();
+    const html = await (await SELF.fetch(`https://${host}/mail/${w.id}`, { headers: w.headers })).text();
+    expect(html).not.toContain('action="/api/mail.set_response_intent"');
+    expect(html).toContain("Check a preserved intention edit");
+    const checked = await post(w, "mail.response_intent_write_status", body);
+    expect(checked.status).toBe(200); expect(await checked.text()).toContain("original recorded intention is no longer current");
+    expect(await env.HUB_DB.prepare("SELECT last_proof_at FROM session WHERE id = ?").bind(w.member.session.id).first("last_proof_at")).toBe(time);
+    expect(await count()).toBe(2);
+  });
+  it("renders invalid receipts without resetting them or encouraging a retry", async () => {
+    const w = await world(), body = form(w);
+    expect((await post(w, "mail.set_response_intent", body)).status).toBe(303);
+    const key = `${RESPONSE_INTENT_WRITE_PREFIX}${w.tenant.id}:${w.id}:${w.member.identity.id}:${body.get("request_id")}`;
+    await env.HUB_DB.prepare("UPDATE meta SET value = '{}' WHERE key = ?").bind(key).run();
+    const response = await post(w, "mail.response_intent_write_status", body);
+    expect(response.status).toBe(200); const html = await response.text();
+    expect(html).toContain("stored receipt or source binding is invalid"); expect(html).toContain("not retry authorization");
+    expect(await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(key).first("value")).toBe("{}");
+    expect(await count()).toBe(1);
+  });
+  it.each([false, true])("never claims no change for a transaction error (committed=%s)", async committed => {
+    const w = await world(), body = form(w), db = env.HUB_DB;
+    let editing = false;
+    const faulty = new Proxy(db, { get(target, key) {
+      if (key === "prepare") return (sql: string) => {
+        if (sql.startsWith("INSERT INTO meta (key, value) SELECT ?, ? FROM inbound_mail m")) editing = true;
+        return db.prepare(sql);
+      };
+      if (key === "batch") return async (stmts: D1PreparedStatement[]) => {
+        if (!editing) return db.batch(stmts);
+        if (committed) await db.batch(stmts);
+        throw new Error("test transaction response unavailable");
+      };
+      const value = Reflect.get(target, key); return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const response = await handleApi(new Request(`https://${host}/api/mail.set_response_intent`, { method: "POST", body, headers: w.headers }), { ...env, HUB_DB: faulty });
+    expect(response.status).toBe(500); expect(response.headers.get("cache-control")).toBe("no-store");
+    const html = await response.text(); expect(html).toContain("Save outcome unknown"); expect(html).toContain("may already have committed");
+    expect(html).not.toContain("Nothing was changed"); expect(html).not.toContain('action="/api/mail.set_response_intent"');
+    const checked = await post(w, "mail.response_intent_write_status", body);
+    expect(checked.status).toBe(200);
+    expect(await checked.text()).toContain(committed ? "original recorded edit matches" : "No receipt is currently recorded");
+    expect(await count()).toBe(committed ? 1 : 0);
+  });
+  it.each(["origin", "reader", "agent", "foreign", "private", "proof", "member"])("refuses browser receipt disclosure for %s", async change => {
+    const w = await world(), body = form(w); let headers = w.headers;
+    expect((await post(w, "mail.set_response_intent", body)).status).toBe(303);
+    if (change === "origin") headers = { ...headers, origin: "https://evil.test" };
+    if (change === "reader") headers = cookieHeaders(w.reader.token, host);
+    if (change === "agent") headers = bearer(w.bot.token);
+    if (change === "foreign") { const human = await seedHuman("foreign@example.com", { memberships: [{ tenant_id: w.foreign.id, role: "member" }] }); headers = cookieHeaders(human.token, host); }
+    if (change === "private") await env.HUB_DB.prepare("UPDATE inbound_mail SET recipient_id = ? WHERE id = ?").bind(w.bot.agent.identity.id, w.id).run();
+    if (change === "proof") await env.HUB_DB.prepare("DELETE FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").run();
+    if (change === "member") await env.HUB_DB.prepare("UPDATE membership SET state = 'removed' WHERE tenant_id = ? AND identity_id = ?").bind(w.tenant.id, w.member.identity.id).run();
+    const response = await post(w, "mail.response_intent_write_status", body, headers);
+    expect(response.status).not.toBe(200); expect(await response.text()).not.toContain("Own intention edit receipt");
+    expect(await count()).toBe(1);
   });
 });
 
