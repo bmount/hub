@@ -73,6 +73,9 @@ describe("exact named thread-source snapshot, independent of page progress", () 
     expect(r.structuredContent.messages).toHaveLength(201);
     expect(r.structuredContent.messages.at(-1).seq).toBe(201);
     expect(r.structuredContent.next_after).toBe(201);
+    expect(r.structuredContent.activity_cursors).toEqual(Array.from({ length: 200 }, (_, i) => ({
+      msg_id: r.structuredContent.messages[i + 1].msg_id, seq: i + 2, activity_seq: i + 2,
+    })));
     expect(r.structuredContent.target).toMatchObject({ msg_id: target.msg_id, seq: 206, author: { identity_id: w.dev.identity.id, session_kind: "browser" } });
     expect(r.structuredContent.target.body.length).toBeGreaterThan(8000);
     expect(r.content[0].text).toContain("\\[#1 @lead browser]");
@@ -81,6 +84,7 @@ describe("exact named thread-source snapshot, independent of page progress", () 
     expect(tail.messages.map((m: any) => m.seq)).toEqual([1, 202, 203, 204, 205, 206]);
     expect(tail.target).toEqual(tail.messages.at(-1));
     expect(tail.next_after).toBeNull();
+    expect(tail.activity_cursors).toEqual(tail.messages.slice(1).map((m: any) => ({ msg_id: m.msg_id, seq: m.seq, activity_seq: m.seq })));
   }, 20000);
 
   it("uses immutable current session provenance, hides retracted text and keeps revision actor separate from ownership", async () => {

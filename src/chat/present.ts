@@ -37,7 +37,9 @@ export async function present(ctx: Ctx, msgs: MsgView[]): Promise<{ tagOf: TagOf
   return { tagOf, refs };
 }
 
-export type ReadResult = { tenant_id: string; identity_id: string; conversation_id: string; channel: string; head: number; messages: MsgJson[]; next_after: number | null; next_before: number | null; text: string; target?: MsgJson };
+/** Scan positions for shown forward messages, not processing receipts or message revisions. */
+export type ActivityCursor = { msg_id: string; seq: number; activity_seq: number };
+export type ReadResult = { tenant_id: string; identity_id: string; conversation_id: string; channel: string; head: number; messages: MsgJson[]; activity_cursors: ActivityCursor[]; next_after: number | null; next_before: number | null; text: string; target?: MsgJson };
 
 /** Bounded activity text/JSON, plus optional exact named evidence that never affects paging. */
 export async function readResult(
@@ -47,6 +49,13 @@ export async function readResult(
   const { tagOf, refs } = await present(ctx, evidence);
   const r = renderMessages({ title: o.title, c: ch.slug, messages: msgs, tagOf, refs, budget: o.budget, keep: o.keep, has_more: o.has_more, full: o.full ?? null, context: o.context, cursors: o.cursors });
   const shown = new Set(r.shown);
+  // Retain final-page scan positions even when no continuation remains. Never synthesize a
+  // position from original seq/head, repeated root context or separately returned target.
+  const activity_cursors: ActivityCursor[] = o.keep === "oldest" ? msgs.flatMap((m) => {
+    const activity_seq = o.cursors?.[m.seq];
+    return shown.has(m.seq) && m.seq !== o.context && activity_seq !== undefined
+      ? [{ msg_id: m.msg_id, seq: m.seq, activity_seq }] : [];
+  }) : [];
   const target = o.target ? msgJson(o.target, tagOf(o.target.author_id, o.target.session_id, o.target.session_kind), refs.get(o.target.seq) ?? []) : undefined;
   const targetText = o.target ? [
     "", `Exact named target: #${o.target.seq} r${o.target.rev}; full body in structured target. Snapshot evidence, not page progress or execution authority.`,
@@ -55,6 +64,6 @@ export async function readResult(
   return {
     tenant_id: ch.tenant_id, identity_id: viewerOf(ctx).identity.id, conversation_id: ch.project_id, channel: ch.slug, head: o.head,
     messages: msgs.filter((m) => shown.has(m.seq)).map((m) => msgJson(m, tagOf(m.author_id, m.session_id, m.session_kind), refs.get(m.seq) ?? [])),
-    next_after: r.next_after, next_before: r.next_before, text: r.text + targetText, ...(target ? { target } : {}),
+    activity_cursors, next_after: r.next_after, next_before: r.next_before, text: r.text + targetText, ...(target ? { target } : {}),
   };
 }
