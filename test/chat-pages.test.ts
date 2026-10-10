@@ -1,4 +1,5 @@
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
+import { createProject } from "../src/db/projects";
 import { describe, expect, it } from "vitest";
 import { cookieHeaders, seedHuman, seedTenant } from "./helpers";
 import { HOST, channelWith, chatWorld, ok } from "./chat-helpers";
@@ -11,6 +12,70 @@ const postForm = (path: string, token: string, fields: Record<string, string>, o
     headers: { ...cookieHeaders(token, HOST), origin, "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(fields).toString(),
   });
+
+describe("message/work navigation", () => {
+  it("opens exact recorded message sources/links and deduplicates authorized work backlinks with escaping", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    await createProject(env.HUB_DB, { tenant_id: w.acme.id, namespace_id: null, slug: "site", kind: "repo", display_name: "Site" }, Date.now());
+    const m = await ok(w.lead.token, "chat.post", { c: "general", body: "Recorded discussion" });
+    const filed = (await ok(w.lead.token, "work.create", { project: "site", kind: "errand", title: "Follow up", source_kind: "message", source_ref: m.msg_id })).item;
+    const linked = (await ok(w.lead.token, "work.create", { project: "site", kind: "errand", title: '<img src=x onerror="evil()">Linked work' })).item;
+    for (const item of [filed, linked]) await ok(w.lead.token, "work.link", { id: item.id, target_kind: "message", target_ref: m.msg_id });
+    const workPage = await (await get(`/site/w/${filed.number}`, w.dev.token)).text();
+    expect(workPage).toContain(`href="/m/${m.msg_id}">Recorded message</a>`);
+    expect(workPage).toContain(`href="/m/${m.msg_id}">${m.msg_id}</a>`);
+    expect(workPage).not.toContain("Recorded discussion");
+    const page = await (await get(`/m/${m.msg_id}`, w.dev.token)).text();
+    expect(page).toContain("Recorded discussion");
+    expect(page.match(/>Follow up<\/a>/g)).toHaveLength(1);
+    expect(page).toContain(`href="/site/w/${linked.number}"`);
+    expect(page).toContain("&lt;img src=x onerror=&quot;evil()&quot;&gt;Linked work");
+    expect(page).not.toContain('<img src=x');
+    expect(page).toContain("2 related work items shown; complete for recorded associations");
+    expect(page).toContain("do not prove that a message authorized");
+    await ok(w.lead.token, "chat.retract", { c: "general", msg: m.seq });
+    const retracted = await (await get(`/m/${m.msg_id}`, w.dev.token)).text();
+    expect(retracted).toContain("retracted");
+    expect(retracted).toContain("Follow up");
+    const outsider = await seedHuman("outsider@example.com");
+    const denied = await get(`/m/${m.msg_id}`, outsider.token);
+    expect(denied.status).toBe(404);
+    expect(await denied.text()).not.toContain("Follow up");
+    const other = await seedTenant("other");
+    const foreign = await seedHuman("foreign@example.com", { memberships: [{ tenant_id: other.id, role: "member" }] });
+    expect((await get(`/m/${m.msg_id}`, foreign.token)).status).toBe(404);
+    expect((await SELF.fetch(`https://${HOST}/m/${m.msg_id}`, { headers: { authorization: `Bearer ${w.scout.token}` }, redirect: "manual" })).status).toBe(404);
+    expect((await get(`/m/${m.msg_id}`, null)).status).toBe(303);
+  });
+
+  it("reports empty/exact/capped work coverage and filters invalid tenant/project/channel rows before limits", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const p = await createProject(env.HUB_DB, { tenant_id: w.acme.id, namespace_id: null, slug: "site", kind: "repo", display_name: "Site" }, Date.now());
+    const m = await ok(w.lead.token, "chat.post", { c: "general", body: "Discussion" });
+    const read = async () => (await get(`/m/${m.msg_id}`, w.dev.token)).text();
+    expect(await read()).toContain("0 related work items shown; complete for recorded associations");
+    const add = async (n: number, tenant = w.acme.id, project = p.id, number = n + 1) => env.HUB_DB.prepare("INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, source_kind, source_ref, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'errand', ?, '', 'done', 'message', ?, ?, ?, ?)").bind(`work-${n}`, tenant, project, number, `Recorded work ${n}`, m.msg_id, w.lead.identity.id, n, n).run();
+    for (let n = 0; n < 50; n++) await add(n);
+    expect(await read()).toContain("50 related work items shown; complete for recorded associations");
+    const other = await seedTenant("other");
+    const foreign = await createProject(env.HUB_DB, { tenant_id: other.id, namespace_id: null, slug: "private", kind: "repo", display_name: "Private" }, Date.now());
+    const channel = await env.HUB_DB.prepare("SELECT id AS project_id FROM project WHERE tenant_id = ? AND slug = 'general' AND kind = 'channel'").bind(w.acme.id).first<string>("project_id");
+    for (let n = 100; n < 155; n++) await add(n, n % 3 === 0 ? other.id : w.acme.id, n % 3 === 0 ? p.id : n % 3 === 1 ? foreign.id : channel!);
+    await add(200, w.acme.id, p.id, 0);
+    await add(201, w.acme.id, p.id, 100000000);
+    expect(await read()).toContain("50 related work items shown; complete for recorded associations");
+    await add(50);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(p.id).run();
+    const capped = await read();
+    expect(capped).toContain("50 related work items shown; capped at 50, more omitted");
+    expect(capped).toContain(">Recorded work 50</a>");
+    expect(capped).not.toContain(">Recorded work 0</a>");
+    expect(capped).not.toContain("Recorded work 100");
+    expect(capped).not.toContain("private#");
+  });
+});
 
 describe("chat pages", () => {
   it("send visitors without a session to sign in", async () => {

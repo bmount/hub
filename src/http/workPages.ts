@@ -151,10 +151,15 @@ function mailEvidenceHref(reference: string | null): string | null {
   return reference?.length === 26 && /^[0-9A-HJKMNP-TV-Z]{26}$/.test(reference) ? `/mail/${reference}` : null;
 }
 
+function messageEvidenceHref(reference: string | null): string | null {
+  return reference?.length === 26 && /^[0-9A-HJKMNP-TV-Z]{26}$/.test(reference) ? `/m/${reference}` : null;
+}
+
 function workLinkHtml(l: WorkLink): string {
   let href: string | null = null;
   if (l.target_kind === "url") href = safeExternalUrl(l.target_ref);
   else if (l.target_kind === "mail") href = mailEvidenceHref(l.target_ref);
+  else if (l.target_kind === "message") href = messageEvidenceHref(l.target_ref);
   else if (!/\s/.test(l.target_ref)) {
     const name = "([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)";
     if (l.target_kind === "commit") {
@@ -173,6 +178,7 @@ function workLinkHtml(l: WorkLink): string {
 function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string): string {
   const canWrite = rank(ctx.role) >= rank("member");
   const sourceMail = w.source_kind === "mail" ? mailEvidenceHref(w.source_ref) : null;
+  const sourceMessage = w.source_kind === "message" ? messageEvidenceHref(w.source_ref) : null;
   const sourceUrl = w.source_kind === "url" && w.source_ref ? safeExternalUrl(w.source_ref) : null;
   const self = `/${esc(project.slug)}/w/${w.number}`;
   const keepParams = new URLSearchParams(back.includes("?") ? back.slice(back.indexOf("?") + 1) : "");
@@ -219,6 +225,7 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
 ${controls}
 ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
 ${sourceMail ? `<p>Source: <a href="${sourceMail}">Recorded mail</a>. Access is checked when opened.</p>` : ""}
+${sourceMessage ? `<p>Source: <a href="${sourceMessage}">Recorded message</a>. Access is checked when opened.</p>` : ""}
 ${sourceUrl ? `<p>Source: <a href="${esc(sourceUrl)}">Recorded URL</a>. Recorded evidence, not verified access or existence.</p>` : ""}
 ${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Add them under Edit (e): what, why, and how you will know it is done." : ""}</p>`}
 ${edit}

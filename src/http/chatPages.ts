@@ -14,6 +14,7 @@ import type { AuthorJson, MsgJson, ReadResult } from "../chat/present";
 import type { ViewRef } from "../chat/types";
 import { notFoundPage } from "./pages";
 import { MAX_CHANNEL_FORM_BODY_BYTES, readRequestForm } from "./body";
+import { KINDS, STATES, type WorkKind, type WorkState } from "../work/names";
 
 type Extra = Record<string, string>;
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -220,7 +221,22 @@ export async function permalinkPage(request: Request, env: Env, msgId: string): 
     );
     const versions = h.versions.map((x) => `<article><p>r${x.rev} ${when(x.created_at)} ${tagHtml(x.author)}${x.retracted ? " <em>retracted</em>" : ""}</p>`
       + `${x.retracted ? "" : `<pre style="white-space:pre-wrap;margin:.25rem 0">${esc(x.body)}</pre>`}</article>`).join("");
-    const body = `<h1>#${esc(h.channel)} message #${h.seq}</h1>${NAV}<p><a href="/c/${esc(h.channel)}/t/${h.seq}">in context</a></p>${versions}`;
+    // History authorization precedes the work lookup; a recorded link cannot grant channel access.
+    const related = await pc.ctx.db.prepare(`SELECT w.id, p.slug AS project, w.number, w.kind, w.state, w.title,
+      CASE WHEN w.source_kind = 'message' AND w.source_ref = ? THEN 'filed' ELSE 'linked' END AS relationship
+      FROM msg_index mi JOIN work_item w ON w.tenant_id = mi.tenant_id
+      JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind <> 'channel'
+      WHERE mi.msg_id = ? AND mi.tenant_id = ? AND mi.conversation_id = ? AND typeof(w.number) = 'integer' AND w.number BETWEEN 1 AND 99999999 AND
+        ((w.source_kind = 'message' AND w.source_ref = ?) OR EXISTS
+          (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND l.target_kind = 'message' AND l.target_ref = ?))
+      ORDER BY w.created_at DESC, w.id DESC LIMIT 51`)
+      .bind(msgId, msgId, pc.ctx.tenant!.id, ch.project_id, msgId, msgId)
+      .all<{ id: string; project: string; number: number; kind: WorkKind; state: WorkState; title: string; relationship: "filed" | "linked" }>();
+    const work = related.results.slice(0, 50);
+    const workHtml = `<h2>Recorded work</h2><p>Recorded associations do not prove that a message authorized, approved or completed the work.</p>
+${work.length ? `<table><tbody>${work.map(w => `<tr><td>${esc(w.project)}#${w.number}</td><td>${esc(KINDS[w.kind].name)}</td><td><a href="/${esc(encodeURIComponent(w.project))}/w/${w.number}">${esc(w.title)}</a></td><td>${esc(STATES[w.state])}</td><td>${w.relationship}</td></tr>`).join("")}</tbody></table>` : "<p>No work associations recorded for this message.</p>"}
+<p>${work.length} related work items shown${related.results.length > 50 ? "; capped at 50, more omitted" : "; complete for recorded associations"}.</p>`;
+    const body = `<h1>#${esc(h.channel)} message #${h.seq}</h1>${NAV}<p><a href="/c/${esc(h.channel)}/t/${h.seq}">in context</a></p>${versions}${workHtml}`;
     return htmlResponse(page(`#${h.channel} #${h.seq}`, body, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);

@@ -235,6 +235,8 @@ describe("recorded work evidence navigation", () => {
       ["item", "site#0"], ["item", "site#01"], ["item", "site#100000000"], ["item", "site#1\n"],
       ["item", "site#1?x=1"], ["item", "site#1/../../mail"], ["item", "site#1\" onclick=\"alert(1)"],
       ["item", "https://evil.test/site#1"], ["message", "site#1"], ["event", `site@${oid}`],
+      ["message", "javascript:alert(1)"], ["message", "//evil.test"], ["message", "../m"],
+      ["message", "0".repeat(26) + "\n"], ["message", "i".repeat(26)], ["message", "0".repeat(26) + "/" + "1".repeat(26)],
       ["mail", "javascript:alert(1)"], ["mail", "//evil.test"], ["mail", "../mail"],
       ["mail", "0".repeat(26) + "\n"], ["mail", "0".repeat(26) + "/../"], ["mail", "i".repeat(26)],
     ];

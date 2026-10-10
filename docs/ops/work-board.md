@@ -34,6 +34,10 @@ The inspector opens recorded `commit` references (`project@` plus a full 40-char
 
 Members can use **Add link** in the inspector to record a commit, work item, mail, message, event or HTTPS URL, with an optional note. The form uses the existing audited `work.link` command and returns to the same item and Docket filters. References and notes are limited to 500 characters. Repeating a kind/reference pair keeps the original link, note and author; it does not edit the existing evidence. Readers can view links but cannot add them.
 
+Exact uppercase 26-character Crockford message IDs open `/m/<id>` from `message` links and message sources. Composite channel/message strings, short IDs and malformed values stay inert. Work reads do not fetch message bodies or verify access/existence; the permalink applies its existing cookie, tenant and channel-history checks.
+
+An authorized message permalink shows work filed with that exact message ID or explicitly linked to it. Source associations are labelled **filed**, other links **linked**; duplicates appear once. The list is capped at 50, newest filing first with item ID descending as a tie-breaker, and explicitly discloses truncation. Work and its non-channel project must belong to the current tenant, with a positive integer work number of at most eight digits. Filtering precedes the cap; archived projects and closed work remain readable. History authorization precedes this lookup, and retraction does not erase previously recorded work associations. The message remains evidence, not authority to execute, approve or complete work. These backlinks are browser-only; existing chat API/MCP read shapes are unchanged.
+
 Short commit IDs, malformed references and other reference kinds remain escaped plain text. External `url` links still require a safe HTTPS URL without credentials. Notes are escaped, and the inspector distinguishes recorded references from verified access or existence. Safe HTTPS `url` sources also open from the inspector without fetching the target; unsafe sources are non-navigable. [App error views](app-work.md) show work recorded against their canonical URLs.
 
 ## Mail evidence navigation
