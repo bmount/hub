@@ -646,20 +646,21 @@ export class Conversation extends DurableObject<Env> {
     );
     const mentions_truncated = mentionRows.length > q.max_items;
     const mentions_me = mentionRows.slice(0, q.max_items).map((r) => this.#view(r));
-    // Followed threads carry incoming revised/retracted roots and replies, even without mentions.
-    // Retractions are body-free current state, never requests or proof of the retracting actor.
+    // Incoming activity belongs to the latest artifact actor, not the original owner: an
+    // operator can retract the reader's own message. Retractions remain body-free evidence.
     // Group once per subscription; counts are disjoint and roots never count as replies.
     const threadRows = this.#q<{ thread_root: string; n: number; edited: number; retracted: number; root_edited: number; root_retracted: number; newest: number }>(
-      `SELECT COALESCE(thread_root, msg_id) AS thread_root,
-         SUM(CASE WHEN thread_root IS NOT NULL AND retracted = 0 AND first_seq > ? THEN 1 ELSE 0 END) AS n,
-         SUM(CASE WHEN thread_root IS NOT NULL AND retracted = 0 AND first_seq <= ? THEN 1 ELSE 0 END) AS edited,
-         SUM(CASE WHEN thread_root IS NOT NULL AND retracted = 1 THEN 1 ELSE 0 END) AS retracted,
-         MAX(CASE WHEN thread_root IS NULL AND retracted = 0 THEN 1 ELSE 0 END) AS root_edited,
-         MAX(CASE WHEN thread_root IS NULL AND retracted = 1 THEN 1 ELSE 0 END) AS root_retracted, MAX(last_seq) AS newest
-         FROM msg WHERE kind = 'say' AND last_seq > ? AND author_id <> ?
-         AND (thread_root IS NOT NULL OR last_seq > first_seq)
-         AND COALESCE(thread_root, msg_id) IN (SELECT thread_root FROM thread_sub WHERE identity_id = ?)
-         GROUP BY COALESCE(thread_root, msg_id) ORDER BY newest LIMIT ?`,
+      `SELECT COALESCE(m.thread_root, m.msg_id) AS thread_root,
+         SUM(CASE WHEN m.thread_root IS NOT NULL AND m.retracted = 0 AND m.first_seq > ? THEN 1 ELSE 0 END) AS n,
+         SUM(CASE WHEN m.thread_root IS NOT NULL AND m.retracted = 0 AND m.first_seq <= ? THEN 1 ELSE 0 END) AS edited,
+         SUM(CASE WHEN m.thread_root IS NOT NULL AND m.retracted = 1 THEN 1 ELSE 0 END) AS retracted,
+         MAX(CASE WHEN m.thread_root IS NULL AND m.retracted = 0 THEN 1 ELSE 0 END) AS root_edited,
+         MAX(CASE WHEN m.thread_root IS NULL AND m.retracted = 1 THEN 1 ELSE 0 END) AS root_retracted, MAX(m.last_seq) AS newest
+         FROM msg m JOIN artifact a ON a.seq = m.last_seq
+         WHERE m.kind = 'say' AND m.last_seq > ? AND a.author_id <> ?
+         AND (m.thread_root IS NOT NULL OR m.last_seq > m.first_seq)
+         AND COALESCE(m.thread_root, m.msg_id) IN (SELECT thread_root FROM thread_sub WHERE identity_id = ?)
+         GROUP BY COALESCE(m.thread_root, m.msg_id) ORDER BY newest LIMIT ?`,
       since, since, since, q.me, q.me, q.max_items + 1,
     );
     const my_threads_truncated = threadRows.length > q.max_items;

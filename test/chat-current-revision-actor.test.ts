@@ -43,6 +43,67 @@ describe("immutable current revision actor separate from original ownership", ()
     expect(read.messages[0]).toMatchObject({ msg_id: root.msg_id, activity_seq: rootRetract.head, author: { identity_id: w.dev.identity.id }, revision_author: { identity_id: w.dev.identity.id }, body: "", retracted: true });
   });
 
+  it("discovers incoming operator retractions of the reader's own followed root and nested reply", async () => {
+    const w = await chatWorld(); await channelWith(w);
+    const root = await ok(w.scout.token, "chat.post", { c: "general", body: "@tidy own root", after: 0 });
+    const context = await ok(w.lead.token, "chat.post", { c: "general", body: "operator context", reply_to: root.msg_id });
+    const reply = await ok(w.scout.token, "chat.post", { c: "general", body: "own nested reply", reply_to: context.msg_id, after: context.head });
+    const ch = (await getChannelBySlug(env.HUB_DB, w.acme.id, "general"))!;
+    const conv = conversationStub(env, w.acme.id, ch.project_id);
+    const id = w.scout.agent.identity.id;
+    const box = inboxStub(env, w.acme.id, id);
+    await ok(w.scout.token, "chat.mark_read", { c: "general", seq: reply.head });
+    const before = await box.list(w.acme.id, id, { after: 0, limit: 100, include_acked: true });
+    const rootChange = await ok(w.lead.token, "chat.retract", { c: "general", msg: root.msg_id });
+    const replyChange = await ok(w.lead.token, "chat.retract", { c: "general", msg: reply.msg_id });
+    const expected = { root_seq: root.seq, replies: 0, edited_replies: 0, retracted_replies: 1,
+      root_edited: false, root_retracted: true, latest_activity_seq: replyChange.head,
+      latest: { msg_id: reply.msg_id, body: "", refs: [], rev: 2, retracted: true,
+        author: { identity_id: id }, revision_author: { identity_id: w.lead.identity.id, session_kind: "browser" } } };
+    for (let i = 0; i < 3; i++) {
+      const catchup = (await tool(w.scout.longLived, "chat_catchup", { scope: "general", budget: 8000 })).structuredContent;
+      expect(catchup.for_you).toEqual([]);
+      expect(catchup.threads).toHaveLength(1);
+      expect(catchup.threads[0]).toMatchObject(expected);
+      expect(catchup.text).toContain("root retracted");
+      expect(catchup.text).not.toContain("own nested reply");
+    }
+    const api = await ok(w.scout.token, "chat.catchup", { scope: "general", budget: 8000 });
+    expect(api.threads[0]).toMatchObject(expected);
+    await inDO(conv, async (_object, state) => {
+      // Body metadata cannot turn an incoming revision into a self-acted change.
+      state.storage.sql.exec("UPDATE artifact SET meta_json = json_set(meta_json, '$.author_id', ?) WHERE seq IN (?, ?)", id, rootChange.seq, replyChange.seq);
+      const fresh = new Conversation(state, env);
+      const beforeChanges = state.storage.sql.exec("SELECT total_changes() AS n").one().n;
+      const digest = await fresh.digest({ tenant_id: w.acme.id, conversation_id: ch.project_id, since: reply.head, me: id, max_items: 20 });
+      expect(digest.my_threads).toHaveLength(1);
+      expect(digest.my_threads[0]).toMatchObject({ root_retracted: true, retracted_replies: 1, newest: { revision_author_id: w.lead.identity.id } });
+      expect(state.storage.sql.exec("SELECT total_changes() AS n").one().n).toBe(beforeChanges);
+    });
+    expect(await box.cursors(w.acme.id, id)).toEqual({ [ch.project_id]: reply.head });
+    expect(await box.list(w.acme.id, id, { after: 0, limit: 100, include_acked: true })).toEqual(before);
+    expect(await conv.head(w.acme.id, ch.project_id)).toBe(replyChange.head);
+  });
+
+  it("excludes the revision actor's own operator retractions without hiding another reader's incoming changes", async () => {
+    const w = await chatWorld(); await channelWith(w);
+    const root = await ok(w.scout.token, "chat.post", { c: "general", body: "agent root", after: 0 });
+    const follow = await ok(w.lead.token, "chat.post", { c: "general", body: "operator follows normally", reply_to: root.msg_id });
+    await ok(w.lead.token, "chat.mark_read", { c: "general", seq: follow.head });
+    await ok(w.lead.token, "chat.retract", { c: "general", msg: root.msg_id });
+    const api = await ok(w.lead.token, "chat.catchup", { scope: "general", budget: 8000 });
+    expect(api.threads).toEqual([]);
+    const oauth = await connectWithTokens(w.lead.token, { scope: "read" });
+    const result = (await rpcBody(await mcpPost("acme", oauth.tokens.access_token, "tools/call", {
+      name: "chat_catchup", arguments: { scope: "general", budget: 8000 },
+    }))).result;
+    expect(result.structuredContent.threads).toEqual([]);
+    const incoming = (await tool(w.scout.longLived, "chat_catchup", { scope: "general", budget: 8000 })).structuredContent;
+    expect(incoming.threads).toHaveLength(1);
+    expect(incoming.threads[0]).toMatchObject({ root_retracted: true, latest: { msg_id: root.msg_id, body: "", revision_author: { identity_id: w.lead.identity.id } } });
+    expect((await tool(w.tidy.longLived, "chat_catchup", { scope: "general", budget: 8000 })).structuredContent.threads).toEqual([]);
+  });
+
   it("uses current artifact actor/session in mention, read and target, not body claims or mutable session-directory kind", async () => {
     const w = await chatWorld(); await channelWith(w);
     const source = await ok(w.lead.token, "chat.post", { c: "general", body: "@scout native source" });
