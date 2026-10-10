@@ -99,10 +99,10 @@ export async function sendNewcomerWelcome(env: Env, source: WelcomeSource, proof
       + "This is one-time context for this organization. Substantive replies are separate from this welcome.\n",
     inReplyTo: proof.messageId, utf8: true,
   }, now);
-  state.status = result; state.completed_at = Math.max(now, Date.now());
+  state.status = result === "unknown" ? "failed" : result; state.completed_at = Math.max(now, Date.now());
   // Only this attempt can finalize; no late/stale writer can change a terminal result.
   await env.HUB_DB.prepare(`UPDATE meta SET value = ? WHERE key = ?
     AND json_extract(value, '$.attempt_id') = ? AND json_extract(value, '$.status') = 'pending'`)
     .bind(JSON.stringify(state), keyFor(source), state.attempt_id).run();
-  return result;
+  return state.status;
 }

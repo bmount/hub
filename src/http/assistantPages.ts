@@ -86,7 +86,7 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
 <p class="lede">I look through work, code, mail, reviews and app errors in ${esc(org)}, as you. Nothing changes unless you allow it below.</p>
 <div class="starters">${STARTERS.map(([title, ask]) => `<button type="button" class="starter" data-ask="${esc(ask)}"><b>${esc(title)}</b><span>${esc(ask)}</span></button>`).join("")}</div></div>`;
   const list = `<div class="assist">
-<div class="assist-top"><div class="chips"><a class="chip" href="/assistant" aria-current="true">Chat</a><a class="chip" href="/assistant/tools">Tools</a><a class="chip only-s" href="/assistant?list=1${thread ? `&t=${esc(thread.id)}` : ""}">Conversations</a>${thread ? `<a class="chip" href="/assistant">+ New chat</a>` : ""}</div></div>
+<div class="assist-top"><div class="chips"><a class="chip" data-chat-link href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}" aria-current="true">Chat</a><a class="chip" data-tools-link href="/assistant/tools${thread ? `?t=${esc(thread.id)}` : ""}">Tools</a><a class="chip only-s" data-conversations-link href="/assistant?list=1${thread ? `&t=${esc(thread.id)}` : ""}">Conversations</a><a class="chip" href="/assistant">+ New chat</a></div></div>
 <div id="chatlog" class="chatlog" aria-live="polite">${log || welcome}</div>
 <form id="ask" class="composer" autocomplete="off">
 <input type="hidden" name="thread" value="${esc(thread?.id ?? "")}">
@@ -99,6 +99,7 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
 <script>
 (function () {
   var f = document.getElementById("ask"), log = document.getElementById("chatlog"); if (!f || f.dataset.ready) return; f.dataset.ready = "1";
+  var pending = false;
   var coarse = window.matchMedia && matchMedia("(pointer:coarse)").matches;
   var esc = function (s) { return s.replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
   function fmt(text) {
@@ -127,9 +128,24 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
   f.text.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey && !coarse) { e.preventDefault(); f.requestSubmit(); } });
   log.addEventListener("click", function (e) {
     var s = e.target.closest("[data-ask]"); if (s) { f.text.value = s.getAttribute("data-ask"); f.requestSubmit(); return; }
-    var r = e.target.closest("[data-retry]"); if (r) { var t = r.getAttribute("data-retry"); r.closest(".msg").remove(); send(t, false); }
+    var r = e.target.closest("[data-retry]"); if (r && !pending) { var t = r.getAttribute("data-retry"); r.closest(".msg").remove(); send(t, false); }
   });
+  function bindThread(id, title) {
+    if (!f.isConnected || f.thread.value || !id) return;
+    f.thread.value = id;
+    var url = "/assistant?t=" + encodeURIComponent(id);
+    // Match the server's pane key so opening Conversations keeps this live transcript.
+    f.closest(".pane").setAttribute("data-key", "assistant:" + id);
+    f.closest(".assist").querySelector("[data-chat-link]").href = url;
+    f.closest(".assist").querySelector("[data-tools-link]").href = "/assistant/tools?t=" + encodeURIComponent(id);
+    f.closest(".assist").querySelector("[data-conversations-link]").href = url + "&list=1";
+    var back = document.querySelector("#inspector .back"); if (back) back.href = url;
+    history.replaceState(history.state, "", url);
+    document.title = title.replace(/\\s+/g, " ").slice(0, 80);
+  }
   function send(t, echo) {
+    if (pending) return;
+    pending = true;
     if (echo) add("user", esc(t));
     var w = add("assistant", '<div class="thinking"><i></i><i></i><i></i> Looking through ' + esc(${JSON.stringify(org).replace(/</g, "\\u003c")}) + "…</div>");
     var btn = f.querySelector(".send"); btn.disabled = true;
@@ -138,15 +154,16 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
       body: JSON.stringify({ thread: f.thread.value || null, text: t, scopes: f.scopes.value }) })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (x) {
+        bindThread(x.j.thread, t);
         if (!x.ok) { fail(x.j.reason || x.j.error || "something went wrong"); return; }
         w.innerHTML = fmt(x.j.reply) + steps(x.j.steps); w.scrollIntoView({ block: "end", behavior: "smooth" });
-        if (!f.thread.value) { f.thread.value = x.j.thread; history.replaceState(history.state, "", "/assistant?t=" + x.j.thread); }
       })
       .catch(function () { fail("the connection dropped"); })
-      .then(function () { btn.disabled = false; if (!coarse) f.text.focus(); });
+      .then(function () { pending = false; btn.disabled = false; if (!coarse) f.text.focus(); });
   }
   f.addEventListener("submit", function (e) {
-    e.preventDefault(); var t = f.text.value.trim(); if (!t) return;
+    e.preventDefault(); if (pending) return;
+    var t = f.text.value.trim(); if (!t) return;
     f.text.value = ""; grow(); send(t, true);
   });
   var last = log.lastElementChild; if (last && !log.querySelector(".welcome")) last.scrollIntoView({ block: "end" });

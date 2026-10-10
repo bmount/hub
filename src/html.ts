@@ -13,7 +13,7 @@ export type RailLink = { href: string; label: string; active: boolean; count?: n
  * sections; `projects` and `planned` are its lower groups; `tabs` is the phone's bottom bar.
  */
 export type Shell = {
-  brandHref: string; org: { name: string; href: string } | null; nav: RailLink[]; me: { name: string; href: string }; tip: string;
+  brandHref: string; org: { name: string; href: string } | null; nav: RailLink[]; me: { name: string; email: string; role: string | null; href: string }; tip: string;
   projects?: RailLink[]; planned?: RailLink[]; tabs?: RailLink[]; canFile?: boolean;
 };
 
@@ -42,10 +42,10 @@ function frame(title: string, main: string, shell: Shell, focus: "list" | "inspe
   const rail = `<aside id="rail" class="rail"><div class="railhead"><b>${esc(org ? shell.org!.name : "Pimwell")}</b><a class="close" href="#" aria-label="Close menu">✕ Close</a></div><nav aria-label="Primary"><ul>${shell.nav.map(railLink).join("")}</ul>
 ${shell.projects?.length ? `<h4>Projects</h4><ul>${shell.projects.map(railLink).join("")}</ul>` : ""}
 ${shell.planned?.length ? `<h4>Coming</h4><ul>${shell.planned.map(railLink).join("")}</ul>` : ""}</nav>
-<h4>Your account</h4><ul><li><a href="${esc(shell.me.href)}">${esc(shell.me.name)}</a></li><li>${logout(org ? "/signed-out" : "/")}</li></ul></aside>`;
+<h4>Your account</h4><ul><li><a href="${esc(shell.me.href)}">${esc(shell.me.name)}</a></li><li class="account-details">${esc(shell.me.email)}${shell.me.role ? `<span>Role: ${esc(shell.me.role)}</span>` : ""}</li><li>${logout(org ? "/signed-out" : "/")}</li></ul></aside>`;
   const bar = `<header class="bar"><a class="menu" href="#rail" aria-label="Menu"><span aria-hidden="true">☰</span><span class="ml">Menu</span></a><a class="brand" href="${esc(shell.brandHref)}">Pimwell</a>${org ? `<a class="org" href="${esc(shell.org!.href)}">${esc(shell.org!.name)}</a>` : ""}
 ${org ? `<form class="jump" action="/jump" method="get" role="search"><input name="q" placeholder="Jump to… a project, person or site#3" autocomplete="off" aria-label="Jump to"><kbd>⌘K</kbd></form>` : `<span class="jump"></span>`}
-${org && shell.canFile ? `<a class="button file" href="/new" title="File work (c)">+ File</a>` : ""}<a class="me" href="${esc(shell.me.href)}">${esc(shell.me.name)}</a></header>`;
+${org && shell.canFile ? `<a class="button file" href="/new" title="File work (c)">+ File</a>` : ""}<a class="me" href="${esc(shell.me.href)}">${esc(shell.me.email)}${shell.me.role ? ` (${esc(shell.me.role)})` : ""}</a></header>`;
   const tabs = shell.tabs?.length ? `<nav class="tabs" aria-label="Sections">${shell.tabs.map((t) => `<a href="${esc(t.href)}"${t.active ? ' aria-current="page"' : ""}>${esc(t.label)}${typeof t.count === "number" && t.count > 0 ? `<span class="n">${t.count}</span>` : ""}</a>`).join("")}<a href="#rail">More</a></nav>` : "";
   const status = `<footer class="status"><span id="perf"></span><span class="tip">${esc(shell.tip)}</span><span class="keys hide-s"><kbd>⌘K</kbd> jump · <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>e</kbd> edit · <kbd>c</kbd> file · <kbd>/</kbd> filter</span><a href="${esc(shell.brandHref)}privacy">Privacy</a><a href="${esc(shell.brandHref)}terms">Terms</a></footer>`;
   return `${head(title)}

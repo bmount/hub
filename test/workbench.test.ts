@@ -1,7 +1,8 @@
 // The workbench (2026-10-07): persistent rail with live counts, list and inspector panes that keep their place,
 // + File, the jump box, and the planned areas in plain view.
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { WORKBENCH_JS } from "../src/workbenchScript";
 import { createProject } from "../src/db/projects";
 import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
 
@@ -32,6 +33,43 @@ describe("the workbench", () => {
     expect(html).toContain('<span class="pill">planned</span>');
     expect(html).toContain('<nav class="tabs" aria-label="Sections">');
     expect(res.headers.get("server-timing")).toMatch(/db;desc="2 round trips/);
+  });
+
+  it("reloads instead of retaining panes when enhanced navigation sees a different account or role", () => {
+    const swap = WORKBENCH_JS.slice(WORKBENCH_JS.indexOf("  function swap("), WORKBENCH_JS.indexOf("  var busy ="));
+    const run = new Function("$", "doc", "location", `${swap}\nswap(doc, '/docket', true);`);
+    for (const nextLabel of ["work@example.com (member)", "owner@example.com (member)", null]) {
+      const current = vi.fn((selector: string) => selector === ".bar .me" ? { textContent: "owner@example.com (root)" } : {});
+      const doc = { querySelector: vi.fn((selector: string) => selector === ".bar .me" ? nextLabel === null ? null : { textContent: nextLabel } : {}) };
+      const location = { href: "/" };
+      run(current, doc, location);
+      expect(location.href).toBe("/docket");
+      expect(current.mock.calls.map(([selector]) => selector)).toEqual(["main.panes", ".bar .me"]);
+      expect(doc.querySelector.mock.calls.map(([selector]) => selector)).toEqual(["main.panes", ".bar .me"]);
+    }
+  });
+
+  it("distinguishes identical display names by the active address and role on hub and tenant pages", async () => {
+    const t = await seedTenant("acme");
+    const root = await seedHuman("owner@example.com", { is_root: true });
+    const member = await seedHuman("work@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    await env.HUB_DB.prepare("UPDATE identity SET display_name = 'Brian' WHERE id IN (?, ?)").bind(root.identity.id, member.identity.id).run();
+    for (const who of [root, member]) {
+      for (const host of ["pimwell.test", HOST]) {
+        const res = await SELF.fetch(`https://${host}/`, { headers: cookieHeaders(who.token, host) });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("cache-control")).toBe("no-store");
+        const html = await res.text();
+        const role = who === root ? "root" : host === HOST ? "member" : null;
+        expect(html).toContain(`<a class="me" href="https://pimwell.test/me">${who.identity.email}${role ? ` (${role})` : ""}</a>`);
+        expect(html).toContain(`<li class="account-details">${who.identity.email}${role ? `<span>Role: ${role}</span>` : ""}</li>`);
+        expect(html).not.toContain(who === root ? member.identity.email : root.identity.email);
+      }
+    }
+    const anonymous = await (await SELF.fetch(`https://${HOST}/`)).text();
+    expect(anonymous).not.toContain("account-details");
+    expect(anonymous).not.toContain(root.identity.email);
+    expect(anonymous).not.toContain(member.identity.email);
   });
 
   it("opens an item beside the same list, keeping the list's filters and key", async () => {

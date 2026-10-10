@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { ulid } from "../ids";
 import { postIntentFingerprint } from "./postIntent";
+import type { RunClaim, RunClaimOutcome, RunSource, RunStatus } from "./runClaim";
 import { versionIntentFingerprint } from "./versionIntent";
 import { bindOnce, storedBinding } from "./bound";
 import { PRESENCE_TTL_MS, retainedPresence, type PresenceRow, type PresenceStatus } from "./presence";
@@ -213,6 +214,59 @@ export class Conversation extends DurableObject<Env> {
       return { refused: "conflict", detail: "source evidence changed or does not match; read the original message again" };
     }
     return null;
+  }
+
+  #runKey(identity_id: string, msg_id: string): string {
+    return `run:v1:${identity_id}:${msg_id}`;
+  }
+
+  #runStatus(identity_id: string, source: MsgRow): RunStatus {
+    const row = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = ?", this.#runKey(identity_id, source.msg_id))[0];
+    const claim = row ? (JSON.parse(row.value) as { claim: RunClaim }).claim : null;
+    return {
+      source: { msg_id: source.msg_id, rev: source.rev, author_id: source.author_id, retracted: source.retracted === 1 }, claim,
+      source_matches: claim ? !source.retracted && claim.source.rev === source.rev && claim.source.author_id === source.author_id : null,
+    };
+  }
+
+  async runStatus(tenant_id: string, conversation_id: string, identity_id: string, msg: string): Promise<RunStatus | null> {
+    this.#bind(tenant_id, conversation_id);
+    const source = this.#msg(msg);
+    return source?.kind === "say" ? this.#runStatus(identity_id, source) : null;
+  }
+
+  /** No expiring lease: ambiguous starts must be reconciled, never automatically reacquired. */
+  async claimRun(tenant_id: string, conversation_id: string, identity_id: string, evidence: RunSource, fingerprint: string, now: number): Promise<RunClaimOutcome> {
+    this.#bind(tenant_id, conversation_id);
+    return this.ctx.storage.transactionSync(() => {
+      const source = this.#msg(evidence.msg_id);
+      if (!source || source.kind !== "say") return { refused: "not_found", detail: "no such source message" };
+      const key = this.#runKey(identity_id, source.msg_id);
+      const row = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = ?", key)[0];
+      if (row) {
+        const prior = JSON.parse(row.value) as { claim: RunClaim; fingerprint: string };
+        if (prior.fingerprint !== fingerprint || prior.claim.source.rev !== evidence.rev || prior.claim.source.author_id !== evidence.author_id) {
+          return { refused: "conflict", detail: "a run is already reserved for this source; reconcile it, do not start another model turn" };
+        }
+        return { ...this.#runStatus(identity_id, source), acquired: false };
+      }
+      if (source.retracted || source.rev !== evidence.rev || source.author_id !== evidence.author_id) {
+        return { refused: "conflict", detail: "source changed; read the original again" };
+      }
+      const actor = this.#q<{ author_id: string }>("SELECT author_id FROM artifact WHERE seq = ?", source.last_seq)[0];
+      const mentions = (JSON.parse(source.meta_json) as Meta).mentions ?? [];
+      if (source.author_kind !== "human" || source.current_session_kind !== "browser" || actor?.author_id !== source.author_id || !mentions.includes(identity_id)) {
+        return { refused: "forbidden", detail: "run reservation requires a current native human message explicitly mentioning this agent" };
+      }
+      for (const stage of ["progress", "result"] as const) {
+        if (this.#q<{ value: string }>("SELECT value FROM meta WHERE key = ?", this.#responseKey(identity_id, { source: evidence, stage }))[0]) {
+          return { refused: "conflict", detail: "a response is already recorded; reconcile the original run and thread before adoption" };
+        }
+      }
+      const claim: RunClaim = { source: evidence, claimed_at: now, authority: "conversation_only" };
+      this.#run("INSERT INTO meta (key, value) VALUES (?, ?)", key, JSON.stringify({ claim, fingerprint }));
+      return { ...this.#runStatus(identity_id, source), acquired: true };
+    });
   }
 
   /** Read-only preflight; post repeats this check inside the artifact/outbox transaction. */

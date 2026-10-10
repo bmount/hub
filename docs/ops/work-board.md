@@ -53,6 +53,22 @@ of the previous statement's reads, with identical quest counts (4,000 total,
 a production latency measurement or total page-cost benchmark. Other board
 queries, authentication reads and rail work are not included in that ratio.
 
+## Work inspector evidence links
+
+The inspector opens recorded `commit` references (`project@` plus a full 40-character hex ID) in the commit view, and `item` references (`project#number`) in the work view. Work numbers are positive and at most eight digits. These links stay on the current tenant host; each destination checks the viewer's access. Rendering does not fetch target titles or verify that the target exists.
+
+Members can use **Add link** in the inspector to record a commit, work item, mail, message, event or HTTPS URL, with an optional note. The form uses the existing audited `work.link` command and returns to the same item and Docket filters. References and notes are limited to 500 characters. Repeating a kind/reference pair keeps the original link, note and author; it does not edit the existing evidence. Readers can view links but cannot add them.
+
+Short commit IDs, malformed references and other reference kinds remain escaped plain text. External `url` links still require a safe HTTPS URL without credentials. Notes are escaped, and the inspector distinguishes recorded references from verified access or existence.
+
+## Mail evidence navigation
+
+Work inspectors open `mail` links and recorded mail sources when the reference is a canonical 26-character uppercase ULID. Malformed references stay inert. Rendering does not fetch the mail or imply that the viewer can read it; the destination applies the existing mailbox, tenant and quarantine checks.
+
+Authorized mail reads show work filed from the message or explicitly linked to it. The page distinguishes **Filed from this** from **Linked to this**; an item with both associations appears once as filed. API/MCP `mail_read` returns `relatedWork` and `relatedWorkCoverage`. These are recorded associations, not proof that a message authorized execution.
+
+Related work must have a matching tenant and non-channel project. The same mail-read predicate gates the association query. At most 50 items are shown across both association types, newest filing first with item ID as the tie-breaker. One extra item detects truncation, and both surfaces report coverage. Invalid tenant/project/channel rows are excluded before the limit. No mail is sent or model invoked by this navigation.
+
 ## Evidence and remaining scope
 
 - `test/board-counts.test.ts`: more than 500 items, all stalled/recent-done items outside the sample, strict time boundaries, empty/exactly-500 completeness, deterministic ties, browser/API/MCP reporting and tenant/project/channel/quest-child boundaries.

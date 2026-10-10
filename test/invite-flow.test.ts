@@ -69,6 +69,8 @@ describe("invite acceptance page", () => {
       const html = await res.text();
       expect(html).toContain("ACME");
       expect(html).toContain("new@example.com");
+      expect(html).toContain("replaces any current sign-in in this browser across Pimwell organizations");
+      expect(html).toContain("even if your accounts have the same display name");
       expect(html).toContain('href="/login/google?next=acme"');
       expect(html).not.toContain("<form");
       expect(res.headers.get("set-cookie")).toBeNull();

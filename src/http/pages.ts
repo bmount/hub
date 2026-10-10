@@ -42,6 +42,7 @@ export async function invitePage(request: Request, env: Env): Promise<Response> 
   const configured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
   const body = `<h1>Verify your invited address</h1>
 <p>Join ${target} with the address <strong>${esc(invite.email)}</strong>.</p>
+<p>Google sign-in uses the account you choose and replaces any current sign-in in this browser across Pimwell organizations. Choose the invited address, even if your accounts have the same display name.</p>
 <p>This link is an invitation, not proof that you control this address. Existing sign-ins and old invite-derived proofs cannot accept it. Sign in with Google using the exact invited address; a verified matching account accepts open invitations.</p>
 ${configured ? `<p><a class="button" href="/login/google${esc(next)}">Verify with Google and sign in</a></p>` : `<p>Independent address verification is unavailable: Google sign-in is not configured. Nothing has been granted. Ask the inviter to wait until verification is available.</p>`}
 <p>Without a matching verified Google account, this invitation stays unaccepted. Email-only onboarding for new invitations is not available yet.</p>`;

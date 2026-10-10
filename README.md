@@ -23,8 +23,13 @@ With `HUB_DOMAIN=localhost` the session cookie is host-only, so after accepting 
 
 ## Test
 
+Install Chromium once for the Vitest browser regressions:
+
+    npx playwright install chromium
     npm test
     npm run typecheck
+
+Browser tests use a disposable local Worker and scripted model, never production sessions or external services.
 
 ## Deploy
 
@@ -91,6 +96,8 @@ and send it with a matching `Origin` header:
 | chat.agents_enable | tenant | admin | 60 min |
 
 ### Signing in and re-proving
+
+The signed-in shell shows the active email address and role, not just the display name. On phones these are in the menu under Your account. Ordinary Google sign-in selects an account and replaces this browser's shared hub/organization session cookie; separate email identities are not merged. Invite verification uses that same sign-in flow. Enhanced navigation reloads the page if the server reports a different account or role, rather than retaining the previous account's panes. An extra check (`reproof=1`) must match the existing account and browser session instead of switching accounts.
 
 - `https://pimwell.com/login` emails a sign-in link, but only to an address that has written to the hub first (the consent rule). To give consent, or to sign in without the form, send any message to `login@pimwell.com` or `signup@pimwell.com` from your address; the reply carries a link. Links last 15 minutes, work once, and are consumed by the button on `/auth/<token>`, not by opening it.
 - Admin changes need a proof less than 60 minutes old. A form post past that age lands on `/login?reproof=1`, which emails a confirmation link to your own address; open it in the same browser. Without consent, write to `login@pimwell.com` and open the reply's link in the browser you are signed in with; that refreshes the proof too.

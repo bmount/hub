@@ -13,6 +13,17 @@ describe("html", () => {
     expect(doc).toContain("<p>hi</p>");
   });
 
+  it("escapes account names, addresses and roles in both account displays", () => {
+    const doc = page("Account", "", {
+      brandHref: "/", org: null, nav: [], tip: "",
+      me: { name: "<Name>", email: 'a"<b>@example.com', role: "<role>", href: "/me" },
+    });
+    expect(doc).toContain('>a&quot;&lt;b&gt;@example.com (&lt;role&gt;)</a>');
+    expect(doc).toContain('<li class="account-details">a&quot;&lt;b&gt;@example.com<span>Role: &lt;role&gt;</span></li>');
+    expect(doc).toContain(">&lt;Name&gt;</a>");
+    expect(doc).not.toContain("<role>");
+  });
+
   it("returns an html response with no-store", () => {
     const res = htmlResponse("<p>x</p>", 404);
     expect(res.status).toBe(404);
