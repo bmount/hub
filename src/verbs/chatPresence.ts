@@ -5,7 +5,11 @@ import { readableChannel, viewerOf } from "../chat/access";
 import { notFound } from "../errors";
 import { conversationStub } from "../chat/stubs";
 import { presenceState, retainedPresence, PRESENCE_TTL_MS, type PresenceRow } from "../chat/presence";
-import type { Ctx } from "../auth/context";
+import { rank, roleFor, type Ctx } from "../auth/context";
+import { operatorActiveIn } from "../auth/agent";
+import { getIdentityById } from "../db/identities";
+import { getMembership } from "../db/memberships";
+import { getTenantById } from "../db/tenants";
 import { chatCommandText, plainText } from "../chat/compact";
 import { cleanText, cutText } from "../mcp/render";
 
@@ -90,9 +94,19 @@ export const chatPresence = defineVerb({
     const ch = await activeChannel(ctx, p.c);
     const rows = await conversationStub(ctx.env, ch.tenant_id, ch.project_id).presence(ch.tenant_id, ch.project_id) as PresenceRow[];
     const subjects = await presenceSubjects(ctx, ch.tenant_id, ch.project_id, rows);
-    // DO/subject lookups may outlast channel archival or an agent grant removal.
+    // Cross-service lookups can outlast withdrawal of the reader's tenant authority.
+    const v = viewerOf(ctx);
+    const [identity, membership, tenant] = await Promise.all([
+      getIdentityById(ctx.db, v.identity.id),
+      getMembership(ctx.db, v.identity.id, ch.tenant_id),
+      getTenantById(ctx.db, ch.tenant_id),
+    ]);
+    const role = roleFor(identity, membership);
+    if (!identity || !tenant || tenant.state !== "active" || rank(role) < rank("reader")
+      || (identity.kind === "agent" && (!membership || membership.state !== "active"
+        || !(await operatorActiveIn(ctx.db, identity.operator_id, tenant.id))))) throw notFound("no such active channel");
     // A reused slug must not relabel the old conversation's activity either.
-    const current = await activeChannel(ctx, p.c);
+    const current = await activeChannel({ ...ctx, identity, tenant, role }, p.c);
     if (current.project_id !== ch.project_id || current.tenant_id !== ch.tenant_id) throw notFound("no such active channel");
     const observed_at = Date.now();
     // The clock can roll back between DO sampling and the completed subject lookup.

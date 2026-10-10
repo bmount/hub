@@ -203,6 +203,89 @@ describe("explicit expiring channel presence", () => {
     expect(await inDO(stub, (_obj, state) => state.storage.get("presence:v1"))).toEqual(stored);
   });
 
+  it.each(["membership-archive", "membership-delete", "identity-archive", "tenant-archive"] as const)("denies a completed human snapshot after %s during lookup", async (change) => {
+    const w = await chatWorld(); await channelWith(w);
+    await ok(w.lead.token, "chat.heartbeat", { c: "general", status: "online" });
+    const { stub, ch } = await stubFor(w.acme.id);
+    const stored = await inDO(stub, (_obj, state) => state.storage.get("presence:v1"));
+    const ctx = await buildContext(new Request(`https://${HOST}/api/chat.presence`, { headers: bearer(w.dev.token) }), env);
+    const lookup = vi.spyOn(stubs, "conversationStub").mockReturnValue(new Proxy(stub, { get(target, prop) {
+      if (prop === "presence") return async (...args: [string, string]) => {
+        const rows = await target.presence(...args);
+        if (change === "membership-archive") await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE tenant_id = ? AND identity_id = ?").bind(w.acme.id, w.dev.identity.id).run();
+        if (change === "membership-delete") await env.HUB_DB.prepare("DELETE FROM membership WHERE tenant_id = ? AND identity_id = ?").bind(w.acme.id, w.dev.identity.id).run();
+        if (change === "identity-archive") await env.HUB_DB.prepare("UPDATE identity SET state = 'archived' WHERE id = ?").bind(w.dev.identity.id).run();
+        if (change === "tenant-archive") await env.HUB_DB.prepare("UPDATE tenant SET state = 'archived' WHERE id = ?").bind(w.acme.id).run();
+        return rows;
+      };
+      return Reflect.get(target, prop, target);
+    } }));
+    try {
+      await expect(chatPresence.run(ctx, { c: "general" })).rejects.toMatchObject({ status: 404, reason: "not_found" });
+    } finally { lookup.mockRestore(); }
+    expect(await inDO(stub, (_obj, state) => state.storage.get("presence:v1"))).toEqual(stored);
+    expect(await stub.head(w.acme.id, ch.project_id)).toBe(0);
+  });
+
+  it.each(["own-membership", "own-identity", "operator-membership", "operator-identity", "operator-reassigned"] as const)("returns no MCP presence evidence after reader agent %s withdrawal during lookup", async (change) => {
+    const w = await chatWorld(); await channelWith(w, "general", ["scout"]);
+    await ok(w.dev.token, "chat.heartbeat", { c: "general", status: "away" });
+    const { stub, ch } = await stubFor(w.acme.id);
+    const stored = await inDO(stub, (_obj, state) => state.storage.get("presence:v1"));
+    const auth = await agentMcpAuth(new Request(`https://${HOST}/agent/mcp`, { headers: bearer(w.scout.longLived) }), env, "acme", Date.now());
+    if (auth.kind !== "ok") throw new Error("fixture auth refused");
+    const lookup = vi.spyOn(stubs, "conversationStub").mockReturnValue(new Proxy(stub, { get(target, prop) {
+      if (prop === "presence") return async (...args: [string, string]) => {
+        const rows = await target.presence(...args);
+        if (change === "own-membership" || change === "operator-membership") await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE tenant_id = ? AND identity_id = ?")
+          .bind(w.acme.id, change === "own-membership" ? w.scout.agent.identity.id : w.lead.identity.id).run();
+        if (change === "own-identity" || change === "operator-identity") await env.HUB_DB.prepare("UPDATE identity SET state = 'archived' WHERE id = ?")
+          .bind(change === "own-identity" ? w.scout.agent.identity.id : w.lead.identity.id).run();
+        if (change === "operator-reassigned") await env.HUB_DB.prepare("UPDATE identity SET operator_id = NULL WHERE id = ?").bind(w.scout.agent.identity.id).run();
+        return rows;
+      };
+      return Reflect.get(target, prop, target);
+    } }));
+    try {
+      const result = await callTool(auth.ctx, "chat_presence", { c: "general" });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+      expect(JSON.stringify(result)).not.toContain(w.dev.identity.id);
+    } finally { lookup.mockRestore(); }
+    expect(await inDO(stub, (_obj, state) => state.storage.get("presence:v1"))).toEqual(stored);
+    expect(await stub.head(w.acme.id, ch.project_id)).toBe(0);
+  });
+
+  it.each(["archive", "demote"] as const)("denies a cached root reader after %s without same-tenant membership", async (change) => {
+    const w = await chatWorld(); await channelWith(w);
+    await ok(w.dev.token, "chat.heartbeat", { c: "general", status: "online" });
+    const root = await seedHuman("presence-retired-root@example.com", { is_root: true });
+    const ctx = await buildContext(new Request(`https://${HOST}/api/chat.presence`, { headers: bearer(root.token) }), env);
+    const { stub } = await stubFor(w.acme.id);
+    const stored = await inDO(stub, (_obj, state) => state.storage.get("presence:v1"));
+    const lookup = vi.spyOn(stubs, "conversationStub").mockReturnValue(new Proxy(stub, { get(target, prop) {
+      if (prop === "presence") return async (...args: [string, string]) => {
+        const rows = await target.presence(...args);
+        await env.HUB_DB.prepare(change === "archive" ? "UPDATE identity SET state = 'archived' WHERE id = ?" : "UPDATE identity SET is_root = 0 WHERE id = ?").bind(root.identity.id).run();
+        return rows;
+      };
+      return Reflect.get(target, prop, target);
+    } }));
+    try {
+      await expect(chatPresence.run(ctx, { c: "general" })).rejects.toMatchObject({ status: 404, reason: "not_found" });
+    } finally { lookup.mockRestore(); }
+    expect(await inDO(stub, (_obj, state) => state.storage.get("presence:v1"))).toEqual(stored);
+  });
+
+  it("preserves current human root and reader access without renewing reports", async () => {
+    const w = await chatWorld(); await channelWith(w);
+    const report = await ok(w.dev.token, "chat.heartbeat", { c: "general", status: "offline" });
+    const root = await seedHuman("presence-reader-root@example.com", { is_root: true });
+    expect((await ok(root.token, "chat.presence", { c: "general" })).entries).toMatchObject([{ identity_id: report.identity_id, last_seen: report.last_seen, state: "offline" }]);
+    await env.HUB_DB.prepare("UPDATE membership SET role = 'reader' WHERE tenant_id = ? AND identity_id = ?").bind(w.acme.id, w.lead.identity.id).run();
+    expect((await ok(w.lead.token, "chat.presence", { c: "general" })).entries).toMatchObject([{ identity_id: report.identity_id, last_seen: report.last_seen, state: "offline" }]);
+  });
+
   it("isolates channels/tenants including equal slugs, denies archived channels and wrong DO binding", async () => {
     const w = await chatWorld(); await channelWith(w); await channelWith(w, "elsewhere", []);
     await ok(w.dev.token, "chat.heartbeat", { c: "general", status: "online" });
