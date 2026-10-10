@@ -19,14 +19,14 @@ describe("search coverage", () => {
   it("keeps hit arrays, declares unsearched sources and unknown totals/freshness even with zero hits", async () => {
     const w = await chatWorld();
     const r = await result(w.dev.token);
-    for (const key of ["work", "mail", "messages", "people", "projects", "errors"] as const) {
+    for (const key of ["work", "mail", "messages", "people", "projects", "errors", "reviews", "situations", "assistant", "outgoing"] as const) {
       expect(r[key]).toEqual([]);
-      expect(r.coverage.sources[key]).toEqual({ returned: 0, limit: key === "work" ? 20 : ["mail", "messages"].includes(key) ? 15 : 10, total_matches: null, may_have_more: false });
+      expect(r.coverage.sources[key]).toEqual({ returned: 0, limit: key === "work" ? 20 : ["mail", "messages", "reviews", "situations", "assistant", "outgoing"].includes(key) ? 15 : 10, total_matches: null, may_have_more: false });
     }
     expect(r.coverage.scope).toBe("caller_readable_records");
     expect(r.coverage.freshness).toBe("unknown");
-    expect(r.coverage.not_searched).toEqual(["outbound mail", "mail attachments", "reviews", "situations", "repository code", "archived conversations"]);
-    expect(r.coverage.conversations).toEqual({ readable_active_channels: 0, searched_channels: 0, channel_limit: 40, per_channel_limit: 10, channels_at_hit_limit: 0 });
+    expect(r.coverage.not_searched).toEqual(["repository file contents", "binary or unextracted mail attachments", "raw telemetry logs"]);
+    expect(r.coverage.conversations).toEqual({ readable_active_channels: 0, readable_archived_channels: 0, searched_channels: 0, channel_limit: 40, per_channel_limit: 10, channels_at_hit_limit: 0 });
   });
 
   it("discloses effective terms without changing the existing six-term/short-term matching contract", async () => {
@@ -85,6 +85,20 @@ describe("search coverage", () => {
     expect(outsider.coverage.sources.messages.may_have_more).toBe(false);
   }, 30_000);
 
+  it("finds archived conversation text and links directly to the matching message without expanding agent access", async () => {
+    const w = await chatWorld();
+    await channelWith(w, "archive", ["scout"]);
+    const posted = await ok(w.lead.token, "chat.post", { c: "archive", body: "needle in an archived conversation" });
+    const row = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'archive'").bind(w.acme.id).first<{id: string}>();
+    await setChannelState(env.HUB_DB, w.acme.id, row!.id, "archived");
+    const r = await result(w.scout.token);
+    expect(r.coverage.conversations.readable_active_channels).toBe(0);
+    expect(r.coverage.conversations.readable_archived_channels).toBe(1);
+    expect(r.messages).toHaveLength(1);
+    expect(r.messages[0]!.href).toBe(`/m/${posted.msg_id}`);
+    expect((await result(w.tidy.token)).messages).toEqual([]);
+  });
+
   it("reports per-channel truncation even when the global message result cap was not reached", async () => {
     const w = await chatWorld();
     await channelWith(w);
@@ -112,7 +126,7 @@ describe("search coverage", () => {
         expect(response.isError, JSON.stringify(response)).toBeUndefined();
         const text = (response.content[0] as { text: string }).text;
         expect(text).toContain("Coverage: caller-readable records");
-        expect(text).toContain("Not searched: outbound mail, mail attachments, reviews, situations, repository code, archived conversations");
+        expect(text).toContain("Not searched: repository file contents, binary or unextracted mail attachments, raw telemetry logs");
         expect(text).toContain("Total matches and source freshness unknown");
         expect((response.structuredContent as SearchResult).coverage.conversations.searched_channels).toBe(1);
         expect(text).not.toContain("**coverage**");
@@ -126,7 +140,7 @@ describe("search coverage", () => {
       if (q === "missing") expect(html).toContain("No matches within this coverage");
     }
     const initial = await (await SELF.fetch(`https://${HOST}/search`, { headers: h })).text();
-    expect(initial).toContain("other sources are not included");
+    expect(initial).toContain("Repository files, binary attachments and raw telemetry logs are not included");
     expect(initial).not.toContain("data-search-coverage");
     const invalid = await (await SELF.fetch(`https://${HOST}/search?q=a`, { headers: h })).text();
     expect(invalid).not.toContain("data-search-coverage");

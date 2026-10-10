@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { chromium, expect as browserExpect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { seal } from "../../src/models/secretbox";
@@ -112,6 +112,44 @@ async function ask(page: Page, text: string) {
   await response;
   await expect.poll(() => page.locator('#ask .send').isDisabled()).toBe(false);
 }
+
+it("searches body and comment text across projects from the upper box, while retaining keyboard jumps", async () => {
+  const db = await mf.getD1Database("HUB_DB"), now = Date.now();
+  for (const [slug, suffix] of [["search-front", "FRONT"], ["search-back", "BACK"]]) {
+    await db.prepare("INSERT INTO project (id, tenant_id, slug, kind, display_name, created_at) VALUES (?, ?, ?, 'repo', ?, ?)").bind(suffix, ID, slug, slug, now).run();
+    await db.prepare("INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, created_by, created_at, updated_at) VALUES (?, ?, ?, 1, 'errand', ?, ?, 'open', ?, ?, ?)")
+      .bind(`W${suffix}`, ID, suffix, `Ordinary ${suffix} card`, suffix === "FRONT" ? "nebula orchard appears only in these details" : "Normal details", ID, now, now).run();
+  }
+  await db.prepare("INSERT INTO work_comment (id, tenant_id, item_id, author_id, body, created_at) VALUES ('SEARCHCOMMENT', ?, 'WBACK', ?, 'nebula orchard appears only in this comment', ?)").bind(ID, ID, now).run();
+  const { context, page } = await open();
+  try {
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`${BASE}/docket`);
+      const box = page.getByRole("textbox", { name: "Search all projects", exact: true });
+      await box.fill("nebula orchard");
+      // Enter must search even before the suggestion request completes.
+      await box.press("Enter");
+      await page.waitForURL(`${BASE}/search?q=nebula%20orchard`);
+      await browserExpect(page.locator("#list")).toContainText("Ordinary FRONT card");
+      await browserExpect(page.locator("#list")).toContainText("Ordinary BACK card");
+      await browserExpect(page.locator("#list")).toContainText("only in this comment");
+      await page.locator("#list").getByRole("link", { name: "Ordinary FRONT card", exact: true }).click();
+      await page.waitForURL(`${BASE}/search-front/w/1`);
+      await browserExpect(page.locator("#inspector")).toContainText("only in these details");
+    }
+    await page.setViewportSize({ width: 1280, height: 844 });
+    const box = page.getByRole("textbox", { name: "Search all projects", exact: true });
+    await box.fill("nebula orchard");
+    await browserExpect(page.locator('.jump [role="option"]')).toContainText(["Search all projects", "Ordinary FRONT card", "Ordinary BACK card"]);
+    await box.fill("search-back#1");
+    await browserExpect(page.locator('.jump [role="option"]')).toContainText(["Search all projects", "Ordinary BACK card"]);
+    await box.press("ArrowDown");await box.press("ArrowDown");await box.press("Enter");
+    await page.waitForURL(`${BASE}/search-back/w/1`);
+    await browserExpect(page.locator("#inspector")).toContainText("only in this comment");
+    expect(await page.evaluate(() => (globalThis as any).cspViolations)).toEqual([]);
+  } finally { await context.close(); }
+});
 
 it("keeps a serial transcript, model context, navigation and reload history", async () => {
   inputs.length = 0;

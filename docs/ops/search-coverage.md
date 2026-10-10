@@ -1,26 +1,40 @@
-# Search coverage and limits
+# Search
 
-`search.query` (MCP `search_query`) and `/search` search available evidence, not everything in the organization. The existing six hit arrays (`work`, `mail`, `messages`, `people`, `projects`, `errors`) remain. An additive `coverage` object accompanies successful results, including zero hits. Consumers must treat `coverage` as metadata, not another hit array.
+## Using it
 
-## Currently searched
+The upper box searches across all projects in the current organization. Type words and press Enter for grouped results with matching excerpts. Suggestions include content matches and quick jumps to projects, people, sections and work references. Click a suggestion or select it with the arrow keys and Enter to jump directly. Ctrl+K or Command+K focuses the box. Without JavaScript, the form still opens `/search`.
 
-- Work title, body, source quote and comments: at most 20 hits, title matches first.
-- Caller-readable admitted inbound mail subject, text and sender: at most 15 hits. The existing mailbox/operator/tenant predicate applies before the limit.
-- Caller-readable **active** conversations: first 40 channels in channel-slug order, at most 10 matching messages per channel, then at most 15 messages globally by creation time. Channel totals in coverage count only channels the caller can read, never inaccessible channels. Humans and agents keep their existing distinct channel access rules.
-- Active members' display names and email addresses: at most 10 hits.
-- Non-channel project slugs and display names: at most 10 hits.
-- Stored app-error group title, latest message and script name: at most 10 hits.
+Enter searches even if suggestions have not loaded. Typing three words does not turn a search into an assistant action. Recent jumps are stored separately for each signed-in identity in that browser.
 
-Matching is the existing case-insensitive all-term substring search. Only the first six whitespace-separated words of two or more characters are used; `coverage.terms_used` records those effective terms. `%` and `_` remain literal search characters, not wildcard authority.
+## Content and permissions
 
-Each `coverage.sources` entry gives `returned`, `limit`, `total_matches: null` and conservative `may_have_more`. Reaching a result cap means more matches **may** exist, not that they definitely do. Conversations also flag omitted readable channels or a reached per-channel hit cap, even if fewer than 15 messages were returned. Below-cap results describe only the searched fields/records, not universal absence.
+Search includes:
 
-## Not searched / unknown
+- Work titles, details, source quotes and comments, across projects.
+- Readable inbound mail and stored extracted attachment text.
+- Readable outgoing mail, including recorded unsuccessful attempts.
+- Current, non-retracted chat messages in active and archived channels.
+- Review titles, summaries and comments.
+- Situation questions, reports and outcomes.
+- The caller's own assistant conversation titles and messages.
+- People, project names and app error titles/messages.
 
-Outbound mail, mail attachments, reviews, situations, repository code and archived conversations are explicitly listed as not searched. This is a product implementation limit, not a list of hidden resources, a permission grant, or proof any such record exists. No new indexing or permission bypass was added.
+Tenant boundaries apply before matching and limiting results. Mail uses the shared `readableMail` and `readableOutgoingMail` predicates. Agents search only channels they can read. Assistant conversations require the caller's exact identity and tenant; being an administrator does not grant access to another person's private assistant conversations. Search does not expand any permissions.
 
-Total matching records and source freshness remain unknown. Stored receive/update timestamps are not continuous-ingestion or synchronization watermarks. These reads are not an atomic cross-D1/DO snapshot. Source/query failure still fails the request rather than returning a misleading successful empty source. No new search-wide deadline, pagination, full-scan redesign or freshness ledger is claimed; those remain separate work (#108/#118/#119).
+Message hits open their exact permalink. Outgoing hits open a permission-checked read-only mail page. HTML is escaped; suggestion labels and excerpts are assigned as text, never executed.
 
-MCP's inert-data note remains before results; its text and the escaped browser page show coverage for both hits and zero hits. Initial browser guidance also names the limited searched sources. Existing `work.search` and `message.search` hit-only contracts are unchanged by this increment.
+## Implementation and limits
 
-Regression tests: `test/search-coverage.test.ts`, `test/search.test.ts`, `test/mail-access.test.ts`. Native Workers tests cover zero versus unknown, effective terms, exact/over/under caps, 41-readable-channel truncation, per-channel truncation below the global cap, agent-only visibility, other tenants and archives, API/MCP/browser parity, inert rendering and anonymous denials. Additional evidence-source indexing and performance work remain open; these tests are not a production-load benchmark.
+`searchAll` in `src/verbs/search.ts` supplies `/search`, the upper-box JSON suggestions, and MCP `search_query`. It uses parameterized substring matching over the existing D1 tables and the channel Durable Objects. There is no new index, migration or external search service.
+
+All effective words must match. Queries use the first six whitespace-separated words of at least two characters. `%`, `_` and backslashes are literal, not search wildcards. Excerpts show text around a match.
+
+Results are bounded: 20 work items, 15 each for mail, chat, reviews, situations, assistant conversations and outgoing mail, and 10 each for people, projects and app errors. Chat searches up to 40 readable channels and returns up to 10 matches from each. Search scope and limits are available beneath the search form; hitting a cap is not an exact total.
+
+Repository file contents, binary/unextracted attachments and raw telemetry logs are not indexed. Attachment matches cover stored extracts, which may themselves be truncated. Total matches and ingestion freshness are not claimed. A failed source fails the request rather than pretending to have no matches.
+
+## Verifying and shipping a change
+
+Use the existing search and mailbox tests for matching, privacy, archived channels, literal wildcards and escaped output. The browser test in `test/browser/assistant.test.ts` types a phrase found only in details/comments of two different projects, presses Enter immediately, opens both results, and checks keyboard jumps on desktop and mobile layouts. It uses a real browser and bundled Worker with disposable synthetic data, not production credentials.
+
+For a manual change, reproduce the interaction, run focused tests while editing, then the full `npm test` suite and `npm run typecheck`. Commit one logical change, merge normally, and use the managed release helper. Verify the live version and search client artifact before closing the item. Keep release/test evidence in the ticket, not this document.

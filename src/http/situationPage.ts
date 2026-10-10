@@ -16,7 +16,8 @@ export async function situationsPage(request: Request, env: Env): Promise<Respon
   const sel = new URL(request.url).searchParams.get("s") ?? "";
   const rows = (await ctx.db.prepare(`SELECT s.id, s.title, s.question, s.report, s.outcome, s.created_at, s.thread_id, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id
     WHERE s.tenant_id = ? ORDER BY s.created_at DESC LIMIT 100`).bind(ctx.tenant.id).all<Row>()).results;
-  const one = rows.find((r) => r.id === sel) ?? null;
+  const one = rows.find((r) => r.id === sel) ?? (sel ? await ctx.db.prepare(`SELECT s.id, s.title, s.question, s.report, s.outcome, s.created_at, s.thread_id, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id
+    WHERE s.tenant_id = ? AND s.id = ?`).bind(ctx.tenant.id, sel).first<Row>() : null);
   const list = `<div class="head"><h1>Situations</h1><span>${rows.length}</span></div>
 <p class="lede">Describe what's wrong in plain words. Pimwell looks through the record (work, commits, deploys, errors, reviews, mail) and answers with a cause, the evidence, who should act, and an honest estimate. Nothing changes; it only reads.</p>
 ${ctx.identity.kind === "human" ? `<form method="post" action="/api/situation.open" data-reload><input type="hidden" name="_back" value="@result"><label style="display:block"><textarea data-voice name="text" rows="3" required minlength="10" maxlength="4000" style="display:block;width:100%" placeholder="Signups dropped last week. Why?"></textarea></label><button type="submit">Investigate</button> <small class="lede">Takes up to a minute.</small></form>` : ""}

@@ -173,7 +173,7 @@ export const WORKBENCH_JS = String.raw`
   // sections, your open work, active projects), so most jumps are one tap. Typing narrows them instantly, word by
   // word, and the full search fills in behind.
   var jump = $(".jump input"), list = null, picks = [], at = -1, timer = 0, sugg = null, suggAt = 0;
-  var RECENT = "pimwell.jump.recent." + location.host;
+  var RECENT = "pimwell.jump.recent." + location.host + "." + ($(".bar .me") || {}).textContent;
   function recent() { try { return JSON.parse(localStorage.getItem(RECENT) || "[]"); } catch (e) { return []; } }
   function remember(it) {
     try {
@@ -214,22 +214,30 @@ export const WORKBENCH_JS = String.raw`
       clearTimeout(timer); var q = jump.value.trim();
       if (!q) { openEmpty(); return; }
       var local = matches(q).map(function (x) { return { label: x.label, hint: x.hint, href: x.href }; });
-      if (q.split(/\s+/).length >= 3) local.unshift({ label: "Do it: " + q, hint: "Pimwell finds the way", href: "/do?q=" + encodeURIComponent(q) });
+      local.unshift({ label: "Search all projects for “" + q + "”", hint: "Enter to search · arrows to jump", href: "/search?q=" + encodeURIComponent(q), group: "Search" });
       render(local);
       timer = setTimeout(function () {
-        fetch("/jump?q=" + encodeURIComponent(q), { headers: { accept: "application/json" }, credentials: "same-origin" })
-          .then(function (r) { return r.json(); }).then(function (j) {
-            if (jump.value.trim() !== q) return;
-            var seen = {}; local.forEach(function (x) { seen[x.href] = 1; });
-            render(local.concat((j.results || []).filter(function (x) { return !seen[x.href]; })).slice(0, 14));
-          }).catch(function () {});
-      }, 90);
+        Promise.all(["/search?format=json&q=", "/jump?q="].map(function (url) {
+          return fetch(url + encodeURIComponent(q), { headers: { accept: "application/json" }, credentials: "same-origin" })
+            .then(function (r) { return r.ok ? r.json() : { results: [] }; });
+        })).then(function (responses) {
+          if (jump.value.trim() !== q || document.activeElement !== jump) return;
+          var seen = {};
+          render(local.concat(responses[0].results || [], responses[1].results || []).filter(function (x) {
+            if (seen[x.href]) return false; seen[x.href] = 1; return true;
+          }).slice(0, 14));
+        }).catch(function () {});
+      }, 250);
     });
     jump.addEventListener("keydown", function (e) {
       if (e.key === "ArrowDown") { e.preventDefault(); if (!list) openEmpty(); else pick(1); }
       else if (e.key === "ArrowUp") { e.preventDefault(); pick(-1); }
       else if (e.key === "Escape") { closeJump(); jump.blur(); }
-      else if (e.key === "Enter" && picks.length) { e.preventDefault(); choose(picks[Math.max(at, 0)].it); }
+      else if (e.key === "Enter") {
+        e.preventDefault();
+        if (at >= 0 && picks[at]) choose(picks[at].it);
+        else { var q = jump.value.trim(); if (q) choose({ label: q, href: "/search?q=" + encodeURIComponent(q) }); }
+      }
     });
     jump.addEventListener("blur", function () { setTimeout(closeJump, 150); });
   }

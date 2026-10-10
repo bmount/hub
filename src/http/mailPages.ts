@@ -25,6 +25,18 @@ type Msg = { id: string; recipient_id: string | null; project: string | null; fr
 export const mailListPage = (request: Request, env: Env) => mailPage(request, env, null);
 export const mailReadPage = (request: Request, env: Env, id: string) => mailPage(request, env, id);
 
+export async function sentMailReadPage(request: Request, env: Env, id: string): Promise<Response> {
+  const ctx = await buildContext(request, env);
+  const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
+  if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
+  const access = readableOutgoingMail(ctx);
+  const mail = await ctx.db.prepare(`SELECT o.subject, o.text, o.from_address, o.to_address, o.status, o.created_at FROM outbound_mail o WHERE o.id = ? AND ${access.sql}`)
+    .bind(id, ...access.bindings).first<{ subject: string; text: string; from_address: string; to_address: string; status: string; created_at: number }>();
+  if (!mail) return notFoundPage(extra);
+  const list = `<a href="/mail">‹ Mail</a><h1>${esc(mail.subject || "(no subject)")}</h1><p>${esc(mail.from_address)} → ${esc(mail.to_address)} · ${esc(mail.status)} · ${when(mail.created_at)}</p><pre class="prose">${esc(mail.text)}</pre>`;
+  return htmlResponse(workbench(mail.subject || "Sent mail", { list, listKey: `sent:${id}`, inspector: null }, shellFor(ctx, env, "mail")!), 200, extra);
+}
+
 async function mailPage(request: Request, env: Env, id: string | null): Promise<Response> {
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
