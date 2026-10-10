@@ -1,8 +1,8 @@
 // AI usage accounting (migration 0012): report usage from any tool, see it summed, and keep prices.
 import { defineVerb } from "./table";
 import { optString, reqString } from "./params";
-import { badRequest, forbidden } from "../errors";
-import { rank } from "../auth/context";
+import { badRequest, forbidden, notFound } from "../errors";
+import { rank, type Ctx } from "../auth/context";
 import { ulid } from "../ids";
 import { recordEvent } from "../db/events";
 import { DATA_NOTE, cleanText } from "../mcp/render";
@@ -95,9 +95,23 @@ export function usageWorkGroups(rows: WorkGroup[]) {
   return { byWork, byWorkCoverage: { limit: WORK_GROUP_LIMIT, shown: byWork.length, truncated: rows.length > WORK_GROUP_LIMIT } };
 }
 
-export function usageQueries(db: D1Database, tenant_id: string, since: number, identity_id: string | null) {
-  const where = `m.tenant_id = ? AND m.created_at >= ? AND (? IS NULL OR m.identity_id = ?)`;
-  const args = [tenant_id, since, identity_id, identity_id];
+export type UsageWork = { id: string; project_id: string; ref: string };
+
+export async function resolveUsageWork(ctx: Ctx, reference: string | null): Promise<UsageWork | null> {
+  if (reference === null || reference === "") return null;
+  if (reference.length > 80) throw badRequest("work is too long");
+  const item = await itemRef(ctx, { id: reference });
+  const work = await ctx.db.prepare(`SELECT w.id, w.project_id, p.slug || '#' || w.number AS ref
+    FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind <> 'channel'
+    WHERE w.id = ? AND w.tenant_id = ?`).bind(item.id, ctx.tenant!.id).first<UsageWork>();
+  if (!work) throw notFound("no such work item");
+  return work;
+}
+
+export function usageQueries(db: D1Database, tenant_id: string, since: number, identity_id: string | null, work: UsageWork | null = null) {
+  const where = `m.tenant_id = ? AND m.created_at >= ? AND (? IS NULL OR m.identity_id = ?)
+    AND (? IS NULL OR (m.work_item_id = ? AND m.project_id = ?))`;
+  const args = [tenant_id, since, identity_id, identity_id, work?.id ?? null, work?.id ?? null, work?.project_id ?? null];
   const cols = "COUNT(*) AS calls, COALESCE(SUM(m.input_tokens), 0) AS input_tokens, COALESCE(SUM(m.output_tokens), 0) AS output_tokens, SUM(m.cost_micros) AS cost_micros, SUM(m.cost_micros IS NULL) AS unpriced";
   return {
     total: db.prepare(`SELECT 'all' AS key, 'All' AS label, ${cols} FROM model_call m WHERE ${where}`).bind(...args),
@@ -120,23 +134,24 @@ export const usageSummary = defineVerb({
   summary: "Recorded AI usage and cost over a period: totals, and by person or agent, model, tool, day and work item (up to 50 groups, with coverage). Yours by default; admins can see the whole organization.",
   mcp: {
     scope: "read", destructive: false, title: "AI usage",
-    input: { type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 90, description: "Default 30" }, everyone: { type: "boolean", description: "Admins: the whole organization" } }, additionalProperties: false },
+    input: { type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 90, description: "Default 30" }, everyone: { type: "boolean", description: "Admins: the whole organization" }, work: { type: "string", maxLength: 80, description: "Optional work item reference or ID, like pimwell#1. Narrows the existing caller/organization scope." } }, additionalProperties: false },
     render: (r) => {
-      const x = r as { days: number; scope: string; total: Group; byWho: Group[]; byModel: Group[]; byWork: WorkGroup[]; byWorkCoverage: { limit: number; shown: number; truncated: boolean } };
+      const x = r as { days: number; scope: string; work: string | null; total: Group; byWho: Group[]; byModel: Group[]; byWork: WorkGroup[]; byWorkCoverage: { limit: number; shown: number; truncated: boolean } };
       const line = (g: Group) => `- ${cleanText(g.label)}: ${g.calls} calls, ${g.input_tokens} in / ${g.output_tokens} out, ${fmtUsd(g.cost_micros)}${g.unpriced ? ` (${g.unpriced} unpriced)` : ""}`;
-      return [DATA_NOTE, "", `**AI usage, last ${x.days} days (${x.scope})**`, line(x.total), "", "By person or agent:", ...x.byWho.map(line), "", "By model:", ...x.byModel.map(line), "", `By work item (${x.byWorkCoverage.shown} groups shown${x.byWorkCoverage.truncated ? `; capped at ${x.byWorkCoverage.limit}, more groups omitted` : "; complete for recorded calls in this scope"}):`, ...x.byWork.map(line), "Recorded calls only, not the full cost of the work. Unpriced calls are not zero-cost calls."].join("\n");
+      return [DATA_NOTE, "", `**AI usage, last ${x.days} days (${x.scope})${x.work ? ` for ${cleanText(x.work)}` : ""}**`, line(x.total), "", "By person or agent:", ...x.byWho.map(line), "", "By model:", ...x.byModel.map(line), "", `By work item (${x.byWorkCoverage.shown} groups shown${x.byWorkCoverage.truncated ? `; capped at ${x.byWorkCoverage.limit}, more groups omitted` : "; complete for recorded calls in this scope"}):`, ...x.byWork.map(line), "Recorded calls only, not the full cost of the work. Unpriced calls are not zero-cost calls."].join("\n");
     },
   },
   parse: (i) => {
     const d = i.days === undefined || i.days === "" ? 30 : Number(i.days);
     if (!Number.isInteger(d) || d < 1 || d > 90) throw badRequest("days must be from 1 to 90");
-    return { days: d, everyone: i.everyone === true || i.everyone === "1" || i.everyone === "true" };
+    return { days: d, everyone: i.everyone === true || i.everyone === "1" || i.everyone === "true", work: optString(i, "work", { max: 80 }) };
   },
   run: async (ctx, p) => {
     if (p.everyone && rank(ctx.role) < rank("admin")) throw forbidden("only admins see everyone's usage");
-    const q = usageQueries(ctx.db, ctx.tenant!.id, ctx.now - p.days * 86_400_000, p.everyone ? null : ctx.identity!.id);
+    const selectedWork = await resolveUsageWork(ctx, p.work);
+    const q = usageQueries(ctx.db, ctx.tenant!.id, ctx.now - p.days * 86_400_000, p.everyone ? null : ctx.identity!.id, selectedWork);
     const [t, w, m, s, d, work] = await ctx.db.batch([q.total, q.byWho, q.byModel, q.bySource, q.byDay, q.byWork]);
-    return { days: p.days, scope: p.everyone ? "everyone" : "you", total: t!.results[0] as Group, byWho: w!.results as Group[], byModel: m!.results as Group[], bySource: s!.results as Group[], byDay: d!.results as Group[], ...usageWorkGroups(work!.results as WorkGroup[]) };
+    return { days: p.days, scope: p.everyone ? "everyone" : "you", work: selectedWork?.ref ?? null, total: t!.results[0] as Group, byWho: w!.results as Group[], byModel: m!.results as Group[], bySource: s!.results as Group[], byDay: d!.results as Group[], ...usageWorkGroups(work!.results as WorkGroup[]) };
   },
 });
 

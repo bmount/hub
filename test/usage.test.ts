@@ -26,6 +26,90 @@ async function world() {
 }
 const costs = async () => (await env.HUB_DB.prepare("SELECT model, cost_micros, cost_source, source FROM model_call ORDER BY model").all()).results;
 
+describe("work-filtered recorded AI usage", () => {
+  it("filters every aggregate and the call inspector without widening own usage scope", async () => {
+    const w = await world();
+    const first = await w.call(w.pat, "work.create", { project: "site", kind: "errand", title: "First" });
+    const item = first.result.item as { id: string };
+    await w.call(w.pat, "work.create", { project: "site", kind: "errand", title: "Second" });
+    await w.call(w.pat, "usage.report", { calls: [
+      { provider: "p", model: "first-priced", work: "site#1", cost_usd: 0.25, client: "first-tool" },
+      { provider: "p", model: "first-unpriced", work: "site#1", client: "first-tool" },
+      { provider: "p", model: "second-model", work: "site#2", cost_usd: 20, client: "second-tool" },
+      { provider: "p", model: "second-model", work: "site#2", cost_usd: 20, client: "second-tool" },
+      { provider: "p", model: "unlinked-model", cost_usd: 100 },
+      { provider: "p", model: "old-model", work: "site#1", cost_usd: 500, at: new Date(Date.now() - 8 * 86_400_000).toISOString() },
+    ] });
+    await w.call(w.bot, "usage.report", { provider: "p", model: "bot-secret-model", work: "site#1", cost_usd: 9 });
+    const wrongProject = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: null, slug: "other", kind: "repo", display_name: "Other" }, Date.now());
+    await usageStatement(env.HUB_DB, { id: "wrong-project-call", source: "reported", purpose: "coding", provider: "p", model: "wrong-project-model", tenant_id: w.t.id, identity_id: w.patId, project_id: wrongProject.id, work_item_id: item.id, ok: true, ms: 0, input_tokens: null, output_tokens: null, reported_cost_micros: 99999, created_at: Date.now() }).run();
+    const result = await w.call(w.pat, "usage.summary", { days: 7, work: item.id });
+    expect(result.status).toBe(200);
+    expect(result.result).toMatchObject({ work: "site#1", scope: "you", total: { calls: 2, cost_micros: 250_000, unpriced: 1 }, byWorkCoverage: { shown: 1, truncated: false } });
+    expect((result.result.byWork as WorkGroup[]).map(g => g.ref)).toEqual(["site#1"]);
+    expect((result.result.byModel as { key: string }[]).map(g => g.key).sort()).toEqual(["p/first-priced", "p/first-unpriced"]);
+    expect(result.result.bySource).toMatchObject([{ label: "first-tool", calls: 2 }]);
+    expect(result.result.byWho).toMatchObject([{ key: "pat@example.com", calls: 2 }]);
+    expect(result.result.byDay).toMatchObject([{ calls: 2 }]);
+    expect((await w.call(w.pat, "usage.summary", { days: 7, work: "site#1" })).result).toEqual(result.result);
+    expect((await w.call(w.ada, "usage.summary", { days: 7, work: "site#1", everyone: true })).result.total).toMatchObject({ calls: 3, cost_micros: 9_250_000, unpriced: 1 });
+    const url = `/usage?days=7&work=${encodeURIComponent(item.id)}&who=scout%40acme.pimwell.test`;
+    const response = await SELF.fetch(`https://${HOST}${url}`, { headers: w.pat });
+    expect(response.status).toBe(200);
+    const page = await response.text();
+    expect(page).toContain('name="work" maxlength="80" value="site#1"');
+    expect(page).toContain("Clear work filter");
+    expect(page).toContain("work=site%231");
+    expect(page).toContain("first-priced");
+    expect(page).toContain("first-unpriced");
+    for (const text of ["second-model", "unlinked-model", "old-model", "bot-secret-model", "wrong-project-model", "$9.25"]) expect(page).not.toContain(text);
+    const secondPage = await (await SELF.fetch(`https://${HOST}/usage?days=7&work=site%232`, { headers: w.pat })).text();
+    const key = (html: string) => html.match(/id="list"[^>]*data-key="([^"]*)"/)![1];
+    expect(key(page)).not.toBe(key(secondPage));
+    const adminPage = await (await SELF.fetch(`https://${HOST}/usage?days=7&work=site%231`, { headers: w.ada })).text();
+    expect(adminPage).toContain("$9.25");
+    expect(adminPage).toContain('who=pat%40example.com&amp;work=site%231');
+    const itemPage = await (await SELF.fetch(`https://${HOST}/site/w/1`, { headers: w.pat })).text();
+    expect(itemPage).toContain('<a href="/usage?work=site%231">Recorded AI usage for this work</a>');
+  });
+
+  it("reports a scoped empty result, including when other people recorded calls for the work", async () => {
+    const w = await world();
+    await w.call(w.pat, "work.create", { project: "site", kind: "errand", title: "Empty for member" });
+    await w.call(w.bot, "usage.report", { provider: "p", model: "private-model", work: "site#1", cost_usd: 123 });
+    const result = await w.call(w.pat, "usage.summary", { work: "site#1" });
+    expect(result.result).toMatchObject({ work: "site#1", total: { calls: 0, cost_micros: null }, byWork: [], byWorkCoverage: { shown: 0, truncated: false } });
+    for (const field of ["byWho", "byModel", "bySource", "byDay"]) expect(result.result[field]).toEqual([]);
+    const page = await (await SELF.fetch(`https://${HOST}/usage?work=site%231`, { headers: w.pat })).text();
+    expect(page).toContain("No AI usage recorded for site#1 in this period and scope.");
+    expect(page).not.toContain("private-model");
+    expect(page).not.toContain("$123");
+    expect((await w.call(w.pat, "usage.summary", { work: "site#1", everyone: true })).status).toBe(403);
+  });
+
+  it("refuses unknown, foreign, channel and inconsistent targets instead of falling back to totals", async () => {
+    const w = await world();
+    const other = await seedTenant("bravo");
+    const foreign = await createProject(env.HUB_DB, { tenant_id: other.id, namespace_id: null, slug: "foreign-secret", kind: "repo", display_name: "Private" }, Date.now());
+    const channel = await createChannel(env.HUB_DB, { tenant_id: w.t.id, slug: "channel-secret", display_name: "Private channel", topic: "", created_by: w.patId }, Date.now());
+    const localProject = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'site'").bind(w.t.id).first("id");
+    await env.HUB_DB.prepare("INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, created_by, created_at, updated_at) VALUES ('foreign-work', ?, ?, 1, 'errand', 'Foreign secret title', '', 'open', ?, 1, 1), ('channel-work', ?, ?, 1, 'errand', 'Channel secret title', '', 'open', ?, 1, 1), ('bad-project-work', ?, ?, 2, 'errand', 'Bad project secret', '', 'open', ?, 1, 1), ('bad-tenant-work', ?, ?, 2, 'errand', 'Bad tenant secret', '', 'open', ?, 1, 1)")
+      .bind(other.id, foreign.id, w.patId, w.t.id, channel.project_id, w.patId, w.t.id, foreign.id, w.patId, other.id, localProject, w.patId).run();
+    await w.call(w.pat, "usage.report", { provider: "p", model: "existing-model", cost_usd: 1 });
+    for (const work of ["unknown-id", "site#99", "foreign-work", "foreign-secret#1", "channel-work", "channel-secret#1", "bad-project-work", "site#2", "bad-tenant-work"]) {
+      const result = await w.call(w.pat, "usage.summary", { work });
+      expect(result.status, work).toBe(404);
+      expect(result.result).toBeUndefined();
+      const response = await SELF.fetch(`https://${HOST}/usage?work=${encodeURIComponent(work)}`, { headers: w.pat });
+      expect(response.status, work).toBe(404);
+      expect(await response.text()).not.toContain("existing-model");
+    }
+    for (const work of [42, {}, "x".repeat(81)]) expect((await w.call(w.pat, "usage.summary", { work })).status).toBe(400);
+    expect((await SELF.fetch(`https://${HOST}/usage?work=${"x".repeat(81)}`, { headers: w.pat })).status).toBe(404);
+    expect((await SELF.fetch(`https://${HOST}/usage?work=site%232`)).status).toBe(404);
+  });
+});
+
 describe("recorded AI usage by work item", () => {
   it("groups priced and unpriced calls by work without widening member scope", async () => {
     const w = await world();
@@ -125,14 +209,16 @@ describe("recorded AI usage by work item", () => {
     const auth = await agentMcpAuth(new Request(`https://${HOST}/agent/mcp`, { headers: bearer(w.botToken) }), env, "acme", Date.now());
     expect(auth.kind).toBe("ok");
     if (auth.kind !== "ok") throw new Error("agent auth failed");
-    const result = await callTool(auth.ctx, "usage_summary", { days: 7 });
+    const result = await callTool(auth.ctx, "usage_summary", { days: 7, work: "site#1" });
     expect(result.isError).not.toBe(true);
-    expect(result.structuredContent).toMatchObject({ total: { calls: 1, cost_micros: null }, byWork: [{ ref: "site#1", calls: 1, cost_micros: null, unpriced: 1 }], byWorkCoverage: { limit: 50, shown: 1, truncated: false } });
+    expect(result.structuredContent).toMatchObject({ work: "site#1", total: { calls: 1, cost_micros: null }, byWork: [{ ref: "site#1", calls: 1, cost_micros: null, unpriced: 1 }], byWorkCoverage: { limit: 50, shown: 1, truncated: false } });
     const text = result.content.filter(c => c.type === "text").map(c => c.text).join("\n");
     expect(text).toContain("By work item (1 groups shown; complete for recorded calls in this scope)");
     expect(text).toContain("price unknown (1 unpriced)");
     expect(text).toContain("not the full cost of the work");
+    expect(text).toContain("for site#1");
     expect(text).not.toContain("$99");
+    expect((await callTool(auth.ctx, "usage_summary", { work: "x".repeat(81) })).isError).toBe(true);
     expect((await callTool(auth.ctx, "usage_summary", { everyone: true })).isError).toBe(true);
   });
 });

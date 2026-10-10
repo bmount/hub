@@ -205,6 +205,7 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
 <h1>${esc(w.title)}</h1>
 <dl class="meta"><dt>Owner</dt><dd>${d.owner ? esc(d.owner.display_name) : "Nobody yet"}</dd><dt>Quest</dt><dd>${d.parent ? `<a href="/${esc(project.slug)}/w/${d.parent.number}">#${d.parent.number} ${esc(d.parent.title)}</a>` : "None"}</dd>
 <dt>Project</dt><dd><a href="/${esc(project.slug)}/docket">${esc(project.display_name)}</a></dd><dt>Filed</dt><dd>${when(w.created_at)}${w.closed_at ? `, closed ${when(w.closed_at)}` : ""}</dd></dl>
+<p><a href="/usage?work=${esc(encodeURIComponent(`${project.slug}#${w.number}`))}">Recorded AI usage for this work</a></p>
 ${controls}
 ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
 ${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Add them under Edit (e): what, why, and how you will know it is done." : ""}</p>`}
