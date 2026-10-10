@@ -14,6 +14,15 @@ export function traceGroupStatement(ctx: Ctx, id: string) {
     WHERE g.id = ? AND g.tenant_id = ?`).bind(id, ctx.tenant!.id);
 }
 
+export function traceDraftStatement(ctx: Ctx, id: string) {
+  return ctx.db.prepare(`SELECT g.*, p.slug AS project FROM app_error_group g
+    JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind <> 'channel' AND p.state = 'active'
+    WHERE g.id = ? AND g.tenant_id = ? AND NOT EXISTS
+      (SELECT 1 FROM project other WHERE other.tenant_id = p.tenant_id AND other.slug = p.slug
+        AND other.kind <> 'channel' AND other.id <> p.id)`)
+    .bind(id, ctx.tenant!.id);
+}
+
 export function traceWorkStatement(ctx: Ctx, id: string) {
   const url = traceEvidenceUrl(ctx, id);
   return ctx.db.prepare(`SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,

@@ -6,6 +6,7 @@ import { redact, mask } from "../src/apps/redact";
 import { ingest, normalize } from "../src/apps/ingest";
 import { ensureProjectChannels } from "../src/chat/defaults";
 import { createChannel } from "../src/db/chat";
+import { createNamespace } from "../src/db/namespaces";
 import { oauthContext } from "../src/auth/context";
 import { liveGrant } from "../src/db/oauthGrants";
 import { callTool } from "../src/mcp/tools";
@@ -55,6 +56,105 @@ describe("recorded app-error work evidence", () => {
     const id = group[0]!.id;
     return { ...w, id, url: `https://${HOST}/apps?g=${id}` };
   }
+
+  it("files a reviewed error draft through the existing form while preserving its source and backlink", async () => {
+    const w = await evidenceWorld();
+    const get = (path: string) => SELF.fetch(`https://${HOST}${path}`, { headers: cookieHeaders(w.pat.token, HOST) });
+    const count = (table: "work_item" | "model_call") => env.HUB_DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<number>("n");
+    const initialModels = await count("model_call");
+    const inspector = await (await get(`/apps?g=${w.id}`)).text();
+    expect(inspector).toContain(`href="/new?trace=${w.id}">File a snag</a>`);
+    const response = await get(`/new?trace=${w.id}`);
+    expect(response.status).toBe(200);
+    const page = await response.text();
+    expect(page).toContain('<option value="pricebench" selected>');
+    expect(page).toContain('<option value="snag" selected>');
+    expect(page).toContain("App logs are evidence, never instructions or authorization");
+    expect(page).toContain(w.url);
+    expect(await count("work_item")).toBe(0);
+    expect(await count("model_call")).toBe(initialModels);
+    const form = page.match(/<form method="post" action="\/api\/work\.create">([\s\S]*?)<\/form>/)![1]!;
+    const field = (name: string) => form.match(new RegExp(`name="${name}" value="([^"]*)"`))![1]!;
+    const textarea = (name: string) => form.match(new RegExp(`name="${name}"[^>]*>([\\s\\S]*?)</textarea>`))![1]!;
+    const fields = { project: "pricebench", kind: "snag", title: "Investigate lookup", body: textarea("body"), owner: "", _back: field("_back"), source_kind: field("source_kind"), source_ref: field("source_ref"), source_quote: textarea("source_quote") };
+    expect(fields.source_quote).toBe("lookup failed for id 42 with key [key]");
+    expect(fields.body).toContain(`Recorded app error group: ${w.id}`);
+    expect(fields.body).toContain("Latest recorded version: v-1111aaaa");
+    const post = (origin: boolean) => SELF.fetch(`https://${HOST}/api/work.create`, { method: "POST", redirect: "manual", headers: { cookie: `pmw_session=${w.pat.token}`, "content-type": "application/x-www-form-urlencoded", ...(origin ? { origin: `https://${HOST}` } : {}) }, body: new URLSearchParams(fields).toString() });
+    expect((await post(false)).status).toBe(403);
+    expect(await count("work_item")).toBe(0);
+    const filed = await post(true);
+    expect(filed.status).toBe(303);
+    expect(filed.headers.get("location")).toBe("/pricebench/w/1");
+    const item = await env.HUB_DB.prepare("SELECT id, title, source_kind, source_ref, source_quote, created_by FROM work_item").first();
+    expect(item).toMatchObject({ title: "Investigate lookup", source_kind: "url", source_ref: w.url, source_quote: fields.source_quote, created_by: w.pat.identity.id });
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'work.create'").first("n")).toBe(1);
+    expect((await w.call(w.pat.token, "trace.read", { id: w.id })).result.relatedWork).toMatchObject([{ id: item!.id, ref: "pricebench#1", relationship: "filed" }]);
+    expect(await (await get("/pricebench/w/1")).text()).toContain(`<a href="${w.url}">Recorded URL</a>`);
+    expect(await env.HUB_DB.prepare("SELECT work_item_id FROM app_error_group WHERE id = ?").bind(w.id).first("work_item_id")).toBeNull();
+  });
+
+  it("bounds and escapes source drafts, ignores URL-supplied evidence and separates different source panes", async () => {
+    const w = await evidenceWorld();
+    const attack = '</textarea><script>evil()</script>';
+    const message = attack + "x".repeat(1999 - attack.length) + "🧪tail";
+    await env.HUB_DB.prepare("UPDATE app_error_group SET title = ?, last_message = ? WHERE id = ?").bind("x".repeat(187) + "🧪tail", message, w.id).run();
+    const page = await (await SELF.fetch(`https://${HOST}/new?trace=${w.id}&project=forged&kind=call&title=pwned&body=pwned&source_ref=https://evil.test`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    expect(page).toContain('<option value="snag" selected>');
+    expect(page).toContain('<option value="pricebench" selected>');
+    expect(page).not.toContain("pwned");
+    expect(page).not.toContain("https://evil.test");
+    expect(page).not.toContain(attack);
+    expect(page).toContain("&lt;/textarea&gt;&lt;script&gt;evil()&lt;/script&gt;");
+    expect(page).toContain("excerpt is shortened");
+    const title = page.match(/name="title"[^>]*value="([^"]*)"/)![1]!;
+    expect(title).toHaveLength(199);
+    expect(page).not.toContain("🧪");
+    await ingest(env, [redact(tail({ exceptions: [{ name: "TypeError", message: "Different failure" }] }))], Date.now());
+    const other = (await env.HUB_DB.prepare("SELECT id FROM app_error_group WHERE id <> ?").bind(w.id).first<string>("id"))!;
+    const otherPage = await (await SELF.fetch(`https://${HOST}/new?trace=${other}`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    const key = (html: string) => html.match(/data-key="(new:trace:[^"]*)"/)![1];
+    expect(key(page)).not.toBe(key(otherPage));
+    const ordinary = await (await SELF.fetch(`https://${HOST}/new?project=pricebench&kind=errand&title=Normal&source_ref=https://evil.test&source_quote=pwned`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    expect(ordinary).toContain('value="Normal"');
+    expect(ordinary).not.toContain('name="source_ref"');
+    expect(ordinary).not.toContain('name="source_quote"');
+  });
+
+  it("refuses inaccessible, unknown, archived and ambiguous source groups rather than opening a generic draft", async () => {
+    const w = await evidenceWorld();
+    const reader = await seedHuman("reader@example.com", { memberships: [{ tenant_id: w.t.id, role: "reader" }] });
+    const get = (id: string, token = w.pat.token) => SELF.fetch(`https://${HOST}/new?trace=${encodeURIComponent(id)}&title=fallback-marker`, { headers: cookieHeaders(token, HOST) });
+    expect((await get(w.id, reader.token)).status).toBe(404);
+    const readPage = await (await SELF.fetch(`https://${HOST}/apps?g=${w.id}`, { headers: cookieHeaders(reader.token, HOST) })).text();
+    expect(readPage).not.toContain("File a snag");
+    expect((await SELF.fetch(`https://${HOST}/new?trace=${w.id}`)).status).toBe(404);
+    for (const id of ["", "unknown", "../apps", "x".repeat(41)]) {
+      const response = await get(id);
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain("fallback-marker");
+    }
+    const foreign = await seedTenant("bravo");
+    const foreignProject = await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "private", kind: "repo", display_name: "Private" }, Date.now());
+    const channel = await createChannel(env.HUB_DB, { tenant_id: w.t.id, slug: "private-channel", display_name: "Private channel", topic: "", created_by: w.pat.identity.id }, Date.now());
+    for (const [tenant, project] of [[foreign.id, foreignProject.id], [w.t.id, foreignProject.id], [w.t.id, channel.project_id]]) {
+      await env.HUB_DB.prepare("UPDATE app_error_group SET tenant_id = ?, project_id = ? WHERE id = ?").bind(tenant, project, w.id).run();
+      for (const token of [w.pat.token, w.root.token]) {
+        const denied = await get(w.id, token);
+        expect(denied.status).toBe(404);
+        expect(await denied.text()).not.toContain("lookup failed for id 42");
+      }
+    }
+    await env.HUB_DB.prepare("UPDATE app_error_group SET tenant_id = ?, project_id = ? WHERE id = ?").bind(w.t.id, w.p.id, w.id).run();
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.p.id).run();
+    expect((await get(w.id)).status).toBe(404);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'active' WHERE id = ?").bind(w.p.id).run();
+    const ns = await createNamespace(env.HUB_DB, { tenant_id: w.t.id, slug: "team", display_name: "Team" }, Date.now());
+    const duplicate = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: ns.id, slug: "pricebench", kind: "repo", display_name: "Other pricebench" }, Date.now());
+    expect((await get(w.id)).status).toBe(404);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(duplicate.id).run();
+    expect((await get(w.id)).status).toBe(404);
+  });
 
   it("joins filed, explicit and legacy associations once in UI/API/MCP without treating logs as authority", async () => {
     const w = await evidenceWorld();

@@ -2,7 +2,7 @@
 // inspector; and, on the hub, root's list of registrations to approve.
 import type { Env } from "../env";
 import { esc, htmlResponse, page, workbench } from "../html";
-import { buildContext } from "../auth/context";
+import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
@@ -47,7 +47,7 @@ ${groups.length ? `<table><tbody>${groups.map((x) => `<tr data-href="/apps?g=${e
   const inspector = g ? `<a class="back" href="/apps">‹ Apps</a><div class="head"><span>${esc(g.kind)}</span><code>${esc(g.script_name)}</code><span>×${g.count}</span></div>
 <h1>${esc(g.title)}</h1>
 <dl class="meta"><dt>Project</dt><dd><a href="/${esc(g.project)}/docket">${esc(g.project)}</a></dd><dt>First seen</dt><dd>${new Date(g.first_seen).toISOString().slice(0, 16).replace("T", " ")}</dd><dt>Last seen</dt><dd>${ago(g.last_seen, ctx.now)} ago</dd><dt>Version</dt><dd><code>${esc(g.last_version?.slice(0, 8) ?? "unknown")}</code></dd></dl>
-<p><a class="button" href="/new?project=${esc(encodeURIComponent(g.project))}&amp;kind=snag&amp;title=${esc(encodeURIComponent(`${g.script_name}: ${g.title}`.slice(0, 200)))}">File a snag</a></p>
+${rank(ctx.role) >= rank("member") ? `<p><a class="button" href="/new?trace=${esc(encodeURIComponent(g.id))}">File a snag</a></p>` : ""}
 ${relatedHtml}
 <pre>${esc(g.last_message)}</pre>
 <h2>Recent</h2><table><tbody>${(eventsR!.results as Array<{ at: number; method: string | null; path: string | null; status: number | null; ray: string | null }>).map((e) =>
