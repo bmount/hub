@@ -4,7 +4,7 @@
 // to be true, so diagnoses can be checked against reality later.
 import { defineVerb } from "./table";
 import { reqString } from "./params";
-import { badRequest, notFound } from "../errors";
+import { badRequest, conflict, notFound } from "../errors";
 import { ulid } from "../ids";
 import { recordEvent } from "../db/events";
 import { DATA_NOTE, cleanText } from "../mcp/render";
@@ -51,10 +51,25 @@ export const situationResolve = defineVerb({
     input: { type: "object", properties: { id: { type: "string" }, outcome: { type: "string", description: "What turned out to be true" } }, required: ["id", "outcome"], additionalProperties: false },
     render: () => `${DATA_NOTE}\n\nRecorded.`,
   },
-  parse: (i) => ({ id: reqString(i, "id", { max: 40 }), outcome: reqString(i, "outcome", { max: 4000 }) }),
+  parse: (i) => {
+    const id = reqString(i, "id", { max: 40 });
+    const outcome = reqString(i, "outcome", { max: 4000 }).trim();
+    if (!outcome) throw badRequest("outcome is required");
+    return { id, outcome };
+  },
   run: async (ctx, p) => {
-    const r = await ctx.db.prepare("UPDATE situation SET outcome = ?, outcome_by = ?, outcome_at = ? WHERE id = ? AND tenant_id = ?").bind(p.outcome.trim(), ctx.identity!.id, ctx.now, p.id, ctx.tenant!.id).run();
-    if (!r.meta.changes) throw notFound("no such situation");
+    // First-writer wins, including concurrent submissions. Never replace calibration evidence.
+    const r = await ctx.db.prepare(`UPDATE situation SET outcome = ?, outcome_by = ?, outcome_at = ?
+      WHERE id = ? AND tenant_id = ? AND outcome IS NULL AND outcome_by IS NULL AND outcome_at IS NULL`)
+      .bind(p.outcome, ctx.identity!.id, ctx.now, p.id, ctx.tenant!.id).run();
+    if (!r.meta.changes) {
+      const saved = await ctx.db.prepare("SELECT outcome, outcome_by, outcome_at FROM situation WHERE id = ? AND tenant_id = ?")
+        .bind(p.id, ctx.tenant!.id).first<{ outcome: string | null; outcome_by: string | null; outcome_at: number | null }>();
+      if (!saved) throw notFound("no such situation");
+      // An exact retry by its recorder succeeds without moving attribution or time.
+      if (saved.outcome !== p.outcome || saved.outcome_by !== ctx.identity!.id || saved.outcome_at === null)
+        throw conflict("an outcome is already recorded; read it before taking further action");
+    }
     return { id: p.id };
   },
 });
@@ -65,8 +80,11 @@ export const situationList = defineVerb({
   mcp: {
     scope: "read", destructive: false, title: "Situations",
     input: { type: "object", properties: {}, additionalProperties: false },
-    render: (r) => { const x = (r as { situations: Array<{ id: string; title: string; report: string; outcome: string | null }> }).situations; return [DATA_NOTE, "", ...x.map((s) => `- \`${s.id}\` ${cleanText(s.title)}${s.outcome ? ` — outcome: ${cleanText(s.outcome).slice(0, 200)}` : ""}\n  ${cleanText(s.report).slice(0, 400)}`)].join("\n"); },
+    render: (r) => { const x = (r as { situations: Array<{ id: string; title: string; report: string; outcome: string | null }> }).situations; return [DATA_NOTE, "", ...x.map((s) => `- \`${s.id}\` ${cleanText(s.title)}${s.outcome !== null ? ` — member-reported outcome: ${cleanText(s.outcome).slice(0, 200)}` : ""}\n  ${cleanText(s.report).slice(0, 400)}`)].join("\n"); },
   },
   parse: () => ({}),
-  run: async (ctx) => ({ situations: (await ctx.db.prepare("SELECT s.id, s.title, s.report, s.outcome, s.created_at, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id WHERE s.tenant_id = ? ORDER BY s.created_at DESC LIMIT 50").bind(ctx.tenant!.id).all()).results }),
+  run: async (ctx) => ({ situations: (await ctx.db.prepare(`SELECT s.id, s.title, s.report, s.outcome, s.outcome_by, s.outcome_at,
+    s.created_at, i.display_name AS who, recorder.display_name AS outcome_who
+    FROM situation s JOIN identity i ON i.id = s.identity_id LEFT JOIN identity recorder ON recorder.id = s.outcome_by
+    WHERE s.tenant_id = ? ORDER BY s.created_at DESC LIMIT 50`).bind(ctx.tenant!.id).all()).results }),
 });
