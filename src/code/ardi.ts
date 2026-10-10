@@ -9,6 +9,10 @@ import type { Ctx } from "../auth/context";
 import { HubError } from "../errors";
 import { open, seal } from "../models/secretbox";
 import { createGitSession, createRepoCreateSession, revokeSession } from "../db/sessions";
+import { artifactRead } from "./artifactRead";
+import { ArtifactsRest, artifactNamespace } from "./artifactsRest";
+import { repoOwnership } from "./artifactPush";
+import { usesArtifacts } from "./gitBackend";
 
 const TIMEOUT_MS = 10_000;
 const REFRESH_MS = 7 * 86_400_000;           // mint a new git session when the sealed one has less than a week left
@@ -21,6 +25,7 @@ export function setArdiForTest(f: Fetcher | null): void { testArdi = f; }
 
 /** One Ardi verb. Throws HubError with Ardi's reason, or 503 when Ardi can't be reached. */
 export async function ardiCall<T>(env: Env, org: string, authorization: string, verb: string, body: Record<string, unknown>): Promise<ArdiPage<T>> {
+  if (await usesArtifacts(env, org, String(body.repo ?? ""))) return artifactRead<T>(env, org, authorization, verb, body);
   const ardi = testArdi ?? env.ARDI;
   if (!ardi) throw new HubError(503, "unavailable", "the git host is not connected");
   let res: Response;
@@ -76,6 +81,20 @@ export async function codeRead<T>(ctx: Ctx, verb: string, body: Record<string, u
  * already exists is fine: it is the project's.
  */
 export async function createRepo(env: Env, db: D1Database, input: { identity_id: string; tenant_id: string; org: string; name: string }, now: number): Promise<void> {
+  if (env.GIT_BACKEND === "artifacts") {
+    const project = await db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'").bind(input.tenant_id, input.name).first<{ id: string }>();
+    if (!project) throw new HubError(404, "not_found", "repository project not found");
+    const api = new ArtifactsRest(env), namespace = artifactNamespace(input.org), ownership = repoOwnership(input.tenant_id, project.id);
+    try {
+      const info = await api.info(namespace, input.name);
+      if (info.description !== ownership) throw new HubError(409, "conflict", "repository storage name is already owned");
+    } catch (error) {
+      if (!(error instanceof HubError) || error.status !== 404) throw error;
+      await api.create(namespace, input.name, ownership);
+    }
+    await db.prepare("INSERT OR IGNORE INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(input.tenant_id, project.id, now).run();
+    return;
+  }
   const { session, token } = await createRepoCreateSession(db, { identity_id: input.identity_id, tenant_id: input.tenant_id }, now);
   try {
     await ardiCall(env, input.org, basic("pimwell", token), "repo.create", { name: input.name });

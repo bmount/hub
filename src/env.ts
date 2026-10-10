@@ -19,6 +19,14 @@ export type Env = {
   ARDI_REPO_CREATE?: string;
   /** The Ardi git host (service binding); absent means git URLs answer 503. */
   ARDI?: Fetcher;
+  /** Select Artifacts only after repository import and compatibility acceptance. */
+  GIT_BACKEND?: "artifacts";
+  /** Shared Git Worker. Uses the existing tenant/repository URL; no per-tenant deployment. */
+  GIT_PROXY?: Fetcher;
+  ARTIFACTS_ACCOUNT_ID?: string;
+  ARTIFACTS_API_TOKEN?: string;
+  /** Private replay storage for append-only push validation. */
+  GIT_PUSH_STAGING?: R2Bucket;
   /** One SQLite object per channel, named `<tenant_id>:<conversation_id>` (messaging spec 9.1). */
   CONVERSATION: DurableObjectNamespace<Conversation>;
   /** One SQLite object per member identity, named `<tenant_id>:<identity_id>` (messaging spec 9.2). */

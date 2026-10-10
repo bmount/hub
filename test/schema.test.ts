@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 const EXPECTED = [
-  "agent_chat_state", "agent_connect_link", "agent_mcp_session", "api_token", "app_deploy", "app_error_group", "app_event", "app_source", "app_stat", "ardi_cred", "assistant_message", "assistant_thread", "attention", "auth_link", "channel", "chat_control", "code_event", "code_sync", "consent", "conversation_member", "deleted_tenant", "event", "follow", "google_account", "identity", "inbound_mail", "invite",
+  "agent_chat_state", "agent_connect_link", "agent_mcp_session", "api_token", "app_deploy", "app_error_group", "app_event", "app_source", "app_stat", "ardi_cred", "assistant_message", "assistant_thread", "attention", "auth_link", "channel", "chat_control", "code_event", "code_sync", "consent", "conversation_member", "deleted_tenant", "event", "follow", "git_commit", "git_legacy_forward", "git_push", "git_repository", "google_account", "identity", "inbound_mail", "invite",
   "membership", "meta", "model_call", "model_price", "model_route", "msg_index", "msg_ref", "namespace", "oauth_grant", "oauth_redirect_allow", "outbound_mail", "project", "proof", "provider_credential", "rate_counter", "review", "review_comment", "review_reviewer", "session", "signin_grant", "signin_rule", "situation", "tenant", "work_comment", "work_item", "work_link",
 ];
 
@@ -28,6 +28,11 @@ describe("schema", () => {
     expect(rows.results.map((r) => r.pattern)).toEqual([
       "http://127.0.0.1/callback", "http://localhost/callback", "https://claude.ai/api/mcp/auth_callback",
     ]);
+  });
+
+  it("keeps git_push recovery tombstones after tenant or project deletion", async () => {
+    const fks = (await env.HUB_DB.prepare("PRAGMA foreign_key_list('git_push')").all<{ table: string; from: string }>()).results;
+    expect(fks.filter(fk => ["tenant_id", "project_id"].includes(fk.from))).toEqual([]);
   });
 
   it("enforces unique top-level project slug per tenant", async () => {

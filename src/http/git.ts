@@ -2,6 +2,8 @@ import type { Env } from "../env";
 import { classifyHost } from "../tenant";
 import { getTenantBySlug } from "../db/tenants";
 import { notFoundPage } from "./pages";
+import { artifactGit } from "./artifactGit";
+import { usesArtifacts } from "../code/gitBackend";
 
 /**
  * Git smart HTTP for one top-level repository, on the raw (undecoded) path (integration spec 3). Nested
@@ -24,6 +26,8 @@ export async function forwardGit(request: Request, env: Env): Promise<Response |
   if (host.kind !== "tenant") return null;
   const tenant = await getTenantBySlug(env.HUB_DB, host.slug);
   if (!tenant || tenant.state !== "active") return notFoundPage();
+  if (env.GIT_PROXY) return env.GIT_PROXY.fetch(request);
+  if (await usesArtifacts(env, tenant.slug, url.pathname.slice(1, url.pathname.indexOf(".git/")))) return artifactGit(request, env, tenant.slug);
   if (!env.ARDI) return new Response("git service unavailable\n", { status: 503, headers: { "content-type": "text/plain; charset=utf-8" } });
   // The original request, except the hub-wide session cookie, which Ardi never needs, and any `x-ardi-*` header.
   const headers = new Headers(request.headers);
