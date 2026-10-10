@@ -19,13 +19,13 @@ describe("search coverage", () => {
   it("keeps hit arrays, declares unsearched sources and unknown totals/freshness even with zero hits", async () => {
     const w = await chatWorld();
     const r = await result(w.dev.token);
-    for (const key of ["work", "mail", "messages", "people", "projects", "errors"] as const) {
+    for (const key of ["work", "mail", "messages", "people", "projects", "errors", "situations"] as const) {
       expect(r[key]).toEqual([]);
       expect(r.coverage.sources[key]).toEqual({ returned: 0, limit: key === "work" ? 20 : ["mail", "messages"].includes(key) ? 15 : 10, total_matches: null, may_have_more: false });
     }
     expect(r.coverage.scope).toBe("caller_readable_records");
     expect(r.coverage.freshness).toBe("unknown");
-    expect(r.coverage.not_searched).toEqual(["outbound mail", "mail attachments", "reviews", "situations", "repository code", "archived conversations"]);
+    expect(r.coverage.not_searched).toEqual(["outbound mail", "mail attachments", "reviews", "assistant conversations", "repository code", "archived conversations"]);
     expect(r.coverage.conversations).toEqual({ readable_active_channels: 0, searched_channels: 0, channel_limit: 40, per_channel_limit: 10, channels_at_hit_limit: 0 });
   });
 
@@ -112,7 +112,7 @@ describe("search coverage", () => {
         expect(response.isError, JSON.stringify(response)).toBeUndefined();
         const text = (response.content[0] as { text: string }).text;
         expect(text).toContain("Coverage: caller-readable records");
-        expect(text).toContain("Not searched: outbound mail, mail attachments, reviews, situations, repository code, archived conversations");
+        expect(text).toContain("Not searched: outbound mail, mail attachments, reviews, assistant conversations, repository code, archived conversations");
         expect(text).toContain("Total matches and source freshness unknown");
         expect((response.structuredContent as SearchResult).coverage.conversations.searched_channels).toBe(1);
         expect(text).not.toContain("**coverage**");

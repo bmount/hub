@@ -8,7 +8,7 @@ import { shellFor } from "./shell";
 import { HubError } from "../errors";
 import { searchAll, coverageText, type Hit, type SearchCoverage } from "../verbs/search";
 
-const LABEL: Record<string, string> = { work: "Work", mail: "Mail", messages: "Conversations", people: "People and agents", projects: "Projects", errors: "App errors" };
+const LABEL: Record<string, string> = { work: "Work", mail: "Mail", messages: "Conversations", people: "People and agents", projects: "Projects", errors: "App errors", situations: "Situations" };
 
 export async function searchPage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
@@ -22,8 +22,8 @@ export async function searchPage(request: Request, env: Env): Promise<Response> 
   const count = Object.values(groups).reduce((n, g) => n + g.length, 0);
   const sections = Object.entries(groups).filter(([, g]) => g.length).map(([k, g]) => `<h2>${esc(LABEL[k] ?? k)} <span class="pill">${g.length}</span></h2>
 <table><tbody>${g.map((h) => `<tr data-href="${esc(h.href)}"><td class="ref">${esc(h.ref)}</td><td><a href="${esc(h.href)}">${esc(h.title)}</a>${h.snippet ? `<div class="lede" style="margin:0">${esc(h.snippet)}</div>` : ""}</td><td class="when hide-s">${esc(h.kind)}</td></tr>`).join("")}</tbody></table>`).join("");
-  const list = `<form class="filters" method="get" action="/search"><input name="q" value="${esc(q)}" placeholder="Search work, mail, conversations, people, apps" style="flex:1;min-width:12rem" autofocus><button type="submit">Search</button></form>
+  const list = `<form class="filters" method="get" action="/search"><input name="q" value="${esc(q)}" placeholder="Search work, mail, conversations, people, apps, situations" style="flex:1;min-width:12rem" autofocus><button type="submit">Search</button></form>
 ${coverage ? `<p class="lede" data-search-coverage>${esc(coverageText(coverage))}</p>` : ""}
-${!q ? `<p class="lede">Searches work, inbound mail, active conversations, people, projects and app errors; other sources are not included. Every word must appear (up to six words of two characters or more). Try a ref like site#3 in the jump box instead to go straight there.</p>` : problem ? `<p class="empty">${esc(problem)}</p>` : count ? sections : `<p class="empty">No matches within this coverage for "${esc(q)}".</p>`}`;
+${!q ? `<p class="lede">Searches work, inbound mail, active conversations, people, projects, app errors and published situations; other sources are not included. Every word must appear (up to six words of two characters or more). Try a ref like site#3 in the jump box instead to go straight there.</p>` : problem ? `<p class="empty">${esc(problem)}</p>` : count ? sections : `<p class="empty">No matches within this coverage for "${esc(q)}".</p>`}`;
   return htmlResponse(workbench(q ? `Search: ${q}` : "Search", { list, listKey: `search:${q}`, inspector: null }, shellFor(ctx, env, "home", "search")!), 200, extra);
 }

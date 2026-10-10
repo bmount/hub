@@ -33,7 +33,7 @@ export function snippet(text: string, ts: string[], max = 160): string {
 }
 
 export type Hit = { kind: string; ref: string; title: string; snippet: string; href: string; at: number };
-const SOURCE_LIMITS = { work: 20, mail: 15, messages: 15, people: 10, projects: 10, errors: 10 } as const;
+const SOURCE_LIMITS = { work: 20, mail: 15, messages: 15, people: 10, projects: 10, errors: 10, situations: 10 } as const;
 const CHANNEL_LIMIT = 40;
 const PER_CHANNEL_LIMIT = 10;
 type SearchSource = keyof typeof SOURCE_LIMITS;
@@ -123,7 +123,7 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
   const ts = terms(q);
   const access = readableMail(ctx);
   const tid = ctx.tenant!.id;
-  const [work, mail, ppl, proj, errs] = await ctx.db.batch([
+  const [work, mail, ppl, proj, errs, situations] = await ctx.db.batch([
     workHitsStatement(ctx, ts, null, SOURCE_LIMITS.work),
     ctx.db.prepare(`SELECT m.id, m.subject, m.text, m.from_email, m.received_at FROM inbound_mail m WHERE ${access.sql}
       AND ${all("m.subject || ' ' || m.text || ' ' || m.from_email", ts.length)} ORDER BY m.received_at DESC LIMIT ?`).bind(...access.bindings, ...ts.map(like), SOURCE_LIMITS.mail),
@@ -132,6 +132,11 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
     ctx.db.prepare(`SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel' AND ${all("slug || ' ' || display_name", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.projects),
     ctx.db.prepare(`SELECT g.id, g.script_name, g.title, g.last_message, g.last_seen FROM app_error_group g WHERE g.tenant_id = ? AND ${all("g.title || ' ' || g.last_message || ' ' || g.script_name", ts.length)}
       ORDER BY g.last_seen DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.errors),
+    // Published situations are tenant-readable like situation.list; private assistant threads are not searched.
+    ctx.db.prepare(`SELECT s.id, s.title, s.question, s.report, s.outcome, s.created_at
+      FROM situation s JOIN identity i ON i.id = s.identity_id WHERE s.tenant_id = ?
+      AND ${all("s.title || ' ' || s.question || ' ' || s.report || ' ' || COALESCE(s.outcome, '')", ts.length)}
+      ORDER BY s.created_at DESC, s.id DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.situations),
   ]);
   const messages = await messageHits(ctx, ts, null, SOURCE_LIMITS.messages);
   const groups: SearchGroups = {
@@ -141,6 +146,10 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
     people: (ppl!.results as Array<{ display_name: string; email: string; kind: string }>).map((x) => ({ kind: x.kind === "agent" ? "Agent" : "Person", ref: x.email, title: x.display_name, snippet: "", href: `/people/${encodeURIComponent(x.email)}`, at: 0 })),
     projects: (proj!.results as Array<{ slug: string; display_name: string }>).map((x) => ({ kind: "Project", ref: x.slug, title: x.display_name, snippet: "", href: `/${x.slug}/docket`, at: 0 })),
     errors: (errs!.results as Array<{ id: string; script_name: string; title: string; last_message: string; last_seen: number }>).map((g) => ({ kind: "Error", ref: g.script_name, title: g.title, snippet: snippet(g.last_message, ts), href: `/apps?g=${g.id}`, at: g.last_seen })),
+    situations: (situations!.results as Array<{ id: string; title: string; question: string; report: string; outcome: string | null; created_at: number }>).map((s) => ({
+      kind: "Situation", ref: s.id, title: s.title, href: `/situations?s=${encodeURIComponent(s.id)}`, at: s.created_at,
+      snippet: snippet(`Question: ${s.question} Diagnosis: ${s.report}${s.outcome === null ? "" : ` Recorded outcome: ${s.outcome}`}`, ts),
+    })),
   };
   const sources = Object.fromEntries(Object.entries(SOURCE_LIMITS).map(([key, limit]) => {
     const returned = groups[key as SearchSource].length;
@@ -150,15 +159,15 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
   return { ...groups, coverage: {
     scope: "caller_readable_records", matching: "all_terms_substring", terms_used: ts, freshness: "unknown", sources,
     conversations: messages.coverage,
-    not_searched: ["outbound mail", "mail attachments", "reviews", "situations", "repository code", "archived conversations"],
+    not_searched: ["outbound mail", "mail attachments", "reviews", "assistant conversations", "repository code", "archived conversations"],
   } };
 }
 
 export const searchQuery = defineVerb({
   name: "search.query", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Search caller-readable work, inbound mail, active conversations, people, projects and app errors. Bounded results with explicit coverage; not a search of every source.",
+  summary: "Search caller-readable work, inbound mail, active conversations, people, projects, app errors and published situations. Bounded results with explicit coverage; not a search of every source.",
   mcp: {
-    scope: "read", destructive: false, title: "Search available sources",
+    scope: "read", destructive: false, title: "Search available sources", auditKeysOnly: true,
     input: { type: "object", properties: { q: { type: "string", description: "What to find" } }, required: ["q"], additionalProperties: false },
     render: (r) => {
       const { coverage, ...g } = r as SearchResult;
