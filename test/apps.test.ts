@@ -47,6 +47,91 @@ describe("redaction at the source", () => {
   });
 });
 
+describe("deployment/work associations", () => {
+  it("deduplicates URL sources, links and full version commit references with precedence across UI/API/MCP", async () => {
+    const w = await world();
+    const sha = "a".repeat(40);
+    const id = ((await w.call(w.pat.token, "deploy.record", { project: "pricebench", commit: sha })).result.deploy as { id: string }).id;
+    const url = `https://${HOST}/apps?d=${id}`;
+    const create = async (title: string, fields: Record<string, unknown> = {}) => (await w.call(w.pat.token, "work.create", { project: "pricebench", kind: "errand", title, ...fields })).result.item as { id: string; number: number };
+    const filed = await create("Filed from the record", { source_kind: "url", source_ref: url, state: "done" });
+    const linked = await create("Explicit URL link");
+    const committed = await create('<img src=x onerror="evil()">Commit evidence');
+    for (const item of [filed, linked, committed]) await w.call(w.pat.token, "work.link", { id: item.id, target_kind: "commit", target_ref: `pricebench@${sha.toUpperCase()}` });
+    for (const item of [filed, linked]) await w.call(w.pat.token, "work.link", { id: item.id, target_kind: "url", target_ref: url });
+    for (const [kind, ref] of [["url", `${url}&extra=1`], ["url", `${url}#fragment`], ["commit", `pricebench@${sha.slice(0, 7)}`], ["commit", `PRICEBENCH@${sha}`]]) {
+      const item = await create("Unsupported association");
+      await w.call(w.pat.token, "work.link", { id: item.id, target_kind: kind, target_ref: ref });
+    }
+    const reader = await seedHuman("reader@example.com", { memberships: [{ tenant_id: w.t.id, role: "reader" }] });
+    const result = (await w.call(reader.token, "deploy.read", { id })).result;
+    expect(result).toMatchObject({ relatedWork: [{ id: committed.id, relationship: "commit" }, { id: linked.id, relationship: "linked" }, { id: filed.id, relationship: "filed", state: "done" }], relatedWorkCoverage: { limit: 50, shown: 3, truncated: false } });
+    const get = async () => (await SELF.fetch(`https://${HOST}/apps?d=${id}`, { headers: cookieHeaders(reader.token, HOST) })).text();
+    const page = await get();
+    expect(page).toContain(`href="/pricebench/w/${filed.number}">Filed from the record</a>`);
+    expect(page.match(/>Filed from the record<\/a>/g)).toHaveLength(1);
+    expect(page).toContain("&lt;img src=x onerror=&quot;evil()&quot;&gt;Commit evidence");
+    expect(page).not.toContain('<img src=x');
+    expect(page).not.toContain("Unsupported association");
+    expect(page).toContain("not proof of feature delivery");
+    const { grant } = await seedGrant(w.t, reader);
+    const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
+    const mcp = await callTool(ctx, "deploy_read", { id });
+    expect(mcp.structuredContent).toEqual(result);
+    expect(JSON.stringify(mcp.content)).toContain("Recorded work (3 shown; complete for recorded associations)");
+    expect(JSON.stringify(mcp.content)).toContain("not proof of live rollout");
+    await w.call(w.pat.token, "work.update", { id: committed.id, title: "Changed evidence title", state: "doing" });
+    const updated = await get();
+    const key = (html: string) => html.match(/data-key="(deploy:[^"]*)"/)![1];
+    expect(key(updated)).not.toBe(key(page));
+    expect(updated).toContain("Changed evidence title");
+  });
+
+  it("does not use tags/opaque versions or ambiguous repositories as commit work evidence", async () => {
+    const w = await world();
+    const sha = "a".repeat(40);
+    const id = ((await w.call(w.pat.token, "deploy.record", { project: "pricebench", commit: sha })).result.deploy as { id: string }).id;
+    const source = (await w.call(w.pat.token, "work.create", { project: "pricebench", kind: "errand", title: "Explicit record source", source_kind: "url", source_ref: `https://${HOST}/apps?d=${id}` })).result.item as { id: string };
+    const commit = (await w.call(w.pat.token, "work.create", { project: "pricebench", kind: "errand", title: "Commit-only work" })).result.item as { id: string };
+    await w.call(w.pat.token, "work.link", { id: commit.id, target_kind: "commit", target_ref: `pricebench@${sha}` });
+    const read = async () => (await w.call(w.pat.token, "deploy.read", { id })).result;
+    for (const version of ["runtime-uuid", sha.slice(0, 7), "g".repeat(40)]) {
+      await env.HUB_DB.prepare("UPDATE app_deploy SET version_id = ?, tag = ? WHERE id = ?").bind(version, sha, id).run();
+      expect(await read()).toMatchObject({ commitRef: null, relatedWork: [{ id: source.id, relationship: "filed" }], relatedWorkCoverage: { shown: 1, truncated: false } });
+    }
+    await env.HUB_DB.prepare("UPDATE app_deploy SET version_id = ? WHERE id = ?").bind(sha, id).run();
+    const ns = await createNamespace(env.HUB_DB, { tenant_id: w.t.id, slug: "team", display_name: "Team" }, Date.now());
+    await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: ns.id, slug: "pricebench", kind: "repo", display_name: "Other" }, Date.now());
+    expect(await read()).toMatchObject({ commitRef: null, relatedWork: [{ id: source.id }], relatedWorkCoverage: { shown: 1 } });
+  });
+
+  it("caps valid scoped work only, with empty/exact/capped coverage and historical work retained", async () => {
+    const w = await world();
+    const id = ((await w.call(w.pat.token, "deploy.record", { project: "pricebench", commit: "a".repeat(40) })).result.deploy as { id: string }).id;
+    const read = async () => (await w.call(w.pat.token, "deploy.read", { id })).result;
+    expect(await read()).toMatchObject({ relatedWork: [], relatedWorkCoverage: { limit: 50, shown: 0, truncated: false } });
+    const add = async (n: number, tenant = w.t.id, pid = w.p.id, number = n + 1) => env.HUB_DB.prepare("INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, source_kind, source_ref, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'errand', 'Recorded work', '', 'done', 'url', ?, ?, ?, ?)").bind(`work-${String(n).padStart(3, "0")}`, tenant, pid, number, `https://${HOST}/apps?d=${id}`, w.pat.identity.id, n, n).run();
+    for (let n = 0; n < 50; n++) await add(n);
+    expect(await read()).toMatchObject({ relatedWorkCoverage: { shown: 50, truncated: false } });
+    const foreign = await seedTenant("bravo");
+    const project = await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "private", kind: "repo", display_name: "Private" }, Date.now());
+    const channel = await createChannel(env.HUB_DB, { tenant_id: w.t.id, slug: "private-channel", display_name: "Private channel", topic: "", created_by: w.pat.identity.id }, Date.now());
+    for (let n = 100; n < 155; n++) await add(n, n % 3 === 0 ? foreign.id : w.t.id, n % 3 === 0 ? w.p.id : n % 3 === 1 ? project.id : channel.project_id);
+    await add(200, w.t.id, w.p.id, 0);
+    await add(201, w.t.id, w.p.id, 100000000);
+    expect(await read()).toMatchObject({ relatedWorkCoverage: { shown: 50, truncated: false } });
+    await add(50);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.p.id).run();
+    const capped = await read();
+    expect(capped.relatedWorkCoverage).toEqual({ limit: 50, shown: 50, truncated: true });
+    expect((capped.relatedWork as Array<{ id: string }>).map(row => row.id)).toEqual(Array.from({ length: 50 }, (_, n) => `work-${String(50 - n).padStart(3, "0")}`));
+    const page = await (await SELF.fetch(`https://${HOST}/apps?d=${id}`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    expect(page).toContain("50 related work items shown; capped at 50, more omitted");
+    expect(page).not.toContain("private-channel#");
+    expect(page).not.toContain("private#");
+  });
+});
+
 describe("deployment record inspection", () => {
   it("reads a manually recorded deployment without an app registration through API/MCP/UI", async () => {
     const w = await world();

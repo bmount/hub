@@ -9,7 +9,7 @@ import { shellFor } from "./shell";
 import { appsStatement } from "../verbs/apps";
 import { traceGroupStatement, traceWorkStatement, traceWorkResults, type TraceWorkItem } from "../apps/work";
 import { KINDS, STATES } from "../work/names";
-import { deployStatement, deploysStatement, deployView, deployListResults, type DeployRow } from "../apps/deploy";
+import { deployStatement, deploysStatement, deployView, deployListResults, deployWorkStatement, deployWorkResults, type DeployWorkItem, type DeployRow } from "../apps/deploy";
 import { sha256Hex } from "../ids";
 
 const ago = (ms: number | null, now: number) => {
@@ -69,12 +69,16 @@ ${relatedHtml}
   let inspectorKey = g ? `group:${g.id}:${g.count}:${relatedWork.length}:${relatedWorkCoverage.truncated}` : "";
   if (selected) {
     const { deploy: d, commitRef, commitHref } = deployView(selected);
+    const { relatedWork: work, relatedWorkCoverage: workCoverage } = deployWorkResults((await deployWorkStatement(ctx, selected).all<DeployWorkItem>()).results);
     inspector = `<a class="back" href="/apps">‹ Apps</a><div class="head"><span>Deploy record</span><code>${esc(d.id)}</code></div>
 <h1>${esc(d.script_name)}</h1><p class="lede">Recorded metadata is not proof of live rollout, continued deployment or execution authority.</p>
 <dl class="meta"><dt>Project</dt><dd>${esc(d.project)}</dd><dt>Recorded at</dt><dd>${new Date(d.seen_at).toISOString()}</dd><dt>Version</dt><dd><code>${esc(d.version_id)}</code></dd><dt>Tag</dt><dd><code>${esc(d.tag ?? "none recorded")}</code></dd></dl>
 ${commitHref ? `<p><a href="${esc(commitHref)}">Recorded commit reference: ${esc(commitRef!)}</a>. The destination checks its own access; this record does not verify the commit exists or was deployed.</p>` : `<p class="lede">No supported full recorded commit reference. Tags, opaque versions and ambiguous repository slugs are not inferred to identify a commit.</p>`}
+<h2>Recorded work</h2><p class="lede">Recorded associations are not proof of feature delivery, completion, revenue or execution authority.</p>
+${work.length ? `<table><tbody>${work.map(w => `<tr><td class="ref">${esc(w.ref)}</td><td>${esc(KINDS[w.kind].name)}</td><td><a href="/${esc(encodeURIComponent(w.project))}/w/${w.number}">${esc(w.title)}</a></td><td>${esc(STATES[w.state])}</td><td>${w.relationship}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">No work associations recorded for this deploy.</p>`}
+<p class="lede">${workCoverage.shown} related work items shown${workCoverage.truncated ? "; capped at 50, more omitted" : "; complete for recorded associations"}.</p>
 ${d.message ? `<h2>Recorded message</h2><pre>${esc(d.message)}</pre>` : `<p class="lede">No message recorded.</p>`}`;
-    inspectorKey = `deploy:${d.id}:${await sha256Hex(JSON.stringify(selected))}`;
+    inspectorKey = `deploy:${d.id}:${await sha256Hex(JSON.stringify([selected, work, workCoverage]))}`;
   }
   return htmlResponse(workbench(selected ? selected.script_name : g ? g.title : "Apps", { list, listKey: `apps:${apps.length}:${groups.length}:${await sha256Hex(JSON.stringify(recordedDeploys))}:${coverage.truncated}`, inspector, inspectorKey }, shellFor(ctx, env, "apps", "apps")!), 200, extra);
 }
