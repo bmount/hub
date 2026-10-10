@@ -1,12 +1,12 @@
 // AI usage in the workbench: totals and breakdowns as the list, one person's or agent's calls in the inspector.
-// Members see their own usage; admins see the whole organization. One D1 batch after an optional work lookup.
+// Members see their own usage; admins see the whole organization. One D1 batch after optional filter lookups.
 import type { Env } from "../env";
 import { esc, htmlResponse, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
-import { resolveUsageWork, usageQueries, usageWorkGroups, type Group, type WorkGroup, type UsageWork } from "../verbs/usage";
+import { resolveUsageWork, resolveUsageProject, usageQueries, usageWorkGroups, type Group, type WorkGroup, type UsageWork, type UsageProject } from "../verbs/usage";
 import { HubError } from "../errors";
 import { fmtUsd } from "../models/usage";
 
@@ -27,10 +27,16 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
   const who = admin ? whoParam || null : ctx.identity.email;
   const scopeId = admin ? null : ctx.identity.id;
   let selectedWork: UsageWork | null;
-  try { selectedWork = await resolveUsageWork(ctx, url.searchParams.get("work")); }
-  catch (e) { if (e instanceof HubError) return notFoundPage(extra); throw e; }
+  let selectedProject: UsageProject | null;
+  try {
+    selectedWork = await resolveUsageWork(ctx, url.searchParams.get("work"));
+    selectedProject = await resolveUsageProject(ctx, url.searchParams.get("project"), selectedWork);
+  } catch (e) { if (e instanceof HubError) return notFoundPage(extra); throw e; }
   const workQs = selectedWork ? `&work=${encodeURIComponent(selectedWork.ref)}` : "";
-  const q = usageQueries(ctx.db, ctx.tenant.id, since, scopeId, selectedWork);
+  const projectQs = selectedProject ? `&project=${encodeURIComponent(selectedProject.ref)}` : "";
+  const filterQs = workQs + projectQs;
+  const filterLabel = [selectedWork?.ref, selectedProject ? `project ${selectedProject.ref}` : null].filter(Boolean).join(" in ");
+  const q = usageQueries(ctx.db, ctx.tenant.id, since, scopeId, selectedWork, selectedProject);
   const [t, w, m, s, d, work, calls] = await ctx.db.batch([q.total, q.byWho, q.byModel, q.bySource, q.byDay, q.byWork,
     ctx.db.prepare(`SELECT m.created_at, m.source, m.client, m.purpose, m.provider, m.model, m.input_tokens, m.output_tokens, m.cost_micros, m.ok,
         CASE WHEN w.id IS NULL THEN NULL ELSE p.slug || '#' || w.number END AS ref
@@ -38,8 +44,8 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
       LEFT JOIN work_item w ON w.id = m.work_item_id AND w.tenant_id = m.tenant_id AND w.project_id = m.project_id
       LEFT JOIN project p ON p.id = w.project_id AND p.tenant_id = m.tenant_id AND p.kind <> 'channel'
       WHERE m.tenant_id = ? AND m.created_at >= ? AND COALESCE(i.email, 'pimwell') = ?
-        AND (? IS NULL OR (m.work_item_id = ? AND m.project_id = ?))
-      ORDER BY m.created_at DESC LIMIT 100`).bind(ctx.tenant.id, since, who ?? "", selectedWork?.id ?? null, selectedWork?.id ?? null, selectedWork?.project_id ?? null)]);
+        AND (? IS NULL OR (m.work_item_id = ? AND m.project_id = ?)) AND (? IS NULL OR m.project_id = ?)
+      ORDER BY m.created_at DESC LIMIT 100`).bind(ctx.tenant.id, since, who ?? "", selectedWork?.id ?? null, selectedWork?.id ?? null, selectedWork?.project_id ?? null, selectedProject?.id ?? null, selectedProject?.id ?? null)]);
   const total = t!.results[0] as Group;
   const table = (title: string, rows: Group[], hrefFor?: (g: Group) => string | null) => rows.length ? `<h2>${esc(title)}</h2><table><thead><tr><th></th><th>Calls</th><th class="hide-s">Tokens in / out</th><th>Cost</th></tr></thead><tbody>${rows.map((g) => {
     const href = hrefFor?.(g);
@@ -55,18 +61,20 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
   const dayRows = d!.results as Group[];
   const peak = Math.max(1, ...dayRows.map((g) => g.calls));
   const daysHtml = dayRows.length ? `<h2>By day</h2><div class="bars">${dayRows.map((g) => `<div title="${esc(g.key)}: ${g.calls} calls, ${fmtUsd(g.cost_micros)}"><span style="height:${Math.max(2, Math.round((g.calls / peak) * 48))}px"></span><small>${esc(g.label.slice(3))}</small></div>`).join("")}</div>` : "";
-  const range = [7, 30, 90].map((x) => `<a class="chip" href="${esc(`/usage?days=${x}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}${workQs}`)}"${x === days ? ' aria-current="true"' : ""}>${x} days</a>`).join("");
+  const range = [7, 30, 90].map((x) => `<a class="chip" href="${esc(`/usage?days=${x}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}${filterQs}`)}"${x === days ? ' aria-current="true"' : ""}>${x} days</a>`).join("");
   const filter = `<form class="filters" method="get" action="/usage"><input type="hidden" name="days" value="${days}">${whoParam ? `<input type="hidden" name="who" value="${esc(whoParam)}">` : ""}
+<label>Project <input name="project" maxlength="127" value="${esc(selectedProject?.ref ?? "")}" placeholder="project or namespace/project"></label>
 <label>Work item <input name="work" maxlength="80" value="${esc(selectedWork?.ref ?? "")}" placeholder="project#number"></label><button type="submit" class="quiet">Filter</button>
-${selectedWork ? `<a href="${esc(`/usage?days=${days}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}`)}">Clear work filter</a>` : ""}</form>`;
+${selectedWork ? `<a href="${esc(`/usage?days=${days}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}${projectQs}`)}">Clear work filter</a>` : ""}
+${selectedProject ? `<a href="${esc(`/usage?days=${days}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}${workQs}`)}">Clear project filter</a>` : ""}</form>`;
   const list = `<div class="head"><h1>AI usage</h1><span>${admin ? `everyone in ${esc(ctx.tenant.display_name)}` : "yours"}</span></div>
 <div class="chips">${range}</div>${filter}
 <div class="grid"><div class="card"><div class="stat">${total.calls}<small>calls</small></div></div><div class="card"><div class="stat">${n(total.input_tokens + total.output_tokens)}<small>tokens</small></div></div><div class="card"><div class="stat">${cost(total)}</div><p>${total.unpriced ? `${total.unpriced} calls have no price yet` : "every call priced"}</p></div></div>
-${total.calls ? "" : `<p class="empty">No AI usage recorded${selectedWork ? ` for ${esc(selectedWork.ref)} in this period and scope` : " yet"}.${selectedWork ? " This does not mean the work cost nothing." : ""} Pimwell records its own calls; agents and people report theirs with usage_report, and apps log theirs (see the onboard skill).</p>`}
-${admin ? table("By person or agent", w!.results as Group[], (g) => `/usage?days=${days}&who=${encodeURIComponent(g.key)}${workQs}`) : ""}${table("By model", m!.results as Group[])}${table("By tool", s!.results as Group[])}${workHtml}${daysHtml}`;
+${total.calls ? "" : `<p class="empty">No AI usage recorded${filterLabel ? ` for ${esc(filterLabel)} in this period and scope` : " yet"}.${filterLabel ? ` This does not mean the ${selectedWork ? "work" : "project"} cost nothing.` : ""} Pimwell records its own calls; agents and people report theirs with usage_report, and apps log theirs (see the onboard skill).</p>`}
+${admin ? table("By person or agent", w!.results as Group[], (g) => `/usage?days=${days}&who=${encodeURIComponent(g.key)}${filterQs}`) : ""}${table("By model", m!.results as Group[])}${table("By tool", s!.results as Group[])}${workHtml}${daysHtml}`;
   const callRows = calls!.results as Call[];
-  const inspector = who ? `<a class="back" href="${esc(`/usage?days=${days}${workQs}`)}">‹ AI usage</a><h1>${esc(who === "pimwell" ? "Pimwell" : who)}</h1>
+  const inspector = who ? `<a class="back" href="${esc(`/usage?days=${days}${filterQs}`)}">‹ AI usage</a><h1>${esc(who === "pimwell" ? "Pimwell" : who)}</h1>
 ${callRows.length ? `<table><thead><tr><th>When</th><th>Model</th><th class="hide-s">Tool</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${callRows.map((c) =>
     `<tr><td class="when">${new Date(c.created_at).toISOString().slice(5, 16).replace("T", " ")}</td><td><code>${esc(c.model)}</code>${c.ok ? "" : ' <span class="pill">failed</span>'}${c.ref ? ` <small>${esc(c.ref)}</small>` : ""}</td><td class="hide-s">${esc(c.client ?? c.source)}</td><td class="when">${n(c.input_tokens ?? 0)} / ${n(c.output_tokens ?? 0)}</td><td>${fmtUsd(c.cost_micros)}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">No calls in this period.</p>`}` : null;
-  return htmlResponse(workbench("AI usage", { list, listKey: `usage:${days}:${total.calls}:${selectedWork?.id ?? "all"}`, inspector, inspectorKey: who ? `usage:${who}:${days}:${selectedWork?.id ?? "all"}` : "" }, shellFor(ctx, env, "usage", "usage")!), 200, extra);
+  return htmlResponse(workbench("AI usage", { list, listKey: `usage:${days}:${total.calls}:${selectedWork?.id ?? "all"}:${selectedProject?.id ?? "all"}`, inspector, inspectorKey: who ? `usage:${who}:${days}:${selectedWork?.id ?? "all"}:${selectedProject?.id ?? "all"}` : "" }, shellFor(ctx, env, "usage", "usage")!), 200, extra);
 }

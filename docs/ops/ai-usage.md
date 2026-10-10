@@ -2,6 +2,12 @@
 
 `usage.summary` and MCP `usage_summary` return recorded model calls and costs for a period. Readers and members see their own calls. Only admins can request everyone's calls in the current organization. The AI usage page uses the same scope rule; selecting another person does not widen a member's scope.
 
+## Project filter
+
+Pass `project` to `usage.summary` / MCP `usage_summary`, or use the project filter on `/usage`, to restrict totals, every breakdown and the call inspector to calls recorded with that project ID. Use a top-level slug or a namespace/project path; the canonical path is returned as `project`. Namespace and project must belong to the current tenant. Channels, unknown targets and inconsistent namespace associations are refused, never replaced by an unfiltered report. Archived projects remain available for historical accounting.
+
+The filter includes project-attributed calls without work items, but not calls with no recorded project. It retains caller/admin scope and the selected period. A simultaneous work filter must belong to the selected project; a mismatch is refused. Project overviews link to this view. Range chips, person links and back navigation retain both filters; each filter can be cleared independently. Empty results do not prove a project cost nothing.
+
 ## Work filter
 
 Pass `work` to `usage.summary` / MCP `usage_summary`, or use the work-item filter on `/usage`, to restrict the period's totals and every breakdown to one work item. A reference such as `project#12` or the item's ID is resolved in the current tenant and returned as a canonical `work` reference. Unknown, foreign, channel or inconsistent work items are refused rather than silently showing an unfiltered report.

@@ -74,8 +74,11 @@ export async function projectPage(request: Request, env: Env, slug: string): Pro
   if (oc instanceof Response) return oc;
   const { ctx, extra } = oc;
   const t = ctx.tenant!;
-  const p = await ctx.db.prepare("SELECT id, slug, display_name, kind, state FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel'").bind(t.id, slug)
-    .first<{ id: string; slug: string; display_name: string; kind: string; state: string }>();
+  const p = await ctx.db.prepare(`SELECT p.id, p.slug, p.display_name, p.kind, p.state,
+      CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END AS usage_ref
+    FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id
+    WHERE p.tenant_id = ? AND p.slug = ? AND p.kind <> 'channel'`).bind(t.id, slug)
+    .first<{ id: string; slug: string; display_name: string; kind: string; state: string; usage_ref: string | null }>();
   if (!p) return notFoundPage(extra);
   const eventAccess = readableMailEvents(ctx);
   const [byKind, events, open] = await ctx.db.batch([
@@ -93,6 +96,7 @@ export async function projectPage(request: Request, env: Env, slug: string): Pro
 <p class="lede">Send or forward anything to <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code>. It is filed here as evidence, never as instructions.</p>
 ${clone}
 <div class="chips">${(Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/${esc(p.slug)}/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("")}<a class="chip" href="/${esc(p.slug)}/docket">Docket</a></div>
+${p.usage_ref ? `<p><a href="/usage?project=${esc(encodeURIComponent(p.usage_ref))}">Recorded AI usage for this project</a></p>` : ""}
 <h2>Open now</h2>${openRows.length ? `<ul>${openRows.map((w) => `<li><a href="/${esc(p.slug)}/w/${w.number}">#${w.number}</a> <span class="k-${w.kind}">${esc(KINDS[w.kind].name)}</span>: ${esc(w.title)} <small>${esc(STATES[w.state])}</small></li>`).join("")}</ul>` : `<p class="lede">Nothing open. File a wish, a snag, or an errand from the Docket.</p>`}
 <h2>What happened</h2>${timeline(ctx.now, events!.results as Ev[])}`;
   return htmlResponse(page(p.display_name, body, shellFor(ctx, env, "project", `${t.slug}/${p.slug}`)), 200, extra);

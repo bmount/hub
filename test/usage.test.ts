@@ -3,6 +3,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
 import { createChannel } from "../src/db/chat";
+import { createNamespace } from "../src/db/namespaces";
 import { usageStatement } from "../src/models/usage";
 import { agentMcpAuth } from "../src/mcp/agentAuth";
 import { callTool } from "../src/mcp/tools";
@@ -25,6 +26,127 @@ async function world() {
   return { t, pat: cookieHeaders(pat.token, HOST), ada: cookieHeaders(ada.token, HOST), root: cookieHeaders(root.token, "pimwell.test"), bot: bearer(bot.token), botToken: bot.longLived, call, patId: pat.identity.id };
 }
 const costs = async () => (await env.HUB_DB.prepare("SELECT model, cost_micros, cost_source, source FROM model_call ORDER BY model").all()).results;
+
+describe("project-filtered recorded AI usage", () => {
+  it("filters every aggregate and inspector, includes calls without work, and retains own/admin scope", async () => {
+    const w = await world();
+    const created = await w.call(w.pat, "work.create", { project: "site", kind: "errand", title: "Build" });
+    const work = created.result.item as { id: string; project_id: string };
+    await w.call(w.pat, "usage.report", { calls: [
+      { provider: "p", model: "site-paid", work: "site#1", cost_usd: 0.25, client: "site-tool" },
+      { provider: "p", model: "site-unpriced", work: "site#1", client: "site-tool" },
+      { provider: "p", model: "unattributed-model", cost_usd: 100 },
+      { provider: "p", model: "old-model", work: "site#1", cost_usd: 500, at: new Date(Date.now() - 8 * 86_400_000).toISOString() },
+    ] });
+    const other = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: null, slug: "other", kind: "tracker", display_name: "Other" }, Date.now());
+    const foreign = await seedTenant("bravo");
+    for (const [id, project, tenant, identity, cost] of [
+      ["site-no-work", work.project_id, w.t.id, w.patId, 500_000],
+      ["other-model", other.id, w.t.id, w.patId, 20_000_000],
+      ["app-model", work.project_id, w.t.id, null, 2_000_000],
+      ["foreign-secret-model", work.project_id, foreign.id, w.patId, 999_000_000],
+    ] as const) await usageStatement(env.HUB_DB, { id, source: "reported", purpose: "coding", provider: "p", model: id, tenant_id: tenant, identity_id: identity, project_id: project, client: "site-tool", ok: true, ms: 0, input_tokens: null, output_tokens: null, reported_cost_micros: cost, created_at: Date.now() }).run();
+    await w.call(w.bot, "usage.report", { provider: "p", model: "bot-secret-model", work: "site#1", cost_usd: 9 });
+    const result = await w.call(w.pat, "usage.summary", { days: 7, project: "SITE" });
+    expect(result.status).toBe(200);
+    expect(result.result).toMatchObject({ project: "site", work: null, scope: "you", total: { calls: 3, cost_micros: 750_000, unpriced: 1 }, byWorkCoverage: { shown: 2, truncated: false } });
+    expect((result.result.byModel as { label: string }[]).map(g => g.label).sort()).toEqual(["site-no-work", "site-paid", "site-unpriced"]);
+    expect(result.result.byWho).toMatchObject([{ key: "pat@example.com", calls: 3 }]);
+    expect(result.result.bySource).toMatchObject([{ label: "site-tool", calls: 3 }]);
+    expect(result.result.byDay).toMatchObject([{ calls: 3 }]);
+    expect(result.result.byWork).toMatchObject([{ ref: null, calls: 1 }, { ref: "site#1", calls: 2, unpriced: 1 }]);
+    const narrowed = await w.call(w.pat, "usage.summary", { days: 7, project: "site", work: "site#1" });
+    expect(narrowed.result.total).toMatchObject({ calls: 2, cost_micros: 250_000, unpriced: 1 });
+    expect((await w.call(w.ada, "usage.summary", { days: 7, project: "site", everyone: true })).result.total).toMatchObject({ calls: 5, cost_micros: 11_750_000, unpriced: 1 });
+    expect((await w.call(w.pat, "usage.summary", { project: "site", everyone: true })).status).toBe(403);
+    const page = await (await SELF.fetch(`https://${HOST}/usage?days=7&project=SITE&who=scout%40acme.pimwell.test`, { headers: w.pat })).text();
+    expect(page).toContain('name="project" maxlength="127" value="site"');
+    expect(page).toContain("Clear project filter");
+    expect(page).toContain("project=site");
+    expect(page).toContain("site-no-work");
+    expect(page).toContain("site-unpriced");
+    for (const model of ["other-model", "old-model", "unattributed-model", "app-model", "bot-secret-model", "foreign-secret-model"]) expect(page).not.toContain(model);
+    const adminPage = await (await SELF.fetch(`https://${HOST}/usage?days=7&project=site&work=site%231&who=pat%40example.com`, { headers: w.ada })).text();
+    expect(adminPage).toContain('who=pat%40example.com&amp;work=site%231&amp;project=site');
+    expect(adminPage).toContain('href="/usage?days=7&amp;work=site%231&amp;project=site">‹ AI usage');
+    expect(adminPage).toContain('href="/usage?days=7&amp;who=pat%40example.com&amp;project=site">Clear work filter');
+    expect(adminPage).toContain('href="/usage?days=7&amp;who=pat%40example.com&amp;work=site%231">Clear project filter');
+    const overview = await (await SELF.fetch(`https://${HOST}/site`, { headers: w.pat })).text();
+    expect(overview).toContain('<a href="/usage?project=site">Recorded AI usage for this project</a>');
+  });
+
+  it("resolves namespace paths independently, keeps archived history and distinguishes pane scopes", async () => {
+    const w = await world();
+    const ns = await createNamespace(env.HUB_DB, { tenant_id: w.t.id, slug: "team", display_name: "Team" }, Date.now());
+    const project = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: ns.id, slug: "site", kind: "repo", display_name: "Team site" }, Date.now());
+    const flat = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = 'site'").bind(w.t.id).first<string>("id");
+    for (const [n, projectId] of [flat, project.id].entries()) await usageStatement(env.HUB_DB, { id: `scope-${n}`, source: "reported", purpose: "coding", provider: "p", model: `scope-${n}`, tenant_id: w.t.id, identity_id: w.patId, project_id: projectId, ok: true, ms: 0, input_tokens: null, output_tokens: null, created_at: Date.now() }).run();
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(project.id).run();
+    await env.HUB_DB.prepare("UPDATE namespace SET state = 'archived' WHERE id = ?").bind(ns.id).run();
+    const result = await w.call(w.pat, "usage.summary", { project: " Team/SITE " });
+    expect(result.result).toMatchObject({ project: "team/site", total: { calls: 1, cost_micros: null, unpriced: 1 } });
+    expect(result.result.byModel).toMatchObject([{ label: "scope-1" }]);
+    const page = await (await SELF.fetch(`https://${HOST}/usage?project=team%2Fsite`, { headers: w.pat })).text();
+    expect(page).toContain('value="team/site"');
+    expect(page).toContain("project=team%2Fsite");
+    expect(page).toContain("scope-1");
+    expect(page).not.toContain("scope-0");
+    const flatPage = await (await SELF.fetch(`https://${HOST}/usage?project=site`, { headers: w.pat })).text();
+    const keys = (html: string) => [...html.matchAll(/data-key="(usage:[^"]*)"/g)].map(m => m[1]);
+    expect(keys(flatPage)).toHaveLength(2);
+    expect(keys(page)).toHaveLength(2);
+    expect(keys(flatPage)).not.toEqual(keys(page));
+  });
+
+  it("refuses unknown, foreign, channel, inconsistent and mismatched filters rather than falling back", async () => {
+    const w = await world();
+    await w.call(w.pat, "work.create", { project: "site", kind: "errand", title: "Build" });
+    const foreign = await seedTenant("bravo");
+    await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "foreign-secret", kind: "repo", display_name: "Foreign" }, Date.now());
+    const ns = await createNamespace(env.HUB_DB, { tenant_id: foreign.id, slug: "secret", display_name: "Foreign namespace" }, Date.now());
+    const bad = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: null, slug: "bad", kind: "repo", display_name: "Bad" }, Date.now());
+    await env.HUB_DB.prepare("UPDATE project SET namespace_id = ? WHERE id = ?").bind(ns.id, bad.id).run();
+    await createChannel(env.HUB_DB, { tenant_id: w.t.id, slug: "channel-secret", display_name: "Private channel", topic: "", created_by: w.patId }, Date.now());
+    await w.call(w.pat, "usage.report", { provider: "p", model: "unfiltered-model", cost_usd: 1 });
+    for (const project of ["unknown", "foreign-secret", "channel-secret", "bad", "secret/bad", "../site", "/site", "site/team/more", "site?who=admin"]) {
+      expect((await w.call(w.pat, "usage.summary", { project })).status, project).toBe(404);
+      const response = await SELF.fetch(`https://${HOST}/usage?project=${encodeURIComponent(project)}`, { headers: w.pat });
+      expect(response.status, project).toBe(404);
+      expect(await response.text()).not.toContain("unfiltered-model");
+    }
+    for (const project of [42, {}, "x".repeat(128)]) expect((await w.call(w.pat, "usage.summary", { project })).status).toBe(400);
+    expect((await SELF.fetch(`https://${HOST}/usage?project=${"x".repeat(128)}`, { headers: w.pat })).status).toBe(404);
+    await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: null, slug: "other", kind: "repo", display_name: "Other" }, Date.now());
+    expect((await w.call(w.pat, "usage.summary", { project: "other", work: "site#1" })).status).toBe(400);
+    expect((await SELF.fetch(`https://${HOST}/usage?project=other&work=site%231`, { headers: w.pat })).status).toBe(404);
+    expect((await SELF.fetch(`https://${HOST}/usage?project=site`)).status).toBe(404);
+    expect((await w.call(w.pat, "usage.summary", { project: "" })).result.project).toBeNull();
+  });
+
+  it("keeps reader/agent scopes and returns truthful empty results through MCP", async () => {
+    const w = await world();
+    await w.call(w.pat, "work.create", { project: "site", kind: "errand", title: "Build" });
+    await w.call(w.pat, "usage.report", { provider: "p", model: "member-only-model", work: "site#1", cost_usd: 10 });
+    const reader = await seedHuman("reader@example.com", { memberships: [{ tenant_id: w.t.id, role: "reader" }] });
+    const result = await w.call(cookieHeaders(reader.token, HOST), "usage.summary", { project: "site" });
+    expect(result.result).toMatchObject({ project: "site", total: { calls: 0, cost_micros: null }, byWork: [], byWorkCoverage: { shown: 0, truncated: false } });
+    for (const field of ["byWho", "byModel", "bySource", "byDay"]) expect(result.result[field]).toEqual([]);
+    const page = await (await SELF.fetch(`https://${HOST}/usage?project=site`, { headers: cookieHeaders(reader.token, HOST) })).text();
+    expect(page).toContain("No AI usage recorded for project site in this period and scope. This does not mean the project cost nothing.");
+    expect(page).not.toContain("member-only-model");
+    const auth = await agentMcpAuth(new Request(`https://${HOST}/agent/mcp`, { headers: bearer(w.botToken) }), env, "acme", Date.now());
+    if (auth.kind !== "ok") throw new Error("agent auth failed");
+    const empty = await callTool(auth.ctx, "usage_summary", { project: "site" });
+    expect(empty.structuredContent).toMatchObject({ project: "site", total: { calls: 0 } });
+    await w.call(w.bot, "usage.report", { provider: "p", model: "agent-unpriced", work: "site#1" });
+    const own = await callTool(auth.ctx, "usage_summary", { project: "site", work: "site#1" });
+    expect(own.structuredContent).toMatchObject({ project: "site", work: "site#1", total: { calls: 1, cost_micros: null, unpriced: 1 } });
+    expect(JSON.stringify(own.content)).toContain("in project site");
+    expect(JSON.stringify(own.content)).toContain("price unknown");
+    expect(JSON.stringify(own)).not.toContain("member-only-model");
+    for (const args of [{ project: "site", everyone: true }, { project: "unknown" }, { project: "x".repeat(128) }]) expect((await callTool(auth.ctx, "usage_summary", args)).isError).toBe(true);
+  });
+});
 
 describe("work-filtered recorded AI usage", () => {
   it("filters every aggregate and the call inspector without widening own usage scope", async () => {
@@ -171,6 +293,7 @@ describe("recorded AI usage by work item", () => {
     expect(capped.result.byWorkCoverage).toEqual({ limit: 50, shown: 50, truncated: true });
     expect(capped.result.byWork).toEqual(full.result.byWork);
     expect(capped.result.total).toMatchObject({ calls: 51, cost_micros: 5100 });
+    expect((await w.call(w.pat, "usage.summary", { project: "site" })).result.byWorkCoverage).toEqual(capped.result.byWorkCoverage);
     expect((capped.result.byWork as WorkGroup[]).map(g => g.key)).toEqual(Array.from({ length: 50 }, (_, n) => `work-${String(n).padStart(2, "0")}`));
     const page = await (await SELF.fetch(`https://${HOST}/usage`, { headers: w.pat })).text();
     expect(page).toContain("capped at 50, more groups omitted");
