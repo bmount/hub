@@ -1,6 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { cleanNext, landingUrl } from "../src/auth/login";
+import { HTML_CSP } from "../src/html";
 import { createAuthLink } from "../src/db/authLinks";
 import { apiPost, bearer, cookieHeaders, seedHuman, seedTenant } from "./helpers";
 import {
@@ -107,7 +108,7 @@ describe("consent page", () => {
     const res = await viewConsent(await pendingFor(client_id, challenge), h.token);
     expect(res.status).toBe(200);
     const csp = res.headers.get("content-security-policy")!;
-    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toBe(`${HTML_CSP}; form-action 'self' http://localhost:33418`);
     expect(csp).toContain("form-action 'self' http://localhost:33418");
     expect(res.headers.get("x-frame-options")).toBe("DENY");
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -129,7 +130,9 @@ describe("consent page", () => {
     const r = await seedHuman("rita@example.com", { memberships: [{ tenant_id: acme.id, role: "reader" }] });
     const client_id = await registerClient(CLAUDE, '<img src=x onerror="alert(1)">');
     const { challenge } = await pkce();
-    const html = await (await viewConsent(await pendingFor(client_id, challenge, { redirect_uri: CLAUDE }), r.token)).text();
+    const res = await viewConsent(await pendingFor(client_id, challenge, { redirect_uri: CLAUDE }), r.token);
+    expect(res.headers.get("content-security-policy")).toBe(`${HTML_CSP}; form-action 'self' https://claude.ai`);
+    const html = await res.text();
     expect(html).toContain(">claude.ai</p>");
     expect(html).not.toContain("own computer");
     expect(html).not.toContain("<img src=x");

@@ -88,13 +88,15 @@ ${body}
   return workbench(title, { list: body, listKey: `page:${title}`, inspector: null }, shell);
 }
 
+export const HTML_CSP = "default-src 'self'; script-src 'self'; script-src-attr 'none'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+
 export function htmlResponse(body: string, status = 200, headers: HeadersInit = {}): Response {
   const h = new Headers(headers);
   h.set("content-type", "text/html; charset=utf-8");
   h.set("cache-control", "no-store");
   h.set("referrer-policy", "same-origin");
   h.set("x-content-type-options", "nosniff");
-  h.set("content-security-policy", "frame-ancestors 'none'");
+  h.set("content-security-policy", HTML_CSP);
   h.set("x-frame-options", "DENY");
   return new Response(body, { status, headers: h });
 }
@@ -109,6 +111,6 @@ export function onramp(opts: { connect: boolean; invite: boolean }): string {
 
 /**
  * Copy buttons: a button with data-copy="#id" copies that element's text (or an input's value) and says so. The
- * workbench script handles it on swapped panes; this inline copy covers a page loaded on its own.
+ * workbench script handles it on swapped panes; this asset covers a page loaded on its own.
  */
-export const COPY_SCRIPT = `<script>(function(){if(window.__pwCopy)return;window.__pwCopy=1;document.addEventListener("click",function(e){var b=e.target.closest&&e.target.closest("[data-copy]");if(!b)return;var t=document.querySelector(b.getAttribute("data-copy"));if(!t)return;var v=t.value!==undefined&&t.tagName!=="PRE"?t.value:t.textContent;var done=function(){var o=b.textContent;b.textContent="Copied";setTimeout(function(){b.textContent=o;},1600);};if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(v).then(done,function(){});else{var a=document.createElement("textarea");a.value=v;document.body.appendChild(a);a.select();try{document.execCommand("copy");done();}catch(x){}a.remove();}});})();</script>`;
+export const COPY_SCRIPT = `<script src="${ASSETS.copy.path}" defer></script>`;

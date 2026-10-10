@@ -13,7 +13,7 @@ import { listMembershipsForIdentity } from "../db/memberships";
 import { listNamespaces } from "../db/namespaces";
 import { listProjects } from "../db/projects";
 import type { State } from "../db/types";
-import intro from "../../site/index.html";
+import { LANDING_HTML } from "../assets";
 import { intentBox } from "../intent/page";
 
 export function neutralInvitePage(): string {
@@ -110,7 +110,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind === "apex") {
-    if (!ctx.identity) return htmlResponse(intro, 200, extra);
+    if (!ctx.identity) return htmlResponse(LANDING_HTML, 200, extra);
     const memberships = (await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id)).filter((m) => m.tenant.state === "active" && m.membership.state === "active");
     const card = (slug: string, name: string, note: string) => `<a class="card big" href="https://${esc(slug)}.${esc(env.HUB_DOMAIN)}/" data-reload><h3>${esc(name)}</h3><p>${esc(note)}</p><p><code>${esc(slug)}.${esc(env.HUB_DOMAIN)}</code></p></a>`;
     let body = `<h1>Hello, ${esc(ctx.identity.display_name)}</h1>

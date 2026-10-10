@@ -10,7 +10,16 @@ Three files, one direction of dependency:
 
 Both the stylesheet (theme plus components) and the workbench script are served from `src/assets.ts` as
 `/assets/app.<hash>.css` and `/assets/wb.<hash>.js`. Each name carries a hash of the content, so browsers cache a file
-for a year and any change gets a new name. No build step is involved.
+for a year and any change gets a new name. No build step is involved. Assistant, tool playground, copy,
+presence and landing clients use the same static asset mechanism. The bundled landing template's trusted
+script is split into its own asset before serving the page. Server-rendered data goes in escaped HTML attributes,
+not executable JavaScript. Swapped panes revive only same-origin static pane clients.
+
+HTML responses share a Content Security Policy: resources default to this origin, scripts must come from this
+origin, and inline scripts, event handlers, eval, objects, base tags and framing are blocked. Inline styles remain
+allowed for existing layouts; Google Fonts stylesheet and font origins remain allowed for public pages.
+OAuth consent adds only the validated client's redirect origin to `form-action`, preserving approval redirects.
+CSP is defense in depth, not a replacement for escaping, URL validation or access checks.
 
 ## The variables
 

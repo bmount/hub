@@ -1,6 +1,6 @@
 import { AuthorizationError, authorizationErrorRedirect, type AuthRequest } from "@cloudflare/workers-oauth-provider";
 import type { Env } from "../env";
-import { esc, htmlResponse, page } from "../html";
+import { esc, HTML_CSP, htmlResponse, page } from "../html";
 import { HubError } from "../errors";
 import { timingSafeEqual } from "../ids";
 import { buildContext, roleFor } from "../auth/context";
@@ -117,7 +117,7 @@ export async function consentPage(request: Request, env: Env, now: number = Date
   const res = htmlResponse(page("Connect an assistant", consentBody(env, bound, ctx.identity, tenant, role)), 200, extra);
   // Chromium applies form-action to the redirect that follows a form post, so the client's origin must be allowed too.
   res.headers.set("content-security-policy",
-    `default-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' ${new URL(bound.request.redirectUri).origin}`);
+    `${HTML_CSP}; form-action 'self' ${new URL(bound.request.redirectUri).origin}`);
   return res;
 }
 

@@ -1,4 +1,7 @@
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -67,7 +70,7 @@ beforeAll(async () => {
   const secret = await seal(KEY, "sk-local-test-key");
   await db.prepare("INSERT INTO provider_credential (id,provider,label,secret_ciphertext,secret_iv,fingerprint,status,created_at) VALUES (?,'openai','local',?,?,'local','active',?)")
     .bind(ID, secret.ciphertext, secret.iv, now).run();
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1"] });
 });
 
 afterAll(async () => {
@@ -77,14 +80,23 @@ afterAll(async () => {
   if (temp) await rm(temp, { recursive: true, force: true });
 });
 
-async function open(): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext({ serviceWorkers: "block" });
+async function open(augment?: (html: string) => string, setup?: (context: BrowserContext) => Promise<void>): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext({ serviceWorkers: "block", permissions: ["microphone", "clipboard-read", "clipboard-write"] });
   await context.addCookies([{ name: "pmw_session", value: TOKEN, domain: ".pimwell.test", path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
   await context.route("**/*", async route => {
     const req = route.request();
-    if (new URL(req.url()).hostname !== HOST) return route.abort("blockedbyclient");
-    const response = await mf.dispatchFetch(req.url(), { method: req.method(), headers: { ...await req.allHeaders(), "x-local-browser-host": HOST }, body: req.postDataBuffer() ?? undefined });
-    await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers), body: Buffer.from(await response.arrayBuffer()) });
+    const host = new URL(req.url()).hostname;
+    if (![HOST, "pimwell.test"].includes(host)) return route.abort("blockedbyclient");
+    const response = await mf.dispatchFetch(req.url(), { method: req.method(), headers: { ...await req.allHeaders(), "x-local-browser-host": host }, body: req.postDataBuffer() ?? undefined, redirect: "manual" });
+    let body = Buffer.from(await response.arrayBuffer());
+    if (augment && response.headers.get("content-type")?.startsWith("text/html")) body = Buffer.from(augment(body.toString()));
+    await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers), body });
+  });
+  if (setup) await setup(context);
+  await context.addInitScript(() => {
+    const w = globalThis as any;
+    w.cspViolations = [];
+    w.document.addEventListener('securitypolicyviolation', (e: any) => w.cspViolations.push({ directive: e.effectiveDirective, blocked: e.blockedURI }));
   });
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
@@ -98,7 +110,7 @@ async function ask(page: Page, text: string) {
   const response = page.waitForResponse(`${BASE}/assistant/chat`);
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await response;
-  await page.waitForFunction("!document.querySelector('#ask .send').disabled");
+  await expect.poll(() => page.locator('#ask .send').isDisabled()).toBe(false);
 }
 
 it("keeps a serial transcript, model context, navigation and reload history", async () => {
@@ -177,6 +189,137 @@ it("keeps the created conversation after an error without replaying the failed t
   } finally { failModel = false; await context.close(); }
 });
 
+it("blocks injected scripts, handlers, javascript URLs, eval, base and objects on loads and pane swaps", async () => {
+  const attacks = `<script>window.cspAttack = true</script><script src="https://evil.test/attack.js"></script><script src="data:text/javascript,window.cspAttack=true"></script><base href="https://evil.test/"><object data="/privacy"></object><button id="attack" onclick="window.cspAttack=true">Attack</button><a id="attack-link" href="javascript:window.cspAttack=true">Attack link</a>`;
+  const { context, page } = await open(html => html.replace('<div class="assist">', '<div class="assist"><script src="/assets/csp-fixture.js"></script>' + attacks), async context => {
+    // Evaluate from an allowed static script: CDP's page.evaluate itself bypasses unsafe-eval enforcement.
+    await context.route(`${BASE}/assets/csp-fixture.js`, route => route.fulfill({ contentType: 'text/javascript', body: `try { new Function('window.cspAttack=true')(); } catch { window.evalBlocked = true; }` }));
+  });
+  try {
+    await page.locator('#attack').click();
+    await page.locator('#attack-link').click();
+    await page.evaluate(() => {
+      const w = globalThis as any, s = w.document.createElement('script');
+      s.src = w.URL.createObjectURL(new w.Blob(['window.cspAttack=true'], { type: 'text/javascript' }));
+      w.document.body.append(s);
+    });
+    const check = () => page.evaluate(() => {
+      const w = globalThis as any;
+      return { attacked: w.cspAttack ?? false, evalBlocked: w.evalBlocked ?? false, base: w.document.baseURI };
+    });
+    expect(await check()).toEqual({ attacked: false, evalBlocked: true, base: `${BASE}/assistant` });
+    await expect.poll(() => page.evaluate(() => (globalThis as any).cspViolations.map((e: any) => e.directive))).toEqual(expect.arrayContaining(['script-src-elem', 'script-src-attr', 'script-src', 'base-uri', 'object-src']));
+    await expect.poll(() => page.evaluate(() => (globalThis as any).cspViolations.map((e: any) => e.blocked))).toEqual(expect.arrayContaining(['inline', 'eval', 'data', 'blob', 'https://evil.test/attack.js']));
+    await ask(page, '<img src=x onerror="window.cspAttack=true">');
+    expect(await page.locator('#chatlog img').count()).toBe(0);
+    await page.locator('.assist-top a', { hasText: '+ New chat' }).click();
+    await page.waitForURL(`${BASE}/assistant`);
+    await page.locator('#attack').click();
+    expect((await check()).attacked).toBe(false);
+    await ask(page, 'Still works after a pane swap');
+    expect(await page.locator('#chatlog .msg').count()).toBe(2);
+  } finally { await context.close(); }
+});
+
+it("runs Tools in both scopes, copies on a plain page, and keeps landing animation executable", async () => {
+  const { context, page } = await open();
+  try {
+    for (const scopes of ['read', 'write']) {
+      await page.goto(`${BASE}/assistant/tools?scopes=${scopes}`);
+      const card = page.locator('.card').filter({ has: page.locator('form[data-tool="whoami"]') });
+      await card.locator('summary').first().click();
+      await card.locator('textarea').fill('{}');
+      const response = page.waitForResponse(`${BASE}/playground/call`);
+      await card.getByRole('button', { name: 'Run', exact: true }).click();
+      const result = await response;
+      expect(result.status()).toBe(200);
+      expect(result.request().postDataJSON().scopes).toBe(scopes);
+      await expect.poll(() => card.locator('.out').textContent()).toContain('brian.mount@costplusdrugs.com');
+    }
+    // A native form submission renders the standalone copy asset, without the workbench listener.
+    await page.goto(`${BASE}/people?connect=1`);
+    await page.locator('input[name="display_name"]').fill('Local copy fixture');
+    await page.evaluate(() => (globalThis as any).document.querySelector('form[action="/api/agent.connect"]').setAttribute('data-reload', ''));
+    await page.getByRole('button', { name: 'Make connect link', exact: true }).click();
+    await page.waitForURL(`${BASE}/api/agent.connect`);
+    expect(await page.locator('body.plain').count()).toBe(1);
+    await page.getByRole('button', { name: 'Copy', exact: true }).click();
+    await expect.poll(() => page.getByRole('button', { name: 'Copied', exact: true }).count()).toBe(1);
+    await context.clearCookies();
+    await page.goto('https://pimwell.test/');
+    await expect.poll(() => page.locator('#lamps .lamp').count()).toBeGreaterThan(0);
+    await expect.poll(() => page.locator('#mm path').count()).toBeGreaterThan(0);
+  } finally { await context.close(); }
+});
+
+it.each(['http://localhost:33418/callback', 'https://claude.ai/api/mcp/auth_callback'])("allows OAuth approval redirect to %s without weakening script policy", async redirectUri => {
+  const apex = 'https://pimwell.test';
+  const registered = await mf.dispatchFetch(`${apex}/oauth/register`, { method: 'POST', headers: { 'x-local-browser-host': 'pimwell.test', 'content-type': 'application/json' }, body: JSON.stringify({
+    client_name: 'Local CSP fixture', redirect_uris: [redirectUri], token_endpoint_auth_method: 'none', grant_types: ['authorization_code'], response_types: ['code'],
+  }) });
+  expect(registered.status).toBe(201);
+  const { client_id } = await registered.json() as { client_id: string };
+  const q = new URLSearchParams({ response_type: 'code', client_id, redirect_uri: redirectUri, resource: `${BASE}/mcp`, scope: 'read', state: 'local-csp-fixture',
+    code_challenge_method: 'S256', code_challenge: createHash('sha256').update('local-csp-verifier'.repeat(3)).digest('base64url') });
+  // Native HTTP redirects must reach Chromium: Playwright fulfillment does not re-route redirect chains.
+  const server = createServer(async (req, res) => {
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const response = await mf.dispatchFetch(`${apex}${req.url}`, { method: req.method, redirect: 'manual',
+        headers: { 'x-local-browser-host': 'pimwell.test', cookie: `pmw_session=${TOKEN}`, origin: apex, 'content-type': req.headers['content-type'] ?? '' },
+        body: req.method === 'POST' ? Buffer.concat(chunks) : undefined });
+      res.writeHead(response.status, Object.fromEntries(response.headers));
+      res.end(Buffer.from(await response.arrayBuffer()));
+    } catch { res.writeHead(500); res.end('Local fixture failed'); }
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const local = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const context = await browser.newContext({ serviceWorkers: 'block' });
+  try {
+    await context.route('**/*', route => {
+      if (route.request().url().startsWith(local + '/')) return route.continue();
+      if (route.request().url().startsWith(redirectUri + '?')) return route.fulfill({ body: 'Local callback', contentType: 'text/plain' });
+      return route.abort('blockedbyclient');
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000); page.setDefaultNavigationTimeout(5000);
+    await page.goto(`${local}/oauth/authorize?${q}`);
+    // Redirect chains bypass route interception. DNS is disabled in Chromium, and the callback's
+    // failed network request proves CSP allowed navigation without contacting an external provider.
+    const callback = page.waitForEvent('requestfailed', { predicate: request => request.url().startsWith(redirectUri + '?') });
+    await page.getByRole('button', { name: 'Approve', exact: true }).click();
+    const attempted = await callback;
+    expect(attempted.failure()?.errorText).toMatch(/ERR_(NAME_NOT_RESOLVED|CONNECTION_REFUSED)/);
+    const result = new URL(attempted.url());
+    expect(result.searchParams.get('state')).toBe('local-csp-fixture');
+    expect(result.searchParams.get('code')).toBeTruthy();
+  } finally {
+    await context.close();
+    await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });
+  }
+});
+
+it("records synthetic microphone audio and inserts corrected text under CSP", async () => {
+  const { context, page } = await open();
+  try {
+    await context.route(`${BASE}/voice/transcribe`, async route => {
+      expect(route.request().headers()['x-pimwell-voice']).toBe('1');
+      expect(route.request().postDataBuffer()!.length).toBeGreaterThan(800);
+      await route.fulfill({ json: { text: 'Synthetic speech' } });
+    });
+    await context.route(`${BASE}/voice/correct`, async route => {
+      expect(route.request().postDataJSON().text).toBe('Synthetic speech');
+      await route.fulfill({ json: { text: 'Corrected synthetic speech', changed: true } });
+    });
+    const mic = page.getByRole('button', { name: 'Talk. Hold, or tap to start and tap again to stop', exact: true });
+    await mic.click();
+    await expect.poll(() => page.locator('.voicestate').textContent(), { timeout: 5000 }).toMatch(/Listening 0:0[1-9]/);
+    await mic.click();
+    await expect.poll(() => page.locator('#ask textarea').inputValue()).toBe('Corrected synthetic speech');
+  } finally { await context.close(); }
+});
+
 it("retains the next draft while a turn is pending rather than forking context", async () => {
   inputs.length = 0;
   holdModel = true;
@@ -185,16 +328,17 @@ it("retains the next draft while a turn is pending rather than forking context",
     const text = page.getByRole("textbox", { name: "Your message", exact: true });
     await text.fill("Slow first question");
     await text.press("Enter");
-    await page.waitForFunction("document.querySelector('#ask .send').disabled");
+    await expect.poll(() => page.locator('#ask .send').isDisabled()).toBe(true);
     await text.fill("Queued follow up");
     await text.press("Enter");
     expect(await text.inputValue()).toBe("Queued follow up");
     expect(await page.locator("#chatlog .msg.user").count()).toBe(1);
     await expect.poll(() => inputs.length).toBe(1);
     releaseModel();
-    await page.waitForFunction("!document.querySelector('#ask .send').disabled");
+    await expect.poll(() => page.locator('#ask .send').isDisabled()).toBe(false);
     await text.press("Enter");
-    await page.waitForFunction("document.querySelectorAll('#chatlog .msg').length === 4 && !document.querySelector('#ask .send').disabled");
+    await expect.poll(() => page.locator('#chatlog .msg').count()).toBe(4);
+    await expect.poll(() => page.locator('#ask .send').isDisabled()).toBe(false);
     expect(inputs[1]!.map(i => i.content)).toEqual(["Slow first question", "Answer to Slow first question", "Queued follow up"]);
   } finally { releaseModel(); await context.close(); }
 });

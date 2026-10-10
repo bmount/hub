@@ -7,6 +7,7 @@
 //   - calls are recorded like MCP calls, as playground.call, with the session id; confirmed-empty routine
 //     polls log debug instead (docs/ops/logging.md). Commands, failures and nonempty queries remain audited.
 import type { Env } from "../env";
+import { ASSETS } from "../assets";
 import { esc, htmlResponse, page } from "../html";
 import { buildContext, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
@@ -47,7 +48,7 @@ export async function playgroundPage(request: Request, env: Env): Promise<Respon
   const example = (schema: { properties?: Record<string, unknown>; required?: string[] }) =>
     JSON.stringify(Object.fromEntries((schema.required ?? []).map((k) => [k, ""])), null, 2);
   const cards = tools.map((t) => `<details class="card"><summary><strong>${esc(t.name)}</strong> <small>${esc((t.description ?? "").split("\n")[0]!)}</small></summary>
-<form class="pg" data-tool="${esc(t.name)}"><label>Arguments (JSON)<br><textarea name="args" rows="4" cols="60" spellcheck="false">${esc(example(t.inputSchema as never))}</textarea></label><br><button type="submit">Run</button></form>
+<form class="pg" data-tool="${esc(t.name)}" data-scopes="${set}"><label>Arguments (JSON)<br><textarea name="args" rows="4" cols="60" spellcheck="false">${esc(example(t.inputSchema as never))}</textarea></label><br><button type="submit">Run</button></form>
 <details><summary><small>Input schema</small></summary><pre>${esc(JSON.stringify(t.inputSchema, null, 2))}</pre></details>
 <div class="out" hidden></div></details>`).join("");
   const body = `<div class="chips"><a class="chip" href="/assistant${threadQuery}">Chat</a><a class="chip" href="/assistant/tools${threadQuery}" aria-current="true">Tools</a></div>
@@ -56,21 +57,7 @@ export async function playgroundPage(request: Request, env: Env): Promise<Respon
 <div class="chips"><a class="chip" href="?scopes=read${scopeQuery}"${set === "read" ? ' aria-current="true"' : ""}>Read only</a><a class="chip" href="?scopes=write${scopeQuery}"${set === "write" ? ' aria-current="true"' : ""}>Read and write</a></div>
 <p><small>${tools.length} tools with ${set === "read" ? "the read scope" : "the read and write scopes"} at your role (${esc(ctx.role!)}). Write tools change real data.</small></p>
 ${cards || `<p class="lede">No tools for this scope at your role.</p>`}
-<script>
-for (const f of document.querySelectorAll("form.pg")) f.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const out = f.parentElement.querySelector(".out"); out.hidden = false; out.textContent = "Running...";
-  let args; try { args = JSON.parse(f.args.value || "{}"); } catch { out.textContent = "Arguments are not valid JSON."; return; }
-  const r = await fetch("/playground/call", { method: "POST", headers: { "content-type": "application/json", "${PLAYGROUND_HEADER}": "1" },
-    body: JSON.stringify({ tool: f.dataset.tool, arguments: args, scopes: ${JSON.stringify(set)} }) });
-  const j = await r.json().catch(() => ({ error: "unreadable response" }));
-  out.replaceChildren();
-  const add = (h, t) => { const d = document.createElement("div"); const b = document.createElement("h3"); b.textContent = h; const p = document.createElement("pre"); p.textContent = t; d.append(b, p); out.append(d); };
-  if (!r.ok) { add("Refused (" + r.status + ")", JSON.stringify(j, null, 2)); return; }
-  add("What the assistant reads (" + j.ms + " ms)", (j.response.result.content || []).map((c) => c.text).join("\\n"));
-  add("Request", JSON.stringify(j.request, null, 2)); add("Response", JSON.stringify(j.response, null, 2));
-});
-</script>`;
+<script src="${ASSETS.playground.path}"></script>`;
   return htmlResponse(page("Assistant tools", body, shellFor(ctx, env, "playground", "tools")), 200, extra);
 }
 

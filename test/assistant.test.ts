@@ -6,6 +6,7 @@ import { ASSISTANT_TURN_TIMEOUT_MS } from "../src/assistant/deadline";
 import { setModelFetchForTest } from "../src/models/providers";
 import { addCredential } from "../src/models/store";
 import { format } from "../src/http/assistantPages";
+import { ASSETS } from "../src/assets";
 import { cookieHeaders, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
@@ -96,9 +97,12 @@ describe("the Assistant", () => {
   it("serves executable conversation scripts", async () => {
     const w = await world();
     const page = await (await SELF.fetch(`https://${HOST}/assistant`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
-    const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)];
-    expect(scripts).toHaveLength(1);
-    expect(() => new Function(scripts[0]![1]!)).not.toThrow();
+    expect(page).not.toContain("<script>");
+    expect(page).toContain(`<script src="${ASSETS.assistant.path}"></script>`);
+    const script = await SELF.fetch(`https://${HOST}${ASSETS.assistant.path}`);
+    expect(script.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(() => new Function(ASSETS.assistant.body)).not.toThrow();
+    expect(await script.text()).toBe(ASSETS.assistant.body);
   });
 
   it("returns truthful 504 and records unknown usage without executing late model tools", async () => {

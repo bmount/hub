@@ -24,12 +24,13 @@ export const WORKBENCH_JS = String.raw`
   }
   function closeRail() { var r = $("#rail"); if (r) r.classList.remove("open"); if (location.hash === "#rail") history.replaceState(history.state, "", location.pathname + location.search); }
 
-  // Scripts that arrive in a swapped pane never run on their own (parsed HTML is inert); run each one now, once.
+  // Parsed panes are inert. Revive only our static pane clients, never inline or arbitrary source scripts.
   function revive(root) {
     $$("script", root).forEach(function (old) {
+      var src = old.getAttribute("src"), url = src && new URL(src, location.href);
+      if (!url || url.origin !== location.origin || url.search || url.hash || !/^\/assets\/(assistant|playground|presence|copy)\.[a-z0-9]+\.js$/.test(url.pathname)) { old.remove(); return; }
       var s = document.createElement("script");
-      for (var i = 0; i < old.attributes.length; i++) s.setAttribute(old.attributes[i].name, old.attributes[i].value);
-      s.textContent = old.textContent;
+      s.src = url.href;
       old.replaceWith(s);
     });
   }
@@ -377,7 +378,7 @@ export const WORKBENCH_JS = String.raw`
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && t.matches && t.matches("textarea[data-enter-submits]") && t.form) { e.preventDefault(); if (t.value.trim()) t.form.requestSubmit(); }
   });
 
-  // Copy buttons (data-copy="#id"): also on panes swapped in, where inline scripts don't run.
+  // Copy buttons (data-copy="#id"): also on panes swapped in.
   if (!window.__pwCopy) {
     window.__pwCopy = 1;
     document.addEventListener("click", function (e) {
