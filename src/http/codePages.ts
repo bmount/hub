@@ -11,6 +11,9 @@ import { getVerb } from "../verbs/table";
 import { type ArdiCommit, type ArdiEntry, type ArdiRef } from "../code/ardi";
 import type { FileDiff } from "../code/diff";
 import type { After, FileChange } from "../verbs/code";
+import type { commitWorkResults } from "../work/commitEvidence";
+import { KINDS, STATES } from "../work/names";
+import { sha256Hex } from "../ids";
 
 const ago = (s: number, now: number) => {
   const m = Math.max(0, Math.round((now - s * 1000) / 60_000));
@@ -47,7 +50,7 @@ export async function codePage(request: Request, env: Env, slug: string): Promis
   const url = new URL(request.url);
   const ref = url.searchParams.get("ref") ?? "";
   const oid = url.searchParams.get("c") ?? "";
-  let list: string; let inspector: string | null = null;
+  let list: string; let inspector: string | null = null; let inspectorKey = "";
   const crumbs = `<p class="crumbs"><a href="/">${esc(ctx.tenant!.display_name)}</a> / <a href="/${esc(project.slug)}/docket">${esc(project.display_name)}</a></p>
 <div class="chips"><a class="chip" href="/${esc(project.slug)}/docket">Docket</a><a class="chip" href="/${esc(project.slug)}/code" aria-current="true">Commits</a><a class="chip" href="/${esc(project.slug)}/files">Files</a></div>`;
   try {
@@ -62,12 +65,13 @@ export async function codePage(request: Request, env: Env, slug: string): Promis
 <table><tbody>${log.commits.map((c) => `<tr data-href="${q(`c=${c.oid}`)}"${c.oid === oid ? ' aria-selected="true"' : ""}><td class="ref"><code>${c.oid.slice(0, 8)}</code></td><td><a href="${q(`c=${c.oid}`)}">${esc(c.summary)}</a><div class="lede" style="margin:0">${esc(c.author_name)}${c.principal && log.who[c.principal] ? ` · pushed by ${esc(log.who[c.principal]!)}` : ""}</div></td><td class="when">${ago(c.commit_time, ctx.now)}</td></tr>`).join("")}</tbody></table>
 ${log.next ? `<p><a href="${q(`next=${esc(log.next)}`)}">Older commits</a></p>` : ""}`;
     if (oid) {
-      const c = await run<{ commit: ArdiCommit; pushed_by: string | null; files: FileChange[]; after: After }>(ctx, "repo.commit", { project: project.slug, oid });
-      const linked = await ctx.db.prepare(`SELECT p.slug, w.number, w.title FROM work_link l JOIN work_item w ON w.id = l.item_id JOIN project p ON p.id = w.project_id
-        WHERE w.tenant_id = ? AND l.target_kind = 'commit' AND (l.target_ref = ? OR l.target_ref = ?)`).bind(ctx.tenant!.id, `${project.slug}@${oid}`, `${project.slug}@${oid.slice(0, 7)}`).all<{ slug: string; number: number; title: string }>();
+      const c = await run<{ commit: ArdiCommit; pushed_by: string | null; files: FileChange[]; after: After } & ReturnType<typeof commitWorkResults>>(ctx, "repo.commit", { project: project.slug, oid });
+      inspectorKey = `commit:${project.id}:${oid.toLowerCase()}:${await sha256Hex(JSON.stringify([c.relatedWork, c.relatedWorkCoverage, c.after]))}`;
       inspector = `<a class="back" href="${q("")}">‹ Commits</a><div class="head"><code>${oid.slice(0, 12)}</code><span>${esc(c.commit.author_name)}</span>${c.pushed_by ? `<span>pushed by ${esc(c.pushed_by)}</span>` : ""}<span>${new Date(c.commit.commit_time * 1000).toISOString().slice(0, 16).replace("T", " ")}</span></div>
 <h1>${esc(c.commit.summary)}</h1>${(c.commit.message ?? "").trim().split("\n").slice(1).join("\n").trim() ? `<div class="prose">${esc((c.commit.message ?? "").trim().split("\n").slice(1).join("\n").trim())}</div>` : ""}
-${linked.results.length ? `<p>Work: ${linked.results.map((l) => `<a href="/${esc(l.slug)}/w/${l.number}">${esc(l.slug)}#${l.number}</a> ${esc(l.title)}`).join(", ")}</p>` : ""}
+<h2>Recorded work</h2><p class="lede">Full commit references and exact canonical URLs only. Recorded associations do not prove that this commit completes, reviews or approves the work.</p>
+${c.relatedWork.length ? `<table><tbody>${c.relatedWork.map(w => `<tr><td class="ref">${esc(w.ref)}</td><td>${esc(KINDS[w.kind].name)}</td><td><a href="/${esc(encodeURIComponent(w.project))}/w/${w.number}">${esc(w.title)}</a></td><td>${esc(STATES[w.state])}</td><td>${w.relationship}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">No work associations recorded for this commit.</p>`}
+<p class="lede">${c.relatedWorkCoverage.shown} related work items shown${c.relatedWorkCoverage.truncated ? `; capped at ${c.relatedWorkCoverage.limit}, more omitted` : "; complete for recorded associations"}.</p>
 <h2>After this commit</h2><dl class="meta"><dt>Shipped</dt><dd>${c.after.shipped ? `${esc(c.after.shipped.script)} <code>${esc(c.after.shipped.tag ?? "")}</code>, ${new Date(c.after.shipped.at).toISOString().slice(0, 16).replace("T", " ")}` : "no deploy tagged with this commit yet"}</dd>
 <dt>Deploys since</dt><dd>${c.after.since.length ? c.after.since.map((d) => `<code>${esc(d.tag ?? "?")}</code>`).join(" ") : "none"}</dd>
 <dt>New errors since</dt><dd>${c.after.errors.length ? c.after.errors.map((e) => `<a href="/apps?g=${esc(e.id)}">${esc(e.title)}</a> ×${e.count}`).join("<br>") : "none"}</dd></dl>
@@ -81,7 +85,7 @@ ${c.files.map((f) => diffHtml(f.path, f.diff, f.note, f.kind)).join("")}`;
   } catch (e) {
     list = `${crumbs}${unavailable(e)}`;
   }
-  return htmlResponse(workbench(`${project.display_name}: commits`, { list, listKey: `code:${project.slug}:${ref}:${url.searchParams.get("next") ?? ""}`, inspector, inspectorKey: oid ? `commit:${oid}` : "" },
+  return htmlResponse(workbench(`${project.display_name}: commits`, { list, listKey: `code:${project.slug}:${ref}:${url.searchParams.get("next") ?? ""}`, inspector, inspectorKey },
     shellFor(ctx, env, "project", project.slug)!), 200, extra);
 }
 

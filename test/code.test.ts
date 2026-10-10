@@ -2,8 +2,14 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
+import { createChannel } from "../src/db/chat";
+import { buildContext, oauthContext } from "../src/auth/context";
+import { liveGrant } from "../src/db/oauthGrants";
+import { callTool } from "../src/mcp/tools";
+import { afterCommit } from "../src/verbs/code";
+import { commitWorkStatement } from "../src/work/commitEvidence";
 import { setArdiForTest } from "../src/code/ardi";
-import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
+import { apiPost, bearer, cookieHeaders, seedAgent, seedGrant, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
 const A = "a".repeat(40), B = "b".repeat(40), C = "c".repeat(40);
@@ -33,7 +39,7 @@ function fakeArdi(seen: Array<{ path: string; auth: string | null; body: Record<
 
 async function world() {
   const t = await seedTenant("acme");
-  await createProject(env.HUB_DB, { tenant_id: t.id, namespace_id: null, slug: "site", kind: "repo", display_name: "Site" }, Date.now());
+  const p = await createProject(env.HUB_DB, { tenant_id: t.id, namespace_id: null, slug: "site", kind: "repo", display_name: "Site" }, Date.now());
   const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
   const bot = await seedAgent(t, pat.identity, "scout");
   const seen: Array<{ path: string; auth: string | null; body: Record<string, unknown> }> = [];
@@ -42,8 +48,102 @@ async function world() {
     const r = await apiPost(HOST, verb, body, h);
     return { status: r.status, ...((await r.json()) as { result: Record<string, unknown>; detail?: string }) };
   };
-  return { t, pat, bot, seen, call, h: cookieHeaders(pat.token, HOST) };
+  return { t, p, pat, bot, seen, call, h: cookieHeaders(pat.token, HOST) };
 }
+
+describe("recorded commit/work evidence", () => {
+  it("joins deduplicated full references and exact URLs across API/UI/MCP, not short ids or alternate URLs", async () => {
+    const w = await world();
+    const url = `https://${HOST}/site/code?c=${B}`;
+    const create = async (title: string, extra: Record<string, unknown> = {}) => (await w.call(w.h, "work.create", { project: "site", kind: "errand", title, ...extra })).result.item as { id: string; number: number };
+    const filed = await create("Filed source", { source_kind: "url", source_ref: url, state: "done" });
+    const linked = await create("URL-linked work");
+    const committed = await create('<img src=x onerror="evil()">Commit work');
+    for (const item of [filed, linked, committed]) await w.call(w.h, "work.link", { id: item.id, target_kind: "commit", target_ref: `site@${B.toUpperCase()}` });
+    for (const item of [filed, linked]) await w.call(w.h, "work.link", { id: item.id, target_kind: "url", target_ref: url });
+    for (const [kind, ref] of [["commit", `site@${B.slice(0, 7)}`], ["commit", `SITE@${B}`], ["url", `${url}&ref=main`], ["url", `${url}#fragment`]]) {
+      const item = await create(`Unsupported ${ref}`);
+      await w.call(w.h, "work.link", { id: item.id, target_kind: kind, target_ref: ref });
+    }
+    const result = (await w.call(w.h, "repo.commit", { project: "site", oid: B.toUpperCase() })).result;
+    expect(result).toMatchObject({ relatedWork: [{ id: committed.id, relationship: "commit" }, { id: linked.id, relationship: "linked" }, { id: filed.id, relationship: "filed", state: "done" }], relatedWorkCoverage: { limit: 50, shown: 3, truncated: false } });
+    const reader = await seedHuman("reader@example.com", { memberships: [{ tenant_id: w.t.id, role: "reader" }] });
+    const get = async () => (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: cookieHeaders(reader.token, HOST) })).text();
+    const page = await get();
+    expect(page).toContain(`href="/site/w/${filed.number}">Filed source</a>`);
+    expect(page.match(/>Filed source<\/a>/g)).toHaveLength(1);
+    expect(page).toContain("&lt;img src=x onerror=&quot;evil()&quot;&gt;Commit work");
+    expect(page).not.toContain('<img src=x');
+    expect(page).not.toContain("Unsupported");
+    expect(page).toContain("do not prove that this commit completes, reviews or approves the work");
+    const { grant } = await seedGrant(w.t, reader);
+    const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
+    const mcp = await callTool(ctx, "repo_commit", { project: "site", oid: B });
+    expect(mcp.isError).not.toBe(true);
+    expect(mcp.structuredContent).toMatchObject({ relatedWork: result.relatedWork, relatedWorkCoverage: result.relatedWorkCoverage });
+    expect(JSON.stringify(mcp.content)).toContain("Recorded work (3 shown; complete for recorded associations)");
+    expect((await callTool({ ...ctx, oauth: { ...ctx.oauth!, scopes: ["write"] } }, "repo_commit", { project: "site", oid: B })).isError).toBe(true);
+    await w.call(w.h, "work.update", { id: committed.id, title: "Changed title", state: "doing" });
+    const updated = await get();
+    const key = (html: string) => html.match(/data-key="(commit:[^"]*)"/)![1];
+    expect(key(updated)).not.toBe(key(page));
+    expect(updated).toContain("Changed title");
+    expect((await SELF.fetch(`https://${HOST}/site/code?c=${B}`)).status).toBe(404);
+  });
+
+  it("reports empty/exact/capped coverage, excluding foreign, inconsistent and channel work before limiting", async () => {
+    const w = await world();
+    const read = async () => (await w.call(w.h, "repo.commit", { project: "site", oid: B })).result;
+    expect(await read()).toMatchObject({ relatedWork: [], relatedWorkCoverage: { shown: 0, truncated: false } });
+    const add = async (n: number, tenant = w.t.id, project = w.p.id, number = n + 1) => {
+      await env.HUB_DB.prepare("INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, source_kind, source_ref, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'errand', 'Associated work', '', 'open', 'url', ?, ?, ?, ?)")
+        .bind(`work-${String(n).padStart(3, "0")}`, tenant, project, number, `https://${HOST}/site/code?c=${B}`, w.pat.identity.id, n, n).run();
+    };
+    for (let n = 0; n < 50; n++) await add(n);
+    expect(await read()).toMatchObject({ relatedWorkCoverage: { shown: 50, truncated: false } });
+    const foreign = await seedTenant("bravo");
+    const project = await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "private-project", kind: "repo", display_name: "Private" }, Date.now());
+    const channel = await createChannel(env.HUB_DB, { tenant_id: w.t.id, slug: "private-channel", display_name: "Private channel", topic: "", created_by: w.pat.identity.id }, Date.now());
+    for (let n = 100; n < 155; n++) await add(n, n % 3 === 0 ? foreign.id : w.t.id, n % 3 === 0 ? w.p.id : n % 3 === 1 ? project.id : channel.project_id);
+    await add(200, w.t.id, w.p.id, 0);
+    await add(201, w.t.id, w.p.id, 100000000);
+    expect(await read()).toMatchObject({ relatedWorkCoverage: { shown: 50, truncated: false } });
+    await add(50);
+    const capped = await read();
+    expect(capped.relatedWorkCoverage).toEqual({ limit: 50, shown: 50, truncated: true });
+    expect((capped.relatedWork as Array<{ id: string }>).map(r => r.id)).toEqual(Array.from({ length: 50 }, (_, n) => `work-${String(50 - n).padStart(3, "0")}`));
+    const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
+    expect(page).toContain("capped at 50, more omitted");
+    expect(page).not.toContain("private-project");
+    expect(page).not.toContain("private-channel");
+    const ctx = await buildContext(new Request(`https://${HOST}/`, { headers: w.h }), env);
+    expect((await commitWorkStatement(ctx, project.id, B).all()).results).toEqual([]);
+    expect((await commitWorkStatement(ctx, channel.project_id, B).all()).results).toEqual([]);
+    expect((await commitWorkStatement(ctx, w.p.id, B.slice(0, 7)).all()).results).toEqual([]);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.p.id).run();
+    expect(await read()).toMatchObject({ relatedWorkCoverage: { shown: 50, truncated: true } });
+  });
+
+  it("keeps deploy and error evidence inside the current tenant and consistent repository project", async () => {
+    const w = await world();
+    const foreign = await seedTenant("bravo");
+    const project = await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "private", kind: "repo", display_name: "Private" }, Date.now());
+    const channel = await createChannel(env.HUB_DB, { tenant_id: w.t.id, slug: "private-channel", display_name: "Private channel", topic: "", created_by: w.pat.identity.id }, Date.now());
+    const at = 1791000000 * 1000;
+    for (const [n, tenant, pid] of [[0, foreign.id, w.p.id], [1, w.t.id, project.id], [2, w.t.id, channel.project_id], [3, w.t.id, w.p.id]] as const) {
+      await env.HUB_DB.prepare("INSERT INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(`deploy-${n}`, tenant, pid, n < 3 ? "Private deploy" : "Own deploy", `v${n}`, B.slice(0, 8), at + n).run();
+      await env.HUB_DB.prepare("INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, title, last_message, count, first_seen, last_seen) VALUES (?, ?, ?, 'app', ?, 'exception', ?, '', 1, ?, ?)").bind(`error-${n}`, tenant, pid, `fp-${n}`, n < 3 ? "Private error" : "Own error", at + 10, at + 10).run();
+    }
+    const after = (await w.call(w.h, "repo.commit", { project: "site", oid: B })).result.after;
+    expect(after).toEqual({ shipped: { tag: B.slice(0, 8), script: "Own deploy", at: at + 3 }, since: [{ tag: B.slice(0, 8), script: "Own deploy", at: at + 3 }], errors: [{ id: "error-3", title: "Own error", count: 1, first_seen: at + 10 }] });
+    const ctx = await buildContext(new Request(`https://${HOST}/`, { headers: w.h }), env);
+    for (const pid of [project.id, channel.project_id]) expect(await afterCommit(ctx, pid, B, at)).toEqual({ shipped: null, since: [], errors: [] });
+    const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
+    expect(page).toContain("Own error");
+    expect(page).not.toContain("Private deploy");
+    expect(page).not.toContain("Private error");
+  });
+});
 
 describe("code views", () => {
   it("reads branches and commits as the person, with a sealed git session minted once", async () => {
