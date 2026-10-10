@@ -6,7 +6,7 @@ import { rank, type Ctx } from "../auth/context";
 import { ulid } from "../ids";
 import { recordEvent } from "../db/events";
 import { DATA_NOTE, cleanText } from "../mcp/render";
-import { fmtUsd, usageStatement } from "../models/usage";
+import { USAGE_MONEY_COLUMNS, usageMoney, usageStatement, type UsageMoney } from "../models/usage";
 import { itemRef } from "./work";
 import { isValidSlug } from "../tenant";
 
@@ -82,12 +82,12 @@ export const usageReport = defineVerb({
       session_id: ctx.session?.id ?? null, project_id: c.work ? items.get(c.work)!.project_id : null, work_item_id: c.work ? items.get(c.work)!.id : null,
       client: c.client, ok: true, ms: 0, input_tokens: c.input_tokens, output_tokens: c.output_tokens, cached_tokens: c.cached_tokens, reported_cost_micros: c.cost_micros, created_at: c.at ?? ctx.now,
     })));
-    const sum = await ctx.db.prepare(`SELECT SUM(cost_micros) AS c, SUM(cost_micros IS NULL) AS unknown FROM model_call WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).first<{ c: number | null; unknown: number }>();
-    return { recorded: calls.length, cost_micros: sum?.c ?? null, unpriced: sum?.unknown ?? 0, cost: sum?.unknown ? `${fmtUsd(sum?.c ?? 0)} known, ${sum.unknown} unpriced` : fmtUsd(sum?.c ?? 0) };
+    const sum = (await ctx.db.prepare(`SELECT ${USAGE_MONEY_COLUMNS} FROM model_call m WHERE m.tenant_id = ? AND m.identity_id = ? AND m.id IN (${ids.map(() => "?").join(",")})`).bind(ctx.tenant!.id, ctx.identity!.id, ...ids).first<UsageMoney>())!;
+    return { recorded: calls.length, ...sum, cost: usageMoney(sum) };
   },
 });
 
-export type Group = { key: string; label: string; calls: number; input_tokens: number; output_tokens: number; cost_micros: number | null; unpriced: number };
+export type Group = UsageMoney & { key: string; label: string; input_tokens: number; output_tokens: number; cached_tokens: number; input_known: number; output_known: number };
 export type WorkGroup = Group & { ref: string | null };
 const WORK_GROUP_LIMIT = 50;
 
@@ -132,7 +132,8 @@ export function usageQueries(db: D1Database, tenant_id: string, since: number, i
   const where = `m.tenant_id = ? AND m.created_at >= ? AND (? IS NULL OR m.identity_id = ?)
     AND (? IS NULL OR (m.work_item_id = ? AND m.project_id = ?)) AND (? IS NULL OR m.project_id = ?)`;
   const args = [tenant_id, since, identity_id, identity_id, work?.id ?? null, work?.id ?? null, work?.project_id ?? null, project?.id ?? null, project?.id ?? null];
-  const cols = "COUNT(*) AS calls, COALESCE(SUM(m.input_tokens), 0) AS input_tokens, COALESCE(SUM(m.output_tokens), 0) AS output_tokens, SUM(m.cost_micros) AS cost_micros, SUM(m.cost_micros IS NULL) AS unpriced";
+  const cols = `${USAGE_MONEY_COLUMNS}, COALESCE(SUM(m.input_tokens), 0) AS input_tokens, COALESCE(SUM(m.output_tokens), 0) AS output_tokens,
+    COALESCE(SUM(m.cached_tokens), 0) AS cached_tokens, COUNT(m.input_tokens) AS input_known, COUNT(m.output_tokens) AS output_known`;
   return {
     total: db.prepare(`SELECT 'all' AS key, 'All' AS label, ${cols} FROM model_call m WHERE ${where}`).bind(...args),
     byWho: db.prepare(`SELECT COALESCE(i.email, 'pimwell') AS key, COALESCE(i.display_name, 'Pimwell') AS label, ${cols} FROM model_call m LEFT JOIN identity i ON i.id = m.identity_id WHERE ${where} GROUP BY m.identity_id ORDER BY SUM(m.cost_micros) DESC, calls DESC LIMIT 50`).bind(...args),
@@ -157,8 +158,8 @@ export const usageSummary = defineVerb({
     input: { type: "object", properties: { days: { type: "integer", minimum: 1, maximum: 90, description: "Default 30" }, everyone: { type: "boolean", description: "Admins: the whole organization" }, work: { type: "string", maxLength: 80, description: "Optional work item reference or ID, like pimwell#1. Narrows the existing caller/organization scope." }, project: { type: "string", maxLength: 127, description: "Optional project path, like pimwell or team/site. Includes recorded calls without work items; never widens caller scope." } }, additionalProperties: false },
     render: (r) => {
       const x = r as { days: number; scope: string; work: string | null; project: string | null; total: Group; byWho: Group[]; byModel: Group[]; byWork: WorkGroup[]; byWorkCoverage: { limit: number; shown: number; truncated: boolean } };
-      const line = (g: Group) => `- ${cleanText(g.label)}: ${g.calls} calls, ${g.input_tokens} in / ${g.output_tokens} out, ${fmtUsd(g.cost_micros)}${g.unpriced ? ` (${g.unpriced} unpriced)` : ""}`;
-      return [DATA_NOTE, "", `**AI usage, last ${x.days} days (${x.scope})${x.work ? ` for ${cleanText(x.work)}` : ""}${x.project ? ` in project ${cleanText(x.project)}` : ""}**`, line(x.total), "", "By person or agent:", ...x.byWho.map(line), "", "By model:", ...x.byModel.map(line), "", `By work item (${x.byWorkCoverage.shown} groups shown${x.byWorkCoverage.truncated ? `; capped at ${x.byWorkCoverage.limit}, more groups omitted` : "; complete for recorded calls in this scope"}):`, ...x.byWork.map(line), "Recorded calls only, not the full cost of the work. Unpriced calls are not zero-cost calls."].join("\n");
+      const line = (g: Group) => `- ${cleanText(g.label)}: ${g.calls} calls, ${g.input_tokens} in / ${g.output_tokens} out (${g.input_known}/${g.calls} input and ${g.output_known}/${g.calls} output counts known), ${usageMoney(g)}`;
+      return [DATA_NOTE, "", `**AI usage, last ${x.days} days (${x.scope})${x.work ? ` for ${cleanText(x.work)}` : ""}${x.project ? ` in project ${cleanText(x.project)}` : ""}**`, line(x.total), "", "By person or agent:", ...x.byWho.map(line), "", "By model:", ...x.byModel.map(line), "", `By work item (${x.byWorkCoverage.shown} groups shown${x.byWorkCoverage.truncated ? `; capped at ${x.byWorkCoverage.limit}, more groups omitted` : "; complete for recorded calls in this scope"}):`, ...x.byWork.map(line), "Recorded calls only, not the full cost of the work. Unpriced calls are not zero-cost calls. Amounts are USD. Reported amounts are not audited invoices; API-rate estimates are not charges. Billing mode is unknown: the ledger does not record API/subscription evidence. Subscription fees are not configured here or allocated to calls. Rate-tier coverage (batch, long context, cache writes) is unknown."].join("\n");
     },
   },
   parse: (i) => {

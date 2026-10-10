@@ -2,6 +2,14 @@
 
 `usage.summary` and MCP `usage_summary` return recorded model calls and costs for a period. Readers and members see their own calls. Only admins can request everyone's calls in the current organization. The AI usage page uses the same scope rule; selecting another person does not widen a member's scope.
 
+## Amounts and coverage
+
+The page and MCP show reported amounts, API-rate estimates, and unclassified historical amounts separately, in USD. Each category has a call count; missing amounts are not zeros. Unpriced calls remain visible. Token totals are independent of money and include input/output count coverage; cached input is part of input, not an additional token total. The call inspector preserves provider/model names, amount provenance, and unknown token counts.
+
+All summary groups and `usage.report` return `reported_micros`, `estimated_micros`, `unclassified_micros` and their corresponding `*_calls` counts. The legacy `cost_micros` field remains a sum of stored amounts for compatibility, not a total charge. Estimates use stored costs, never today's rates. Reported amounts are caller/tool reports, not audited invoices.
+
+Billing mode is unknown: the current ledger has no API/subscription evidence. OAuth does not prove subscription billing or zero usage cost. Subscription period/seat fees are not configured here and are not allocated to calls. Rate-tier coverage for batch, long context and cache writes is unknown. Separating amounts does not implement those missing ledger features.
+
 ## Project filter
 
 Pass `project` to `usage.summary` / MCP `usage_summary`, or use the project filter on `/usage`, to restrict totals, every breakdown and the call inspector to calls recorded with that project ID. Use a top-level slug or a namespace/project path; the canonical path is returned as `project`. Namespace and project must belong to the current tenant. Channels, unknown targets and inconsistent namespace associations are refused, never replaced by an unfiltered report. Archived projects remain available for historical accounting.
@@ -22,4 +30,4 @@ A work association must match the call's tenant and project, and the project mus
 
 The breakdown shows at most 50 groups, including the unmatched group if it falls in that range. Groups sort by known cost descending, call count descending, then key. `byWorkCoverage` gives `limit`, `shown` and `truncated`; one extra group is read to distinguish a complete 50-group result from an incomplete one. Overall totals are calculated independently and include groups omitted from the breakdown.
 
-These are recorded calls, not a complete cost-to-build estimate. Costs are fixed when a call is recorded. A null cost is unknown, not zero; a group with both priced and unpriced calls shows its known cost and an unpriced count. Unreported work, non-model costs and revenue are not inferred.
+These are recorded calls, not a complete cost-to-build estimate. Costs are fixed when a call is recorded. A null cost is unknown, not zero; a group with both priced and unpriced calls shows its separate monetary categories and an unpriced count. Unreported work, non-model costs and revenue are not inferred.

@@ -244,7 +244,7 @@ describe("recorded AI usage by work item", () => {
     ] });
     await w.call(w.bot, "usage.report", { provider: "openai", model: "private-bot-model", work: "site#1", cost_usd: 9 });
     const mine = await w.call(w.pat, "usage.summary", {});
-    expect(mine.result.byWork).toEqual([
+    expect(mine.result.byWork).toMatchObject([
       { key: item.id, label: "site#1", ref: "site#1", calls: 2, input_tokens: 100, output_tokens: 20, cost_micros: 250_000, unpriced: 1 },
       { key: "unmatched", label: "No matching work item", ref: null, calls: 1, input_tokens: 0, output_tokens: 0, cost_micros: 0, unpriced: 0 },
     ]);
@@ -256,7 +256,7 @@ describe("recorded AI usage by work item", () => {
     const page = await (await SELF.fetch(`https://${HOST}/usage?who=ada%40example.com`, { headers: w.pat })).text();
     expect(page).toContain("By work item");
     expect(page).toContain('<a href="/site/w/1">site#1</a>');
-    expect(page).toContain("+1 unpriced");
+    expect(page).toContain("price unknown (1 unpriced)");
     expect(page).toContain("not the full cost of the work");
     expect(page).not.toContain("private-bot-model");
     expect(page).not.toContain("$9.25");
@@ -313,7 +313,7 @@ describe("recorded AI usage by work item", () => {
     for (const [n, [work, project]] of targets.entries()) await usageStatement(env.HUB_DB, { id: `bad-${n}`, source: "reported", purpose: "coding", provider: "p", model: "m", tenant_id: w.t.id, identity_id: w.patId, project_id: project, work_item_id: work, ok: true, ms: 0, input_tokens: null, output_tokens: null, reported_cost_micros: 100, created_at: Date.now() }).run();
     await usageStatement(env.HUB_DB, { id: "foreign-call", source: "reported", purpose: "coding", provider: "p", model: "foreign-model-secret", tenant_id: other.id, identity_id: w.patId, project_id: foreign.id, work_item_id: "foreign-work", ok: true, ms: 0, input_tokens: null, output_tokens: null, reported_cost_micros: 99999, created_at: Date.now() }).run();
     const r = await w.call(w.pat, "usage.summary", {});
-    expect(r.result.byWork).toEqual([{ key: "unmatched", label: "No matching work item", ref: null, calls: 4, input_tokens: 0, output_tokens: 0, cost_micros: 400, unpriced: 0 }]);
+    expect(r.result.byWork).toMatchObject([{ key: "unmatched", label: "No matching work item", ref: null, calls: 4, input_tokens: 0, output_tokens: 0, cost_micros: 400, unpriced: 0 }]);
     const page = await (await SELF.fetch(`https://${HOST}/usage`, { headers: w.pat })).text();
     for (const text of ["foreign-secret", "channel-secret", "Private foreign title", "foreign-model-secret"]) {
       expect(JSON.stringify(r.result)).not.toContain(text);
@@ -343,6 +343,66 @@ describe("recorded AI usage by work item", () => {
     expect(text).not.toContain("$99");
     expect((await callTool(auth.ctx, "usage_summary", { work: "x".repeat(81) })).isError).toBe(true);
     expect((await callTool(auth.ctx, "usage_summary", { everyone: true })).isError).toBe(true);
+  });
+});
+
+describe("AI usage cost provenance", () => {
+  it("separates stored reported, estimated and unclassified amounts in every breakdown and UI", async () => {
+    const w = await world();
+    await w.call(w.pat, "work.create", { project: "site", kind: "errand", title: "Build" });
+    await w.call(w.root, "model.price_set", { provider: "anthropic", model: "exact-model", input_usd: 3, output_usd: 15, cached_input_usd: 0.3 }, "pimwell.test");
+    const reported = await w.call(w.pat, "usage.report", { calls: [
+      { provider: "anthropic", model: "exact-model", input_tokens: 1_000_000, output_tokens: 100_000, cached_tokens: 500_000, work: "site#1" },
+      { provider: "anthropic", model: "exact-model", cost_usd: 0.25, work: "site#1" },
+      { provider: "anthropic", model: "exact-model", cost_usd: 0, work: "site#1" },
+      { provider: "anthropic", model: "exact-model-alias", input_tokens: 7, work: "site#1" },
+    ] });
+    expect(reported.result).toMatchObject({ reported_micros: 250_000, estimated_micros: 3_150_000, reported_calls: 2, estimated_calls: 1, unpriced: 1 });
+    expect(reported.result.cost).toContain("Reported amounts: $0.25 (2 calls); API-rate estimates: $3.15 (1 call)");
+    await env.HUB_DB.prepare("UPDATE model_call SET cost_source = NULL WHERE cost_micros = 250000").run();
+    const summary = await w.call(w.pat, "usage.summary", { project: "site", work: "site#1" });
+    const money = { calls: 4, reported_micros: 0, reported_calls: 1, estimated_micros: 3_150_000, estimated_calls: 1, unclassified_micros: 250_000, unclassified_calls: 1, unpriced: 1 };
+    expect(summary.result.total).toMatchObject({ ...money, input_tokens: 1_000_007, output_tokens: 100_000, cached_tokens: 500_000, input_known: 2, output_known: 1 });
+    for (const key of ["byWho", "bySource", "byDay", "byWork"]) expect(summary.result[key]).toMatchObject([money]);
+    expect(summary.result.byModel).toMatchObject([{ calls: 3, estimated_micros: 3_150_000 }, { calls: 1, estimated_micros: null, unpriced: 1 }]);
+    const page = await (await SELF.fetch(`https://${HOST}/usage?project=site&work=site%231`, { headers: w.pat })).text();
+    for (const text of ["Reported amounts: $0 (1 call)", "API-rate estimates: $3.15 (1 call)", "Unclassified amounts: $0.25 (1 call)", "price unknown (1 unpriced)", "2/4 input and 1/4 output counts known", "Billing mode: unknown", "Subscription fees are not configured", "not audited invoices", "not charges", "Rate-tier coverage", "anthropic/exact-model", "$3.15 · API-rate estimate", "$0.25 · unclassified amount", "$0 · reported amount", "unknown / unknown"]) expect(page).toContain(text);
+    expect(page).not.toContain("$3.40");
+    expect(page).not.toContain("every call priced");
+  });
+
+  it("keeps provenance sums historical and period-scoped without widening caller or tenant scope", async () => {
+    const w = await world();
+    const other = await seedTenant("bravo");
+    const now = Date.now();
+    const auth = await agentMcpAuth(new Request(`https://${HOST}/agent/mcp`, { headers: bearer(w.botToken) }), env, "acme", now);
+    if (auth.kind !== "ok") throw new Error("agent auth failed");
+    for (const [id, tenant, identity, at, source, amount] of [
+      ["boundary", w.t.id, auth.ctx.identity!.id, now - 7 * 86_400_000, "reported", 0],
+      ["outside", w.t.id, auth.ctx.identity!.id, now - 7 * 86_400_000 - 1, "reported", 99_000_000],
+      ["historical-estimate", w.t.id, auth.ctx.identity!.id, now, "price", 1_000_000],
+      ["unpriced", w.t.id, auth.ctx.identity!.id, now, null, null],
+      ["other-person", w.t.id, w.patId, now, "reported", 88_000_000],
+      ["other-tenant", other.id, auth.ctx.identity!.id, now, "reported", 77_000_000],
+    ] as const) {
+      await usageStatement(env.HUB_DB, { id, tenant_id: tenant, identity_id: identity, source: "reported", purpose: "coding", provider: "p", model: id, input_tokens: null, output_tokens: null, ok: true, ms: 0, created_at: at }).run();
+      await env.HUB_DB.prepare("UPDATE model_call SET cost_source = ?, cost_micros = ? WHERE id = ?").bind(source, amount, id).run();
+    }
+    const result = await callTool(auth.ctx, "usage_summary", { days: 7 });
+    expect(result.structuredContent).toMatchObject({ total: { calls: 3, reported_calls: 1, reported_micros: 0, estimated_calls: 1, estimated_micros: 1_000_000, unclassified_calls: 0, unpriced: 1, input_known: 0, output_known: 0 } });
+    const text = JSON.stringify(result.content);
+    for (const expected of ["Reported amounts: $0", "API-rate estimates: $1.00", "price unknown (1 unpriced)", "not audited invoices", "Billing mode is unknown"]) expect(text).toContain(expected);
+    for (const excluded of ["outside", "other-person", "other-tenant", "$99", "$88", "$77"]) expect(JSON.stringify(result)).not.toContain(excluded);
+  });
+
+  it("shows empty monetary categories as absent records rather than zero charges", async () => {
+    const w = await world();
+    const summary = await w.call(w.pat, "usage.summary", {});
+    expect(summary.result.total).toMatchObject({ calls: 0, reported_micros: null, estimated_micros: null, unclassified_micros: null, reported_calls: 0, estimated_calls: 0, unclassified_calls: 0, unpriced: 0, input_known: 0, output_known: 0 });
+    const page = await (await SELF.fetch(`https://${HOST}/usage`, { headers: w.pat })).text();
+    expect(page).toContain("Reported amounts: none recorded (0 calls)");
+    expect(page).toContain("API-rate estimates: none recorded (0 calls)");
+    expect(page).not.toContain("$0");
   });
 });
 
