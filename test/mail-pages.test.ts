@@ -2,13 +2,18 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createProject } from "../src/db/projects";
+import { createChannel } from "../src/db/chat";
+import { ulid } from "../src/ids";
+import { oauthContext } from "../src/auth/context";
+import { liveGrant } from "../src/db/oauthGrants";
+import { callTool } from "../src/mcp/tools";
 import { handleApi } from "../src/http/api";
 import { registerAllVerbs } from "../src/verbs/index";
 import { grantConsent, revokeConsent } from "../src/db/consent";
 import { setTestTransport } from "../src/mail/send";
 import * as events from "../src/db/events";
 import { esc } from "../src/html";
-import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
+import { apiPost, cookieHeaders, seedAgent, seedGrant, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
 beforeAll(() => registerAllVerbs());
@@ -28,8 +33,113 @@ async function world() {
     method: "POST", headers: { ...cookieHeaders(token, HOST), origin, "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ id, body: "Thanks", _back: `/mail/${id}` }),
   }), env);
-  return { t, pat, ada, get, form };
+  return { t, p, pat, ada, get, form, insert };
 }
+
+describe("mail and work evidence navigation", () => {
+  it("opens canonical mail sources and links, and returns deduplicated filed/linked work through UI and MCP", async () => {
+    const w = await world();
+    const id = ulid(Date.now());
+    await w.insert(id, "admitted", "Original evidence");
+    const headers = cookieHeaders(w.pat.token, HOST);
+    const create = async (fields: Record<string, unknown>) => {
+      const r = await apiPost(HOST, "work.create", { project: "site", kind: "errand", ...fields }, headers);
+      expect(r.status).toBe(200);
+      return (await r.json() as { result: { item: { id: string; number: number } } }).result.item;
+    };
+    const filed = await create({ title: "Filed task", source_kind: "mail", source_ref: id, source_quote: "Prices look wrong" });
+    const linked = await create({ title: '<img src=x onerror="alert(1)">Linked evidence' });
+    const unrelated = await create({ title: "Unrelated task" });
+    for (const [item, target] of [[filed, id], [linked, id], [unrelated, "M1"]] as const) {
+      expect((await apiPost(HOST, "work.link", { id: item.id, target_kind: "mail", target_ref: target }, headers)).status).toBe(200);
+    }
+    expect((await apiPost(HOST, "work.link", { id: unrelated.id, target_kind: "event", target_ref: id }, headers)).status).toBe(200);
+    const workPage = await (await w.get(`/site/w/${filed.number}`, w.pat.token)).text();
+    expect(workPage).toContain(`<a href="/mail/${id}">Recorded mail</a>`);
+    expect(workPage).toContain(`<a href="/mail/${id}">${id}</a>`);
+    const page = await (await w.get(`/mail/${id}`, w.pat.token)).text();
+    expect(page).toContain("<h2>Filed from this</h2>");
+    expect(page).toContain("<h2>Linked to this</h2>");
+    expect(page).toContain(`href="/site/w/${filed.number}">Filed task</a>`);
+    expect(page).toContain(`href="/site/w/${linked.number}">`);
+    expect(page).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;Linked evidence");
+    expect(page).not.toContain('<img src=x');
+    const inspector = page.slice(page.indexOf('id="inspector"'));
+    expect(inspector).not.toContain("Unrelated task");
+    expect(inspector.match(/>Filed task<\/a>/g)).toHaveLength(1);
+    expect(page).toContain("not proof that this mail authorized the work");
+    const { grant } = await seedGrant(w.t, w.pat);
+    const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
+    const result = await callTool(ctx, "mail_read", { id });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ relatedWork: [
+      { id: linked.id, ref: `site#${linked.number}`, relationship: "linked" },
+      { id: filed.id, ref: `site#${filed.number}`, relationship: "filed" },
+    ], relatedWorkCoverage: { limit: 50, shown: 2, truncated: false } });
+    expect(JSON.stringify(result.content)).toContain("Related work (2 shown; complete for recorded associations)");
+    expect(JSON.stringify(result.content)).not.toContain("Unrelated task");
+  });
+
+  it("does not let a navigable work reference grant access to another agent's original mail", async () => {
+    const w = await world();
+    const agent = await seedAgent(w.t, w.ada.identity, "private-agent");
+    const id = ulid(Date.now());
+    await w.insert(id, "admitted", "Private original subject");
+    await env.HUB_DB.prepare("UPDATE inbound_mail SET recipient_id = ?, text = 'Private original body' WHERE id = ?").bind(agent.agent.identity.id, id).run();
+    const r = await apiPost(HOST, "work.create", { project: "site", kind: "errand", title: "Recorded association", source_kind: "mail", source_ref: id }, cookieHeaders(w.pat.token, HOST));
+    expect(r.status).toBe(200);
+    const work = (await r.json() as { result: { item: { number: number } } }).result.item;
+    const workPage = await (await w.get(`/site/w/${work.number}`, w.pat.token)).text();
+    expect(workPage).toContain(`<a href="/mail/${id}">Recorded mail</a>`);
+    expect(workPage).not.toContain("Private original subject");
+    expect(workPage).not.toContain("Private original body");
+    const denied = await w.get(`/mail/${id}`, w.pat.token);
+    expect(denied.status).toBe(404);
+    expect(await denied.text()).not.toContain("Private original");
+    expect((await apiPost(HOST, "mail.read", { id }, cookieHeaders(w.pat.token, HOST))).status).toBe(404);
+    expect((await SELF.fetch(`https://${HOST}/mail/${id}`)).status).toBe(404);
+    const allowed = await w.get(`/mail/${id}`, w.ada.token);
+    expect(allowed.status).toBe(200);
+    expect(await allowed.text()).toContain("Private original body");
+  });
+
+  it("distinguishes exactly 50 from omitted work and filters inconsistent rows before the cap", async () => {
+    const w = await world();
+    const id = ulid(Date.now());
+    await w.insert(id, "admitted", "Many associations");
+    const add = async (n: number) => {
+      await env.HUB_DB.prepare("INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, source_kind, source_ref, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'errand', ?, '', 'open', 'mail', ?, ?, ?, ?)")
+        .bind(`work-${String(n).padStart(2, "0")}`, w.t.id, w.p.id, n + 1, `Task ${n}`, id, w.pat.identity.id, n, n).run();
+    };
+    const read = async () => {
+      const r = await apiPost(HOST, "mail.read", { id }, cookieHeaders(w.pat.token, HOST));
+      expect(r.status).toBe(200);
+      return (await r.json() as { result: { relatedWork: Array<{ id: string }>; relatedWorkCoverage: unknown } }).result;
+    };
+    expect((await read()).relatedWorkCoverage).toEqual({ limit: 50, shown: 0, truncated: false });
+    for (let n = 0; n < 50; n++) await add(n);
+    expect((await read()).relatedWorkCoverage).toEqual({ limit: 50, shown: 50, truncated: false });
+    const foreign = await seedTenant("bravo");
+    const foreignProject = await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "foreign-secret", kind: "repo", display_name: "Foreign" }, Date.now());
+    const channel = await createChannel(env.HUB_DB, { tenant_id: w.t.id, slug: "channel-secret", display_name: "Channel", topic: "", created_by: w.pat.identity.id }, Date.now());
+    for (let n = 0; n < 55; n++) {
+      const tenant = n % 3 === 0 ? foreign.id : w.t.id;
+      const project = n % 3 === 0 ? w.p.id : n % 3 === 1 ? foreignProject.id : channel.project_id;
+      await env.HUB_DB.prepare("INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, source_kind, source_ref, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'errand', 'Boundary secret', '', 'open', 'mail', ?, ?, 1000, 1000)")
+        .bind(`bad-${n}`, tenant, project, n + 100, id, w.pat.identity.id).run();
+    }
+    expect((await read()).relatedWorkCoverage).toEqual({ limit: 50, shown: 50, truncated: false });
+    await add(50);
+    const capped = await read();
+    expect(capped.relatedWorkCoverage).toEqual({ limit: 50, shown: 50, truncated: true });
+    expect(capped.relatedWork.map(r => r.id)).toEqual(Array.from({ length: 50 }, (_, n) => `work-${String(50 - n).padStart(2, "0")}`));
+    const page = await (await w.get(`/mail/${id}`, w.pat.token)).text();
+    expect(page).toContain("capped at 50, more omitted");
+    expect(page).not.toContain("Boundary secret");
+    expect(page).not.toContain("foreign-secret");
+    expect(page).not.toContain("channel-secret");
+  });
+});
 
 describe("mail in the workbench", () => {
   it("lists admitted mail for members and held mail for admins too, with the addresses beside it", async () => {

@@ -220,6 +220,8 @@ describe("recorded work evidence navigation", () => {
       ["item", "site#0"], ["item", "site#01"], ["item", "site#100000000"], ["item", "site#1\n"],
       ["item", "site#1?x=1"], ["item", "site#1/../../mail"], ["item", "site#1\" onclick=\"alert(1)"],
       ["item", "https://evil.test/site#1"], ["message", "site#1"], ["event", `site@${oid}`],
+      ["mail", "javascript:alert(1)"], ["mail", "//evil.test"], ["mail", "../mail"],
+      ["mail", "0".repeat(26) + "\n"], ["mail", "0".repeat(26) + "/../"], ["mail", "i".repeat(26)],
     ];
     for (const [i, [kind, ref]] of refs.entries()) {
       await env.HUB_DB.prepare("INSERT INTO work_link (id, item_id, target_kind, target_ref, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)")

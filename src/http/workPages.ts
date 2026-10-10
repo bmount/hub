@@ -144,9 +144,14 @@ function plannedBlock(name: string, label: string): string {
   return `<div class="planned"><b>${esc(label)}</b> <span class="pill">planned</span> ${esc(p.summary)} <a href="/planned/${p.area}?v=${esc(name)}">What it will do</a></div>`;
 }
 
+function mailEvidenceHref(reference: string | null): string | null {
+  return reference?.length === 26 && /^[0-9A-HJKMNP-TV-Z]{26}$/.test(reference) ? `/mail/${reference}` : null;
+}
+
 function workLinkHtml(l: WorkLink): string {
   let href: string | null = null;
   if (l.target_kind === "url") href = safeExternalUrl(l.target_ref);
+  else if (l.target_kind === "mail") href = mailEvidenceHref(l.target_ref);
   else if (!/\s/.test(l.target_ref)) {
     const name = "([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)";
     if (l.target_kind === "commit") {
@@ -164,6 +169,7 @@ function workLinkHtml(l: WorkLink): string {
 
 function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string): string {
   const canWrite = rank(ctx.role) >= rank("member");
+  const sourceMail = w.source_kind === "mail" ? mailEvidenceHref(w.source_ref) : null;
   const self = `/${esc(project.slug)}/w/${w.number}`;
   const keepParams = new URLSearchParams(back.includes("?") ? back.slice(back.indexOf("?") + 1) : "");
   if (back.startsWith("/docket")) keepParams.set("in", "org");
@@ -208,6 +214,7 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
 <p><a href="/usage?work=${esc(encodeURIComponent(`${project.slug}#${w.number}`))}">Recorded AI usage for this work</a></p>
 ${controls}
 ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
+${sourceMail ? `<p>Source: <a href="${sourceMail}">Recorded mail</a>. Access is checked when opened.</p>` : ""}
 ${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Add them under Edit (e): what, why, and how you will know it is done." : ""}</p>`}
 ${edit}
 ${under}

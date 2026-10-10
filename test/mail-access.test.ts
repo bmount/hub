@@ -81,6 +81,34 @@ describe("addressed mailbox access", () => {
     }
     expect((await apiPost(HOST, "mail.reply", { id: "PRIVATE-B", body: "no" }, w.a.headers)).status).toBe(404);
   });
+  it("gates associated work by mailbox ownership, quarantine and tenant before returning backlinks", async () => {
+    const w = await world();
+    const created = await apiPost(HOST, "work.create", { project: "site", kind: "errand", title: "Associated evidence", source_kind: "mail", source_ref: "PRIVATE-A" }, w.pat.headers);
+    expect(created.status).toBe(200);
+    const item = (await created.json() as { result: { item: { id: string } } }).result.item;
+    for (const id of ["PRIVATE-A", "PRIVATE-B", "HELD-A", "FOREIGN"]) {
+      expect((await apiPost(HOST, "work.link", { id: item.id, target_kind: "mail", target_ref: id }, w.pat.headers)).status).toBe(200);
+    }
+    const cases = [
+      [w.pat, "PRIVATE-A", true], [w.a, "PRIVATE-A", true], [w.ordinary, "PRIVATE-A", false],
+      [w.pat, "PRIVATE-B", false], [w.a, "PRIVATE-B", false], [w.lee, "PRIVATE-B", true],
+      [w.pat, "HELD-A", false], [w.admin, "HELD-A", true], [w.root, "FOREIGN", false],
+    ] as const;
+    for (const [viewer, id, allowed] of cases) {
+      const response = await apiPost(HOST, "mail.read", { id }, viewer.headers);
+      expect(response.status, id).toBe(allowed ? 200 : 404);
+      if (allowed) {
+        expect(await response.json()).toMatchObject({ result: { relatedWork: [{ id: item.id }], relatedWorkCoverage: { shown: 1, truncated: false } } });
+      } else expect(await response.text()).not.toContain("Associated evidence");
+      const page = await SELF.fetch(`https://${HOST}/mail/${id}`, { headers: viewer.headers });
+      expect(page.status).toBe(allowed ? 200 : 404);
+      expect((await page.text()).includes("Associated evidence")).toBe(allowed);
+    }
+    await env.HUB_DB.prepare("UPDATE identity SET operator_id = ? WHERE id = ?").bind(w.ordinary.identity.id, w.a.agent.identity.id).run();
+    expect((await apiPost(HOST, "mail.read", { id: "PRIVATE-A" }, w.pat.headers)).status).toBe(404);
+    const nowAllowed = await apiPost(HOST, "mail.read", { id: "PRIVATE-A" }, w.ordinary.headers);
+    expect(await nowAllowed.json()).toMatchObject({ result: { relatedWork: [{ id: item.id }] } });
+  });
   it("does not grant agents an admin override even if handed an elevated context", async () => {
     const w = await world();
     const ctx = await buildContext(new Request(`https://${HOST}/api/mail.list`, { headers: w.a.headers }), env);

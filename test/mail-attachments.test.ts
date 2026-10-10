@@ -88,7 +88,7 @@ describe("bounded inert attachment evidence", () => {
   it("bounds MCP display excerpts and announces display/storage cuts separately", async () => {
     const parsed = await parseMail(mixed(...Array.from({ length: 4 }, (_, i) => part("🧪".repeat(10_001), "text/plain", `${i}.txt`))));
     const result = toolResult(mailRead as never, { mail: { subject: "Audit", from_email: "member@example.com", to_address: "attachments@pimwell.test",
-      received_at: now, text: "body", attachments: JSON.stringify(parsed.attachments) } });
+      received_at: now, text: "body", attachments: JSON.stringify(parsed.attachments) }, relatedWork: [], relatedWorkCoverage: { limit: 50, shown: 0, truncated: false } });
     const text = (result.content[0] as { text: string }).text;
     expect(text.length).toBeLessThan(20_000);
     expect(text).toContain("truncated by attachment limits");
