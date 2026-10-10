@@ -20,7 +20,7 @@ function fakeArdi(seen: Array<{ path: string; auth: string | null; body: Record<
       const verb = url.pathname.split("/api/")[1];
       const ok = (result: unknown, next: string | null = null) => Response.json({ ok: true, result, next });
       const commit = (oid: string, parents: string[], summary: string) => ({ oid, parents, summary, tree: "t", author_name: "Bruno", author_email: "b@example.com", author_time: 1791000000, committer_name: "Bruno", committer_email: "b@example.com", commit_time: 1791000000, principal: pusher, session: "S1", trailer_principal: null, trailer_session: null });
-      if (verb === "refs.list") return ok({ refs: [{ name: "refs/heads/main", target: B }, { name: "refs/heads/topic", target: C }] });
+      if (verb === "refs.list") return ok({ refs: [{ name: "refs/heads/main", target: B }, { name: "refs/heads/pio/topic", target: C }] });
       if (verb === "log") return ok({ commits: [commit(B, [A], "Fix two (site#1)"), commit(A, [], "Start")] }, "cursor1");
       if (verb === "commit.show") return ok({ ...commit(String(body.oid), body.oid === B ? [A] : [], body.oid === B ? "Fix two (site#1)" : "Start"), message: "Fix two (site#1)\n\nCareful now.",
         changes: body.oid === B ? [{ path: "app.ts", prev_path: null, prev_blob: "x", new_blob: "y", kind: "modify" }, { path: "new.md", prev_path: null, prev_blob: null, new_blob: "z", kind: "add" }] : [] });
@@ -98,6 +98,31 @@ describe("code views", () => {
     expect((d.result.files as Array<{ path: string }>).map((x) => x.path)).toEqual(["app.ts", "new.md"]);
     const page = await (await SELF.fetch(`https://${HOST}/site/files?path=&f=app.ts`, { headers: w.h })).text();
     expect(page).toContain("<code>three</code>");
+  });
+
+  it("follows generated commit links on slash-containing branches and preserves branch context", async () => {
+    const w = await world();
+    const get = async (path: string) => (await SELF.fetch(`https://${HOST}${path}`, { headers: w.h })).text();
+    const initial = await get("/site/code");
+    const branchHref = [...initial.matchAll(/href="([^"]+)"/g)].map(m => m[1]!).find(h => h.includes("ref=pio%2Ftopic"));
+    expect(branchHref).toBeTruthy();
+    const branch = await get(branchHref!);
+    expect(branch).not.toContain("give a branch");
+    const commitHref = [...branch.matchAll(/href="([^"]+)"/g)].map(m => m[1]!.replace(/&amp;/g, "&")).find(h => h.includes(`c=${B}`));
+    expect(commitHref).toContain("ref=pio%2Ftopic");
+    const commit = await get(commitHref!);
+    expect(commit).toContain("<h1>Fix two (site#1)</h1>");
+    expect(commit).toContain('<tr class="ins">');
+    expect(commit).not.toContain("give a branch");
+    expect(w.seen.filter(s => s.path.endsWith("/log")).at(-1)!.body.ref).toBe("refs/heads/pio/topic");
+    const file = await get("/site/files?ref=pio%2Ftopic&f=app.ts");
+    expect(file).toContain("<code>TWO</code>");
+    const compare = await w.call(w.h, "repo.diff", { project: "site", from: A, to: "pio/topic" });
+    expect(compare.status).toBe(200);
+    expect(compare.result.commits).toBe(1);
+    const qualified = await w.call(w.h, "repo.log", { project: "site", ref: "refs/heads/pio/topic" });
+    expect(qualified.status).toBe(200);
+    expect(w.seen.at(-1)!.body.ref).toBe("refs/heads/pio/topic");
   });
 
   it("says plainly when the git host can't be reached", async () => {
