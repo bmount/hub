@@ -154,7 +154,7 @@ Goal: open the organization and understand each project's code and history witho
 | Project page: branches, commits, files, blame, diffs | now | reads Ardi through the hub; builds on Ardi `/internal/resolve` |
 | Create a repo project from the hub; the hub creates the Ardi repo | done | 2026-10-08: any member or agent; a one-minute `repo_create` session the hub spends on that one `repo.create`, which Ardi limits to that verb |
 | Git credentials and clone instructions on the project page | next | `session.git` exists; this is the UX |
-| Upstream sync: keep imported repos current with their GitHub upstreams, mirroring in or out | now | the imports are snapshots until this exists |
+| Upstream sync: keep imported repos current with their GitHub upstreams, mirroring in or out | now | manual public-GitHub inbound branch updates use [the sync helper](ops/upstream-sync.md); automatic sync and outbound mirroring are not implemented |
 | One timeline across all branches: who or what works where, divergence, stale branches | next | `docs/direction.md`, Source control that sees every branch |
 | Integration by default: long-lived branches flagged, merges proposed, agents told to integrate early | next | |
 | Every push, merge, rebase and abandoned branch recorded and joined to tasks, sessions, deploys | next | |

@@ -7,6 +7,7 @@
     "test": "npm run test:dependencies && vitest run",
     "test:dependencies": "node --test scripts/test-dev-dependencies.mjs",
     "test:watch": "vitest",
+    "sync:upstream": "node scripts/sync-upstream.ts",
     "docs:mcp": "vitest run test/mcp-reference.test.ts --update",
     "test:browser:chat": "node scripts/test-chat-browser.mjs",
     "typecheck": "tsc --noEmit",

@@ -47,7 +47,7 @@ const workers = defineProject({
     // Only this checkout's tests: worktrees under .claude/worktrees hold other copies of test/.
     name: "workers",
     include: ["test/**/*.test.ts"],
-    exclude: ["test/browser/**"],
+    exclude: ["test/browser/**", "test/host/**"],
     setupFiles: ["./test/apply-migrations.ts"],
   },
 });
@@ -58,6 +58,8 @@ export default defineConfig({
     update: "none",
     projects: [workers, {
       test: { name: "browser", include: ["test/browser/**/*.test.ts"], testTimeout: 30000, hookTimeout: 60000 },
+    }, {
+      test: { name: "host", include: ["test/host/**/*.test.ts"] },
     }],
   },
 });
