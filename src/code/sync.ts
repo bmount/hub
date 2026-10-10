@@ -12,6 +12,10 @@ import { createAgentSession, revokeSession } from "../db/sessions";
 import { recordEvent } from "../db/events";
 import { conversationStub } from "../chat/stubs";
 import { ardiCall, type ArdiEvent } from "./ardi";
+import { readGitSyncState, type GitSyncState } from "./syncState";
+
+const PAGES_PER_REPO = 3;
+const PAGE_SIZE = 100;
 
 const SYNC_SLUG = "pimwell-sync";
 const REF_IN_TEXT = /\b([a-z][a-z0-9-]{1,62})#(\d{1,8})\b/g;
@@ -71,28 +75,58 @@ export async function syncAll(env: Env, now: number): Promise<{ repos: number; e
 
 async function syncRepo(env: Env, t: Tenant, r: Repo, auth: string, now: number): Promise<number> {
   const db = env.HUB_DB;
-  const state = await db.prepare("SELECT cursor FROM code_sync WHERE project_id = ?").bind(r.id).first<{ cursor: string | null }>();
-  let got: ArdiEvent[] = [];
-  let next: string | null = state?.cursor ?? null;
+  const row = await db.prepare("SELECT cursor FROM code_sync WHERE tenant_id = ? AND project_id = ?").bind(t.id, r.id).first<{ cursor: string | null }>();
+  // Legacy checkpoints started at Ardi's newest page. Replay quietly from zero to recover omitted history.
+  const state: GitSyncState = readGitSyncState(row?.cursor ?? null) ?? {
+    version: 1, after: 0, cutoff: null, phase: "backfill", head: 0, head_at: null,
+    imported_at: null, observed_at: null, caught_up_at: null,
+  };
+  const save = (error: string | null) => db.prepare(`INSERT INTO code_sync (tenant_id, project_id, cursor, last_run_at, last_error) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (project_id) DO UPDATE SET cursor = excluded.cursor, last_run_at = excluded.last_run_at, last_error = excluded.last_error`)
+    .bind(t.id, r.id, JSON.stringify(state), now, error).run();
+  let total = 0;
   try {
-    const page = await ardiCall<{ events: ArdiEvent[] }>(env, t.slug, auth, "timeline", { repo: r.slug, limit: 100, ...(next ? { since: next } : {}) });
-    got = page.result.events ?? [];
-    next = page.next ?? (got.length ? String(got[got.length - 1]!.id) : next);
+    // Without since Ardi returns the newest page; since=0 walks all history forwards.
+    const head = (await ardiCall<{ events: ArdiEvent[] }>(env, t.slug, auth, "timeline", { repo: r.slug, limit: 1 })).result.events.at(-1);
+    state.head = head?.id ?? 0;
+    state.head_at = head ? head.time * 1000 : null;
+    state.observed_at = now;
+    state.cutoff ??= state.head;
+    await save(null);
+    for (let pageNumber = 0; pageNumber < PAGES_PER_REPO; pageNumber++) {
+      const page = await ardiCall<{ events: ArdiEvent[] }>(env, t.slug, auth, "timeline", { repo: r.slug, limit: PAGE_SIZE, since: String(state.after) });
+      const got = page.result.events ?? [];
+      if (got.length > PAGE_SIZE || got.some((e, i) => !Number.isSafeInteger(e.id) || e.id <= (i ? got[i - 1]!.id : state.after))) throw new Error("invalid git timeline page");
+      await importPage(env, t, r, got, state.cutoff, now);
+      const last = got.at(-1);
+      if (last) {
+        state.after = last.id;
+        state.imported_at = last.time * 1000;
+        if (last.id > state.head) { state.head = last.id; state.head_at = state.imported_at; }
+      }
+      total += got.length;
+      // A null continuation proves exhaustion of this read, not continuous upstream freshness.
+      if (page.next === null) {
+        state.phase = "live";
+        state.caught_up_at = now;
+      }
+      await save(null);
+      if (page.next === null || !got.length) break;
+    }
   } catch (e) {
-    await db.prepare(`INSERT INTO code_sync (tenant_id, project_id, cursor, last_run_at, last_error) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT (project_id) DO UPDATE SET last_run_at = excluded.last_run_at, last_error = excluded.last_error`).bind(t.id, r.id, next, now, e instanceof Error ? e.message.slice(0, 200) : "error").run();
-    return 0;
+    await save(e instanceof Error ? e.message.slice(0, 200) : "error");
   }
-  const first = state === null;   // the first sync takes the history quietly: no links or notices for old commits
+  return total;
+}
+
+async function importPage(env: Env, t: Tenant, r: Repo, got: ArdiEvent[], cutoff: number, now: number): Promise<void> {
+  const db = env.HUB_DB;
   const ids = [...new Set(got.map((e) => e.principal).filter((x): x is string => !!x))];
   const known = new Set(ids.length ? (await db.prepare(`SELECT id FROM identity WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<{ id: string }>()).results.map((x) => x.id) : []);
   const stmts: D1PreparedStatement[] = got.map((e) => db.prepare(`INSERT OR IGNORE INTO code_event (tenant_id, project_id, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(t.id, r.id, e.id, String(e.kind).slice(0, 40), e.principal && known.has(e.principal) ? e.principal : null, e.session, e.ref, e.target, (e.summary ?? "").slice(0, 300), e.time * 1000));
-  stmts.push(db.prepare(`INSERT INTO code_sync (tenant_id, project_id, cursor, last_run_at, last_error) VALUES (?, ?, ?, ?, NULL)
-    ON CONFLICT (project_id) DO UPDATE SET cursor = excluded.cursor, last_run_at = excluded.last_run_at, last_error = NULL`).bind(t.id, r.id, next, now));
   for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
-  if (first) return got.length;
-  const commits = got.filter((e) => e.kind === "commit" && e.target);
+  const commits = got.filter((e) => e.id > cutoff && e.kind === "commit" && e.target);
   // Commits that mention project#n link to that work item, with an event on it.
   for (const c of commits) {
     for (const m of (c.summary ?? "").matchAll(REF_IN_TEXT)) {
@@ -107,7 +141,7 @@ async function syncRepo(env: Env, t: Tenant, r: Repo, auth: string, now: number)
       if (linked.meta.changes) await recordEvent(db, { tenant_id: t.id, identity_id: by, session_id: sess?.id ?? null, kind: "work.commit", target_kind: "work_item", target_id: w.id, summary: `Commit ${c.target!.slice(0, 8)} in ${r.slug}: ${(c.summary ?? "").slice(0, 150)}` }, now);
     }
   }
-  // One notice per sync with new commits.
+  // One notice per imported page with live commits.
   if (commits.length) {
     const ch = await db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'channel' AND state = 'active'").bind(t.id, `${r.slug}-ops`).first<{ id: string }>();
     if (ch) {
@@ -117,5 +151,4 @@ async function syncRepo(env: Env, t: Tenant, r: Repo, auth: string, now: number)
       try { await (conversationStub(env, t.id, ch.id) as unknown as { notice(a: string, b: string, c: string, d: number): Promise<unknown> }).notice(t.id, ch.id, body.slice(0, 500), now); } catch { /* the push is recorded either way */ }
     }
   }
-  return got.length;
 }

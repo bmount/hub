@@ -102,18 +102,24 @@ describe("truthful project period status", () => {
     const empty = await projectStatus(w.ctx, "site", w.since);
     expect(empty.coverage.telemetry).toEqual({ registered_sources: 0, active_sources: 0, active_never_received: 0, active_received_in_period: 0, oldest_active_last_received_at: null, latest_active_last_received_at: null });
     expect(empty.coverage.latest_recorded_commit_at).toBeNull();
+    expect(empty.coverage.git_sync).toMatchObject({ phase: "unknown", lag_ms: null, observed_at: null });
     expect(statusText(empty)).toContain("zero records does not prove zero activity or healthy operation");
     for (const [name, state, at] of [["stale", "active", w.since - DAY], ["fresh", "active", w.now], ["unseen", "active", null], ["disabled", "disabled", w.now], ["pending", "pending", null]] as const) {
       await env.HUB_DB.prepare("INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_at, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(name, w.t.id, w.p.id, name, state, w.since - 2 * DAY, at).run();
     }
     await env.HUB_DB.prepare("INSERT INTO code_event (tenant_id, project_id, ardi_id, kind, summary, at) VALUES (?, ?, 1, 'commit', 'old commit', ?)").bind(w.t.id, w.p.id, w.since - DAY).run();
+    await env.HUB_DB.prepare("INSERT INTO code_sync (tenant_id, project_id, cursor, last_run_at) VALUES (?, ?, ?, ?)").bind(w.t.id, w.p.id, JSON.stringify({ version: 1, after: 100, cutoff: 250, phase: "backfill", head: 250, head_at: w.now, imported_at: w.now - 5000, observed_at: w.now, caught_up_at: null }), w.now).run();
     const s = await projectStatus(w.ctx, "site", w.since);
+    expect(s.coverage.git_sync).toMatchObject({ phase: "backfill", lag_ms: 5000, pending_id_span: 150 });
+    expect(statusText(s)).toContain("observed event-time lag 5000ms");
     expect(s.commits.count).toBe(0);
     expect(s.coverage).toMatchObject({ telemetry: { registered_sources: 5, active_sources: 3, active_never_received: 1, active_received_in_period: 1, oldest_active_last_received_at: w.since - DAY, latest_active_last_received_at: w.now }, latest_recorded_commit_at: w.since - DAY });
     const html = await (await SELF.fetch(`https://${HOST}/site/status`, { headers: w.headers })).text();
     expect(html).toContain("No matching records observed.");
     expect(html).toContain("Telemetry last-received times do not prove continuous coverage");
     expect(html).toContain("1 active never received");
+    expect(html).toContain("Git sync: backfill");
+    expect(html).toContain("not an event count or continuous freshness guarantee");
   });
 
   it("keeps same-slug projects and malformed cross-tenant rows out of counts, samples and freshness", async () => {
@@ -128,7 +134,9 @@ describe("truthful project period status", () => {
     await env.HUB_DB.prepare("INSERT INTO code_event (tenant_id, project_id, ardi_id, kind, summary, at) VALUES (?, ?, 1, 'commit', 'FOREIGN SECRET', ?)").bind(other.id, p2.id, w.now).run();
     await work(w, 1, "done", w.now);
     await env.HUB_DB.prepare("INSERT INTO work_comment (id, tenant_id, item_id, author_id, body, created_at) VALUES ('foreign', ?, 'w1', ?, 'FOREIGN SECRET', ?)").bind(other.id, w.h.identity.id, w.now).run();
+    await env.HUB_DB.prepare("INSERT INTO code_sync (tenant_id, project_id, cursor, last_error) VALUES (?, ?, '100', 'FOREIGN SECRET')").bind(other.id, w.p.id).run();
     const s = await projectStatus(w.ctx, "site", w.since);
+    expect(s.coverage.git_sync).toMatchObject({ phase: "unknown", last_error: null });
     expect(s.totals.errors).toBe(1); expect(s.errors[0]!.period_samples).toBe(0);
     expect(s.comments).toBe(0); expect(s.commits.count).toBe(0);
     expect(s.coverage.telemetry.registered_sources).toBe(0);

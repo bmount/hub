@@ -5,6 +5,7 @@ import { badRequest, notFound } from "../errors";
 import type { Ctx } from "../auth/context";
 import { DATA_NOTE, cleanText } from "../mcp/render";
 import { KINDS, type WorkKind } from "../work/names";
+import { gitSyncCoverage } from "../code/syncState";
 
 export const STATUS_COVERAGE_NOTE = "Recorded evidence only; zero records does not prove zero activity or healthy operation. Error occurrences in the period are unavailable: retained events are sampled and capped, and group counts are lifetime counts. Telemetry last-received times do not prove continuous coverage. Git records may lag upstream.";
 type ExampleKey = "filed" | "finished" | "doing" | "deploys" | "errors" | "reviews" | "commits";
@@ -12,7 +13,7 @@ export type Status = {
   project: string; since: number; as_of: number;
   totals: Record<Exclude<ExampleKey, "commits">, number> & { error_occurrences: null };
   examples: Record<ExampleKey, { shown: number; limit: number; truncated: boolean }>;
-  coverage: { note: string; telemetry: { registered_sources: number; active_sources: number; active_never_received: number; active_received_in_period: number; oldest_active_last_received_at: number | null; latest_active_last_received_at: number | null }; latest_recorded_commit_at: number | null };
+  coverage: { note: string; telemetry: { registered_sources: number; active_sources: number; active_never_received: number; active_received_in_period: number; oldest_active_last_received_at: number | null; latest_active_last_received_at: number | null }; latest_recorded_commit_at: number | null; git_sync: ReturnType<typeof gitSyncCoverage> };
   filed: Array<{ ref: string; kind: WorkKind; title: string; by: string | null }>;
   finished: Array<{ ref: string; kind: WorkKind; title: string; state: string }>;
   doing: Array<{ ref: string; title: string; owner: string | null; stalled: boolean }>;
@@ -39,7 +40,7 @@ export async function projectStatus(ctx: Ctx, slug: string, since: number): Prom
   const id = p.id;
   // D1 batch reads use one transaction, keeping counts and examples consistent. No unbounded time ranges.
   const period = (table: string, time: string, suffix = "") => ctx.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ? AND project_id = ? AND ${time} >= ? AND ${time} <= ? ${suffix}`).bind(tenant, id, since, now);
-  const [filed, finished, doing, commits, byWho, deploys, errors, reviews, mail, comments, recent, counts, telemetry, latestCommit] = await ctx.db.batch([
+  const [filed, finished, doing, commits, byWho, deploys, errors, reviews, mail, comments, recent, counts, telemetry, latestCommit, gitSync] = await ctx.db.batch([
     ctx.db.prepare("SELECT w.number, w.kind, w.title, i.display_name AS by FROM work_item w LEFT JOIN identity i ON i.id = w.created_by WHERE w.tenant_id = ? AND w.project_id = ? AND w.created_at BETWEEN ? AND ? ORDER BY w.created_at DESC, w.number DESC LIMIT 50").bind(tenant, id, since, now),
     ctx.db.prepare("SELECT number, kind, title, state FROM work_item WHERE tenant_id = ? AND project_id = ? AND closed_at BETWEEN ? AND ? ORDER BY closed_at DESC, number DESC LIMIT 50").bind(tenant, id, since, now),
     ctx.db.prepare("SELECT w.number, w.title, w.updated_at, i.display_name AS owner FROM work_item w LEFT JOIN identity i ON i.id = w.owner_id WHERE w.tenant_id = ? AND w.project_id = ? AND w.state = 'doing' ORDER BY w.updated_at, w.number LIMIT 50").bind(tenant, id),
@@ -67,6 +68,7 @@ export async function projectStatus(ctx: Ctx, slug: string, since: number): Prom
       MAX(CASE WHEN state = 'active' THEN last_event_at END) AS latest_active_last_received_at
       FROM app_source WHERE tenant_id = ? AND project_id = ?`).bind(since, now, tenant, id),
     ctx.db.prepare("SELECT MAX(at) AS at FROM code_event WHERE tenant_id = ? AND project_id = ? AND kind = 'commit' AND at <= ?").bind(tenant, id, now),
+    ctx.db.prepare("SELECT cursor, last_run_at, last_error FROM code_sync WHERE tenant_id = ? AND project_id = ?").bind(tenant, id),
   ]);
   const r = <T>(x: D1Result<unknown> | undefined) => (x?.results ?? []) as T[];
   const totals = { ...r<Omit<Status["totals"], "error_occurrences">>(counts)[0]!, error_occurrences: null };
@@ -78,7 +80,7 @@ export async function projectStatus(ctx: Ctx, slug: string, since: number): Prom
   ] as const) examples[key] = { shown: result!.results.length, limit, truncated: total > result!.results.length };
   return {
     project: p.slug, since, as_of: now, totals, examples,
-    coverage: { note: STATUS_COVERAGE_NOTE, telemetry: r<Status["coverage"]["telemetry"]>(telemetry)[0]!, latest_recorded_commit_at: r<{ at: number | null }>(latestCommit)[0]!.at },
+    coverage: { note: STATUS_COVERAGE_NOTE, telemetry: r<Status["coverage"]["telemetry"]>(telemetry)[0]!, latest_recorded_commit_at: r<{ at: number | null }>(latestCommit)[0]!.at, git_sync: gitSyncCoverage(r<{ cursor: string | null; last_run_at: number | null; last_error: string | null }>(gitSync)[0]) },
     filed: r<{ number: number; kind: WorkKind; title: string; by: string | null }>(filed).map((x) => ({ ref: `${p.slug}#${x.number}`, kind: x.kind, title: x.title, by: x.by })),
     finished: r<{ number: number; kind: WorkKind; title: string; state: string }>(finished).map((x) => ({ ref: `${p.slug}#${x.number}`, kind: x.kind, title: x.title, state: x.state })),
     doing: r<{ number: number; title: string; updated_at: number; owner: string | null }>(doing).map((x) => ({ ref: `${p.slug}#${x.number}`, title: x.title, owner: x.owner, stalled: now - x.updated_at > 7 * 86_400_000 })),
@@ -95,7 +97,9 @@ export function statusExamples(total: number, shown: number): string {
 export function statusFreshness(s: Status): string {
   const t = s.coverage.telemetry;
   const when = (at: number | null) => at === null ? "never received" : new Date(at).toISOString();
-  return `As of ${new Date(s.as_of).toISOString()}; telemetry sources: ${t.registered_sources} registered, ${t.active_sources} active, ${t.active_never_received} active never received, ${t.active_received_in_period} active last received in period. Oldest/latest active last received: ${when(t.oldest_active_last_received_at)} / ${when(t.latest_active_last_received_at)}. Latest recorded commit: ${when(s.coverage.latest_recorded_commit_at)}.`;
+  const git = s.coverage.git_sync;
+  const lag = git.lag_ms === null ? "unknown" : `${git.lag_ms}ms`;
+  return `Git sync: ${git.phase}; observed at ${when(git.observed_at)}; pending event-ID span ${git.pending_id_span ?? "unknown"}; observed event-time lag ${lag} (not an event count or continuous freshness guarantee). Last run: ${when(git.last_run_at)}${git.last_error ? "; sync error recorded" : ""}. As of ${new Date(s.as_of).toISOString()}; telemetry sources: ${t.registered_sources} registered, ${t.active_sources} active, ${t.active_never_received} active never received, ${t.active_received_in_period} active last received in period. Oldest/latest active last received: ${when(t.oldest_active_last_received_at)} / ${when(t.latest_active_last_received_at)}. Latest recorded commit: ${when(s.coverage.latest_recorded_commit_at)}.`;
 }
 export function statusText(s: Status): string {
   const lines = [`**${s.project} since ${new Date(s.since).toISOString()}**`, statusFreshness(s), s.coverage.note, ""];
