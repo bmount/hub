@@ -9,6 +9,8 @@ import { shellFor } from "./shell";
 import { HubError } from "../errors";
 import { readReview, reviewListStatement } from "../verbs/review";
 import type { FileDiff } from "../code/diff";
+import { KINDS, STATES } from "../work/names";
+import { sha256Hex } from "../ids";
 
 const ago = (ms: number, now: number) => { const m = Math.max(0, Math.round((now - ms) / 60_000)); return m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
 const STATUS: Record<string, string> = { open: "Waiting", approved: "Approved", changes: "Changes asked", closed: "Closed" };
@@ -41,6 +43,10 @@ ${rows.length ? `<table><tbody>${rows.map((r) => `<tr data-href="/${esc(r.slug)}
     const me = v.reviewers.find((x) => x.identity_id === ctx.identity!.id);
     inspector = `<a class="back" href="${back}">‹ Reviews</a><div class="head"><strong>${esc(r.slug)}!${r.number}</strong><span>${esc(STATUS[r.status] ?? r.status)}</span><code>${esc(r.branch)}</code><span>into</span><code>${esc(r.base)}</code></div>
 <h1>${esc(r.title)}</h1>${r.summary ? `<div class="prose">${esc(r.summary)}</div>` : ""}
+<h2>Recorded work</h2>
+<p class="lede">${v.relatedWorkCommit ? `Commit associations use ${esc(v.relatedWorkCommit)}, not the moving branch tip.` : "No supported full recorded commit; only explicit review URL associations are matched."} Recorded associations are not proof that this work was reviewed, approved or completed.</p>
+${v.relatedWork.length ? `<table><tbody>${v.relatedWork.map(w => `<tr><td class="ref">${esc(w.ref)}</td><td>${esc(KINDS[w.kind].name)}</td><td><a href="/${esc(encodeURIComponent(w.project))}/w/${w.number}">${esc(w.title)}</a></td><td>${esc(STATES[w.state])}</td><td>${w.relationship}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">No work associations recorded for this review.</p>`}
+<p class="lede">${v.relatedWorkCoverage.shown} related work items shown${v.relatedWorkCoverage.truncated ? `; capped at ${v.relatedWorkCoverage.limit}, more omitted` : "; complete for recorded associations"}.</p>
 <dl class="meta"><dt>Author</dt><dd>${esc(r.author)}</dd><dt>Reviewers</dt><dd>${v.reviewers.length ? v.reviewers.map((x) => `${esc(x.name)}: ${x.verdict ? (x.verdict === "approve" ? "approved" : "changes asked") : "waiting"}${x.stale ? " <small>(on an older commit)</small>" : ""}`).join("<br>") : "nobody named"}</dd>
 <dt>Integrate</dt><dd><span class="pill">planned</span> waits for a merge verb in the git host</dd></dl>
 ${canWrite && r.author_id !== ctx.identity!.id && r.status !== "closed" ? `<form method="post" action="/api/review.verdict"><input type="hidden" name="id" value="${esc(r.slug)}!${r.number}"><input type="hidden" name="_back" value="/${esc(r.slug)}/reviews/${r.number}">
@@ -53,7 +59,7 @@ ${canWrite ? `<form method="post" action="/api/review.comment"><input type="hidd
 <label style="display:block"><textarea data-voice name="body" rows="3" required style="display:block;width:100%" placeholder="Comment"></textarea></label><button type="submit" class="quiet">Comment</button></form>` : ""}
 <h2>Changes${v.diff ? ` <span class="pill">${v.diff.commits} commit${v.diff.commits === 1 ? "" : "s"}</span>` : ""}</h2>
 ${v.diff ? v.diff.files.map((f) => diffBlock(f.path, f.diff, f.note)).join("") : `<p class="lede">${esc(v.diff_error ?? "")}</p>`}`;
-    key = `review:${r.id}:${r.updated_at}`;
+    key = `review:${r.id}:${r.updated_at}:${await sha256Hex(JSON.stringify([v.relatedWork, v.relatedWorkCoverage, v.relatedWorkCommit]))}`;
   }
   return htmlResponse(workbench(inspector ? `${slug}!${num}` : "Reviews", { list, listKey: `reviews:${slug ?? "org"}:${rows.length}`, inspector, inspectorKey: key }, shellFor(ctx, env, "reviews", slug ?? "reviews")!), 200, extra);
 }
