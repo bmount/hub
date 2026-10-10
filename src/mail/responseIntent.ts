@@ -8,6 +8,7 @@ import { decodeResponseRecipients, RESPONSE_RECIPIENT_PREFIX, recipientId } from
 import { resolveMailAddress } from "./projectMail";
 
 export const RESPONSE_INTENT_PREFIX = "mail_response_intent:v1:";
+export const RESPONSE_INTENT_WRITE_PREFIX = "mail_response_intent_write:v1:";
 // The public UTC minute format has a four-digit year; corrupt records cannot reach Date rendering.
 const UTC_FORMAT_END = Date.UTC(10000, 0, 1);
 type Intent = { revision: number; state: "planned" | "cancelled" | "completed"; updated_at: number; change_id: string; respond_by: number | null };
@@ -26,6 +27,20 @@ function decode(raw: string | null): Intent | null {
   } catch { return null; }
 }
 const keyFor = (ctx: Ctx, id: string) => `${RESPONSE_INTENT_PREFIX}${ctx.tenant!.id}:${id}:${ctx.identity!.id}`;
+const writeKeyFor = (ctx: Ctx, id: string, requestId: string) => `${RESPONSE_INTENT_WRITE_PREFIX}${ctx.tenant!.id}:${id}:${ctx.identity!.id}:${requestId}`;
+function checkRequestId(requestId: string) {
+  if (!recipientId(requestId)) throw badRequest("request_id must be a stable unique identity id");
+}
+type WriteReceipt = { version: 1; expected_revision: number; source: string; result: Intent };
+function decodeWrite(raw: string | null, now: number): WriteReceipt | null {
+  try {
+    const s = raw === null ? null : JSON.parse(raw) as WriteReceipt;
+    const result = s && decode(JSON.stringify(s.result));
+    return s?.version === 1 && Number.isSafeInteger(s.expected_revision) && s.expected_revision >= 0
+      && /^[a-f0-9]{64}$/.test(s.source) && result && result.revision === s.expected_revision + 1
+      && result.updated_at <= now ? { ...s, result } : null;
+  } catch { return null; }
+}
 const valueAt = async (ctx: Ctx, key: string) => (await ctx.db.prepare("SELECT value FROM meta WHERE key = ?")
   .bind(key).first<{ value: string }>())?.value ?? null;
 
@@ -72,7 +87,8 @@ type ReplyObservation = {
 
 /** Stored attempt evidence only. Absence/transport failure cannot prove that nothing was sent. */
 async function replyObservation(ctx: Ctx, e: Awaited<ReturnType<typeof evidence>>, raw: string | null, intent: Intent | null,
-  p: Awaited<ReturnType<typeof preference>>, compareReply: boolean): Promise<ReplyObservation> {
+  p: Awaited<ReturnType<typeof preference>>, compareReply: boolean,
+  receipt: { key: string; raw: string | null } | null = null): Promise<ReplyObservation> {
   const observation: ReplyObservation = { state: "not_applicable", outbound_id: null, recorded_at: null,
     recipient_delivery: "not_observed", fulfillment: "not_inferred",
     coverage: "latest_recorded_matching_own_reply_since_revision_time" };
@@ -92,6 +108,9 @@ async function replyObservation(ctx: Ctx, e: Awaited<ReturnType<typeof evidence>
         OR EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?))
       AND ((? IS NULL AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?))
         OR EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?))
+      AND (? IS NULL OR m.received_at IS ?)
+      AND (? IS NULL OR ((? IS NULL AND NOT EXISTS (SELECT 1 FROM meta WHERE key = ?))
+        OR EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)))
       AND (? AND (
         m.project_id IS NULL AND EXISTS (SELECT 1 FROM tenant t WHERE t.id = m.tenant_id AND m.to_address = t.slug || '@' || ?)
         OR EXISTS (SELECT 1 FROM project pr JOIN tenant t ON t.id = pr.tenant_id
@@ -100,7 +119,10 @@ async function replyObservation(ctx: Ctx, e: Awaited<ReturnType<typeof evidence>
     .bind(planned ? 1 : 0, ctx.identity!.id, intent?.updated_at ?? 0, ...e.bindings, e.row.project_id, e.row.identity_id,
       e.row.from_email, e.row.to_address, e.row.message_id, e.replayKey, e.replayRaw,
       raw, keyFor(ctx, e.row.id), keyFor(ctx, e.row.id), raw,
-      p.raw, p.key, p.key, p.raw, p.selected ? 1 : 0,
+      p.raw, p.key, p.key, p.raw,
+      receipt?.key ?? null, e.row.received_at,
+      receipt?.key ?? null, receipt?.raw ?? null, receipt?.key ?? null, receipt?.key ?? null, receipt?.raw ?? null,
+      p.selected ? 1 : 0,
       ctx.env.HUB_DOMAIN.toLowerCase(), ctx.env.HUB_DOMAIN.toLowerCase(), p.eligible ? 1 : 0)
     .first<{ id: string | null; status: string | null; created_at: number | null }>();
   if (!r) throw conflict("response intention or reply evidence changed; read again");
@@ -166,12 +188,41 @@ export async function responseAgenda(ctx: Ctx, before: string | null = null) {
     automatic_execution: "not_implemented" as const, notification: "not_requested" as const, response_guaranteed: false };
 }
 
-export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["state"], expected: number, respondBy: number | null = null) {
+const sourceHash = (e: Awaited<ReturnType<typeof evidence>>) => sha256Hex(JSON.stringify([e.row, e.replayKey, e.replayRaw]));
+
+/** Reconciles only a preserved exact intention edit. Never sends or authorizes retry. */
+export async function responseIntentWriteStatus(ctx: Ctx, id: string, requestId: string,
+  state: Intent["state"], expected: number, respondBy: number | null = null) {
+  checkRequestId(requestId);
+  const e = await evidence(ctx, id), key = writeKeyFor(ctx, id, requestId), receiptRaw = await valueAt(ctx, key);
+  const receipt = decodeWrite(receiptRaw, ctx.now);
+  const raw = await valueAt(ctx, keyFor(ctx, id)), current = decode(raw), p = await preference(ctx, e.row);
+  const sourceMatches = receipt && receipt.source === await sourceHash(e);
+  // This final bounded query also anchors the receipt (including absence) to
+  // the same authority/source/replay/current-intention/preference observation.
+  await replyObservation(ctx, e, raw, current, p, false, { key, raw: receiptRaw });
+  const valid = !!receipt && !!sourceMatches;
+  return { mail_id: id, request_id: requestId,
+    status: receiptRaw === null ? "no_record" : valid ? "committed" : "invalid",
+    matches: valid ? receipt.expected_revision === expected && receipt.result.state === state
+      && receipt.result.respond_by === respondBy : null,
+    committed_revision: valid ? receipt.result.revision : null,
+    recorded_at: valid ? receipt.result.updated_at : null,
+    current_revision: raw === null ? 0 : current?.revision ?? null,
+    still_current: valid ? raw === JSON.stringify(receipt.result) : null,
+    retry_authorized: false, automatic_execution: "not_implemented", notification: "not_requested", response_guaranteed: false };
+}
+
+export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["state"], expected: number,
+  respondBy: number | null = null, requestId: string | null = null) {
+  if (requestId !== null) checkRequestId(requestId);
   if (respondBy !== null && (state !== "planned" || !Number.isSafeInteger(respondBy) || respondBy <= ctx.now
     || respondBy - ctx.now > REPLY_WINDOW_MS || respondBy >= UTC_FORMAT_END)) {
     throw badRequest("respond-by must be a future UTC time within the reply window, for a planned intention only");
   }
   const e = await evidence(ctx, id), key = keyFor(ctx, id), raw = await valueAt(ctx, key), old = decode(raw);
+  const writeKey = requestId === null ? null : writeKeyFor(ctx, id, requestId);
+  if (writeKey !== null && await valueAt(ctx, writeKey) !== null) throw conflict("request_id already recorded; reconcile instead of replaying");
   if (respondBy !== null && (!Number.isSafeInteger(e.row.received_at) || e.row.received_at < 0
     || e.row.received_at > ctx.now || respondBy > e.row.received_at + REPLY_WINDOW_MS)) {
     throw conflict("respond-by must be within 30 days of receiving this message");
@@ -188,10 +239,13 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
   if (state === "planned" && !p.eligible) throw conflict("current mailbox preferences do not select you");
   const next: Intent = { revision: expected + 1, state, updated_at: ctx.now, change_id: ulid(ctx.now), respond_by: respondBy };
   const value = JSON.stringify(next);
+  const receipt: WriteReceipt = { version: 1, expected_revision: expected, source: await sourceHash(e), result: next };
   const r = await ctx.db.batch([
     ctx.db.prepare(`INSERT INTO meta (key, value) SELECT ?, ? FROM inbound_mail m
       WHERE ${BASE} AND m.project_id IS ? AND m.identity_id = ? AND m.from_email = ? AND m.to_address = ? AND m.message_id = ?
         AND EXISTS (SELECT 1 FROM meta r WHERE r.key = ? AND r.value = ?)
+        AND (? IS NULL OR m.received_at IS ?)
+        AND (? IS NULL OR NOT EXISTS (SELECT 1 FROM meta receipt WHERE receipt.key = ?))
         AND (? IS NULL OR m.received_at = ? AND m.received_at <= ? AND ? <= m.received_at + ?)
         AND (? IS NULL OR EXISTS (SELECT 1 FROM meta previous WHERE previous.key = ? AND previous.value = ?))
         AND (? IN ('cancelled', 'completed') OR (
@@ -202,8 +256,11 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
                 AND m.to_address = t.slug || '.' || pr.slug || '@' || ?))))
       ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE meta.value = ?`)
       .bind(key, value, ...e.bindings, e.row.project_id, e.row.identity_id, e.row.from_email, e.row.to_address, e.row.message_id,
-        e.replayKey, e.replayRaw, respondBy, e.row.received_at, ctx.now, respondBy, REPLY_WINDOW_MS,
+        e.replayKey, e.replayRaw, writeKey, e.row.received_at, writeKey, writeKey, respondBy, e.row.received_at, ctx.now, respondBy, REPLY_WINDOW_MS,
         raw, key, raw, state, p.key, p.raw, ctx.env.HUB_DOMAIN.toLowerCase(), ctx.env.HUB_DOMAIN.toLowerCase(), raw),
+    ...(writeKey === null ? [] : [ctx.db.prepare(`INSERT INTO meta (key, value)
+      SELECT ?, ? WHERE EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)`)
+      .bind(writeKey, JSON.stringify(receipt), key, value)]),
     ctx.db.prepare(`INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
       SELECT ?, ?, ?, ?, 'mail.set_response_intent', 'inbound_mail', ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)`)
@@ -214,7 +271,7 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
         ctx.now, key, value),
   ]);
   if (r[0]!.meta.changes !== 1) throw conflict("response intent or eligibility changed; read before editing");
-  return { revision: next.revision, state, respond_by: respondBy,
+  return { revision: next.revision, state, respond_by: respondBy, request_id: requestId,
     completion_evidence: state === "completed" ? "self_reported" : "not_reported", recipient_delivery: "not_observed",
     automatic_execution: "not_implemented", notification: "not_requested", response_guaranteed: false };
 }

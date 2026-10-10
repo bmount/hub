@@ -44,6 +44,7 @@ export async function deleteTenant(db: D1Database, slug: string, deleted_by: str
   stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_replay:v1:${t.id}:*`));
   stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_response_recipients:v1:${t.id}:*`));
   stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_response_intent:v1:${t.id}:*`));
+  stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_response_intent_write:v1:${t.id}:*`));
   const sessions = "SELECT id FROM session WHERE tenant_id = ?";
   // Records elsewhere that point at this organization's sessions keep their meaning without the link.
   stmts.push(db.prepare(`UPDATE event SET session_id = NULL WHERE session_id IN (${sessions}) AND IFNULL(tenant_id, '') != ?`).bind(t.id, t.id));

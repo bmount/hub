@@ -151,7 +151,9 @@ commit at most one update/audit. Same-state/no-intent cancellation and stale
 replays conflict instead of creating duplicate audit events.
 
 If a POST outcome is ambiguous, **read/reload the own revision/state before
-editing again**. Never blindly replay it. This is optimistic state management,
+editing again**. Never blindly replay it. Optional durable request receipts
+(below) reconcile the exact edit even after later revisions; they do not
+replay it or authorize another write. This is optimistic state management,
 not an outbound idempotency key. No external delivery is attempted here.
 Existing tenant-deletion code removes only that tenant's intent keys within its
 transaction. Tests use disposable fixtures; release does not delete real data
@@ -162,6 +164,88 @@ applies. The summary contains only fixed intention/cancellation semantics, no
 subject, address or extra recipient list. Completion's fixed audit summary
 explicitly states self-report and unobserved recipient delivery. Read status contains only the caller's
 own record, not another responder's private state.
+
+## Durable exact-edit reconciliation
+
+API clients may preserve a newly generated uppercase ULID `request_id` **before**
+posting `mail.set_response_intent`, along with the exact `id`, `state`,
+`expected_revision` and `respond_by_utc` (or its absence). The ID is a unique
+request alias, not authoritative proof, a mail ID, permission or a delivery key.
+It is optional for compatibility: existing native inspector forms continue to
+use revision CAS without a request receipt. The write response echoes
+`request_id` (null for legacy edits). Do not generate a new alias automatically
+on a failed/ambiguous write.
+
+`POST /api/mail.response_intent_write_status` takes that same preserved payload,
+including the required request alias. It is a human-only member/admin query,
+not an MCP/assistant tool. Normal tenant host, authentication and Origin gates
+apply; like the intention read, it does not require or refresh recent proof.
+The actual write still requires fresh proof. The query accepts a previously
+valid UTC deadline that is now past; reconciliation does not create a new plan.
+
+Response fields:
+
+- `mail_id`, own `request_id`, `status`: `committed`, `no_record` or `invalid`.
+- `matches`: whether the original expected revision, state and deadline exactly
+  match the preserved parsed edit. Null for absent/invalid records. Equality
+  refers to the original intention edit, not current preference, fulfillment,
+  sending, execution or delivery.
+- `committed_revision`, `recorded_at`: original committed revision/time for a
+  valid source-bound receipt; otherwise null. No original content, addresses,
+  raw evidence or transport errors are returned.
+- `current_revision`: own current intention revision (0 absent, null invalid).
+  `still_current` compares the complete committed intention with the current
+  own record, not merely the revision number; null absent/invalid receipt.
+- `retry_authorized: false`, `automatic_execution: "not_implemented"`,
+  `notification: "not_requested"`, `response_guaranteed: false` always remain.
+
+A valid receipt can remain `committed`/`matches: true` after cancellation,
+completion, retiming, replanning or deletion of the current own intention;
+`still_current` then reports false. A different request under the same alias
+reports `matches: false`, never silently updates the receipt. `no_record` is
+only an observed absence, **not proof that a concurrent write cannot commit or
+permission to retry**. `invalid` requires reconciliation, not reset. Read the
+current intention and make any subsequent edit a new explicit human decision
+with its own preserved alias and current revision. No write retry occurs in the
+status query or when supplying an existing alias to the command.
+
+Receipts live in existing `meta` under
+`mail_response_intent_write:v1:<tenant id>:<mail id>:<human id>:<request id>`.
+One accepted transition stores its version, expected revision, fixed result
+state/revision/deadline/change ID/time and a SHA-256 fingerprint of the exact
+server-owned source and independent replay snapshot. This fingerprint is not a
+new authentication mechanism. The request alias is scoped to caller/mail/tenant;
+other responders and sources cannot read or collide with this receipt. Receipt
+storage has no TTL: a later intention edit does not lose ambiguous-write
+reconciliation. Existing tenant deletion removes only that tenant's receipts.
+No schema migration, real deletion or actual human edit is performed on release.
+
+Revision CAS, current authority/evidence/preference/destination/window checks,
+request-alias absence, the receipt insert and the fixed audit commit in the same
+D1 transaction. Keyed edits also recheck the source receipt timestamp even for
+untimed plans. An audit/receipt failure rolls back the intention; a concurrent
+collision cannot overwrite a receipt or create a false audit. A used or corrupt
+alias always conflicts, including after the current intention is deleted. A
+lost transaction response can be reconciled by the query; it does not repeat
+that transaction. Legacy commands without aliases retain existing behavior.
+
+The status query requires the same currently shared independently admitted
+source and active explicit human membership as intention reads, even for old
+receipts. Private-agent, foreign, quarantined, released or unproven sources
+never expose receipt status. A valid current source whose fingerprint differs
+from the committed source reports `invalid`, not a verified old effect. A final
+bounded query binds receipt (including absence), source/receipt time/replay,
+current intention, authority and preference snapshots; concurrent changes
+conflict the whole observation, rather than returning stale reconciliation.
+This is an observation, not a lock against later changes. Database failures
+propagate rather than becoming `no_record`. No outbound record is selected.
+
+Tests use native Workers fixtures for lost responses, later revisions, exact
+payload comparison, concurrency, rollback/collisions, authority loss, source/
+receipt/intention/preference interleavings and tenant cleanup. They are not real
+human interaction, live-provider acceptance, scheduled execution, notification
+or delivery evidence. The browser inspector has no new status/retry UI in this
+increment; API clients must preserve their intended payload explicitly.
 
 ## Bounded own recorded reply evidence
 

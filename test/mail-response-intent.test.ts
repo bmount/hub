@@ -7,9 +7,10 @@ import { checkAccess } from "../src/verbs/dispatch";
 import { buildContext } from "../src/auth/context";
 import { storeIndependentMailCandidate, REPLAY_PREFIX } from "../src/mail/replay";
 import { RESPONSE_RECIPIENT_PREFIX } from "../src/mail/responseRecipients";
-import { RESPONSE_INTENT_PREFIX, responseIntent, setResponseIntent } from "../src/mail/responseIntent";
+import { RESPONSE_INTENT_PREFIX, RESPONSE_INTENT_WRITE_PREFIX, responseIntent, responseIntentWriteStatus, setResponseIntent } from "../src/mail/responseIntent";
 import { REPLY_WINDOW_MS } from "../src/mail/limits";
 import { mailSetResponseIntent } from "../src/verbs/mailIntent";
+import { ulid } from "../src/ids";
 import { createProject } from "../src/db/projects";
 import { deleteTenant } from "../src/db/tenantDelete";
 import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
@@ -593,5 +594,202 @@ describe("explicit self-recorded human response intent, not automatic scheduling
     await env.HUB_DB.prepare("UPDATE tenant SET state = 'archived' WHERE id = ?").bind(w.tenant.id).run();
     await deleteTenant(env.HUB_DB, "intent", w.admin.identity.id, Date.now());
     expect((await env.HUB_DB.prepare("SELECT key FROM meta WHERE key GLOB ?").bind(RESPONSE_INTENT_PREFIX + "*").all()).results).toEqual([{ key: keep }]);
+  });
+});
+
+describe("durable own response-intention write reconciliation (not delivery or retry authorization)", () => {
+  type World = Awaited<ReturnType<typeof world>>;
+  const payload = (w: World, request = ulid(), state = "planned", revision = 0) =>
+    ({ id: w.id, request_id: request, state, expected_revision: revision });
+  const save = (w: World, body: Record<string, unknown>) => apiPost(host, "mail.set_response_intent", body, w.headers);
+  const status = (w: World, body: Record<string, unknown>, headers = w.headers) =>
+    apiPost(host, "mail.response_intent_write_status", body, headers);
+  const receiptKey = (w: World, request: string) => `${RESPONSE_INTENT_WRITE_PREFIX}${w.tenant.id}:${w.id}:${w.member.identity.id}:${request}`;
+  const result = async (r: Response) => { expect(r.status, await r.clone().text()).toBe(200); return (await r.json() as { result: Record<string, any> }).result; };
+  const context = (w: World) => buildContext(new Request(`https://${host}/api/mail.response_intent_write_status`, { headers: w.headers }), env);
+  it.each([false, true])("reconciles exact committed org/project=%s edits after later revisions without replaying them", async project => {
+    const w = await world(project), body = payload(w);
+    expect(await result(await status(w, body))).toMatchObject({ status: "no_record", matches: null, still_current: null, retry_authorized: false });
+    expect(await result(await save(w, body))).toMatchObject({ revision: 1, request_id: body.request_id });
+    expect(await result(await status(w, body))).toMatchObject({ status: "committed", matches: true, committed_revision: 1, current_revision: 1, still_current: true, retry_authorized: false });
+    const cancel = payload(w, ulid(), "cancelled", 1);
+    expect((await save(w, cancel)).status).toBe(200);
+    expect(await result(await status(w, body))).toMatchObject({ status: "committed", matches: true, committed_revision: 1, current_revision: 2, still_current: false });
+    expect(await result(await status(w, cancel))).toMatchObject({ status: "committed", matches: true, committed_revision: 2, still_current: true });
+    for (const changed of [body, { ...body, state: "completed", expected_revision: 2 }, { ...body, expected_revision: 2 }]) expect((await save(w, changed)).status).toBe(409);
+    expect(await count()).toBe(2);
+    for (const table of ["outbound_mail", "attention", "consent", "oauth_grant"]) expect(await env.HUB_DB.prepare(`SELECT COUNT(*) n FROM ${table}`).first("n")).toBe(0);
+  });
+  it("binds expected revision, state and UTC deadline; a past deadline can still be reconciled", async () => {
+    const w = await world(), ctx = await context(w), request = ulid(), due = ctx.now + 60_000;
+    await setResponseIntent(ctx, w.id, "planned", 0, due, request);
+    const later = { ...ctx, now: due + 1 };
+    expect(await responseIntentWriteStatus(later, w.id, request, "planned", 0, due)).toMatchObject({ status: "committed", matches: true });
+    for (const [state, revision, time] of [["planned", 1, due], ["cancelled", 0, null], ["planned", 0, null], ["planned", 0, due + 1]] as const) {
+      expect(await responseIntentWriteStatus(later, w.id, request, state, revision, time)).toMatchObject({ status: "committed", matches: false, retry_authorized: false });
+    }
+    const complete = payload(w, ulid(), "completed", 1);
+    expect((await save(w, complete)).status).toBe(200);
+    expect(await result(await status(w, complete))).toMatchObject({ matches: true, committed_revision: 2 });
+  });
+  it("keeps request receipts scoped to caller, source and tenant, including the same request alias", async () => {
+    const w = await world(), body = payload(w);
+    expect((await save(w, body)).status).toBe(200);
+    expect(await result(await status(w, body, cookieHeaders(w.other.token, host)))).toMatchObject({ status: "no_record", matches: null });
+    expect(await result(await status(w, body, w.adminHeaders))).toMatchObject({ status: "no_record" });
+    expect((await apiPost(host, "mail.set_response_intent", body, cookieHeaders(w.other.token, host))).status).toBe(200);
+    const second = await storeIndependentMailCandidate(env, { bytes: new TextEncoder().encode(fixtures.valid), from: w.member.identity.email, to: "intent.site@pimwell.test" }, now, async () => [[fixtures.record]]);
+    if (second.status !== "stored") throw new Error("second source not stored");
+    expect(await result(await status(w, { ...body, id: second.mail_id }))).toMatchObject({ status: "no_record" });
+    expect((await apiPost("foreign.pimwell.test", "mail.response_intent_write_status", body, cookieHeaders(w.member.token, "foreign.pimwell.test"))).status).not.toBe(200);
+  });
+  it("commits the intent/receipt/audit once despite concurrent identical requests", async () => {
+    const w = await world(), body = payload(w);
+    expect((await Promise.all([save(w, body), save(w, body)])).map(r => r.status).sort()).toEqual([200, 409]);
+    expect(await count()).toBe(1);
+    expect(await result(await status(w, body))).toMatchObject({ status: "committed", matches: true });
+  });
+  it("reconciles a lost commit response, and preserves the receipt after current intention deletion", async () => {
+    const w = await world(), ctx = await context(w), body = payload(w), original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, key) {
+      if (key !== "batch") { const v = Reflect.get(db, key); return typeof v === "function" ? v.bind(db) : v; }
+      return async (stmts: D1PreparedStatement[]) => { await original(stmts); throw new Error("lost commit result"); };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "planned", 0, null, body.request_id)).rejects.toThrow("lost commit result");
+    expect(await result(await status(w, body))).toMatchObject({ status: "committed", matches: true });
+    await env.HUB_DB.prepare("DELETE FROM meta WHERE key = ?").bind(w.intentKey).run();
+    expect(await result(await status(w, body))).toMatchObject({ status: "committed", matches: true, current_revision: 0, still_current: false });
+    expect((await save(w, body)).status).toBe(409);
+    expect(await count()).toBe(1);
+  });
+  it("rolls back the receipt and intent on audit failure; absence never authorizes retry", async () => {
+    const w = await world(), ctx = await context(w), body = payload(w);
+    ctx.session = { ...ctx.session!, id: "missing-session" };
+    await expect(setResponseIntent(ctx, w.id, "planned", 0, null, body.request_id)).rejects.toThrow();
+    expect(await result(await status(w, body))).toMatchObject({ status: "no_record", current_revision: 0, retry_authorized: false });
+    expect(await count()).toBe(0);
+  });
+  it.each([null, "", "bad", "a".repeat(27), "01m4faktzn5k8r70yek82b5s8s"])("rejects invalid status request alias %s", async request => {
+    const w = await world(); expect((await status(w, { ...payload(w), request_id: request })).status).toBe(400);
+  });
+  it("retains legacy CAS without silently inventing a durable receipt", async () => {
+    const w = await world(), body = payload(w);
+    expect((await set(w)).status).toBe(200);
+    expect(await result(await status(w, body))).toMatchObject({ status: "no_record", current_revision: 1 });
+    expect((await set(w)).status).toBe(409);
+  });
+  it.each(["{}", "not-json", "future", "source"])("fails closed for %s receipt without replacing it", async change => {
+    const w = await world(), body = payload(w); expect((await save(w, body)).status).toBe(200);
+    const key = receiptKey(w, body.request_id), original = await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(key).first<string>("value");
+    const value = JSON.parse(original!);
+    if (change === "future") value.result.updated_at = Date.now() + 86_400_000;
+    if (change === "source") value.source = "0".repeat(64);
+    await env.HUB_DB.prepare("UPDATE meta SET value = ? WHERE key = ?").bind(["{}", "not-json"].includes(change) ? change : JSON.stringify(value), key).run();
+    expect(await result(await status(w, body))).toMatchObject({ status: "invalid", matches: null, committed_revision: null, retry_authorized: false });
+    expect((await save(w, body)).status).toBe(409); expect(await count()).toBe(1);
+  });
+  it.each(["private", "released", "quarantine", "proof", "member", "root"])("does not disclose committed receipts after %s authority/evidence loss", async change => {
+    const w = await world(), body = payload(w); expect((await save(w, body)).status).toBe(200);
+    if (change === "private") await env.HUB_DB.prepare("UPDATE inbound_mail SET recipient_id = ? WHERE id = ?").bind(w.bot.agent.identity.id, w.id).run();
+    if (change === "released") await env.HUB_DB.prepare("UPDATE inbound_mail SET released_by = ? WHERE id = ?").bind(w.admin.identity.id, w.id).run();
+    if (change === "quarantine") await env.HUB_DB.prepare("UPDATE inbound_mail SET verdict = 'quarantined' WHERE id = ?").bind(w.id).run();
+    if (change === "proof") await env.HUB_DB.prepare("DELETE FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").run();
+    if (change === "member" || change === "root") await env.HUB_DB.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ?").bind(w.member.identity.id).run();
+    if (change === "root") await env.HUB_DB.prepare("UPDATE identity SET is_root = 1 WHERE id = ?").bind(w.member.identity.id).run();
+    const r = await status(w, body); expect(r.status).not.toBe(200); expect(await r.text()).not.toContain("committed_revision");
+  });
+  it("allows stale-proof read reconciliation without refreshing proof or allowing an agent, reader or bad Origin", async () => {
+    const w = await world(), body = payload(w); expect((await save(w, body)).status).toBe(200);
+    await env.HUB_DB.prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(Date.now() - 61 * 60_000, w.member.session.id).run();
+    const snapshot = (await env.HUB_DB.prepare("SELECT * FROM meta ORDER BY key").all()).results;
+    expect(await result(await status(w, body))).toMatchObject({ matches: true });
+    expect((await save(w, payload(w, ulid(), "cancelled", 1))).status).toBe(403);
+    for (const headers of [bearer(w.bot.token), cookieHeaders(w.reader.token, host), {}, { cookie: w.headers.cookie!, origin: "https://evil.test" }]) expect((await status(w, body, headers)).status).not.toBe(200);
+    expect(getVerb("mail.response_intent_write_status")!.mcp).toBeUndefined();
+    expect((await env.HUB_DB.prepare("SELECT * FROM meta ORDER BY key").all()).results).toEqual(snapshot);
+    expect(await count()).toBe(1);
+  });
+  it.each(["receipt", "absent", "source", "intent", "proof", "member", "preference"])("refuses %s changes in the final read observation", async change => {
+    const w = await world(), body = payload(w), ctx = await context(w);
+    if (change !== "absent") expect((await save(w, body)).status).toBe(200);
+    const original = ctx.db.prepare.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, prop) {
+      if (prop !== "prepare") { const v = Reflect.get(db, prop); return typeof v === "function" ? v.bind(db) : v; }
+      return (sql: string) => {
+        const stmt = original(sql);
+        if (!sql.startsWith("SELECT o.id")) return stmt;
+        return { bind: (...bindings: unknown[]) => ({ first: async () => {
+          if (change === "receipt") await env.HUB_DB.prepare("UPDATE meta SET value = '{}' WHERE key = ?").bind(receiptKey(w, body.request_id)).run();
+          if (change === "absent") await env.HUB_DB.prepare("INSERT INTO meta VALUES (?, '{}')").bind(receiptKey(w, body.request_id)).run();
+          if (change === "source") await env.HUB_DB.prepare("UPDATE inbound_mail SET received_at = received_at + 1 WHERE id = ?").bind(w.id).run();
+          if (change === "intent") await env.HUB_DB.prepare("DELETE FROM meta WHERE key = ?").bind(w.intentKey).run();
+          if (change === "proof") await env.HUB_DB.prepare("DELETE FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").run();
+          if (change === "member") await env.HUB_DB.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ?").bind(w.member.identity.id).run();
+          if (change === "preference") await env.HUB_DB.prepare("UPDATE meta SET value = '{}' WHERE key = ?").bind(w.prefKey).run();
+          return stmt.bind(...bindings).first();
+        } }) };
+      };
+    } });
+    await expect(responseIntentWriteStatus(ctx, w.id, body.request_id, "planned", 0)).rejects.toThrow("changed; read again");
+  });
+  it("rolls back a concurrent request collision without overwriting its receipt or auditing a false change", async () => {
+    const w = await world(), ctx = await context(w), body = payload(w), key = receiptKey(w, body.request_id), original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, prop) {
+      if (prop !== "batch") { const v = Reflect.get(db, prop); return typeof v === "function" ? v.bind(db) : v; }
+      return async (stmts: D1PreparedStatement[]) => {
+        await env.HUB_DB.prepare("INSERT INTO meta VALUES (?, '{}')").bind(key).run(); return original(stmts);
+      };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "planned", 0, null, body.request_id)).rejects.toThrow("eligibility changed");
+    expect(await read(w)).toMatchObject({ state: "unset" }); expect(await count()).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(key).first("value")).toBe("{}");
+  });
+  it("rolls back the intention when receipt storage fails before audit", async () => {
+    const w = await world(), ctx = await context(w), body = payload(w), original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, prop) {
+      if (prop !== "batch") { const v = Reflect.get(db, prop); return typeof v === "function" ? v.bind(db) : v; }
+      return (stmts: D1PreparedStatement[]) => {
+        expect(stmts).toHaveLength(3);
+        return original([stmts[0]!, env.HUB_DB.prepare("INSERT INTO session (id) VALUES ('invalid-receipt-fixture')"), stmts[2]!]);
+      };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "planned", 0, null, body.request_id)).rejects.toThrow();
+    expect(await result(await status(w, body))).toMatchObject({ status: "no_record", current_revision: 0 });
+    expect(await count()).toBe(0);
+  });
+  it("refuses receipt timestamp changes before a keyed untimed write commits", async () => {
+    const w = await world(), ctx = await context(w), body = payload(w), original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, prop) {
+      if (prop !== "batch") { const v = Reflect.get(db, prop); return typeof v === "function" ? v.bind(db) : v; }
+      return async (stmts: D1PreparedStatement[]) => {
+        await env.HUB_DB.prepare("UPDATE inbound_mail SET received_at = received_at + 1 WHERE id = ?").bind(w.id).run(); return original(stmts);
+      };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "planned", 0, null, body.request_id)).rejects.toThrow("eligibility changed");
+    expect(await result(await status(w, body))).toMatchObject({ status: "no_record", current_revision: 0 });
+    expect(await count()).toBe(0);
+  });
+  it("reports changed server-owned source snapshots as invalid, without exposing the original receipt", async () => {
+    const w = await world(), body = payload(w); expect((await save(w, body)).status).toBe(200);
+    await env.HUB_DB.prepare("UPDATE inbound_mail SET received_at = received_at + 1 WHERE id = ?").bind(w.id).run();
+    expect(await result(await status(w, body))).toMatchObject({ status: "invalid", matches: null, committed_revision: null, recorded_at: null, still_current: null });
+    expect(await count()).toBe(1);
+  });
+  it("propagates database failures instead of fabricating no_record", async () => {
+    const w = await world(), ctx = await context(w), request = ulid(), original = ctx.db.prepare.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, prop) {
+      if (prop !== "prepare") { const v = Reflect.get(db, prop); return typeof v === "function" ? v.bind(db) : v; }
+      return (sql: string) => sql.startsWith("SELECT o.id") ? { bind: () => ({ first: () => { throw new Error("database unavailable"); } }) } : original(sql);
+    } });
+    await expect(responseIntentWriteStatus(ctx, w.id, request, "planned", 0)).rejects.toThrow("database unavailable");
+    expect(await count()).toBe(0);
+  });
+  it("cleans only the deleted tenant's durable request receipts", async () => {
+    const w = await world(), body = payload(w); expect((await save(w, body)).status).toBe(200);
+    const keep = `${RESPONSE_INTENT_WRITE_PREFIX}${w.foreign.id}:keep`;
+    await env.HUB_DB.prepare("INSERT INTO meta VALUES (?, 'keep')").bind(keep).run();
+    await env.HUB_DB.prepare("UPDATE tenant SET state = 'archived' WHERE id = ?").bind(w.tenant.id).run();
+    await deleteTenant(env.HUB_DB, "intent", w.admin.identity.id, Date.now());
+    expect((await env.HUB_DB.prepare("SELECT key FROM meta WHERE key GLOB ?").bind(RESPONSE_INTENT_WRITE_PREFIX + "*").all()).results).toEqual([{ key: keep }]);
   });
 });

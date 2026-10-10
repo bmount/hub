@@ -17,7 +17,7 @@ import { whoami } from "./whoami";
 import { tenantArchive, tenantCreate, tenantDelete, tenantList, tenantUnarchive } from "./tenant";
 import { mailList, mailProposeWork, mailRead, mailRelease } from "./mail";
 import { mailResponseRecipients, mailSetResponseRecipients } from "./mailRecipients";
-import { mailResponseAgenda, mailResponseIntent, mailSetResponseIntent } from "./mailIntent";
+import { mailResponseAgenda, mailResponseIntent, mailResponseIntentWriteStatus, mailSetResponseIntent } from "./mailIntent";
 import { workClaim, workCreate, workLink, workList, workRead, workUpdate } from "./work";
 import { capabilities, projectHistory, skillList, skillRead } from "./discover";
 import { modelRouteSet, modelTest, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, providerStatus } from "./models";
@@ -46,7 +46,7 @@ export function registerAllVerbs(): void {
   registerVerbs([
     bootstrap, whoami,
     tenantCreate, tenantArchive, tenantUnarchive, tenantList, tenantDelete,
-    mailList, mailRead, mailRelease, mailProposeWork, mailResponseRecipients, mailSetResponseRecipients, mailResponseIntent, mailSetResponseIntent, mailResponseAgenda,
+    mailList, mailRead, mailRelease, mailProposeWork, mailResponseRecipients, mailSetResponseRecipients, mailResponseIntent, mailSetResponseIntent, mailResponseAgenda, mailResponseIntentWriteStatus,
     workCreate, workList, workRead, workUpdate, workClaim, workLink,
     ...plannedVerbs,
     memberSetRole, memberRemove,

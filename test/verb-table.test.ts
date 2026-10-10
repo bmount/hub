@@ -24,6 +24,7 @@ const TABLE: Record<string, Decl> = {
   "mail.set_response_recipients": T("tenant", "admin", 60, { humanOnly: true }),
   "mail.response_intent": T("tenant", "member", null, { humanOnly: true }),
   "mail.response_agenda": T("tenant", "member", null, { humanOnly: true }),
+  "mail.response_intent_write_status": T("tenant", "member", null, { humanOnly: true }),
   "mail.set_response_intent": T("tenant", "member", 60, { humanOnly: true }),
   "member.set_role": T("tenant", "admin", 60, { humanOnly: true }),
   "work.comment": T("tenant", "member", null, { mcp: "write" }),

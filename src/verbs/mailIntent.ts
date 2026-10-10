@@ -2,7 +2,7 @@ import { defineVerb } from "./table";
 import { optInt, optString, reqEnum, reqString } from "./params";
 import { badRequest } from "../errors";
 import { recipientId } from "../mail/responseRecipients";
-import { responseAgenda, responseIntent, setResponseIntent } from "../mail/responseIntent";
+import { responseAgenda, responseIntent, responseIntentWriteStatus, setResponseIntent } from "../mail/responseIntent";
 
 // UTC minute precision, never server/browser-local interpretation or permissive Date rollover.
 function respondBy(i: Record<string, unknown>) {
@@ -37,15 +37,31 @@ export const mailResponseAgenda = defineVerb({
   },
   run: (ctx, p) => responseAgenda(ctx, p.before),
 });
+function editParams(i: Record<string, unknown>) {
+  const expected = optInt(i, "expected_revision", { min: 0, max: Number.MAX_SAFE_INTEGER - 2 });
+  if (expected === null) throw badRequest("expected_revision is required");
+  const state = reqEnum(i, "state", ["planned", "cancelled", "completed"] as const), due = respondBy(i);
+  if (state !== "planned" && due !== null) throw badRequest("cancellation or completion does not accept a respond-by time");
+  return { id: mailId(i), state, expected, due };
+}
+function requestId(i: Record<string, unknown>) {
+  const id = optString(i, "request_id", { max: 26 });
+  if (id !== null && !recipientId(id)) throw badRequest("request_id must be a stable unique identity id");
+  return id;
+}
+export const mailResponseIntentWriteStatus = defineVerb({
+  name: "mail.response_intent_write_status", kind: "query", scope: "tenant", minRole: "member", freshProofMinutes: null, humanOnly: true,
+  summary: "Reconcile your preserved exact response-intention edit against a durable own request receipt. No resend, notification, execution or retry authorization.",
+  parse: i => {
+    const request = requestId(i);
+    if (request === null) throw badRequest("request_id is required");
+    return { ...editParams(i), request };
+  },
+  run: (ctx, p) => responseIntentWriteStatus(ctx, p.id, p.request, p.state, p.expected, p.due),
+});
 export const mailSetResponseIntent = defineVerb({
   name: "mail.set_response_intent", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: 60, humanOnly: true,
   summary: "Record, retime, cancel or explicitly self-report completion of your own human response intention. Completion is not observed recipient delivery. No send, notification, automation or access grant.",
-  parse: i => {
-    const expected = optInt(i, "expected_revision", { min: 0, max: Number.MAX_SAFE_INTEGER - 2 });
-    if (expected === null) throw badRequest("expected_revision is required");
-    const state = reqEnum(i, "state", ["planned", "cancelled", "completed"] as const), due = respondBy(i);
-    if (state !== "planned" && due !== null) throw badRequest("cancellation or completion does not accept a respond-by time");
-    return { id: mailId(i), state, expected, due };
-  },
-  run: (ctx, p) => setResponseIntent(ctx, p.id, p.state, p.expected, p.due),
+  parse: i => ({ ...editParams(i), request: requestId(i) }),
+  run: (ctx, p) => setResponseIntent(ctx, p.id, p.state, p.expected, p.due, p.request),
 });
