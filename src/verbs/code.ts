@@ -45,8 +45,8 @@ async function fileAt(ctx: Ctx, repo: string, at: string, path: string): Promise
 
 type Coverage = { limit: number; shown: number; truncated: boolean };
 export type After = {
-  shipped: { tag: string | null; script: string; at: number; match: "full-commit" | "tag-prefix" } | null;
-  since: Array<{ tag: string | null; script: string; at: number }>;
+  shipped: { id: string; tag: string | null; script: string; at: number; match: "full-commit" | "tag-prefix" } | null;
+  since: Array<{ id: string; tag: string | null; script: string; at: number }>;
   errors: Array<{ id: string; title: string; count: number; first_seen: number }>;
   sinceCoverage: Coverage; errorsCoverage: Coverage;
   errorsSince: { at: number; basis: "full-commit" | "tag-prefix" | "commit-time" };
@@ -63,10 +63,10 @@ export async function afterCommit(ctx: Ctx, project_id: string, oid: string, com
         AND substr(?, 1, length(d.tag)) = lower(d.tag)))
     ORDER BY CASE WHEN ${fullVersion} THEN 0 ELSE 1 END, d.seen_at, d.id LIMIT 1`;
   const [shipped, since, errors] = await ctx.db.batch([
-    ctx.db.prepare(`SELECT d.tag, d.script_name AS script, d.seen_at AS at,
+    ctx.db.prepare(`SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at,
       CASE WHEN ${fullVersion} THEN 'full-commit' ELSE 'tag-prefix' END AS match ${matchingDeploy}`)
       .bind(project_id, ctx.tenant!.id, normalized, normalized),
-    ctx.db.prepare("SELECT d.tag, d.script_name AS script, d.seen_at AS at FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo' WHERE d.project_id = ? AND d.tenant_id = ? AND d.seen_at >= ? ORDER BY d.seen_at, d.id LIMIT 11").bind(project_id, ctx.tenant!.id, commitMs),
+    ctx.db.prepare("SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo' WHERE d.project_id = ? AND d.tenant_id = ? AND d.seen_at >= ? ORDER BY d.seen_at, d.id LIMIT 11").bind(project_id, ctx.tenant!.id, commitMs),
     ctx.db.prepare(`SELECT g.id, g.title, g.count, g.first_seen FROM app_error_group g
       JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind = 'repo'
       WHERE g.project_id = ? AND g.tenant_id = ? AND g.first_seen >= COALESCE(
@@ -148,9 +148,9 @@ export const repoCommit = defineVerb({
         `Recorded work (${x.relatedWorkCoverage.shown} shown${x.relatedWorkCoverage.truncated ? `; capped at ${x.relatedWorkCoverage.limit}, more omitted` : "; complete for recorded associations"}):`,
         ...x.relatedWork.map(w => `- ${cleanText(w.ref)}: ${cleanText(w.title)} [${w.relationship}, ${w.kind}, ${w.state}]`),
         "Recorded associations do not prove that this commit completes, reviews or approves the work.",
-        x.after.shipped ? `Recorded deploy association (${x.after.shipped.match === "full-commit" ? "exact full commit ID" : "tag-prefix hint"}): ${cleanText(x.after.shipped.tag ?? "")} of ${cleanText(x.after.shipped.script)} at ${new Date(x.after.shipped.at).toISOString().slice(0, 16)}.` : "No supported deploy association recorded for this commit.",
+        x.after.shipped ? `Recorded deploy ${cleanText(x.after.shipped.id)} association (${x.after.shipped.match === "full-commit" ? "exact full commit ID" : "tag-prefix hint"}): ${cleanText(x.after.shipped.tag ?? "")} of ${cleanText(x.after.shipped.script)} at ${new Date(x.after.shipped.at).toISOString().slice(0, 16)}.` : "No supported deploy association recorded for this commit.",
         `Deploy sample from commit time: ${x.after.sinceCoverage.shown} shown${x.after.sinceCoverage.truncated ? "; capped at 10, more omitted" : "; complete for the recorded time window"}.`,
-        ...x.after.since.map(d => `- ${cleanText(d.script)}: ${cleanText(d.tag ?? "no tag")} at ${new Date(d.at).toISOString()}`),
+        ...x.after.since.map(d => `- ${cleanText(d.id)} ${cleanText(d.script)}: ${cleanText(d.tag ?? "no tag")} at ${new Date(d.at).toISOString()}`),
         `Error groups first recorded at or after ${new Date(x.after.errorsSince.at).toISOString()} (${x.after.errorsSince.basis}): ${x.after.errorsCoverage.shown} shown${x.after.errorsCoverage.truncated ? "; capped at 10, more omitted" : "; complete for the recorded time window"}.`,
         ...x.after.errors.map(e => `- ${cleanText(e.title)} (×${e.count})`),
         "Recorded deploy/time associations do not prove live rollout, continued deployment, absence of errors or causation.",

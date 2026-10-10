@@ -14,6 +14,8 @@ The source must be a repository in the current tenant. Work and its non-channel 
 
 The **After this commit** view prefers a deploy whose recorded `version_id` is the exact full commit ID (hex letter case is ignored). If the version is not a full hex commit ID, a 7–40-character hex tag matching the commit prefix is a weaker hint. Malformed tags and SQL wildcard characters never match. A contradictory full version ID prevents falling back to its tag. Exact matches take precedence over hints; within each class the earliest recorded time wins, then deploy ID.
 
+Deploy associations and samples include the deployment record ID. Browser links open the [record inspector](deploy-records.md); API/MCP callers can pass the ID to `deploy.read` / `deploy_read`.
+
 `after.shipped` keeps its historical field name for compatibility, but now includes `match: full-commit | tag-prefix`. It is labelled **Recorded deploy**, not proof that the code shipped or is still live. `after.since` samples project deploy records at or after commit time, not verified descendants of the commit.
 
 `after.errorsSince` gives the error window's timestamp and basis (`full-commit`, `tag-prefix`, or `commit-time`). Error groups are included when their first recorded time is at or after the selected deploy reference; without one, the window starts at commit time. Timing does not establish causation, and no recorded errors does not establish their absence.

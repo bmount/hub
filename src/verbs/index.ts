@@ -6,7 +6,7 @@ import { reviewComment, reviewList, reviewRead, reviewRequest, reviewVerdict } f
 import { repoBranches, repoCommit, repoConnect, repoDiff, repoFile, repoList, repoLog } from "./code";
 import { messageSearch, searchQuery, workSearch } from "./search";
 import { mailReply, mailSend, mailSending } from "./mailOut";
-import { appApprove, appList, appRegister, deployList, deployRecord, traceList, traceRead } from "./apps";
+import { appApprove, appList, appRegister, deployList, deployRead, deployRecord, traceList, traceRead } from "./apps";
 import { modelPriceSet, usageReport, usageSummary } from "./usage";
 import { attentionDone, attentionList, workComment, workSubscribe } from "./collab";
 import { memberRemove, memberSetRole } from "./member";
@@ -53,7 +53,7 @@ export function registerAllVerbs(): void {
     memberSetRole, memberRemove,
     workComment, workSubscribe, attentionList, attentionDone,
     usageReport, usageSummary, modelPriceSet,
-    appRegister, appApprove, appList, traceList, traceRead, deployList, deployRecord,
+    appRegister, appApprove, appList, traceList, traceRead, deployList, deployRead, deployRecord,
     mailReply, mailSend, mailSending,
     workSearch, messageSearch, searchQuery,
     repoBranches, repoLog, repoCommit, repoFile, repoDiff, repoList, repoConnect,

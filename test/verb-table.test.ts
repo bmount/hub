@@ -60,6 +60,7 @@ const TABLE: Record<string, Decl> = {
   "trace.list": T("tenant", "reader", null, { mcp: "read" }),
   "trace.read": T("tenant", "reader", null, { mcp: "read" }),
   "deploy.list": T("tenant", "reader", null, { mcp: "read" }),
+  "deploy.read": T("tenant", "reader", null, { mcp: "read" }),
   "deploy.record": T("tenant", "member", null, { mcp: "write" }),
   "usage.summary": T("tenant", "reader", null, { mcp: "read" }),
   "model.price_set": T("hub", "root", 60, { humanOnly: true }),

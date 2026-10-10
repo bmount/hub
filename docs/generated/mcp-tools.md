@@ -30,6 +30,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `chat_run_status` | read | reader | no | Implemented | **`c`**, **`msg`** |
 | `chat_thread` | read | reader | no | Implemented | `after`, `budget`, **`c`**, **`msg`** |
 | `deploy_list` | read | reader | no | Implemented | `project` |
+| `deploy_read` | read | reader | no | Implemented | **`id`** |
 | `deploy_record` | write | member | no | Implemented | **`commit`**, `environment`, `message`, **`project`** |
 | `event_list` | read | member | no | Implemented | `cursor`, `limit`, `session_id` |
 | `inbox_ack` | write | reader | no | Implemented | `items`, `through` |

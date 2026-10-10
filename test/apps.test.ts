@@ -47,6 +47,92 @@ describe("redaction at the source", () => {
   });
 });
 
+describe("deployment record inspection", () => {
+  it("reads a manually recorded deployment without an app registration through API/MCP/UI", async () => {
+    const w = await world();
+    const sha = "A".repeat(40);
+    const result = await w.call(w.pat.token, "deploy.record", { project: "pricebench", commit: sha, message: '</pre><script>evil()</script>' });
+    const id = (result.result.deploy as { id: string }).id;
+    const reader = await seedHuman("reader@example.com", { memberships: [{ tenant_id: w.t.id, role: "reader" }] });
+    const read = await w.call(reader.token, "deploy.read", { id });
+    expect(read.status).toBe(200);
+    expect(read.result).toMatchObject({ deploy: { id, project: "pricebench", version_id: sha }, commitRef: `pricebench@${sha.toLowerCase()}`, commitHref: `/pricebench/code?c=${sha.toLowerCase()}` });
+    const list = (await w.call(reader.token, "deploy.list", {})).result;
+    expect(list).toMatchObject({ deploys: [{ id }], coverage: { limit: 50, shown: 1, truncated: false } });
+    const page = await (await SELF.fetch(`https://${HOST}/apps?d=${id}`, { headers: cookieHeaders(reader.token, HOST) })).text();
+    expect(page).toContain(`href="/apps?d=${id}"`);
+    expect(page).toContain(`href="/pricebench/code?c=${sha.toLowerCase()}"`);
+    expect(page).toContain("&lt;/pre&gt;&lt;script&gt;evil()&lt;/script&gt;");
+    expect(page).not.toContain('</pre><script>evil()');
+    expect(page).toContain("not proof of live rollout");
+    const { grant } = await seedGrant(w.t, reader);
+    const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
+    const mcp = await callTool(ctx, "deploy_read", { id });
+    expect(mcp.isError).not.toBe(true);
+    expect(mcp.structuredContent).toEqual(read.result);
+    expect(JSON.stringify(mcp.content)).toContain("Recorded commit reference");
+    expect((await callTool({ ...ctx, oauth: { ...ctx.oauth!, scopes: ["write"] } }, "deploy_read", { id })).isError).toBe(true);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM model_call").first("n")).toBe(0);
+    expect((await SELF.fetch(`https://${HOST}/apps?d=${id}`)).status).toBe(404);
+  });
+
+  it("does not infer commits from opaque versions, short tags, trackers or ambiguous repo slugs", async () => {
+    const w = await world();
+    await w.call(w.root.token, "app.register", { project: "pricebench", script: "pricebench" });
+    await ingest(env, [redact(tail())], Date.now());
+    const id = ((await w.call(w.pat.token, "deploy.list", {})).result.deploys as Array<{ id: string }>)[0]!.id;
+    expect((await w.call(w.pat.token, "deploy.read", { id })).result).toMatchObject({ deploy: { version_id: "v-1111aaaa", tag: "abc1234" }, commitRef: null, commitHref: null });
+    const page = await (await SELF.fetch(`https://${HOST}/apps?d=${id}`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    expect(page).toContain("No supported full recorded commit reference");
+    expect(page).not.toContain("Recorded commit reference:");
+    const group = ((await w.call(w.pat.token, "trace.list", {})).result.groups as Array<{ id: string }>)[0]!.id;
+    const groupPage = await (await SELF.fetch(`https://${HOST}/apps?g=${group}`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    expect(groupPage).toContain(`href="/apps?d=${id}"`);
+    await env.HUB_DB.prepare("UPDATE app_deploy SET version_id = ? WHERE id = ?").bind("b".repeat(40), id).run();
+    const tracker = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: null, slug: "tracker", kind: "tracker", display_name: "Tracker" }, Date.now());
+    await env.HUB_DB.prepare("UPDATE app_deploy SET project_id = ? WHERE id = ?").bind(tracker.id, id).run();
+    expect((await w.call(w.pat.token, "deploy.read", { id })).result.commitRef).toBeNull();
+    await env.HUB_DB.prepare("UPDATE app_deploy SET project_id = ? WHERE id = ?").bind(w.p.id, id).run();
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.p.id).run();
+    expect((await w.call(w.pat.token, "deploy.read", { id })).result.commitRef).toBe(`pricebench@${"b".repeat(40)}`);
+    const ns = await createNamespace(env.HUB_DB, { tenant_id: w.t.id, slug: "team", display_name: "Team" }, Date.now());
+    const duplicate = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: ns.id, slug: "pricebench", kind: "repo", display_name: "Other" }, Date.now());
+    for (const state of ["active", "archived"]) {
+      await env.HUB_DB.prepare("UPDATE project SET state = ? WHERE id = ?").bind(state, duplicate.id).run();
+      expect((await w.call(w.pat.token, "deploy.read", { id })).result.commitRef).toBeNull();
+    }
+  });
+
+  it("excludes foreign/channel/inconsistent records before the list limit and refuses inaccessible or mixed inspectors", async () => {
+    const w = await world();
+    const foreign = await seedTenant("bravo");
+    const project = await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "private", kind: "repo", display_name: "Private" }, Date.now());
+    const channel = await createChannel(env.HUB_DB, { tenant_id: w.t.id, slug: "private-channel", display_name: "Private channel", topic: "", created_by: w.pat.identity.id }, Date.now());
+    const add = async (n: number, tenant = w.t.id, pid = w.p.id) => env.HUB_DB.prepare("INSERT INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at) VALUES (?, ?, ?, ?, 'runtime', NULL, 'Recorded message', ?)").bind(`deploy-${String(n).padStart(3, "0")}`, tenant, pid, `script-${n}`, n).run();
+    const read = async () => (await w.call(w.pat.token, "deploy.list", {})).result;
+    expect(await read()).toMatchObject({ deploys: [], coverage: { shown: 0, truncated: false } });
+    for (let n = 0; n < 50; n++) await add(n);
+    expect(await read()).toMatchObject({ coverage: { shown: 50, truncated: false } });
+    for (let n = 100; n < 155; n++) await add(n, n % 3 === 0 ? foreign.id : w.t.id, n % 3 === 0 ? w.p.id : n % 3 === 1 ? project.id : channel.project_id);
+    expect(await read()).toMatchObject({ coverage: { shown: 50, truncated: false } });
+    await add(50);
+    const capped = await read();
+    expect(capped.coverage).toEqual({ limit: 50, shown: 50, truncated: true });
+    expect((capped.deploys as Array<{ id: string }>).map(d => d.id)).toEqual(Array.from({ length: 50 }, (_, n) => `deploy-${String(50 - n).padStart(3, "0")}`));
+    expect((await w.call(w.pat.token, "deploy.list", { project: "private" })).result.deploys).toEqual([]);
+    for (const token of [w.pat.token, w.root.token]) for (const id of ["deploy-100", "deploy-101", "deploy-102", "unknown"]) {
+      expect((await w.call(token, "deploy.read", { id })).status).toBe(404);
+      const response = await SELF.fetch(`https://${HOST}/apps?d=${id}`, { headers: cookieHeaders(token, HOST) });
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain("Recorded message");
+    }
+    for (const query of ["d=", `d=${"x".repeat(41)}`, "d=deploy-001&g=unknown"]) expect((await SELF.fetch(`https://${HOST}/apps?${query}`, { headers: cookieHeaders(w.pat.token, HOST) })).status).toBe(404);
+    const page = await (await SELF.fetch(`https://${HOST}/apps`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    expect(page).toContain("capped at 50, more omitted");
+    expect(page).not.toContain("script-100");
+  });
+});
+
 describe("recorded app-error work evidence", () => {
   async function evidenceWorld() {
     const w = await world();
@@ -236,10 +322,12 @@ describe("recorded app-error work evidence", () => {
     expect((await w.call(w.pat.token, "app.list", {})).result.apps).toMatchObject([{ requests: 1, last_deploy: "abc1234" }]);
     const result = await w.call(w.pat.token, "trace.read", { id: w.id });
     const page = await (await SELF.fetch(`https://${HOST}/apps?g=${w.id}`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    // The org list includes other owned projects; the error inspector must not.
     for (const secret of ["foreign-event-secret", "deploy-secret"]) {
       expect(JSON.stringify(result.result)).not.toContain(secret);
-      expect(page).not.toContain(secret);
+      expect(page.match(/<section id="inspector"[\s\S]*?<\/section>/)![0]).not.toContain(secret);
     }
+    expect(page).toContain('href="/apps?d=bad-deploy-1"');
     for (const [tenant, project] of [[foreign.id, foreignProject.id], [w.t.id, foreignProject.id], [w.t.id, channel.project_id]]) {
       await env.HUB_DB.prepare("UPDATE app_error_group SET tenant_id = ?, project_id = ? WHERE id = ?").bind(tenant, project, w.id).run();
       for (const token of [w.pat.token, w.root.token]) {

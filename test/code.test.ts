@@ -135,7 +135,7 @@ describe("recorded commit/work evidence", () => {
       await env.HUB_DB.prepare("INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, title, last_message, count, first_seen, last_seen) VALUES (?, ?, ?, 'app', ?, 'exception', ?, '', 1, ?, ?)").bind(`error-${n}`, tenant, pid, `fp-${n}`, n < 3 ? "Private error" : "Own error", at + 10, at + 10).run();
     }
     const after = (await w.call(w.h, "repo.commit", { project: "site", oid: B })).result.after;
-    expect(after).toEqual({ shipped: { tag: B.slice(0, 8), script: "Own deploy", at: at + 3, match: "tag-prefix" }, since: [{ tag: B.slice(0, 8), script: "Own deploy", at: at + 3 }], errors: [{ id: "error-3", title: "Own error", count: 1, first_seen: at + 10 }], sinceCoverage: { limit: 10, shown: 1, truncated: false }, errorsCoverage: { limit: 10, shown: 1, truncated: false }, errorsSince: { at: at + 3, basis: "tag-prefix" } });
+    expect(after).toEqual({ shipped: { id: "deploy-3", tag: B.slice(0, 8), script: "Own deploy", at: at + 3, match: "tag-prefix" }, since: [{ id: "deploy-3", tag: B.slice(0, 8), script: "Own deploy", at: at + 3 }], errors: [{ id: "error-3", title: "Own error", count: 1, first_seen: at + 10 }], sinceCoverage: { limit: 10, shown: 1, truncated: false }, errorsCoverage: { limit: 10, shown: 1, truncated: false }, errorsSince: { at: at + 3, basis: "tag-prefix" } });
     const ctx = await buildContext(new Request(`https://${HOST}/`, { headers: w.h }), env);
     for (const pid of [project.id, channel.project_id]) expect(await afterCommit(ctx, pid, B, at)).toMatchObject({ shipped: null, since: [], errors: [], sinceCoverage: { shown: 0, truncated: false }, errorsCoverage: { shown: 0, truncated: false } });
     const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
@@ -305,5 +305,8 @@ describe("code views", () => {
     const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
     expect(page).toContain("<h2>After this commit</h2>");
     expect(page).toContain("TypeError: x");
+    expect(page).toContain('href="/apps?d=D1"');
+    const record = (await w.call(w.h, "deploy.read", { id: "D1" })).result;
+    expect(record).toMatchObject({ deploy: { id: "D1", version_id: "v1" }, commitRef: null });
   });
 });
