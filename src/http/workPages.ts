@@ -144,6 +144,24 @@ function plannedBlock(name: string, label: string): string {
   return `<div class="planned"><b>${esc(label)}</b> <span class="pill">planned</span> ${esc(p.summary)} <a href="/planned/${p.area}?v=${esc(name)}">What it will do</a></div>`;
 }
 
+function workLinkHtml(l: WorkLink): string {
+  let href: string | null = null;
+  if (l.target_kind === "url") href = safeExternalUrl(l.target_ref);
+  else if (!/\s/.test(l.target_ref)) {
+    const name = "([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)";
+    if (l.target_kind === "commit") {
+      const m = new RegExp(`^${name}@([0-9a-fA-F]{40})$`).exec(l.target_ref);
+      if (m) href = `/${m[1]}/code?c=${m[2]!.toLowerCase()}`;
+    } else if (l.target_kind === "item") {
+      const m = new RegExp(`^${name}#([1-9][0-9]{0,7})$`).exec(l.target_ref);
+      if (m) href = `/${m[1]}/w/${m[2]}`;
+    }
+  }
+  // A recorded reference is not proof of existence or access; the destination rechecks the viewer.
+  const target = href ? `<a href="${esc(href)}"${l.target_kind === "url" ? ' rel="noopener noreferrer" data-reload' : ""}>${esc(l.target_ref)}</a>` : `<code>${esc(l.target_ref)}</code>`;
+  return `<li>${esc(l.target_kind)}: ${target}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`;
+}
+
 function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string): string {
   const canWrite = rank(ctx.role) >= rank("member");
   const self = `/${esc(project.slug)}/w/${w.number}`;
@@ -169,7 +187,7 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
   const under = d.children.length
     ? `<h2>Under it</h2><table><tbody>${d.children.map((c) => `<tr data-href="/${esc(project.slug)}/w/${c.number}"><td class="ref">#${c.number}</td><td class="k-${c.kind}"><span class="kd"></span>${esc(KINDS[c.kind].name)}</td><td><a href="/${esc(project.slug)}/w/${c.number}">${esc(c.title)}</a></td><td>${esc(STATES[c.state])}</td></tr>`).join("")}</tbody></table>`
     : w.kind === "quest" ? `<h2>Under it</h2><p class="lede">Nothing yet. To put an item under this quest, choose it as the item's quest when you edit it.</p>` : "";
-  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map((l) => `<li>${esc(l.target_kind)}: ${l.target_kind === "url" && safeExternalUrl(l.target_ref) ? `<a href="${esc(safeExternalUrl(l.target_ref)!)}" rel="noopener noreferrer" data-reload>${esc(l.target_ref)}</a>` : `<code>${esc(l.target_ref)}</code>`}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`).join("")}</ul>` : "<p class=\"lede\">None yet. Agents link commits, threads and pages here with work_link.</p>"}`;
+  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map(workLinkHtml).join("")}</ul><p class="lede">Recorded references, not verified access or existence. Each destination checks your access.</p>` : "<p class=\"lede\">None yet. Agents link commits, threads and pages here with work_link.</p>"}`;
   const activity = d.activity.length ? `<h2>Activity</h2><ul class="timeline">${d.activity.map((a) => `<li><time title="${when(a.created_at)}">${ago(a.created_at, ctx.now)}</time><span>${esc(a.who ?? "Pimwell")}: ${esc(a.summary)}</span></li>`).join("")}</ul>` : "";
   return `<a class="back" href="${esc(back)}">‹ ${esc(DOCKET.name)}</a>
 <div class="head"><span class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)} (${esc(KINDS[w.kind].plain)})</span><strong>${esc(project.slug)}#${w.number}</strong><span>${esc(STATES[w.state])}</span></div>

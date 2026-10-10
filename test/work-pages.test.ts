@@ -97,6 +97,77 @@ describe("work item editing", () => {
   });
 });
 
+describe("recorded work evidence navigation", () => {
+  it("opens full commit IDs and numbered work references without looking up or claiming their targets", async () => {
+    const w = await world();
+    const source = await w.create({ kind: "errand", title: "Source work" });
+    const target = await w.create({ kind: "snag", title: "Target work" });
+    const oid = "ABCDEF0123456789".repeat(2) + "ABCDEF01";
+    for (const [kind, ref] of [["commit", `site@${oid}`], ["item", `site#${target.number}`], ["item", "missing#99999999"]]) {
+      const r = await apiPost(HOST, "work.link", { id: source.id, target_kind: kind, target_ref: ref, note: '<b>recorded & unverified</b>' }, cookieHeaders(w.pat.token, HOST));
+      expect(r.status).toBe(200);
+    }
+    const html = await (await w.get(`/site/w/${source.number}`, w.rae.token)).text();
+    expect(html).toContain(`<a href="/site/code?c=${oid.toLowerCase()}">site@${oid}</a>`);
+    expect(html).toContain(`<a href="/site/w/${target.number}">site#${target.number}</a>`);
+    expect(html).toContain('<a href="/missing/w/99999999">missing#99999999</a>');
+    expect(html).toContain("Recorded references, not verified access or existence.");
+    expect(html).toContain("&lt;b&gt;recorded &amp; unverified&lt;/b&gt;");
+    expect(html.split("<h2>Links</h2>")[1]!.split("<h2>Activity</h2>")[0]!).not.toContain("Target work");
+    expect(await (await w.get(`/site/w/${target.number}`, w.rae.token)).text()).toContain("Target work");
+    expect((await w.get("/missing/w/99999999", w.rae.token)).status).toBe(404);
+  });
+
+  it("keeps short, malformed, unsupported and injection-shaped references inert", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "errand", title: "Legacy references" });
+    const oid = "a".repeat(40);
+    const refs = [
+      ["commit", "site@abcdef0"], ["commit", `site@${oid}0`], ["commit", `site@${oid}\n`],
+      ["commit", `../site@${oid}`], ["commit", `//evil.test@${oid}`], ["commit", `site@${oid}?x=1`],
+      ["commit", `${"s".repeat(64)}@${oid}`], ["commit", `-site@${oid}`], ["commit", `site-@${oid}`],
+      ["item", "site#0"], ["item", "site#01"], ["item", "site#100000000"], ["item", "site#1\n"],
+      ["item", "site#1?x=1"], ["item", "site#1/../../mail"], ["item", "site#1\" onclick=\"alert(1)"],
+      ["item", "https://evil.test/site#1"], ["message", "site#1"], ["event", `site@${oid}`],
+    ];
+    for (const [i, [kind, ref]] of refs.entries()) {
+      await env.HUB_DB.prepare("INSERT INTO work_link (id, item_id, target_kind, target_ref, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(`legacy-${i}`, item.id, kind, ref, w.pat.identity.id, Date.now()).run();
+    }
+    const html = await (await w.get(`/site/w/${item.number}`)).text();
+    const links = html.split("<h2>Links</h2>")[1]!.split("<h2>Activity</h2>")[0]!;
+    expect(links).not.toContain("<a ");
+    expect(links.match(/<code>/g)).toHaveLength(refs.length);
+    expect(links).toContain("&quot; onclick=&quot;alert(1)");
+    expect(links).not.toContain(' onclick="');
+  });
+
+  it("keeps navigation on the current tenant and rechecks destination membership", async () => {
+    const w = await world();
+    const source = await w.create({ kind: "errand", title: "Tenant reference" });
+    const foreign = await seedTenant("other");
+    await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "hidden", kind: "repo", display_name: "Foreign repo" }, Date.now());
+    const outsider = await seedHuman("outsider@example.com", { memberships: [{ tenant_id: foreign.id, role: "member" }] });
+    const foreignItem = await apiPost("other.pimwell.test", "work.create", { project: "hidden", kind: "errand", title: "Private foreign title" }, cookieHeaders(outsider.token, "other.pimwell.test"));
+    expect(foreignItem.status).toBe(200);
+    for (const [kind, ref] of [["item", "hidden#1"], ["commit", `hidden@${"a".repeat(40)}`]]) {
+      expect((await apiPost(HOST, "work.link", { id: source.id, target_kind: kind, target_ref: ref }, cookieHeaders(w.pat.token, HOST))).status).toBe(200);
+    }
+    const html = await (await w.get(`/site/w/${source.number}`)).text();
+    expect(html).toContain('<a href="/hidden/w/1">hidden#1</a>');
+    expect(html).not.toContain("Private foreign title");
+    expect(html).not.toContain("Foreign repo");
+    for (const path of ["/hidden/w/1", `/hidden/code?c=${"a".repeat(40)}`]) {
+      expect((await w.get(path)).status).toBe(404);
+      expect((await SELF.fetch(`https://other.pimwell.test${path}`, { headers: cookieHeaders(w.pat.token, "other.pimwell.test") })).status).toBe(404);
+    }
+    for (const path of [`/site/w/${source.number}`, "/site/w/1", `/site/code?c=${"a".repeat(40)}`]) {
+      expect((await SELF.fetch(`https://${HOST}${path}`)).status).toBe(404);
+      expect((await w.get(path, outsider.token)).status).toBe(404);
+    }
+  });
+});
+
 describe("Docket filters", () => {
   it("filters by mine, owner and quest, keeps other filters on every chip, and names what emptied the list", async () => {
     const w = await world();
