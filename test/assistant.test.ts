@@ -61,6 +61,14 @@ describe("the Assistant", () => {
     expect(page).toContain("Used 1 tool");
   });
 
+  it("serves executable conversation scripts", async () => {
+    const w = await world();
+    const page = await (await SELF.fetch(`https://${HOST}/assistant`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+    expect(scripts).toHaveLength(1);
+    expect(() => new Function(scripts[0]![1]!)).not.toThrow();
+  });
+
   it("returns truthful 504 and records unknown usage without executing late model tools", async () => {
     const w = await world();
     let wall = Date.now(), calls = 0;
@@ -110,6 +118,14 @@ describe("the Assistant", () => {
     const j = (await (await w.chat(w.pat.token, { text: "hello" })).json()) as { thread: string };
     expect((await w.chat(w.sam.token, { thread: j.thread, text: "peek" })).status).toBe(404);
     expect((await SELF.fetch(`https://${HOST}/assistant?t=${j.thread}`, { headers: cookieHeaders(w.sam.token, HOST) })).status).toBe(404);
+    expect((await SELF.fetch(`https://${HOST}/assistant/tools?t=${j.thread}`, { headers: cookieHeaders(w.sam.token, HOST) })).status).toBe(404);
+    const other = await seedTenant("other");
+    await env.HUB_DB.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, created_at) VALUES ('other-membership', ?, ?, 'member', ?)").bind(w.pat.identity.id, other.id, Date.now()).run();
+    for (const path of ["/assistant", "/assistant/tools"]) {
+      expect((await SELF.fetch(`https://other.pimwell.test${path}?t=${j.thread}`, { headers: cookieHeaders(w.pat.token, "other.pimwell.test") })).status).toBe(404);
+    }
+    const ownTools = await (await SELF.fetch(`https://${HOST}/assistant/tools?t=${j.thread}`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    expect(ownTools).toContain(`href="/assistant?t=${j.thread}"`);
     expect((await w.chat(w.pat.token, { text: "x" }, { origin: "https://evil.example" })).status).toBe(403);
     expect((await w.chat(w.pat.token, { text: "x" }, { "x-pimwell-playground": "" })).status).toBe(403);
     expect((await w.chat(w.pat.token, { text: "" })).status).toBe(400);

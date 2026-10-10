@@ -23,8 +23,13 @@ With `HUB_DOMAIN=localhost` the session cookie is host-only, so after accepting 
 
 ## Test
 
+Install Chromium once for the Vitest browser regressions:
+
+    npx playwright install chromium
     npm test
     npm run typecheck
+
+Browser tests use a disposable local Worker and scripted model, never production sessions or external services.
 
 ## Deploy
 
