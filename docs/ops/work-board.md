@@ -22,10 +22,48 @@ Browser badges and MCP headings show exact totals. Browser cards are further cap
 
 Native-Workers regression tests meter one item-query round trip for an unfiltered list spanning 25 distinct projects. A project-filtered list uses two trips (project validation and the joined item query), with no per-item or per-project follow-ups. These measurements exclude request authentication/context reads; they are not production latency benchmarks.
 
+## Request-local quest child aggregation
+
+Quest progress uses one materialized child-count aggregation per board request, in
+place of two correlated `work_item` child scans per quest. It groups by parent **and
+project**, restricts children to the requested tenant/project and non-channel
+projects, then left-joins the active quests in that same scope. Tenant/project
+consistency checks remain on both sides. Empty and dropped-only quests report
+zero, not one from a synthetic left-join row. Children count directly, not
+recursively: a nested quest counts as one child of its parent. Done children still
+count regardless of their age or `closed_at`; dropped children do not count.
+Quest order and the existing uncapped result contract are unchanged.
+
+`MATERIALIZED` means a temporary result inside this SQL statement, **not** a
+persistent table or cross-request cache. Reopens, state changes and reparenting
+are reflected on the next read without invalidation machinery. No migration is
+required. The query still reads matching child rows and may use a temporary
+grouping table; this is not constant-cost access or a demonstrated improvement
+for every possible data distribution (for example, one quest with many unrelated
+parents).
+
+`test/board-quest-scaling.test.ts` compares actual query results with the previous
+correlated SQL for every fixture. Its native-Workers local D1 benchmark has 80
+quests and 4,000 children in one project, tested under both organization and
+project scopes. `EXPLAIN QUERY PLAN` must materialize child counts with no
+correlated subqueries; the previous plan has two correlated subqueries. D1
+`meta.rows_read` for the new **quest statement alone** must be less than one tenth
+of the previous statement's reads, with identical quest counts (4,000 total,
+2,000 done). This deliberately adverse local fixture is read-work evidence, not
+a production latency measurement or total page-cost benchmark. Other board
+queries, authentication reads and rail work are not included in that ratio.
+
 ## Evidence and remaining scope
 
 - `test/board-counts.test.ts`: more than 500 items, all stalled/recent-done items outside the sample, strict time boundaries, empty/exactly-500 completeness, deterministic ties, browser/API/MCP reporting and tenant/project/channel/quest-child boundaries.
 - `test/work-list-reads.test.ts`: constant query count across 25 projects, full fields/references, filter parity, parent filters, and malformed rows before LIMIT.
+- `test/board-quest-scaling.test.ts`: query-plan/read-work comparison, differential result parity, zero/mixed/dropped/nested/non-quest/old-done children, state/reparent/reopen freshness, absent/channel project scope and malformed tenant/project/parent boundaries; browser/MCP progress compatibility.
 - Existing work/page/performance-budget tests cover compatibility of the default non-joined shared statement.
 
-`#109` is **not complete** with this increment: rail aggregate caching/materialization and invalidation, large-tenant query-plan/latency benchmarks, and evaluation of quest-query scaling remain. Quest results retain their existing uncapped behavior. Counts require independent reads over matching data; do not describe this as a demonstrated production speedup or indexed large-tenant redesign. No schema migration, cache, membership/data mutation, mail-auth policy change or scheduler change is required by this increment.
+`#109` is **not complete**: rail aggregate caching/materialization and invalidation,
+broader large-tenant/many-project distribution and production latency benchmarks,
+and uncapped quest-result scaling remain. Counts require independent reads over
+matching data; the scoped local quest benchmark does not demonstrate a production
+speedup or an indexed large-tenant redesign. No schema migration, persistent
+cache, membership/data mutation, mail-auth policy change or scheduler change is
+required by these increments.

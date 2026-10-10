@@ -39,11 +39,22 @@ export async function board(ctx: Ctx, project: string | null): Promise<Board> {
     ctx.db.prepare(`SELECT p.slug, w.number, w.kind, w.state, w.title, w.updated_at, i.display_name AS owner FROM work_item w JOIN project p ON p.id = w.project_id LEFT JOIN identity i ON i.id = w.owner_id
       WHERE ${scope} AND ${visible} ORDER BY w.updated_at DESC, w.id DESC LIMIT ?`)
       .bind(...args, BOARD_ITEM_LIMIT),
-    ctx.db.prepare(`SELECT p.slug, q.number, q.title, q.state,
-        (SELECT COUNT(*) FROM work_item c WHERE c.parent_id = q.id AND c.tenant_id = q.tenant_id AND c.project_id = q.project_id AND c.state = 'done') AS done,
-        (SELECT COUNT(*) FROM work_item c WHERE c.parent_id = q.id AND c.tenant_id = q.tenant_id AND c.project_id = q.project_id AND c.state <> 'dropped') AS total
-      FROM work_item q JOIN project p ON p.id = q.project_id WHERE q.tenant_id = ? AND p.tenant_id = q.tenant_id AND p.kind <> 'channel' AND (? IS NULL OR p.slug = ?) AND q.kind = 'quest' AND q.state IN ('open', 'doing') ORDER BY q.number, q.id`)
-      .bind(ctx.tenant!.id, project, project),
+    // Aggregate children once for the requested scope, not two correlated scans per
+    // quest. Materialization is request-local: counts stay fresh, with no cache or
+    // invalidation dependency. Keep project in the grouping/join as well as tenant.
+    ctx.db.prepare(`WITH child_counts AS MATERIALIZED (
+        SELECT c.parent_id, c.project_id, SUM(c.state = 'done') AS done, COUNT(*) AS total
+        FROM work_item c JOIN project cp ON cp.id = c.project_id
+        WHERE c.tenant_id = ? AND cp.tenant_id = c.tenant_id AND cp.kind <> 'channel'
+          AND (? IS NULL OR cp.slug = ?) AND c.parent_id IS NOT NULL AND c.state <> 'dropped'
+        GROUP BY c.parent_id, c.project_id
+      )
+      SELECT p.slug, q.number, q.title, q.state, COALESCE(c.done, 0) AS done, COALESCE(c.total, 0) AS total
+      FROM work_item q JOIN project p ON p.id = q.project_id
+      LEFT JOIN child_counts c ON c.parent_id = q.id AND c.project_id = q.project_id
+      WHERE q.tenant_id = ? AND p.tenant_id = q.tenant_id AND p.kind <> 'channel'
+        AND (? IS NULL OR p.slug = ?) AND q.kind = 'quest' AND q.state IN ('open', 'doing') ORDER BY q.number, q.id`)
+      .bind(ctx.tenant!.id, project, project, ctx.tenant!.id, project, project),
     ctx.db.prepare(`SELECT COALESCE(SUM(w.state = 'open'), 0) AS open,
         COALESCE(SUM(w.state = 'doing'), 0) AS doing, COALESCE(SUM(w.state = 'done'), 0) AS done,
         COALESCE(SUM(w.state = 'doing' AND w.updated_at < ?), 0) AS stalled
