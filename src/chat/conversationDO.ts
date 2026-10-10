@@ -346,10 +346,10 @@ export class Conversation extends DurableObject<Env> {
   }
 
   /** Fixed version-operation namespace; reads do not reauthorize or replay a version write. */
-  async versionStatus(tenant_id: string, conversation_id: string, identity_id: string, operation: "edit" | "retract", key: string): Promise<VersionStatus> {
+  async versionStatus(tenant_id: string, conversation_id: string, identity_id: string, operation: "edit" | "retract", key: string, fingerprint?: string): Promise<VersionStatus> {
     this.#bind(tenant_id, conversation_id);
     if (operation !== "edit" && operation !== "retract") throw new Error("invalid version status operation");
-    return { operation, ...this.#keyStatus(identity_id, operation, key) };
+    return { operation, ...this.#keyStatus(identity_id, operation, key, fingerprint) };
   }
 
   #keyStatus(identity_id: string, op: Op, key: string, fingerprint?: string): PostStatus {

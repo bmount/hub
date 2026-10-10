@@ -49,8 +49,8 @@ export type PostStatus = {
   intent_check?: { matches: boolean | null; reason: "match" | "mismatch" | "missing" | "unbound" };
 };
 
-/** Caller-only edit/retraction commitment evidence; no payload verification or write permission. */
-export type VersionStatus = Omit<PostStatus, "intent_check"> & { operation: "edit" | "retract" };
+/** Caller-only edit/retraction original commitment/intent evidence, not current-text validation or write permission. */
+export type VersionStatus = PostStatus & { operation: "edit" | "retract" };
 
 export type PostInput = {
   tenant_id: string; conversation_id: string; now: number; author: Author; policy: AgentPolicy;

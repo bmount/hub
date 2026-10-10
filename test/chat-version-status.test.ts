@@ -34,7 +34,10 @@ describe("read-only interrupted chat version reconciliation", () => {
   it("distinguishes original edit/retraction commits from current state without replay or private values", async () => {
     const { w, first, edit, args, ch, conv } = await setup();
     const defs = (await rpcBody(await rpc(w.scout.longLived, "tools/list", {}))).result.tools;
-    expect(defs.find((t: { name: string }) => t.name === "chat_version_status").annotations).toMatchObject({ readOnlyHint: true, idempotentHint: true, destructiveHint: false });
+    const definition = defs.find((t: { name: string }) => t.name === "chat_version_status");
+    expect(definition.annotations).toMatchObject({ readOnlyHint: true, idempotentHint: true, destructiveHint: false });
+    expect(definition.inputSchema.properties.intent).toMatchObject({ additionalProperties: false, required: ["msg"], properties: { msg: { type: ["integer", "string"] }, body: { type: ["string", "null"], maxLength: LIMITS.BODY_MAX } } });
+    expect(definition.inputSchema.required).toEqual(["c", "operation", "idempotency_key"]);
     expect((await tool(w.scout.longLived, { ...args, operation: "retract" })).structuredContent.record).toBeNull();
     const gone = await ok(w.lead.token, "chat.retract", { ...args, msg: first.msg_id });
     const box = inboxStub(env, w.acme.id, w.tidy.agent.identity.id);
