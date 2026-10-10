@@ -105,7 +105,10 @@ export const mailReply = defineVerb({
   mcp: {
     scope: "write", destructive: false, title: "Reply by mail",
     input: { type: "object", properties: { id: { type: "string", description: "The received message's id (mail_list, mail_read)" }, body: { type: "string", description: "Plain text" }, all: { type: "boolean", description: "Agents: also write to the members it was addressed or copied to" } }, required: ["id", "body"], additionalProperties: false },
-    render: (r) => { const x = r as { to: string; from: string }; return `${DATA_NOTE}\n\nSent to ${x.to} from ${x.from}.`; },
+    render: (r) => {
+      const x = r as { to: string; from: string; notice?: string };
+      return `${DATA_NOTE}\n\nSent to ${x.to} from ${x.from}.${x.notice ? `\n\n${x.notice}` : ""}`;
+    },
   },
   parse: (i) => ({ id: reqString(i, "id", { max: 40 }), body: body(i), all: i.all === true || i.all === "1" || i.all === "true" }),
   run: async (ctx, p) => {
@@ -127,14 +130,18 @@ export const mailReply = defineVerb({
     }
     const subject = /^re:/i.test(m.subject) ? m.subject : `Re: ${m.subject || "your message"}`;
     const earlier = (await ctx.db.prepare("SELECT o.id FROM outbound_mail o WHERE o.in_reply_to = ? AND o.status = 'sent' ORDER BY o.created_at").bind(m.id).all<{ id: string }>()).results.map((o) => `<${o.id}@${ctx.env.HUB_DOMAIN}>`);
-    const r = await deliver(ctx, { from: m.to_address, to: m.from_email, cc, inbound_id: m.id, message_id: m.message_id, basis: agent ? "member" : "consent" }, subject.slice(0, 200), p.body, [...(m.message_id ? [m.message_id] : []), ...earlier], async () => {
+    const notice = skipped.length
+      ? `Reply-all omitted: ${skipped.join(", ")}. No mail was sent to these addresses. Recipients must join this organization or accept its membership invitation, with an active human membership for their exact email address set up by an administrator, and must have written to this agent or been copied on admitted mail to it. Membership checks cannot be bypassed by external mail.`
+      : undefined;
+    const text = notice ? `${p.body}\n\n${notice}` : p.body;
+    const r = await deliver(ctx, { from: m.to_address, to: m.from_email, cc, inbound_id: m.id, message_id: m.message_id, basis: agent ? "member" : "consent" }, subject.slice(0, 200), text, [...(m.message_id ? [m.message_id] : []), ...earlier], async () => {
       if (agent) {
         const refused = await agentRecipientRefusals(ctx, [m.from_email]);
         if (refused.length) throw new HubError(403, "forbidden", `agents write only to members who wrote to them or were copied on mail to them: ${refused.join("; ")}`, { mail_block: "recipient_policy" });
       } else if (ctx.now - m.received_at > REPLY_WINDOW_MS) throw new HubError(403, "forbidden", "it has been more than 30 days; wait for them to write again", { mail_block: "reply_window" });
       await capsAndSwitch(ctx);
     });
-    return { ...r, to: [m.from_email, ...cc].join(", "), from: m.to_address, ...(skipped.length ? { left_out: skipped, why: "not members of this organization" } : {}) };
+    return { ...r, to: [m.from_email, ...cc].join(", "), from: m.to_address, ...(skipped.length ? { left_out: skipped, why: "copied recipients are not eligible under the organization membership and contact policy", notice } : {}) };
   },
 });
 

@@ -6,6 +6,7 @@ import { handleProjectMail } from "../src/mail/projectMail";
 import fixtures from "./fixtures/mail-ingress.json";
 import { setTestTransport, type SentMail } from "../src/mail/send";
 import { buildMime } from "../src/mail/mime";
+import { mailReply } from "../src/verbs/mailOut";
 import { createProject } from "../src/db/projects";
 import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
@@ -63,7 +64,7 @@ describe("outbound mail", () => {
     expect((await w.call(w.pat, "mail.reply", { id: w.agentMail, body: "x" })).status).toBe(403);
     expect((await w.call(w.bot, "mail.reply", { id: w.projectMail, body: "x" })).status).toBe(403);
     expect((await w.call(w.bot, "mail.reply", { id: w.agentMail, body: "Done." })).status).toBe(200);
-    expect(w.sent[0]).toMatchObject({ from: "acme.scout@pimwell.test", to: "pat@example.com" });
+    expect(w.sent[0]).toMatchObject({ from: "acme.scout@pimwell.test", to: "pat@example.com", text: "Done." });
   });
 
   it("people write only to those who wrote in the last 30 days; agents to members who wrote, at any time", async () => {
@@ -132,6 +133,74 @@ describe("outbound mail", () => {
     expect((await w.call(w.bot, "mail.reply", { id: w.agentMail, body: "one more" })).status).toBe(429);
   });
 
+  it.each(["absent", "archived", "other tenant", "inactive identity", "agent identity"])("notifies the original sender while excluding CC with %s membership", async (state) => {
+    const w = await world();
+    await w.call(w.ada, "mail.sending", { on: true });
+    const kim = await seedHuman("kim@example.com", { memberships: state === "absent" ? [] : [{ tenant_id: w.t.id, role: "member" }] });
+    if (state === "archived") await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ?").bind(kim.identity.id).run();
+    if (state === "other tenant") {
+      const other = await seedTenant("other");
+      await env.HUB_DB.prepare("UPDATE membership SET tenant_id = ? WHERE identity_id = ?").bind(other.id, kim.identity.id).run();
+    }
+    if (state === "inactive identity") await env.HUB_DB.prepare("UPDATE identity SET state = 'disabled' WHERE id = ?").bind(kim.identity.id).run();
+    if (state === "agent identity") await env.HUB_DB.prepare("UPDATE identity SET kind = 'agent' WHERE id = ?").bind(kim.identity.id).run();
+    await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    const mail = (await env.HUB_DB.prepare("SELECT id FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string }>())!;
+    const r = await w.call(w.bot, "mail.reply", { id: mail.id, body: "Update", all: true });
+    expect(r.status, r.detail).toBe(200);
+    expect(r.result).toMatchObject({ to: "pat@example.com", left_out: ["kim@example.com", "outside@example.org"] });
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]!.to).toBe("pat@example.com");
+    expect(w.sent[0]!.raw).not.toContain("Cc:");
+    expect(w.sent[0]!.text).toContain("Reply-all omitted: kim@example.com, outside@example.org");
+    expect(w.sent[0]!.text).toContain("active human membership for their exact email address");
+    expect(mailReply.mcp!.render!(r.result)).toContain(r.result.notice);
+    expect((await w.call(w.bot, "mail.send", { to: "kim@example.com", subject: "No bypass", body: "x" })).status).toBe(403);
+    expect(w.sent).toHaveLength(1);
+  });
+
+  it("leaves a fully eligible reply-all body unchanged", async () => {
+    const w = await world();
+    await w.call(w.ada, "mail.sending", { on: true });
+    await seedHuman("kim@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
+    await seedHuman("outside@example.org", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
+    await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    const mail = (await env.HUB_DB.prepare("SELECT id FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string }>())!;
+    const r = await w.call(w.bot, "mail.reply", { id: mail.id, body: "Everyone", all: true });
+    expect(r.status).toBe(200);
+    expect(r.result.notice).toBeUndefined();
+    expect(w.sent.map(m => m.to).sort()).toEqual(["kim@example.com", "outside@example.org", "pat@example.com"]);
+    expect(w.sent.every(m => m.text === "Everyone")).toBe(true);
+  });
+
+  it.each(["pat@example.com", "kim@example.com"])("keeps reply-all fail-closed when %s withdraws consent", async (email) => {
+    const w = await world();
+    await w.call(w.ada, "mail.sending", { on: true });
+    await seedHuman("kim@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
+    await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    const mail = (await env.HUB_DB.prepare("SELECT id FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string }>())!;
+    await env.HUB_DB.prepare("INSERT INTO consent (id, email, tenant_id, kind, granted_at, revoked_at) VALUES ('withdrawn', ?, NULL, 'inbound_email', ?, ?)").bind(email, Date.now() + 1, Date.now() + 2).run();
+    const r = await w.call(w.bot, "mail.reply", { id: mail.id, body: "Update", all: true });
+    expect(r.status).toBe(403);
+    expect(w.sent).toHaveLength(0);
+    expect(await env.HUB_DB.prepare("SELECT status, error FROM outbound_mail WHERE in_reply_to = ?").bind(mail.id).first())
+      .toEqual({ status: "refused", error: "no_consent" });
+  });
+
+  it("does not include copied addresses or an omission notice for an individual reply", async () => {
+    const w = await world();
+    await w.call(w.ada, "mail.sending", { on: true });
+    await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    const mail = (await env.HUB_DB.prepare("SELECT id FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string }>())!;
+    const r = await w.call(w.bot, "mail.reply", { id: mail.id, body: "Just you" });
+    expect(r.status).toBe(200);
+    expect(r.result.left_out).toBeUndefined();
+    expect(r.result.notice).toBeUndefined();
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]!.text).toBe("Just you");
+    expect(mailReply.mcp!.render!(r.result)).not.toContain("omitted");
+  });
+
   it("encodes non-ASCII subjects and refuses header injection", () => {
     const raw = buildMime({ from: "a@pimwell.test", to: "b@example.com", subject: "Größe ✓", text: "ok", messageId: "<x@pimwell.test>", date: new Date(0), inReplyTo: null, utf8: true });
     expect(raw).toContain("Subject: =?UTF-8?B?");
@@ -168,6 +237,14 @@ describe("outbound mail", () => {
     expect(all.status).toBe(200);
     expect(all.result).toMatchObject({ to: "pat@example.com, kim@example.com", left_out: ["outside@example.org"] });
     expect(w.sent.map((m) => m.to).sort()).toEqual(["kim@example.com", "pat@example.com"]);
+    const notice = all.result.notice as string;
+    expect(notice).toContain("Reply-all omitted: outside@example.org");
+    expect(notice).toContain("join this organization or accept its membership invitation");
+    expect(w.sent.every(m => m.text === `Thanks, both.\n\n${notice}`)).toBe(true);
+    expect(w.sent.every(m => !m.raw.includes("Cc: kim@example.com, outside@example.org"))).toBe(true);
+    expect(await env.HUB_DB.prepare("SELECT text, to_address FROM outbound_mail WHERE in_reply_to = ?").bind(copiedMail.id).first())
+      .toEqual({ text: `Thanks, both.\n\n${notice}`, to_address: "pat@example.com, kim@example.com" });
+    expect(mailReply.mcp!.render!(all.result)).toContain(notice);
     // A member who withdrew consent is never written to.
     await env.HUB_DB.prepare("INSERT INTO consent (id, email, tenant_id, kind, granted_at, revoked_at, source_message_id, evidence) VALUES ('c-kim', 'kim@example.com', NULL, 'inbound_email', 1, 2, NULL, NULL)").run();
     expect((await w.call(w.bot, "mail.send", { to: "kim@example.com", subject: "x", body: "x" })).status).toBe(403);
