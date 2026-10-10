@@ -26,7 +26,7 @@ function agentRole(i: Record<string, unknown>): "member" | "reader" {
 
 export const agentCreate = defineVerb({
   name: "agent.create", kind: "command", scope: "public", minRole: "public", freshProofMinutes: 60, humanOnly: true,
-  summary: "Create an agent in a tenant with the reserved address <slug>@<tenant>. You operate it unless an admin names another member.",
+  summary: "Create an agent in an organization with the address <org>.<name>@pimwell.com. You operate it unless an admin names another member.",
   parse: (i) => ({
     tenant: optString(i, "tenant", { max: 63 }),
     slug: reqString(i, "slug", { max: 63 }),

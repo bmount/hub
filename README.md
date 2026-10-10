@@ -129,7 +129,7 @@ Pending user actions (as of 2026-10-06):
 
 ## Agents
 
-An agent is an identity with the reserved address `<slug>@<tenant>.pimwell.com`, a membership in one tenant, and a human operator. Create agents and mint tokens on `https://pimwell.com/me` (the new token is shown once). Tenant admins see every agent at `https://<tenant>.pimwell.com/admin/agents`.
+An agent is an identity with the address `<org>.<name>@pimwell.com`, a membership in one organization, and a human operator. Agents and projects share one name space per organization; no per-organization mail subdomains are used. Create agents and mint tokens on `https://pimwell.com/me` (the new token is shown once). Tenant admins see every agent at `https://<tenant>.pimwell.com/admin/agents`.
 
 A run starts by trading the long-lived token for a run session on the agent's tenant host:
 

@@ -53,9 +53,9 @@ export function reservedBecause(name: string): string | null {
 }
 
 /**
- * Names no helper (agent) may take inside an organization. A helper's address is <name>@<org>.pimwell.com, so it can
- * only impersonate within its organization: mailbox, account and authority words are reserved; helper words, brands
- * and everyday infrastructure words (claude, bot, dev, test) stay available because they are natural helper names.
+ * Names no agent may take inside an organization. Its address is <org>.<name>@pimwell.com: mailbox, account and
+ * authority words are reserved to prevent impersonation within the organization. Agent words, brands and everyday
+ * infrastructure words (claude, bot, dev, test) stay available because they are natural agent names.
  */
 export const RESERVED_AGENT_NAMES: ReadonlySet<string> = new Set([
   "www", "mail", "mx", "api", "mcp", "login", "signup", "admin", "root", "static", "cdn", "git", "ardi",

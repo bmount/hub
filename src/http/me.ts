@@ -76,6 +76,7 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
 
   body += `<h2>New agent</h2>` + (creatable.length === 0 ? "<p>You cannot create agents in any tenant.</p>" : creatable.map((slug) =>
     `<form method="post" action="/api/agent.create"><input type="hidden" name="tenant" value="${esc(slug)}">${BACK}`
+    + `<p>Address: <code>${esc(slug)}.&lt;slug&gt;@${esc(env.HUB_DOMAIN)}</code>. Agents and projects share names in this organization.</p>`
     + `<label>Slug <input name="slug" required maxlength="63" pattern="[a-z0-9-]+"></label> `
     + `<label>Name <input name="display_name" required maxlength="80"></label> `
     + `<button type="submit">Create agent in ${esc(slug)}</button></form>`).join(""));

@@ -37,6 +37,9 @@ describe("/me", () => {
     expect(html).toContain("run-1");
     expect(html).toContain(`name="session_id" value="${s.session.id}"`);
     expect(html).toContain('action="/api/agent.create"');
+    expect(html).toContain('Address: <code>acme.&lt;slug&gt;@pimwell.test</code>');
+    expect(html).toContain("Agents and projects share names in this organization.");
+    expect(html).not.toContain('blue.&lt;slug&gt;@pimwell.test');
     expect(html).toContain('name="tenant" value="acme"');
     expect(html).not.toContain("Create agent in blue"); // reader: no agent form (the credential form still lists blue)
     expect(html).toContain("New git credential for blue");
@@ -56,6 +59,8 @@ describe("/me", () => {
     expect(html).not.toContain("<script>x</script>");
     expect(html).toContain('name="tenant" value="acme"');
     expect(html).toContain('name="tenant" value="blue"');
+    expect(html).toContain('acme.&lt;slug&gt;@pimwell.test');
+    expect(html).toContain('blue.&lt;slug&gt;@pimwell.test');
   });
 
   it("is linked from the apex home", async () => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { getSessionByToken } from "../src/db/sessions";
 import { getApiTokenByToken } from "../src/db/apiTokens";
 import { acceptInvite, createInvite } from "../src/db/invites";
+import { agentCreate } from "../src/verbs/agent";
 import { apiPost, bearer, seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const ev = (kind: string) => env.HUB_DB.prepare("SELECT tenant_id, identity_id, session_id, target_id, summary FROM event WHERE kind = ?").bind(kind).first<Record<string, string>>();
@@ -18,6 +19,11 @@ async function setup() {
 }
 
 describe("agent.create", () => {
+  it("describes the organization-prefixed address, not a mail subdomain", () => {
+    expect(agentCreate.summary).toContain("<org>.<name>@pimwell.com");
+    expect(agentCreate.summary).not.toContain("<slug>@<tenant>");
+  });
+
   it("lets a member create their own agent on the tenant host or from the apex", async () => {
     const { acme, member } = await setup();
     const res = await apiPost("acme.pimwell.test", "agent.create", { slug: "Bot", display_name: "Build bot" }, bearer(member.token));
