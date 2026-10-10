@@ -2,9 +2,9 @@
 // (base to branch); a verdict records the commit it was given on. Integrating waits for a merge verb in Ardi.
 import { defineVerb, getVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
-import { badRequest, forbidden, notFound } from "../errors";
+import { badRequest, conflict, forbidden, notFound } from "../errors";
 import type { Ctx } from "../auth/context";
-import { ulid } from "../ids";
+import { sha256Hex, ulid } from "../ids";
 import { recordEvent } from "../db/events";
 import { getIdentityByEmail } from "../db/identities";
 import { getMembership } from "../db/memberships";
@@ -32,24 +32,49 @@ function attentionFor(ctx: Ctx, to: string[], href: string, summary: string): D1
     .bind(ulid(ctx.now), ctx.tenant!.id, id, ctx.identity!.id, summary.slice(0, 300), ctx.now, href));
 }
 
+type RequestResult = { ref: string; review: Review; replayed: boolean };
+
+function requestReplay(ctx: Ctx, value: string, fingerprint: string, projectId: string): RequestResult {
+  let stored: { fingerprint: string; result: RequestResult };
+  try { stored = JSON.parse(value); } catch { throw conflict("review request key has invalid state; reconcile existing reviews"); }
+  const r = stored?.result?.review as (Review & { tenant_id: string }) | undefined;
+  if (stored?.fingerprint !== fingerprint || !r || r.project_id !== projectId
+    || r.tenant_id !== ctx.tenant!.id || r.author_id !== ctx.identity!.id
+    || stored.result.ref !== `${r.slug}!${r.number}`) {
+    throw conflict("review request key conflicts with this intent; reconcile existing reviews");
+  }
+  return { ...stored.result, replayed: true };
+}
+
 export const reviewRequest = defineVerb({
   name: "review.request", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
   summary: "Ask people or agents to review a branch of a repository against its base (default main). They see it in What needs me.",
   mcp: {
     scope: "write", destructive: false, title: "Ask for review",
-    input: { type: "object", properties: { project: { type: "string" }, branch: { type: "string", description: "Branch to review" }, base: { type: "string", description: "Default main" }, title: { type: "string" }, summary: { type: "string", description: "What changed and why" }, reviewers: { type: "array", items: { type: "string" }, description: "Emails of people or agents" } }, required: ["project", "branch"], additionalProperties: false },
-    render: (r) => { const x = r as { ref: string }; return `${DATA_NOTE}\n\nReview **${x.ref}** opened.`; },
+    input: { type: "object", properties: { project: { type: "string" }, branch: { type: "string", description: "Branch to review" }, base: { type: "string", description: "Default main" }, title: { type: "string" }, summary: { type: "string", description: "What changed and why" }, reviewers: { type: "array", items: { type: "string" }, description: "Emails of people or agents" }, idempotency_key: { type: "string", minLength: 1, maxLength: 64, description: "Persist one stable key and exact request per intended review. Same caller/tenant/key replays the original snapshot indefinitely; changed intent conflicts. Without a key, reconcile reviews before retrying an ambiguous response." } }, required: ["project", "branch"], additionalProperties: false },
+    render: (r) => { const x = r as RequestResult; return `${DATA_NOTE}\n\nReview **${x.ref}** ${x.replayed ? "already opened (original request replayed)" : "opened"}.`; },
   },
   parse: (i) => {
     const branch = reqString(i, "branch", { max: 200 }).replace(/^refs\/heads\//, "");
     const base = (optString(i, "base", { max: 200 }) ?? "main").replace(/^refs\/heads\//, "");
     if (!BRANCH_RE.test(branch) || !BRANCH_RE.test(base)) throw badRequest("branch and base are branch names");
     if (branch === base) throw badRequest("review a branch against a different base");
-    const reviewers = Array.isArray(i.reviewers) ? (i.reviewers as unknown[]).filter((x): x is string => typeof x === "string").slice(0, 10) : typeof i.reviewers === "string" && i.reviewers ? i.reviewers.split(/[\s,]+/).filter(Boolean).slice(0, 10) : [];
-    return { project: reqString(i, "project", { max: 63 }), branch, base, title: optString(i, "title", { max: 200 }), summary: optString(i, "summary", { max: 10_000 }) ?? "", reviewers };
+    const reviewers = Array.isArray(i.reviewers) ? i.reviewers : typeof i.reviewers === "string"
+      ? i.reviewers.split(/[\s,]+/).filter(Boolean) : i.reviewers === undefined ? [] : null;
+    if (!reviewers || reviewers.length > 10 || reviewers.some((e) => typeof e !== "string" || !e.trim() || e.length > 254)) {
+      throw badRequest("reviewers must contain at most 10 email addresses");
+    }
+    return { project: reqString(i, "project", { max: 63 }), branch, base, title: optString(i, "title", { max: 200 }), summary: optString(i, "summary", { max: 10_000 }) ?? "", reviewers: reviewers as string[], key: i.idempotency_key === undefined ? null : reqString(i, "idempotency_key", { max: 64 }) };
   },
   run: async (ctx, p) => {
     const pr = await repoProject(ctx, p.project);
+    const key = p.key ? `review_request:v1:${ctx.tenant!.id}:${ctx.identity!.id}:${await sha256Hex(p.key)}` : null;
+    const fingerprint = key ? await sha256Hex(JSON.stringify({ project_id: pr.id, branch: p.branch, base: p.base,
+      title: p.title, summary: p.summary, reviewers: p.reviewers })) : null;
+    if (key) {
+      const prior = await ctx.db.prepare("SELECT value FROM meta WHERE key = ?").bind(key).first<string>("value");
+      if (prior !== null) return requestReplay(ctx, prior, fingerprint!, pr.id);
+    }
     const head = (await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: `refs/heads/${p.branch}`, limit: 1 })).result.commits[0];
     if (!head) throw notFound("no such branch");
     const ids: string[] = [];
@@ -63,12 +88,14 @@ export const reviewRequest = defineVerb({
     const title = p.title ?? head.summary;
     // One D1 transaction includes every request effect and the response snapshot.
     // A later attention/event/read failure must not leave a review behind an error.
-    // This is not lost-response idempotency: callers must still reconcile before retrying.
-    const results = await ctx.db.batch<Review>([
+    // Only the winning transaction has this new review ID; racing keyed retries
+    // select no rows for any effect and return the winner's durable snapshot.
+    const results = await ctx.db.batch([
       ctx.db.prepare(`INSERT INTO review (id, tenant_id, project_id, number, branch, base, head_oid, title, summary, status, author_id, created_at, updated_at)
-        SELECT ?, ?, ?, COALESCE(MAX(number), 0) + 1, ?, ?, ?, ?, ?, 'open', ?, ?, ? FROM review WHERE project_id = ?`)
-        .bind(id, ctx.tenant!.id, pr.id, p.branch, p.base, head.oid, title, p.summary, ctx.identity!.id, ctx.now, ctx.now, pr.id),
-      ...[...new Set(ids)].map((rid) => ctx.db.prepare("INSERT INTO review_reviewer (review_id, identity_id) VALUES (?, ?)").bind(id, rid)),
+        SELECT ?, ?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM review WHERE project_id = ?), ?, ?, ?, ?, ?, 'open', ?, ?, ?
+        WHERE NOT EXISTS (SELECT 1 FROM meta WHERE key = ?)`)
+        .bind(id, ctx.tenant!.id, pr.id, pr.id, p.branch, p.base, head.oid, title, p.summary, ctx.identity!.id, ctx.now, ctx.now, key),
+      ...[...new Set(ids)].map((rid) => ctx.db.prepare("INSERT INTO review_reviewer (review_id, identity_id) SELECT id, ? FROM review WHERE tenant_id = ? AND id = ?").bind(rid, ctx.tenant!.id, id)),
       ...[...new Set(ids)].filter((rid) => rid !== ctx.identity!.id).map((rid) => ctx.db.prepare(`
         INSERT INTO attention (id, tenant_id, identity_id, reason, item_id, actor_id, summary, created_at, href)
         SELECT ?, r.tenant_id, ?, 'assigned', NULL, ?, substr(? || p.slug || '!' || r.number || ': ' || r.title, 1, 300), ?,
@@ -80,12 +107,23 @@ export const reviewRequest = defineVerb({
           'Opened review ' || p.slug || '!' || r.number || ' (' || r.branch || ' into ' || r.base || '): ' || r.title, ?
         FROM review r JOIN project p ON p.id = r.project_id WHERE r.tenant_id = ? AND r.id = ?`)
         .bind(ulid(ctx.now), ctx.identity!.id, ctx.session?.id ?? null, ctx.now, ctx.tenant!.id, id),
-      ctx.db.prepare(`SELECT r.*, p.slug, i.display_name AS author FROM review r
-        JOIN project p ON p.id = r.project_id JOIN identity i ON i.id = r.author_id
-        WHERE r.tenant_id = ? AND r.id = ?`).bind(ctx.tenant!.id, id),
+      ...(key ? [ctx.db.prepare(`INSERT INTO meta (key, value)
+        SELECT ?, json_object('fingerprint', ?, 'result', json_object('ref', p.slug || '!' || r.number,
+          'review', json_object('id', r.id, 'tenant_id', r.tenant_id, 'project_id', r.project_id, 'slug', p.slug,
+            'number', r.number, 'branch', r.branch, 'base', r.base, 'head_oid', r.head_oid, 'title', r.title,
+            'summary', r.summary, 'status', r.status, 'author_id', r.author_id, 'author', i.display_name,
+            'created_at', r.created_at, 'updated_at', r.updated_at)))
+        FROM review r JOIN project p ON p.id = r.project_id JOIN identity i ON i.id = r.author_id
+        WHERE r.tenant_id = ? AND r.id = ?`).bind(key, fingerprint, ctx.tenant!.id, id)] : []),
+      key ? ctx.db.prepare("SELECT value FROM meta WHERE key = ?").bind(key)
+        : ctx.db.prepare(`SELECT r.*, p.slug, i.display_name AS author FROM review r
+          JOIN project p ON p.id = r.project_id JOIN identity i ON i.id = r.author_id
+          WHERE r.tenant_id = ? AND r.id = ?`).bind(ctx.tenant!.id, id),
     ]);
-    const r = results[results.length - 1]!.results[0]!;
-    return { ref: `${pr.slug}!${r.number}`, review: r };
+    const row = results[results.length - 1]!.results[0]!;
+    if (key) return { ...requestReplay(ctx, (row as { value: string }).value, fingerprint!, pr.id), replayed: results[0]!.meta.changes === 0 };
+    const r = row as unknown as Review;
+    return { ref: `${pr.slug}!${r.number}`, review: r, replayed: false };
   },
 });
 

@@ -38,8 +38,9 @@ export async function deleteTenant(db: D1Database, slug: string, deleted_by: str
   if (links?.n) counts.work_link = links.n;
 
   const stmts: D1PreparedStatement[] = [db.prepare("PRAGMA defer_foreign_keys = true")];
-  // Mail welcome/replay records live in existing meta until a dedicated schema
+  // Replay records live in existing meta until a dedicated schema
   // is authorized. Tenant ids are internal ULIDs; the trailing colon scopes them.
+  stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`review_request:v1:${t.id}:*`));
   stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_welcome:v1:${t.id}:*`));
   stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_replay:v1:${t.id}:*`));
   stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_response_recipients:v1:${t.id}:*`));

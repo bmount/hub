@@ -40,11 +40,15 @@ describe("tenant.delete", () => {
   it("removes everything for the organization, keeps people who belong elsewhere, and leaves a tombstone", async () => {
     const w = await world();
     await setTenantState(env.HUB_DB, w.old.id, "archived", Date.now());
+    for (const t of [w.old, w.keep]) await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?)")
+      .bind(`review_request:v1:${t.id}:caller:key`, JSON.stringify({ result: "private snapshot" })).run();
     const res = await apiPost(HOST, "tenant.delete", { slug: "oldorg", confirm: "OldOrg" }, w.h);
     expect(res.status).toBe(200);
     for (const t of ["tenant WHERE id", "membership WHERE tenant_id", "project WHERE tenant_id", "session WHERE tenant_id", "api_token WHERE tenant_id", "event WHERE tenant_id"]) {
       expect(await count(`SELECT COUNT(*) AS n FROM ${t} = ?`, w.old.id), t).toBe(0);
     }
+    expect(await count("SELECT COUNT(*) AS n FROM meta WHERE key GLOB ?", `review_request:v1:${w.old.id}:*`)).toBe(0);
+    expect(await count("SELECT COUNT(*) AS n FROM meta WHERE key GLOB ?", `review_request:v1:${w.keep.id}:*`)).toBe(1);
     expect(await count("SELECT COUNT(*) AS n FROM identity WHERE id = ?", w.bot.agent.identity.id)).toBe(0);
     expect(await count("SELECT COUNT(*) AS n FROM identity WHERE id = ?", w.person.identity.id)).toBe(1);
     expect(await count("SELECT COUNT(*) AS n FROM membership WHERE tenant_id = ?", w.keep.id)).toBe(1);
