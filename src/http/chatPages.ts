@@ -90,13 +90,24 @@ function refHtml(r: ViewRef): string {
 }
 
 /** Original server-recorded posting evidence, not task status or execution authority. */
-function responseHtml(m: MsgJson): string {
+function responseHtml(m: MsgJson, messages?: ReadonlyMap<string, MsgJson>): string {
   const source = m.response_to;
   if (!source) return ""; // Ordinary/legacy replies have no public attribution; never infer it from text.
-  return `<p class="response-attribution"><small>Recorded ${esc(source.stage)} response to <a href="/m/${esc(source.msg_id)}">#${source.seq}</a> (source r${source.rev}). Posting attribution only; not proof of execution or completion.</small></p>`;
+  let warning = "";
+  if (messages) {
+    // Use only this authorized snapshot: an omitted source is not proof it is unchanged or deleted.
+    const current = messages.get(source.msg_id);
+    if (!current) warning = "Source is not shown on this page; inspect its history before assuming it is unchanged.";
+    else if (current.retracted) warning = "Source is retracted on this page; review its history. This does not cancel work or reopen the response slot.";
+    else if (current.rev !== source.rev || current.author.identity_id !== source.author_id || current.system) {
+      warning = `Source evidence differs on this page (r${current.rev}); review its history.`;
+    }
+  }
+  return `<p class="response-attribution"><small>Recorded ${esc(source.stage)} response to <a href="/m/${esc(source.msg_id)}">#${source.seq}</a> (source r${source.rev}). Posting attribution only; not proof of execution or completion.</small></p>`
+    + (warning ? `<p class="response-source-warning"><small>${esc(warning)}</small></p>` : "");
 }
 
-function msgHtml(slug: string, m: MsgJson, inThread: boolean, readSeq?: number): string {
+function msgHtml(slug: string, m: MsgJson, inThread: boolean, readSeq?: number, messages?: ReadonlyMap<string, MsgJson>): string {
   const marks = m.retracted ? " <em>retracted</em>" : m.edited ? ` <em>edited r${m.rev}</em>` : "";
   const who = m.system ? "<strong>hub</strong>" : tagHtml(m.author);
   const body = m.retracted ? "" : `<pre style="white-space:pre-wrap;margin:.25rem 0">${esc(m.body)}</pre>`;
@@ -104,7 +115,7 @@ function msgHtml(slug: string, m: MsgJson, inThread: boolean, readSeq?: number):
   const newThreadActivity = readSeq !== undefined && m.last_reply_seq !== null && m.last_reply_seq > readSeq
     ? ` · <a href="/c/${esc(slug)}/t/${m.seq}?after=${readSeq}">New thread activity</a>` : "";
   const thread = inThread || m.system ? "" : `<p><small><a href="/c/${esc(slug)}/t/${m.seq}">${m.reply_count > 0 ? `${m.reply_count} ${m.reply_count === 1 ? "reply" : "replies"}` : "reply"}</a>${newThreadActivity}</small></p>`;
-  return `<article class="channel-message" id="m${m.seq}"><p><a href="/m/${esc(m.msg_id)}">#${m.seq}</a> ${when(m.created_at)} ${who}${marks}</p>${responseHtml(m)}${body}${refs}${thread}</article>`;
+  return `<article class="channel-message" id="m${m.seq}"><p><a href="/m/${esc(m.msg_id)}">#${m.seq}</a> ${when(m.created_at)} ${who}${marks}</p>${responseHtml(m, messages)}${body}${refs}${thread}</article>`;
 }
 
 /** A read cursor is an activity watermark, not an unread count. Mark only new message sequences. */
@@ -169,10 +180,11 @@ export async function threadPage(request: Request, env: Env, slug: string, seq: 
     const after = new URL(request.url).searchParams.get("after");
     const r = await verb<ReadResult>(pc.ctx, "chat.thread", { c: slug, msg: seq, budget: 8000, ...(after && /^\d{1,12}$/.test(after) ? { after } : {}) });
     const root = r.messages[0]!;
+    const messages = new Map(r.messages.map((m) => [m.msg_id, m]));
     const channels = await conversations(pc.ctx);
     const body = `<header class="channel-header"><p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p><h1>Thread #${root.seq}</h1><a class="chip" href="/c/${esc(r.channel)}/t/${root.seq}">Refresh thread</a></header>${presencePanel(r.channel, channels)}`
-      + `<section class="thread-root" aria-labelledby="thread-original"><h2 id="thread-original">Original message</h2>${msgHtml(r.channel, root, true)}</section>`
-      + `<section aria-labelledby="thread-replies"><h2 id="thread-replies">Replies${after ? " (continued)" : ""}</h2><div class="channel-messages">${r.messages.slice(1).map((m) => msgHtml(r.channel, m, true)).join("") || '<p class="lede">No replies shown.</p>'}</div></section>`
+      + `<section class="thread-root" aria-labelledby="thread-original"><h2 id="thread-original">Original message</h2>${msgHtml(r.channel, root, true, undefined, messages)}</section>`
+      + `<section aria-labelledby="thread-replies"><h2 id="thread-replies">Replies${after ? " (continued)" : ""}</h2><div class="channel-messages">${r.messages.slice(1).map((m) => msgHtml(r.channel, m, true, undefined, messages)).join("") || '<p class="lede">No replies shown.</p>'}</div></section>`
       + (r.next_after !== null ? `<p><a href="/c/${esc(r.channel)}/t/${root.seq}?after=${r.next_after}">More replies</a></p>` : "")
       + (rank(pc.ctx.role) >= rank("member") ? compose(`/c/${r.channel}/t/${root.seq}`, r.head, draft, notice, "Reply") : '<p class="lede">You have read-only access.</p>');
     return htmlResponse(page(`#${r.channel} thread`, workspace(channels, r.channel, body), shellFor(pc.ctx, env, "chat")), 200, pc.extra);

@@ -77,6 +77,63 @@ describe("server-recorded chat response attribution", () => {
     }
   });
 
+  it("warns when recorded responses refer to a changed or retracted source without claiming cancellation", async () => {
+    const { w, root, source, evidence, progress } = await setup();
+    const article = (html: string, seq: number) => html.split(`id="m${seq}"`)[1]!.split("</article>")[0]!;
+    const path = `/c/general/t/${root.seq}`;
+    const original = await (await browserGet(path, w.dev.token)).text();
+    expect(article(original, progress.seq)).not.toContain('class="response-source-warning"');
+    await ok(w.lead.token, "chat.edit", { c: "general", msg: source.msg_id, body: "@scout revised <script>source</script>" });
+    const result = (await tool(w.scout.longLived, "chat_post", {
+      c: "general", body: "tested revised increment", after: 4, idempotency_key: "revised-result", response_to: { ...evidence, rev: 2 },
+    })).structuredContent;
+    const changed = await (await browserGet(path, w.dev.token)).text();
+    expect(article(changed, progress.seq)).toContain("Source evidence differs on this page (r2); review its history.");
+    expect(article(changed, progress.seq)).toContain("(source r1)");
+    expect(article(changed, result.seq)).not.toContain('class="response-source-warning"');
+    expect(article(changed, progress.seq)).not.toContain("<script>source</script>");
+    await ok(w.lead.token, "chat.retract", { c: "general", msg: source.msg_id });
+    const before = await ok(w.dev.token, "chat.inbox");
+    const ch = (await getChannelBySlug(env.HUB_DB, w.acme.id, "general"))!;
+    const head = await conversationStub(env, w.acme.id, ch.project_id).head(w.acme.id, ch.project_id);
+    for (let i = 0; i < 3; i++) {
+      const retracted = await browserGet(path, w.dev.token);
+      expect(retracted.headers.get("cache-control")).toBe("no-store");
+      const html = await retracted.text();
+      for (const response of [progress, result]) {
+        expect(article(html, response.seq)).toContain("Source is retracted on this page; review its history. This does not cancel work or reopen the response slot.");
+        expect(article(html, response.seq)).toContain("Posting attribution only; not proof of execution or completion.");
+      }
+      expect(html).not.toContain("revised &lt;script&gt;source");
+    }
+    expect((await ok(w.dev.token, "chat.inbox")).items).toEqual(before.items);
+    expect((await ok(w.dev.token, "chat.conversations")).conversations[0].read_seq).toBe(0);
+    expect(await conversationStub(env, w.acme.id, ch.project_id).head(w.acme.id, ch.project_id)).toBe(head);
+    expect((await tool(w.scout.longLived, "chat_response_status", { c: "general", msg: source.msg_id })).structuredContent).toMatchObject({
+      progress: { committed: { msg_id: progress.msg_id } }, result: { committed: { msg_id: result.msg_id } },
+    });
+  });
+
+  it("does not guess current source state when pagination omits a nested source", async () => {
+    const { w, root, source, progress } = await setup();
+    const path = `/c/general/t/${root.seq}?after=${source.head}`;
+    for (const token of [w.dev.token, (await seedHuman("paged-reader@example.com", { memberships: [{ tenant_id: w.acme.id, role: "reader" }] })).token]) {
+      const html = await (await browserGet(path, token)).text();
+      const reply = html.split(`id="m${progress.seq}"`)[1]!.split("</article>")[0]!;
+      expect(reply).toContain("Source is not shown on this page; inspect its history before assuming it is unchanged.");
+      expect(reply).toContain(`<a href="/m/${source.msg_id}">#${source.seq}</a> (source r1)`);
+      expect(html).not.toContain(`id="m${source.seq}"`);
+      expect(reply).not.toContain("Source is retracted");
+      expect(reply).not.toContain("Source evidence differs");
+    }
+    const full = await (await browserGet(`/c/general/t/${root.seq}`, w.dev.token)).text();
+    expect(full).not.toContain('class="response-source-warning"');
+    await env.HUB_DB.prepare("DELETE FROM membership WHERE tenant_id = ? AND identity_id = ?").bind(w.acme.id, w.dev.identity.id).run();
+    const denied = await browserGet(path, w.dev.token);
+    expect(denied.status).toBe(404);
+    expect(await denied.text()).not.toContain(source.msg_id);
+  });
+
   it("identifies exact nested sources/stages in read, thread and catchup without disclosing private ledger values", async () => {
     const { w, root, source, evidence, progress } = await setup();
     await ok(w.lead.token, "chat.edit", { c: "general", msg: source.msg_id, body: "@scout revised native request" });
