@@ -10,7 +10,7 @@ import { resolveMailAddress } from "./projectMail";
 export const RESPONSE_INTENT_PREFIX = "mail_response_intent:v1:";
 // The public UTC minute format has a four-digit year; corrupt records cannot reach Date rendering.
 const UTC_FORMAT_END = Date.UTC(10000, 0, 1);
-type Intent = { revision: number; state: "planned" | "cancelled"; updated_at: number; change_id: string; respond_by: number | null };
+type Intent = { revision: number; state: "planned" | "cancelled" | "completed"; updated_at: number; change_id: string; respond_by: number | null };
 type Evidence = { id: string; tenant_id: string; project_id: string | null; identity_id: string;
   from_email: string; to_address: string; message_id: string; received_at: number };
 function decode(raw: string | null): Intent | null {
@@ -21,7 +21,7 @@ function decode(raw: string | null): Intent | null {
     const validDue = due === undefined || due === null || (s.state === "planned" && Number.isSafeInteger(due)
       && due > s.updated_at && due - s.updated_at <= REPLY_WINDOW_MS && due < UTC_FORMAT_END);
     return s && Number.isSafeInteger(s.revision) && s.revision > 0 && s.revision < Number.MAX_SAFE_INTEGER
-      && ["planned", "cancelled"].includes(s.state) && Number.isSafeInteger(s.updated_at) && s.updated_at >= 0
+      && ["planned", "cancelled", "completed"].includes(s.state) && Number.isSafeInteger(s.updated_at) && s.updated_at >= 0
       && recipientId(s.change_id) && validDue ? { ...s, respond_by: due ?? null } : null;
   } catch { return null; }
 }
@@ -101,6 +101,8 @@ export async function responseIntent(ctx: Ctx, id: string) {
     state: raw === null ? "unset" : !state ? "invalid" : state.state === "planned" && !p.eligible ? "stale"
       : state.state === "planned" && state.respond_by !== null && state.respond_by <= ctx.now ? "overdue" : state.state,
     updated_at: state?.updated_at ?? null, respond_by: state?.respond_by ?? null, can_plan: p.eligible,
+    can_complete: state?.state === "planned", completion_evidence: state?.state === "completed" ? "self_reported" : "not_reported",
+    recipient_delivery: "not_observed",
     reply_observation: await replyObservation(ctx, e, raw, state),
     automatic_execution: "not_implemented", notification: "not_requested", response_guaranteed: false };
 }
@@ -117,6 +119,11 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
   if (raw !== null && !old) throw conflict("invalid response intent requires reconciliation");
   if ((old?.revision ?? 0) !== expected) throw conflict("response intent changed; read before editing");
   if ((state === old?.state && respondBy === old.respond_by) || (state === "cancelled" && !old)) throw conflict("no response intent transition");
+  // Only an explicit assertion by the owner of an outstanding plan can complete it.
+  // Terminal states cannot be completed/cancelled again; replan is a separate CAS.
+  if ((state === "completed" || state === "cancelled") && old?.state !== "planned") {
+    throw conflict("completion or cancellation requires an outstanding own intention");
+  }
   const p = await preference(ctx, e.row);
   if (state === "planned" && !p.eligible) throw conflict("current mailbox preferences do not select you");
   const next: Intent = { revision: expected + 1, state, updated_at: ctx.now, change_id: ulid(ctx.now), respond_by: respondBy };
@@ -127,7 +134,7 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
         AND EXISTS (SELECT 1 FROM meta r WHERE r.key = ? AND r.value = ?)
         AND (? IS NULL OR m.received_at = ? AND m.received_at <= ? AND ? <= m.received_at + ?)
         AND (? IS NULL OR EXISTS (SELECT 1 FROM meta previous WHERE previous.key = ? AND previous.value = ?))
-        AND (? = 'cancelled' OR (
+        AND (? IN ('cancelled', 'completed') OR (
           EXISTS (SELECT 1 FROM meta c WHERE c.key = ? AND c.value = ?)
           AND (m.project_id IS NULL AND EXISTS (SELECT 1 FROM tenant t WHERE t.id = m.tenant_id AND m.to_address = t.slug || '@' || ?)
             OR EXISTS (SELECT 1 FROM project pr JOIN tenant t ON t.id = pr.tenant_id
@@ -141,9 +148,13 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
       SELECT ?, ?, ?, ?, 'mail.set_response_intent', 'inbound_mail', ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)`)
       .bind(ulid(ctx.now), ctx.tenant!.id, ctx.identity!.id, ctx.session?.id ?? null, id,
-        state === "planned" ? "Recorded own human response intention (no delivery or execution requested)" : "Cancelled own human response intention",
+        state === "planned" ? "Recorded own human response intention (no delivery or execution requested)"
+          : state === "completed" ? "Self-reported completion of own human response intention (recipient delivery not observed)"
+          : "Cancelled own human response intention",
         ctx.now, key, value),
   ]);
   if (r[0]!.meta.changes !== 1) throw conflict("response intent or eligibility changed; read before editing");
-  return { revision: next.revision, state, respond_by: respondBy, automatic_execution: "not_implemented", notification: "not_requested", response_guaranteed: false };
+  return { revision: next.revision, state, respond_by: respondBy,
+    completion_evidence: state === "completed" ? "self_reported" : "not_reported", recipient_delivery: "not_observed",
+    automatic_execution: "not_implemented", notification: "not_requested", response_guaranteed: false };
 }

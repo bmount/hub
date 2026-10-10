@@ -452,6 +452,139 @@ describe("explicit self-recorded human response intent, not automatic scheduling
     expect(overdue).toContain("intended respond-by time has passed");
     expect(overdue.match(/id="inspector"[^>]*data-key="([^"]*)"/)![1]).not.toBe(page.match(/id="inspector"[^>]*data-key="([^"]*)"/)![1]);
   });
+  it.each([false, true])("explicitly self-reports completion, never delivery, for org/project=%s without send or access effects", async project => {
+    const w = await world(project);
+    expect((await set(w, "completed", 0)).status).toBe(409);
+    expect((await set(w)).status).toBe(200);
+    expect(await read(w)).toMatchObject({ can_complete: true, completion_evidence: "not_reported", recipient_delivery: "not_observed" });
+    expect((await set(w, "completed", 1)).status).toBe(200);
+    expect(await read(w)).toMatchObject({ state: "completed", revision: 2, can_complete: false, respond_by: null,
+      completion_evidence: "self_reported", recipient_delivery: "not_observed", response_guaranteed: false,
+      reply_observation: { state: "not_applicable", fulfillment: "not_inferred" } });
+    expect(await read(w, cookieHeaders(w.other.token, host))).toMatchObject({ state: "unset", completion_evidence: "not_reported" });
+    expect((await set(w, "completed", 2)).status).toBe(409);
+    expect((await set(w, "cancelled", 2)).status).toBe(409);
+    expect(await count()).toBe(2);
+    const audit = await env.HUB_DB.prepare("SELECT summary FROM event WHERE kind = 'mail.set_response_intent' ORDER BY created_at DESC, id DESC LIMIT 1").first<string>("summary");
+    expect(audit).toBe("Self-reported completion of own human response intention (recipient delivery not observed)");
+    for (const table of ["outbound_mail", "attention", "consent", "oauth_grant"]) expect(await env.HUB_DB.prepare(`SELECT COUNT(*) n FROM ${table}`).first("n")).toBe(0);
+    expect((await set(w, "planned", 2)).status).toBe(200);
+    expect(await read(w)).toMatchObject({ state: "planned", revision: 3, completion_evidence: "not_reported" });
+    expect((await set(w, "cancelled", 3)).status).toBe(200);
+    expect((await set(w, "completed", 4)).status).toBe(409);
+  });
+  it.each(["clear", "archive", "rename", "expired"]) ("permits a still-authorized owner to complete a prior plan after %s, not create a new assignment", async change => {
+    const w = await world(change === "archive");
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    ctx.now = now + 60_000;
+    await setResponseIntent(ctx, w.id, "planned", 0, ctx.now + 60_000);
+    if (change === "clear") await env.HUB_DB.prepare("UPDATE meta SET value = '{}' WHERE key = ?").bind(w.prefKey).run();
+    if (change === "archive") await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.project.id).run();
+    if (change === "rename") await env.HUB_DB.prepare("UPDATE tenant SET slug = 'renamed' WHERE id = ?").bind(w.tenant.id).run();
+    ctx.now = now + REPLY_WINDOW_MS + 1;
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ state: change === "expired" ? "overdue" : "stale", can_complete: true });
+    expect(await setResponseIntent(ctx, w.id, "completed", 1)).toMatchObject({ state: "completed", respond_by: null, completion_evidence: "self_reported" });
+    expect(await responseIntent(ctx, w.id)).toMatchObject({ state: "completed", revision: 2, can_complete: false });
+  });
+  it.each(["private", "foreign", "released", "unproven", "removed", "reader", "old-proof", "agent", "admin", "origin"]) ("completion cannot bypass %s authority or complete another person's plan", async change => {
+    const w = await world();
+    expect((await set(w)).status).toBe(200);
+    let headers = w.headers;
+    if (change === "private") await env.HUB_DB.prepare("UPDATE inbound_mail SET recipient_id = ? WHERE id = ?").bind(w.bot.agent.identity.id, w.id).run();
+    if (change === "foreign") await env.HUB_DB.prepare("UPDATE inbound_mail SET tenant_id = ? WHERE id = ?").bind(w.foreign.id, w.id).run();
+    if (change === "released") await env.HUB_DB.prepare("UPDATE inbound_mail SET released_by = ? WHERE id = ?").bind(w.admin.identity.id, w.id).run();
+    if (change === "unproven") await env.HUB_DB.prepare("DELETE FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").run();
+    if (change === "removed") await env.HUB_DB.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ?").bind(w.member.identity.id).run();
+    if (change === "reader") await env.HUB_DB.prepare("UPDATE membership SET role = 'reader' WHERE identity_id = ?").bind(w.member.identity.id).run();
+    if (change === "old-proof") await env.HUB_DB.prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(Date.now() - 61 * 60_000, w.member.session.id).run();
+    if (change === "agent") headers = bearer(w.bot.token);
+    if (change === "admin") headers = w.adminHeaders;
+    if (change === "origin") headers = { ...w.headers, origin: "https://evil.test" };
+    expect((await set(w, "completed", 1, headers)).status).not.toBe(200);
+    expect(await count()).toBe(1);
+    expect(JSON.parse((await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.intentKey).first<string>("value"))!).state).toBe("planned");
+  });
+  it.each(["member", "proof", "mail", "intent"]) ("completion rechecks %s in its atomic revision/audit write", async change => {
+    const w = await world(); expect((await set(w)).status).toBe(200);
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    const original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, key) {
+      if (key !== "batch") { const v = Reflect.get(db, key); return typeof v === "function" ? v.bind(db) : v; }
+      return async (stmts: D1PreparedStatement[]) => {
+        if (change === "member") await env.HUB_DB.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ?").bind(w.member.identity.id).run();
+        if (change === "proof") await env.HUB_DB.prepare("DELETE FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").run();
+        if (change === "mail") await env.HUB_DB.prepare("UPDATE inbound_mail SET verdict = 'quarantined' WHERE id = ?").bind(w.id).run();
+        if (change === "intent") await env.HUB_DB.prepare("DELETE FROM meta WHERE key = ?").bind(w.intentKey).run();
+        return original(stmts);
+      };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "completed", 1)).rejects.toThrow("eligibility changed");
+    expect(await count()).toBe(1);
+  });
+  it("serializes completion against cancellation and requires reconciliation after a lost completion result", async () => {
+    const w = await world(); expect((await set(w)).status).toBe(200);
+    expect((await Promise.all([set(w, "completed", 1), set(w, "cancelled", 1)])).map(r => r.status).sort()).toEqual([200, 409]);
+    expect(await count()).toBe(2);
+    expect((await set(w, "planned", 2)).status).toBe(200);
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    const original = ctx.db.batch.bind(ctx.db);
+    ctx.db = new Proxy(ctx.db, { get(db, key) {
+      if (key !== "batch") { const v = Reflect.get(db, key); return typeof v === "function" ? v.bind(db) : v; }
+      return async (stmts: D1PreparedStatement[]) => { await original(stmts); throw new Error("lost completion result"); };
+    } });
+    await expect(setResponseIntent(ctx, w.id, "completed", 3)).rejects.toThrow("lost completion result");
+    expect(await read(w)).toMatchObject({ state: "completed", revision: 4, completion_evidence: "self_reported" });
+    expect((await set(w, "completed", 3)).status).toBe(409);
+    expect(await count()).toBe(4);
+  });
+  it("refuses completed deadlines/corrupt plans and rolls completion back if its audit fails", async () => {
+    const w = await world(); expect((await set(w)).status).toBe(200);
+    const ctx = await buildContext(new Request(`https://${host}/api/mail.set_response_intent`, { headers: w.headers }), env);
+    await expect(setResponseIntent(ctx, w.id, "completed", 1, ctx.now + 60_000)).rejects.toThrow("future UTC time");
+    expect(() => mailSetResponseIntent.parse({ id: w.id, state: "completed", expected_revision: 1, respond_by_utc: "2028-02-29T12:34" })).toThrow("completion");
+    ctx.session = { ...ctx.session!, id: "missing-session" };
+    await expect(setResponseIntent(ctx, w.id, "completed", 1)).rejects.toThrow();
+    expect(await read(w)).toMatchObject({ state: "planned", revision: 1 });
+    expect(await count()).toBe(1);
+    expect((await set(w, "completed", 1)).status).toBe(200);
+    const stored = JSON.parse((await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(w.intentKey).first<string>("value"))!);
+    stored.respond_by = stored.updated_at + 60_000;
+    await env.HUB_DB.prepare("UPDATE meta SET value = ? WHERE key = ?").bind(JSON.stringify(stored), w.intentKey).run();
+    expect(await read(w)).toMatchObject({ state: "invalid", revision: null, can_complete: false, completion_evidence: "not_reported" });
+    expect((await set(w, "completed", 2)).status).toBe(409);
+    expect(await count()).toBe(2);
+  });
+  it("offers a revision-safe explicit self-report form, clears the deadline and invalidates the inspector pane", async () => {
+    const w = await world(); expect((await set(w)).status).toBe(200);
+    const page = () => SELF.fetch(`https://${host}/mail/${w.id}`, { headers: w.headers });
+    const before = await (await page()).text();
+    expect(before).toContain('name="state" value="completed"');
+    expect(before).toContain("I have completed my response");
+    expect(before).toContain("Record only if you have completed your intended response");
+    const body = new URLSearchParams({ id: w.id, state: "completed", expected_revision: "1", _back: `/mail/${w.id}` });
+    const post = () => SELF.fetch(`https://${host}/api/mail.set_response_intent`, { method: "POST", body, headers: w.headers, redirect: "manual" });
+    expect((await post()).status).toBe(303);
+    const after = await (await page()).text();
+    expect(after).toContain("You self-reported that you completed your response intention");
+    expect(after).toContain("not observed recipient delivery or independently verified fulfillment");
+    expect(after).not.toContain('name="state" value="completed"');
+    expect(after).not.toContain("Cancel my intention");
+    expect(after.match(/id="inspector"[^>]*data-key="([^"]*)"/)![1]).not.toBe(before.match(/id="inspector"[^>]*data-key="([^"]*)"/)![1]);
+    expect((await post()).status).toBe(409);
+    expect(await count()).toBe(2);
+  });
+  it("requires fresh proof for the completion browser form, without a hidden save", async () => {
+    const w = await world(); expect((await set(w)).status).toBe(200);
+    await env.HUB_DB.prepare("UPDATE session SET last_proof_at = ? WHERE id = ?").bind(Date.now() - 61 * 60_000, w.member.session.id).run();
+    const html = await (await SELF.fetch(`https://${host}/mail/${w.id}`, { headers: w.headers })).text();
+    expect(html).toContain("recent confirmation");
+    expect(html).not.toContain('action="/api/mail.set_response_intent"');
+    const body = new URLSearchParams({ id: w.id, state: "completed", expected_revision: "1", _back: `/mail/${w.id}` });
+    const r = await SELF.fetch(`https://${host}/api/mail.set_response_intent`, { method: "POST", body, headers: w.headers, redirect: "manual" });
+    expect(r.status).toBe(303); expect(r.headers.get("location")).toContain("/login?reproof=1");
+    expect(await read(w)).toMatchObject({ state: "planned", revision: 1 });
+    expect(await count()).toBe(1);
+  });
   it("cleans only the deleted tenant's intent keys", async () => {
     const w = await world();
     expect((await set(w)).status).toBe(200);

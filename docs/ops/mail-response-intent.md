@@ -2,8 +2,11 @@
 
 This is a small scheduling-semantics increment: a currently configured human
 reader can **voluntarily record an intention to respond to a particular shared
-message**, optionally record a UTC respond-by time, retime it or cancel it.
+message**, optionally record a UTC respond-by time, retime it, cancel it or
+explicitly self-report completion of an outstanding own intention.
 Reads distinguish a passed intended deadline from an outstanding intention.
+Completion means only the human's assertion, not independently verified
+substantive fulfillment or observed recipient delivery.
 It is not a scheduler, a delivered notification,
 an acknowledgement from someone else, or a guarantee of a substantive reply.
 Preferences alone still do not create an intention. Nothing in an incoming
@@ -15,7 +18,9 @@ Tenant-host APIs (not MCP/assistant tools):
 
 - `POST /api/mail.response_intent`, `{ "id": "<mail id>" }`: reads only the
   caller's own intention. Returns `mail_id`, `revision`, `state`, `updated_at`,
-  `respond_by` (UTC epoch milliseconds or null), `can_plan`, `reply_observation`
+  `respond_by` (UTC epoch milliseconds or null), `can_plan`, `can_complete`,
+  `completion_evidence` (`self_reported` only for completed, otherwise
+  `not_reported`), `recipient_delivery: "not_observed"`, `reply_observation`
   (bounded own recorded reply evidence, below), `automatic_execution: "not_implemented"`,
   `notification: "not_requested"`, `response_guaranteed: false`.
 - `POST /api/mail.set_response_intent`,
@@ -27,9 +32,16 @@ Tenant-host APIs (not MCP/assistant tools):
   an untimed intention; on a planned intention it explicitly clears the old
   deadline. Retiming an existing planned intention uses its current revision.
   An identical state/deadline conflicts without another audit.
-  `state: "cancelled"` cancels an existing intention and does not accept a
-  respond-by time. A cancelled intention may be replanned at its current
-  revision, only if current preferences still select the caller.
+  `state: "cancelled"` cancels an outstanding planned intention and does not
+  accept a respond-by time. `state: "completed"` explicitly records the owner's
+  assertion that they completed their intended response. It requires a prior
+  outstanding planned intention (including overdue/stale observations), clears
+  its deadline and accepts no respond-by time. No outbound record is required
+  or used as proof of completion; a response may have happened outside Pimwell.
+  Absent, cancelled, completed or corrupt records cannot be completed. Neither
+  terminal state can be cancelled/completed again. A cancelled or completed
+  intention may be replanned at its current revision, only if current preferences
+  still select the caller; the new plan no longer reports completion.
 
 A respond-by time must be strictly after server request time and at most 30 days
 from the message's stored receipt time. Future/invalid receipt timestamps and
@@ -51,7 +63,7 @@ configured humans may independently intend to respond; this is not exclusive
 ownership, priority routing or fanout.
 
 The browser mail inspector offers **My response intention** and native
-revision-checked plan/retime/cancel forms for eligible human browser readers,
+revision-checked plan/retime/cancel/self-report-completion forms for eligible human browser readers,
 including an optional UTC minute field. Existing UTC deadlines are shown as
 ISO text; a passed deadline says overdue, never sent/failed. An old
 proof shows the existing confirmation flow, not an active form. The inspector
@@ -85,11 +97,14 @@ Planning additionally requires current mailbox resolution to match the stored
 exact tenant/project/address with no agent recipient, valid preference data
 selecting the caller, and active tenant/project/member/human identity. Project
 preferences are independent of organization preferences; neither inherits.
-Cancellation does not need the caller to remain selected by preferences, or the
-old project/address to remain active. It still requires active human membership,
-shared independently admitted evidence and current proof. This permits an
-explicit cancellation after clearing preferences, archiving a project or
-renaming its address, without authorizing a new response.
+Cancellation and self-reported completion of a prior outstanding plan do not
+need the caller to remain selected by preferences, or the old project/address
+to remain active. Both still require active human membership, shared independently
+admitted evidence and current proof. This permits closing an own intention after
+clearing preferences, archiving a project, renaming its address or expiry of the
+reply window, without authorizing a new response or bypassing actual send gates.
+The completion form explicitly says to record only after completing the intended
+response, and that it neither sends nor independently verifies the response.
 
 ## Durable states and concurrency
 
@@ -110,10 +125,14 @@ mail content, addresses, credentials, raw prompts or transport diagnostics.
   the planned revision. Stale eligibility takes precedence over overdue timing.
   No background write or automatic cancellation occurs.
 - Explicit cancellation: `cancelled`, next revision.
+- Explicit own completion assertion: `completed`, next revision, no deadline.
+  `completion_evidence: "self_reported"` and `recipient_delivery: "not_observed"`
+  remain explicit. It is not delivery status or an independently verified reply.
+  Transport acceptance, deadlines and reads never automatically create it.
 - Corrupt/unsupported stored state or deadline: `invalid`, revision null; no
   silent reset. Timed records must have a safe supported UTC timestamp after
-  their update time and within the reply-window budget; cancellation stores no
-  deadline.
+  their update time and within the reply-window budget; cancellation and completion
+  store no deadline.
 - Loss of source/read authority: fail closed, not a made-up terminal delivery
   outcome. Staleness is a bounded current observation, not a lock or future
   authority guarantee.
@@ -136,7 +155,8 @@ or mutate real preferences, memberships, users, grants or consents.
 
 Audit uses `inbound_mail` targets so existing canonical mail-event visibility
 applies. The summary contains only fixed intention/cancellation semantics, no
-subject, address or extra recipient list. Read status contains only the caller's
+subject, address or extra recipient list. Completion's fixed audit summary
+explicitly states self-report and unobserved recipient delivery. Read status contains only the caller's
 own record, not another responder's private state.
 
 ## Bounded own recorded reply evidence
@@ -153,7 +173,7 @@ deterministic tie-break, **not proof of the order of simultaneous sends**.
 
 The fixed observation states are:
 
-- `not_applicable`: absent/invalid/cancelled intention; no current planned
+- `not_applicable`: absent/invalid/cancelled/completed intention; no current planned
   revision to compare. This is not a statement about send history.
 - `no_record`: no matching recorded attempt in this bounded range. This does
   **not** mean unattempted or definitely unsent: the existing send path records
@@ -181,7 +201,9 @@ and tenant authority, exact shared source identity/destination/verdict, and the
 exact independent replay and intention snapshots. A source/authority/revision
 change during this read refuses the observation rather than leaking stale
 attempt details. This is a bounded database observation, not a future authority
-lock. Unset/invalid/cancelled intentions expose no reply record.
+lock. Unset/invalid/cancelled/completed intentions expose no reply record.
+Completion closes this revision's bounded comparison; it does not erase canonical
+outbound history or attest to an outbound record. It never triggers a resend.
 
 **This is temporal matching, not causal binding.** A reply and revision sharing
 a millisecond may match without the reply having been initiated by that
@@ -216,7 +238,9 @@ accept `sent`, `failed`, `unknown` or arbitrary delivery claims as intention
 transitions. The new read-only observation reconciles only matching existing
 reply records. A real reply's causal action binding, durable pre-send state,
 recipient delivery and substantive fulfillment must not be inferred from an
-intention, checkbox, timestamp or transport acceptance.
+intention, checkbox, timestamp or transport acceptance. The explicit completion
+checkbox/button is a self-report only, not independently observed fulfillment;
+no scheduler or notification acknowledgment is implemented by it.
 
 #85 remains open for transactional human notification intent and durable
 notification delivery/ack/failed/unknown reconciliation, genuinely scheduled
