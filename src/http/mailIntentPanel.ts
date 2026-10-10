@@ -19,6 +19,14 @@ export async function mailIntentPanel(ctx: Ctx, id: string): Promise<{ html: str
     stale: "Your recorded intention is stale: current mailbox preferences or availability changed.",
     invalid: "Stored intention is invalid; reconciliation is required. It cannot be silently reset.",
   };
+  const replyLabels: Record<typeof intent.reply_observation.state, string> = {
+    not_applicable: "No current planned revision to compare with reply records.",
+    no_record: "No matching own reply attempt is recorded since this revision's time. This does not prove that no mail was sent.",
+    transport_accepted: "The latest matching own reply record reports transport acceptance, not recipient delivery or fulfillment of your intention.",
+    consent_refused: "The latest matching own reply record reports a consent refusal. This is not a delivery observation.",
+    outcome_unknown: "The latest matching own reply record has an unknown outcome. Do not infer that nothing was sent or blindly retry.",
+  };
+  const reply = intent.reply_observation;
   const recorded = ["planned", "overdue", "stale"].includes(intent.state);
   const transitions = intent.revision === null ? [] : [
     ...(intent.can_plan ? [{ state: "planned", label: recorded ? "Update my respond-by time" : "I intend to respond" }] : []),
@@ -36,6 +44,9 @@ ${t.state === "planned" ? `<label>Optional respond-by (UTC)<input type="datetime
   return { html: `<section><h2>My response intention</h2><p>${labels[intent.state]} Revision: ${intent.revision ?? "unavailable"}.</p>
 ${intent.respond_by !== null ? `<p>Intended respond-by: ${esc(new Date(intent.respond_by).toISOString())} (UTC).</p>` : ""}
 <p>Self-recorded intention only: no mail, notification or automated work is requested. This does not guarantee a reply. Actual replies and delivery status are separate.</p>
+<h3>Own recorded reply evidence</h3><p>${replyLabels[reply.state]}</p>
+${reply.outbound_id !== null ? `<p>Outbound record: ${esc(reply.outbound_id)}. Recorded at ${esc(new Date(reply.recorded_at!).toISOString())}.</p>` : ""}
+<p>Only the latest exact mailbox/sender/source match since this revision's timestamp is observed, not a complete send history or causal link to the intention. Recipient delivery is not observed; no intention is automatically completed.</p>
 ${controls}${!intent.can_plan && intent.state !== "invalid" ? "<p>Current mailbox preferences do not select you. An admin can manage shared-mailbox preferences; this page does not grant access or assign anyone else.</p>" : ""}
 <p>If a save's outcome is unknown, reload to reconcile the revision; do not blindly resubmit.</p></section>`, key: JSON.stringify([intent, fresh]) };
 }

@@ -15,7 +15,8 @@ Tenant-host APIs (not MCP/assistant tools):
 
 - `POST /api/mail.response_intent`, `{ "id": "<mail id>" }`: reads only the
   caller's own intention. Returns `mail_id`, `revision`, `state`, `updated_at`,
-  `respond_by` (UTC epoch milliseconds or null), `can_plan`, `automatic_execution: "not_implemented"`,
+  `respond_by` (UTC epoch milliseconds or null), `can_plan`, `reply_observation`
+  (bounded own recorded reply evidence, below), `automatic_execution: "not_implemented"`,
   `notification: "not_requested"`, `response_guaranteed: false`.
 - `POST /api/mail.set_response_intent`,
   `{ "id": "<mail id>", "state": "planned", "expected_revision": 0 }`:
@@ -138,6 +139,67 @@ applies. The summary contains only fixed intention/cancellation semantics, no
 subject, address or extra recipient list. Read status contains only the caller's
 own record, not another responder's private state.
 
+## Bounded own recorded reply evidence
+
+A read also returns `reply_observation`, derived from existing server-owned
+`outbound_mail` records, never a caller-supplied delivery claim. For a valid
+stored planned intention (including observed stale/overdue states), it selects
+**at most one latest** record with exact tenant, inbound source ID, caller
+`sent_by`, from-mailbox and original sender destination matches, and a recorded
+time at or after the current intention revision's `updated_at`. New-message
+sends, other actors/tenants/sources/addresses, CC lists and earlier replies do
+not match. Records are ordered by timestamp then ID, descending; the ID is a
+deterministic tie-break, **not proof of the order of simultaneous sends**.
+
+The fixed observation states are:
+
+- `not_applicable`: absent/invalid/cancelled intention; no current planned
+  revision to compare. This is not a statement about send history.
+- `no_record`: no matching recorded attempt in this bounded range. This does
+  **not** mean unattempted or definitely unsent: the existing send path records
+  after transport, so a lost result/write can leave no row.
+- `transport_accepted`: the matching record's status is `sent`. This is the
+  product's stored transport acceptance, **not recipient delivery, a read
+  receipt, or proof of a substantive response**.
+- `consent_refused`: the matching record reports `refused`, a local consent
+  refusal, not a recipient delivery observation.
+- `outcome_unknown`: `failed`/unsupported status or invalid ID/timestamp. A
+  transport exception can follow acceptance, so it does not prove non-send.
+  Future, fractional or unsupported date observations never render as accepted.
+
+`outbound_id` and `recorded_at` identify the selected record when structurally
+valid, otherwise null. The object always states
+`recipient_delivery: "not_observed"`, `fulfillment: "not_inferred"`, and
+`coverage: "latest_recorded_matching_own_reply_since_revision_time"`.
+No subject, body, address, raw status or transport error is returned by this
+observation. The browser's **Own recorded reply evidence** panel uses fixed
+truthful wording and includes the observation in its pane invalidation key.
+Existing canonical readable-reply rendering remains separate and unchanged.
+
+The final bounded query anchors the outbound selection to active human/member
+and tenant authority, exact shared source identity/destination/verdict, and the
+exact independent replay and intention snapshots. A source/authority/revision
+change during this read refuses the observation rather than leaking stale
+attempt details. This is a bounded database observation, not a future authority
+lock. Unset/invalid/cancelled intentions expose no reply record.
+
+**This is temporal matching, not causal binding.** A reply and revision sharing
+a millisecond may match without the reply having been initiated by that
+revision. Retiming/replanning starts a new time range; earlier replies disappear
+from this observation, not from canonical history. Only the latest record is
+shown: an unknown latest attempt is not upgraded by an older accepted record.
+The panel is not a complete send history or an idempotency/retry oracle.
+
+Reads do not change the intention, complete it, audit, send, retry, request
+notification, wake an agent or suppress guidance. A planned/overdue/stale state
+remains distinct even when a reply record reports transport acceptance. Before
+retrying an ambiguous real send, reconcile with authoritative outbound effects;
+this read cannot repair the existing post-transport recording gap. Durable
+pre-send reservation and content/action binding remain separate #105/#85 work.
+Native Workers tests cover stored and actual test-transport reply records,
+metadata-only rendering, revision ranges, transaction-time boundary changes,
+and absence/failure ambiguity; they are not live-provider delivery acceptance.
+
 ## Not implemented / acceptance remaining
 
 Optional respond-by times are self-recorded human plans, not genuine automated
@@ -150,9 +212,11 @@ No mail send, inbox wake, attention, automatic execution, response assignment,
 access grant, consent change, notification or guidance suppression occurs.
 Actual `mail.reply` has its own consent/sending/window/quota and delivery gates;
 a planned intention does not satisfy them. This increment deliberately cannot
-accept `sent`, `failed`, `unknown` or arbitrary delivery claims. A real reply's
-outcome must be independently bound/reconciled by a later increment, not inferred
-from an intention or checkbox.
+accept `sent`, `failed`, `unknown` or arbitrary delivery claims as intention
+transitions. The new read-only observation reconciles only matching existing
+reply records. A real reply's causal action binding, durable pre-send state,
+recipient delivery and substantive fulfillment must not be inferred from an
+intention, checkbox, timestamp or transport acceptance.
 
 #85 remains open for transactional human notification intent and durable
 notification delivery/ack/failed/unknown reconciliation, genuinely scheduled

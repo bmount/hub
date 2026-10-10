@@ -61,13 +61,47 @@ async function preference(ctx: Ctx, row: Evidence) {
     && !target.recipient_id && !!config?.recipients.includes(ctx.identity!.id);
   return { key, raw, eligible };
 }
+type ReplyObservation = {
+  state: "not_applicable" | "no_record" | "transport_accepted" | "consent_refused" | "outcome_unknown";
+  outbound_id: string | null; recorded_at: number | null;
+  recipient_delivery: "not_observed"; fulfillment: "not_inferred";
+  coverage: "latest_recorded_matching_own_reply_since_revision_time";
+};
+
+/** Stored attempt evidence only. Absence/transport failure cannot prove that nothing was sent. */
+async function replyObservation(ctx: Ctx, e: Awaited<ReturnType<typeof evidence>>, raw: string | null, intent: Intent | null): Promise<ReplyObservation> {
+  const observation: ReplyObservation = { state: "not_applicable", outbound_id: null, recorded_at: null,
+    recipient_delivery: "not_observed", fulfillment: "not_inferred",
+    coverage: "latest_recorded_matching_own_reply_since_revision_time" };
+  if (!intent || intent.state !== "planned") return observation;
+  // Anchor the bounded latest-attempt query to current read authority and the exact
+  // source/replay/intent snapshots. Do not expose an attempt after authority changes.
+  const r = await ctx.db.prepare(`SELECT o.id, o.status, o.created_at FROM inbound_mail m
+    LEFT JOIN outbound_mail o ON o.id = (SELECT attempt.id FROM outbound_mail attempt
+      WHERE attempt.tenant_id = m.tenant_id AND attempt.in_reply_to = m.id AND attempt.sent_by = ?
+        AND attempt.from_address = m.to_address AND attempt.to_address = m.from_email AND attempt.created_at >= ?
+      ORDER BY attempt.created_at DESC, attempt.id DESC LIMIT 1)
+    WHERE ${BASE} AND m.project_id IS ? AND m.identity_id = ? AND m.from_email = ? AND m.to_address = ? AND m.message_id = ?
+      AND EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)
+      AND EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)`)
+    .bind(ctx.identity!.id, intent.updated_at, ...e.bindings, e.row.project_id, e.row.identity_id,
+      e.row.from_email, e.row.to_address, e.row.message_id, e.replayKey, e.replayRaw, keyFor(ctx, e.row.id), raw)
+    .first<{ id: string | null; status: string | null; created_at: number | null }>();
+  if (!r) throw conflict("response intention or reply evidence changed; read again");
+  if (r.id === null) return { ...observation, state: "no_record" };
+  if (!recipientId(r.id) || !Number.isSafeInteger(r.created_at) || r.created_at! < intent.updated_at
+    || r.created_at! > ctx.now || r.created_at! >= UTC_FORMAT_END) return { ...observation, state: "outcome_unknown" };
+  return { ...observation, outbound_id: r.id, recorded_at: r.created_at,
+    state: r.status === "sent" ? "transport_accepted" : r.status === "refused" ? "consent_refused" : "outcome_unknown" };
+}
 export async function responseIntent(ctx: Ctx, id: string) {
-  const { row } = await evidence(ctx, id);
+  const e = await evidence(ctx, id), { row } = e;
   const raw = await valueAt(ctx, keyFor(ctx, id)), state = decode(raw), p = await preference(ctx, row);
   return { mail_id: id, revision: raw === null ? 0 : state?.revision ?? null,
     state: raw === null ? "unset" : !state ? "invalid" : state.state === "planned" && !p.eligible ? "stale"
       : state.state === "planned" && state.respond_by !== null && state.respond_by <= ctx.now ? "overdue" : state.state,
     updated_at: state?.updated_at ?? null, respond_by: state?.respond_by ?? null, can_plan: p.eligible,
+    reply_observation: await replyObservation(ctx, e, raw, state),
     automatic_execution: "not_implemented", notification: "not_requested", response_guaranteed: false };
 }
 export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["state"], expected: number, respondBy: number | null = null) {

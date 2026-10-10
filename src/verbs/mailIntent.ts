@@ -23,7 +23,7 @@ function mailId(i: Record<string, unknown>) {
 }
 export const mailResponseIntent = defineVerb({
   name: "mail.response_intent", kind: "query", scope: "tenant", minRole: "member", freshProofMinutes: null, humanOnly: true,
-  summary: "Read your own response intention for independently admitted shared mail. Not a reply or delivery guarantee.",
+  summary: "Read your own response intention and bounded matching own reply-record evidence for independently admitted shared mail. Transport acceptance is not delivery or fulfillment.",
   parse: i => ({ id: mailId(i) }),
   run: (ctx, p) => responseIntent(ctx, p.id),
 });
