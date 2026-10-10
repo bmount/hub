@@ -4,7 +4,7 @@ import { channelParam } from "./chatParams";
 import { readableChannel, viewerOf } from "../chat/access";
 import { notFound } from "../errors";
 import { conversationStub } from "../chat/stubs";
-import { presenceState, PRESENCE_TTL_MS, type PresenceRow } from "../chat/presence";
+import { presenceState, retainedPresence, PRESENCE_TTL_MS, type PresenceRow } from "../chat/presence";
 import type { Ctx } from "../auth/context";
 import { chatCommandText, plainText } from "../chat/compact";
 import { cleanText, cutText } from "../mcp/render";
@@ -84,8 +84,10 @@ export const chatPresence = defineVerb({
     const rows = await conversationStub(ctx.env, ch.tenant_id, ch.project_id).presence(ch.tenant_id, ch.project_id) as PresenceRow[];
     const subjects = await presenceSubjects(ctx, ch.tenant_id, ch.project_id, rows);
     const observed_at = Date.now();
+    // The clock can roll back between DO sampling and the completed subject lookup.
+    // Recheck against the actual snapshot time too, without renewing/writing reports.
     // Recheck subjects too: old heartbeats cannot expose a removed member/agent's activity.
-    const entries = rows.flatMap((r) => {
+    const entries = retainedPresence(rows, observed_at).flatMap((r) => {
       const person = subjects.get(r.identity_id);
       if (!person) return [];
       return [{ identity_id: r.identity_id, handle: person.handle ?? "unknown", display_name: person.display_name, kind: person.kind, via_assistant: r.via_assistant === true,

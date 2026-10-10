@@ -12,5 +12,8 @@ export function presenceState(row: PresenceRow, now: number): PresenceState {
 }
 
 export function retainedPresence(rows: PresenceRow[], now: number): PresenceRow[] {
-  return rows.filter((r) => r.last_seen > now - PRESENCE_RETENTION_MS).sort((a, b) => b.last_seen - a.last_seen).slice(0, PRESENCE_MAX);
+  // A clock rollback cannot turn an observation from the future into current
+  // activity (or a reported offline fact). Omit it as unknown before the cap;
+  // reads never rewrite stored reports or manufacture replacement timestamps.
+  return rows.filter((r) => r.last_seen <= now && r.last_seen > now - PRESENCE_RETENTION_MS).sort((a, b) => b.last_seen - a.last_seen).slice(0, PRESENCE_MAX);
 }
