@@ -63,6 +63,7 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
       + `<button type="submit">New git credential for ${esc(slug)}</button></form>`).join(""));
 
   body += `<h2>Assistants</h2><p>Assistants you connected. Each acts as you in one tenant; its activity is listed by <code>event.list</code> with its session id.</p>`
+    + (memberships.length ? `<p>Connect ChatGPT or Claude as yourself: ${memberships.map(({ tenant }) => `<a href="https://${esc(tenant.slug)}.${esc(env.HUB_DOMAIN)}/assistant/connect">${esc(tenant.display_name)}</a>`).join(" · ")}. Review the identity and consent in the setup guide.</p>` : `<p>To connect a human assistant, first sign in with an identity that has active organization access.</p>`)
     + table(["Assistant", "Sends codes to", "Tenant", "Scopes", "Connected", "Last used", "Session", ""], grants.map(({ grant, tenant_slug, last_seen_at }) => [
       `"${esc(grant.client_name)}"`, `<code>${esc(grant.redirect_host)}</code>`, esc(tenant_slug), esc(grant.scopes), when(grant.created_at), when(last_seen_at),
       `<code>${esc(grant.session_id)}</code>`, button("session.revoke", { session_id: grant.session_id }, "Revoke"),

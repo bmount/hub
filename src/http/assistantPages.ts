@@ -86,7 +86,7 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
 <p class="lede">I look through work, code, mail, reviews and app errors in ${esc(org)}, as you. Nothing changes unless you allow it below.</p>
 <div class="starters">${STARTERS.map(([title, ask]) => `<button type="button" class="starter" data-ask="${esc(ask)}"><b>${esc(title)}</b><span>${esc(ask)}</span></button>`).join("")}</div></div>`;
   const list = `<div class="assist">
-<div class="assist-top"><div class="chips"><a class="chip" href="/assistant" aria-current="true">Chat</a><a class="chip" href="/assistant/tools">Tools</a><a class="chip only-s" href="/assistant?list=1${thread ? `&t=${esc(thread.id)}` : ""}">Conversations</a>${thread ? `<a class="chip" href="/assistant">+ New chat</a>` : ""}</div></div>
+<div class="assist-top"><div class="chips"><a class="chip" href="/assistant" aria-current="true">Chat</a><a class="chip" href="/assistant/tools">Tools</a><a class="chip" href="/assistant/connect">Connect ChatGPT or Claude</a><a class="chip only-s" href="/assistant?list=1${thread ? `&t=${esc(thread.id)}` : ""}">Conversations</a>${thread ? `<a class="chip" href="/assistant">+ New chat</a>` : ""}</div></div>
 <div id="chatlog" class="chatlog" aria-live="polite">${log || welcome}</div>
 <form id="ask" class="composer" autocomplete="off">
 <input type="hidden" name="thread" value="${esc(thread?.id ?? "")}">

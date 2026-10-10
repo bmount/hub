@@ -6,6 +6,7 @@ import { syncAll } from "./code/sync";
 import { codePage, filesPage } from "./http/codePages";
 import { searchPage } from "./http/searchPage";
 import { assistantChat, assistantPage } from "./http/assistantPages";
+import { assistantConnectPage } from "./http/assistantConnect";
 import { onboardBody, setupPage } from "./skills/onboard";
 import { adminAppsPage, appsPage } from "./http/appsPages";
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -141,6 +142,7 @@ app.get("/skills", (c) => skillsPage(c.req.raw, c.env));
 // The onboarding skill, ready to save: the organization's own names on its host, placeholders on the hub's.
 app.get("/skills/pimwell-agent-onboarding/SKILL.md", (c) => { const h = classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN); return h.kind === "unknown" ? notFoundPage() : agentOnboardingResponse(c.env.HUB_DOMAIN.toLowerCase(), h.kind === "tenant" ? h.slug : null); });
 app.get("/assistant", (c) => assistantPage(c.req.raw, c.env));
+app.get("/assistant/connect", (c) => assistantConnectPage(c.req.raw, c.env));
 app.post("/assistant/chat", (c) => assistantChat(c.req.raw, c.env));
 app.post("/voice/transcribe", (c) => voiceTranscribe(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.post("/voice/correct", (c) => voiceCorrect(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));

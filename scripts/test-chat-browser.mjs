@@ -645,6 +645,31 @@ try {
   await workCtx.close();
   console.log('PASS same-title refresh/stale draft and explicit two-pane list retention');
 
+  // Human connector guide is read-only product UI. This proves discoverability,
+  // keyboard/mobile rendering and endpoint binding, NOT hosted-client OAuth.
+  for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }], ['narrow', { width: 320, height: 740 }]]) {
+    const guideCtx = await context(reader, viewport), guidePage = await guideCtx.newPage();
+    await guidePage.goto(`${base}/assistant`);
+    await guidePage.locator('#list a[href="/assistant/connect"]').click();
+    await expect(guidePage.locator('#list h1')).toHaveText('Use Pimwell from your own assistant');
+    const endpoint = guidePage.locator('#mcp-endpoint');
+    await expect(endpoint).toHaveValue(`${base}/mcp`);
+    await expect(endpoint).toHaveAttribute('readonly', '');
+    await expect(guidePage.locator('#list')).toContainText('reader@example.test');
+    await expect(guidePage.locator('#list')).toContainText('No particular hosted client or plan is claimed tested');
+    await tabTo(guidePage, '#mcp-endpoint');
+    await guidePage.keyboard.press('ControlOrMeta+a');
+    expect(await endpoint.evaluate(el => el.selectionEnd - el.selectionStart)).toBe(`${base}/mcp`.length);
+    await noOverflow(guidePage);
+    await guidePage.screenshot({ path: path.join(artifacts, `${label}-human-assistant-guide.png`) });
+    await guidePage.locator('#list a[href="https://pimwell.test/me"]').click();
+    await expect(guidePage.locator('#list h1')).toHaveText('Your account');
+    await guidePage.locator('#list a[href="https://acme.pimwell.test/assistant/connect"]').click();
+    await expect(guidePage.locator('#mcp-endpoint')).toHaveValue(`${base}/mcp`);
+    await guideCtx.close();
+    console.log(`PASS ${label}: human connector guide discovery, keyboard selection, endpoint/identity, account round-trip and wrapping (no hosted OAuth claim)`);
+  }
+
   // Recorded closers are historical actors, not assignees or presence. Exercise
   // the actual board/API with only synthetic local work and browser sessions.
   const closedWork = await verb(member, 'work.create', { project: 'site', kind: 'snag', title: 'Closure evidence', owner: 'peer@example.test' });

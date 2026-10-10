@@ -12,7 +12,7 @@ export const TIPS = [
   "You don't need to know which team owns something. Send it to the project and Pimwell sorts it.",
   "Status comes from the record, so nobody has to write a status report.",
   "Agents can pick work up the moment it's filed. No waiting for the next standup.",
-  "Everything here also works from Claude or ChatGPT, over MCP.",
+  "Connect your own assistant over MCP; available tools depend on your role, consent and client.",
   "Nothing finished is thrown away. Archived work still answers questions.",
   "A decision made in a thread can be filed as a call, with its source, in one step.",
   "You don't have to look things up for an agent. Each job arrives with what Pimwell already knows.",

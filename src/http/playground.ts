@@ -44,7 +44,7 @@ export async function playgroundPage(request: Request, env: Env): Promise<Respon
 <form class="pg" data-tool="${esc(t.name)}"><label>Arguments (JSON)<br><textarea name="args" rows="4" cols="60" spellcheck="false">${esc(example(t.inputSchema as never))}</textarea></label><br><button type="submit">Run</button></form>
 <details><summary><small>Input schema</small></summary><pre>${esc(JSON.stringify(t.inputSchema, null, 2))}</pre></details>
 <div class="out" hidden></div></details>`).join("");
-  const body = `<div class="chips"><a class="chip" href="/assistant">Chat</a><a class="chip" href="/assistant/tools" aria-current="true">Tools</a></div>
+  const body = `<div class="chips"><a class="chip" href="/assistant">Chat</a><a class="chip" href="/assistant/tools" aria-current="true">Tools</a><a class="chip" href="/assistant/connect">Connect ChatGPT or Claude</a></div>
 <h1>Tools</h1>
 <p class="lede">Run any tool directly, exactly as an assistant connected to ${esc(ctx.tenant!.display_name)} would: same tools, same checks, same answers. It acts as you, in this organization only, and every call is on the record.</p>
 <div class="chips"><a class="chip" href="?scopes=read"${set === "read" ? ' aria-current="true"' : ""}>Read only</a><a class="chip" href="?scopes=write"${set === "write" ? ' aria-current="true"' : ""}>Read and write</a></div>
