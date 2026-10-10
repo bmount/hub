@@ -28,6 +28,34 @@ async function source() {
   return { t, p };
 }
 
+// Miniflare's SQLite may permit more variables than production D1. Enforce the
+// production ceiling while executing every successful lookup against real D1.
+function limitedLookups(fail?: "source" | "version" | "group") {
+  const sizes = { source: [] as number[], version: [] as number[], group: [] as number[] };
+  let writes = 0;
+  const db = {
+    prepare(sql: string) {
+      const statement = env.HUB_DB.prepare(sql);
+      return {
+        bind(...values: unknown[]) {
+          if (values.length > 100) throw new Error("D1 parameter limit exceeded");
+          const bound = statement.bind(...values);
+          const kind = sql.includes("WHERE s.script_name IN") ? "source" : sql.includes("WHERE version_id IN") ? "version" : sql.includes("WHERE fingerprint IN") ? "group" : null;
+          if (!kind) return bound;
+          sizes[kind].push(values.length);
+          return { async all() {
+            if (fail === kind && sizes[kind].length === 2) throw new Error("late lookup failed");
+            return bound.all();
+          } };
+        },
+      };
+    },
+    batch(statements: D1PreparedStatement[]) { writes++; return env.HUB_DB.batch(statements); },
+  };
+  return { env: { ...env, HUB_DB: db } as unknown as Env, sizes, writes: () => writes };
+}
+const letters = (n: number) => `${String.fromCharCode(97 + Math.floor(n / 26))}${String.fromCharCode(97 + n % 26)}`;
+
 describe("bounded nested RPC app telemetry validation", () => {
   it("validates every scalar and nested entry, dropping the whole malformed event", () => {
     const now = Date.now(), base = event(now);
@@ -82,6 +110,64 @@ describe("bounded nested RPC app telemetry validation", () => {
     const noSql = { HUB_DB: { prepare() { throw new Error("unexpected SQL"); } } } as unknown as Env;
     expect(await ingest(noSql, batch, now)).toEqual({ accepted: 0, dropped: 16 });
     expect(await ingest(noSql, [overflow, { ...event(now), usage: [null] }], now)).toEqual({ accepted: 0, dropped: 2 });
+  });
+
+  it("chunks diverse source lookups without admitting unapproved or inactive sources", async () => {
+    const { t, p } = await source(), now = Date.now();
+    const scripts = ["bounded-app", ...Array.from({ length: 100 }, (_, i) => `active-${letters(i)}`)];
+    for (const script of scripts.slice(1)) await env.HUB_DB.prepare("INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_at) VALUES (?, ?, ?, ?, 'active', ?)")
+      .bind(script, t.id, p.id, script, now).run();
+    for (const state of ["pending", "disabled"]) await env.HUB_DB.prepare("INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(state, t.id, p.id, state, state, now).run();
+    const archived = await createProject(env.HUB_DB, { tenant_id: t.id, namespace_id: null, slug: "archived", kind: "repo", display_name: "Archived" }, now);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(archived.id).run();
+    const other = await seedTenant("inactive");
+    const otherProject = await createProject(env.HUB_DB, { tenant_id: other.id, namespace_id: null, slug: "inactive", kind: "repo", display_name: "Inactive" }, now);
+    await env.HUB_DB.prepare("UPDATE tenant SET state = 'deleted' WHERE id = ?").bind(other.id).run();
+    for (const [script, tenant, project] of [["archived", t.id, archived.id], ["inactive", other.id, otherProject.id]])
+      await env.HUB_DB.prepare("INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_at) VALUES (?, ?, ?, ?, 'active', ?)").bind(script, tenant, project, script, now).run();
+    const selected = [...scripts, "pending", "disabled", "archived", "inactive", ...Array.from({ length: 395 }, (_, i) => `unknown-${letters(i)}`)];
+    expect(selected).toHaveLength(500);
+    const bounded = limitedLookups();
+    expect(await ingest(bounded.env, [...selected, "bounded-app", "bounded-app", "bounded-app"].map((script) => ({ ...event(now), script })), now))
+      .toEqual({ accepted: 101, dropped: 402 });
+    expect(bounded.sizes).toEqual({ source: [100, 100, 100, 100, 100], version: [], group: [] });
+    expect(await env.HUB_DB.prepare("SELECT SUM(requests) AS n FROM app_stat").first()).toEqual({ n: 101 });
+    expect((await env.HUB_DB.prepare("SELECT script_name FROM app_stat").all<{ script_name: string }>()).results.map((r) => r.script_name).sort()).toEqual(scripts.sort());
+    expect((await env.HUB_DB.prepare("SELECT script_name FROM app_source WHERE last_event_at IS NOT NULL").all()).results).toHaveLength(101);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM app_stat WHERE tenant_id != ?").bind(t.id).first()).toEqual({ n: 0 });
+  });
+
+  it("preserves known and new deploys and groups across every lookup chunk", async () => {
+    await source(); const now = Date.now(), bounded = limitedLookups();
+    const events = Array.from({ length: 500 }, (_, i) => ({ ...event(now), version: `version-${letters(i)}`,
+      logs: [{ level: "warn" as const, text: `warning-${letters(i)}` }, { level: "error" as const, text: `failure-${letters(i)}` }] }));
+    // These are separate occurrences, not a retry-idempotence assertion.
+    expect(await ingest(bounded.env, events.slice(0, 101), now)).toEqual({ accepted: 101, dropped: 0 });
+    expect(await ingest(bounded.env, events, now)).toEqual({ accepted: 500, dropped: 0 });
+    expect(bounded.sizes.version).toEqual([100, 1, 100, 100, 100, 100, 100]);
+    expect(bounded.sizes.group).toEqual([100, 100, 2, ...Array(10).fill(100)]);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM app_deploy").first()).toEqual({ n: 500 });
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n, SUM(count) AS occurrences FROM app_error_group").first()).toEqual({ n: 1000, occurrences: 1202 });
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM app_event").first()).toEqual({ n: 1202 });
+    expect(await env.HUB_DB.prepare("SELECT SUM(requests) AS n FROM app_stat").first()).toEqual({ n: 601 });
+    expect(await env.HUB_DB.prepare("SELECT count FROM app_error_group WHERE title = ?").bind("warning-aa").first()).toEqual({ count: 2 });
+    expect(await env.HUB_DB.prepare("SELECT count FROM app_error_group WHERE title = ?").bind(`failure-${letters(499)}`).first()).toEqual({ count: 1 });
+  });
+
+  it.each(["source", "version", "group"] as const)("rejects a failed late %s lookup before any writes", async (kind) => {
+    await source(); const now = Date.now(), bounded = limitedLookups(kind);
+    const events = Array.from({ length: 101 }, (_, i) => ({ ...event(now),
+      script: kind === "source" ? `script-${letters(i)}` : "bounded-app",
+      version: kind === "version" ? `version-${letters(i)}` : null,
+      logs: kind === "group" ? [{ level: "error" as const, text: `failure-${letters(i)}` }] : [],
+    }));
+    await expect(ingest(bounded.env, events, now)).rejects.toThrow("late lookup failed");
+    expect(bounded.sizes[kind]).toEqual([100, 1]);
+    expect(bounded.writes()).toBe(0);
+    for (const table of ["app_stat", "app_deploy", "app_error_group", "app_event", "model_call"])
+      expect(await env.HUB_DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first()).toEqual({ n: 0 });
+    expect(await env.HUB_DB.prepare("SELECT last_event_at FROM app_source").first()).toEqual({ last_event_at: null });
   });
 
   it("does not let a malformed late event abort valid writes or poison nested usage and preserves exact original counts", async () => {

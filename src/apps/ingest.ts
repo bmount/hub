@@ -12,6 +12,20 @@ import { validatedAppBatch } from "./validate";
 const HOUR = 3_600_000;
 const QUIET_MS = 24 * HOUR;          // an error group that comes back after a day is news again
 const EXAMPLES_PER_GROUP = 50;
+// D1 allows at most 100 bound parameters per statement. Validation's event cap
+// does not cap distinct scripts/versions, or the many problems within each event.
+const LOOKUP_VALUES_MAX = 100;
+
+async function lookup<T>(db: D1Database, values: string[], sql: (marks: string) => string): Promise<T[]> {
+  const rows: T[] = [];
+  // Serial reads bound query concurrency. Finish every lookup before any writes:
+  // a failed later read must not persist a size-dependent prefix of the batch.
+  for (let i = 0; i < values.length; i += LOOKUP_VALUES_MAX) {
+    const chunk = values.slice(i, i + LOOKUP_VALUES_MAX);
+    rows.push(...(await db.prepare(sql(chunk.map(() => "?").join(","))).bind(...chunk).all<T>()).results);
+  }
+  return rows;
+}
 
 type Source = { script_name: string; tenant_id: string; project_id: string; slug: string; display_name: string };
 type Problem = { kind: "exception" | "error" | "warn" | "status"; title: string; message: string };
@@ -43,23 +57,24 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
   const db = env.HUB_DB;
   const scripts = [...new Set(events.map((e) => e.script))];
   if (!scripts.length) return { accepted: 0, dropped: raw.length };
-  const marks = scripts.map(() => "?").join(",");
-  const sources = new Map((await db.prepare(
+  const sources = new Map((await lookup<Source>(db, scripts, (marks) =>
     `SELECT s.script_name, s.tenant_id, s.project_id, p.slug, p.display_name FROM app_source s JOIN project p ON p.id = s.project_id JOIN tenant t ON t.id = s.tenant_id
      WHERE s.script_name IN (${marks}) AND s.state = 'active' AND p.state = 'active' AND t.state = 'active'`,
-  ).bind(...scripts).all<Source>()).results.map((s) => [s.script_name, s]));
+  )).map((s) => [s.script_name, s]));
   const mine = events.filter((e) => sources.has(e.script));
   if (!mine.length) return { accepted: 0, dropped: raw.length };
 
   // What is already known: deploys and error groups touched by this batch.
   const versions = [...new Set(mine.map((e) => e.version).filter((v): v is string => !!v))];
-  const known = new Set(versions.length ? (await db.prepare(`SELECT script_name || ':' || version_id AS k FROM app_deploy WHERE version_id IN (${versions.map(() => "?").join(",")})`)
-    .bind(...versions).all<{ k: string }>()).results.map((r) => r.k) : []);
+  const known = new Set((await lookup<{ k: string }>(db, versions, (marks) =>
+    `SELECT script_name || ':' || version_id AS k FROM app_deploy WHERE version_id IN (${marks})`,
+  )).map((r) => r.k));
   const found: Array<{ e: AppEvent; p: Problem; fp: string }> = [];
   for (const e of mine) for (const p of problems(e)) found.push({ e, p, fp: fnv(`${e.script}|${p.kind}|${normalize(p.title)}`) });
   const fps = [...new Set(found.map((f) => f.fp))];
-  const groups = new Map(fps.length ? (await db.prepare(`SELECT id, fingerprint, last_seen FROM app_error_group WHERE fingerprint IN (${fps.map(() => "?").join(",")})`)
-    .bind(...fps).all<{ id: string; fingerprint: string; last_seen: number }>()).results.map((g) => [g.fingerprint, g]) : []);
+  const groups = new Map((await lookup<{ id: string; fingerprint: string; last_seen: number }>(db, fps, (marks) =>
+    `SELECT id, fingerprint, last_seen FROM app_error_group WHERE fingerprint IN (${marks})`,
+  )).map((g) => [g.fingerprint, g]));
 
   const stmts: D1PreparedStatement[] = [];
   const notices: Array<{ src: Source; text: string }> = [];
