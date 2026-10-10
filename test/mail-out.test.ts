@@ -82,6 +82,47 @@ describe("outbound mail", () => {
     expect((await w.call(w.pat, "mail.send", { to: "pat@example.com", subject: "Late", body: "x", from_project: "site" })).status).toBe(403);
   });
 
+  it.each(["absent", "archived", "other tenant"])("admits root mail but explains agent refusal for %s membership", async (state) => {
+    const w = await world();
+    await w.call(w.ada, "mail.sending", { on: true });
+    const pat = (await env.HUB_DB.prepare("SELECT id FROM identity WHERE email = 'pat@example.com'").first<{ id: string }>())!;
+    await env.HUB_DB.prepare("UPDATE identity SET is_root = 1 WHERE id = ?").bind(pat.id).run();
+    if (state === "absent") await env.HUB_DB.prepare("DELETE FROM membership WHERE identity_id = ?").bind(pat.id).run();
+    else if (state === "archived") await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ?").bind(pat.id).run();
+    else {
+      const other = await seedTenant("other");
+      await env.HUB_DB.prepare("UPDATE membership SET tenant_id = ? WHERE identity_id = ?").bind(other.id, pat.id).run();
+    }
+    await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    const mail = (await env.HUB_DB.prepare("SELECT id, identity_id, verdict FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string; identity_id: string; verdict: string }>())!;
+    expect(mail).toMatchObject({ identity_id: pat.id, verdict: "admitted" });
+    for (const [verb, input] of [
+      ["mail.reply", { id: mail.id, body: "Thanks" }],
+      ["mail.send", { to: "pat@example.com", subject: "Follow-up", body: "Thanks" }],
+    ] as const) {
+      const r = await w.call(w.bot, verb, input);
+      expect(r.status).toBe(403);
+      expect(r.detail).toContain("an administrator must set up membership for this exact address");
+      expect(r.detail).toContain("Root authority or incoming mail admission does not replace membership");
+    }
+    expect(w.sent).toHaveLength(0);
+    expect((await env.HUB_DB.prepare("SELECT status, error FROM outbound_mail").all()).results).toEqual([
+      { status: "refused", error: "recipient_policy" }, { status: "refused", error: "recipient_policy" },
+    ]);
+  });
+
+  it("allows a root recipient with active explicit membership but still honors withdrawal", async () => {
+    const w = await world();
+    await w.call(w.ada, "mail.sending", { on: true });
+    await env.HUB_DB.prepare("UPDATE identity SET is_root = 1 WHERE email = 'pat@example.com'").run();
+    expect((await w.call(w.bot, "mail.reply", { id: w.agentMail, body: "Thanks" })).status).toBe(200);
+    expect(w.sent).toHaveLength(1);
+    await env.HUB_DB.prepare("UPDATE consent SET revoked_at = ? WHERE email = 'pat@example.com'").bind(Date.now()).run();
+    expect((await w.call(w.bot, "mail.reply", { id: w.agentMail, body: "Again" })).status).toBe(403);
+    expect((await w.call(w.bot, "mail.send", { to: "pat@example.com", subject: "Again", body: "Again" })).status).toBe(403);
+    expect(w.sent).toHaveLength(1);
+  });
+
   it("caps each sender at 50 a day", async () => {
     const w = await world();
     await w.call(w.ada, "mail.sending", { on: true });

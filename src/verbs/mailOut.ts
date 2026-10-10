@@ -49,7 +49,7 @@ export async function agentRecipientRefusals(ctx: Ctx, recipients: string[]): Pr
       ctx.db.prepare(`SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND recipient_id = ? AND verdict = 'admitted'
         AND (from_email = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(inbound_mail.copied, '[]')) WHERE value = ?)) LIMIT 1`).bind(ctx.tenant!.id, ctx.identity!.id, r, r),
     ]);
-    if (!member!.results.length) out.push(`${r} is not a member of this organization`);
+    if (!member!.results.length) out.push(`${r} is not a member of this organization with an active human membership; an administrator must set up membership for this exact address before an agent can write to it. Root authority or incoming mail admission does not replace membership`);
     else if (!known!.results.length) out.push(`${r} hasn't written to you, and no member copied them on mail to you`);
   }
   return out;
@@ -101,7 +101,7 @@ const body = (i: Record<string, unknown>) => {
 
 export const mailReply = defineVerb({
   name: "mail.reply", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
-  summary: "Reply by mail to a message received here, from the address it was sent to. Agents reply to their own mail (all: true also writes to the members it was addressed to); members reply to the organization's and projects' within 30 days.",
+  summary: "Reply by mail from the address a message was sent to. Agents reply to their own mail only to active human members of their organization, even for admitted root senders (all: true also writes to eligible copied members). People reply to organization/project mail within 30 days.",
   mcp: {
     scope: "write", destructive: false, title: "Reply by mail",
     input: { type: "object", properties: { id: { type: "string", description: "The received message's id (mail_list, mail_read)" }, body: { type: "string", description: "Plain text" }, all: { type: "boolean", description: "Agents: also write to the members it was addressed or copied to" } }, required: ["id", "body"], additionalProperties: false },
@@ -140,7 +140,7 @@ export const mailReply = defineVerb({
 
 export const mailSend = defineVerb({
   name: "mail.send", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
-  summary: "Send a new message. Agents send from their own address to members of their organization who wrote to them or were copied by a member on mail to them (to and cc, up to 10 in all). People send from a project's address with from_project, to someone who wrote to it in the last 30 days.",
+  summary: "Send a new message. Agents send from their own address to active human members of their organization who wrote to them or were copied by a member on mail to them (to and cc, up to 10 in all). Root authority or incoming admission does not replace membership. People send from a project's address with from_project, to someone who wrote to it in the last 30 days.",
   mcp: {
     scope: "write", destructive: false, title: "Send mail",
     input: { type: "object", properties: {

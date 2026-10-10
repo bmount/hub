@@ -1,5 +1,13 @@
 # Outgoing mail notices
 
+## Agent recipient eligibility
+
+Agents reply from their own mailbox only to active human members of their organization who wrote to them or were copied on admitted mail to them. Incoming admission and outgoing eligibility are separate: a root sender can have proven mail admitted without tenant membership, but an agent still cannot reply to that address. A human administrator must explicitly set up active membership for the exact sender address; admission never grants membership. Missing, archived or other-tenant membership does not qualify. Reply-all skips ineligible copied recipients rather than granting access.
+
+Recipient-policy refusals explain this distinction and the required setup. Existing sending switches, daily caps and consent withdrawal still apply to eligible root recipients. No membership or consent is changed by a send attempt.
+
+## Delivery notices
+
 Mail shows the latest 50 recorded outgoing problems the viewer can read, filtered before the limit. Each notice names affected recipients, a fixed safe reason and a next action. Reply attempts also appear in the received message's inspector. Failed browser submissions show the same notice immediately.
 
 Organization and project replies share the received message's read boundary. New outgoing messages are visible only to their sender, the sender agent's current human operator with tenant access, or a human tenant admin. An elevated agent role does not grant access to other private mailboxes. Reading a notice does not grant permission to send or change configuration.
