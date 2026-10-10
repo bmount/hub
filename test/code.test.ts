@@ -135,13 +135,74 @@ describe("recorded commit/work evidence", () => {
       await env.HUB_DB.prepare("INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, title, last_message, count, first_seen, last_seen) VALUES (?, ?, ?, 'app', ?, 'exception', ?, '', 1, ?, ?)").bind(`error-${n}`, tenant, pid, `fp-${n}`, n < 3 ? "Private error" : "Own error", at + 10, at + 10).run();
     }
     const after = (await w.call(w.h, "repo.commit", { project: "site", oid: B })).result.after;
-    expect(after).toEqual({ shipped: { tag: B.slice(0, 8), script: "Own deploy", at: at + 3 }, since: [{ tag: B.slice(0, 8), script: "Own deploy", at: at + 3 }], errors: [{ id: "error-3", title: "Own error", count: 1, first_seen: at + 10 }] });
+    expect(after).toEqual({ shipped: { tag: B.slice(0, 8), script: "Own deploy", at: at + 3, match: "tag-prefix" }, since: [{ tag: B.slice(0, 8), script: "Own deploy", at: at + 3 }], errors: [{ id: "error-3", title: "Own error", count: 1, first_seen: at + 10 }], sinceCoverage: { limit: 10, shown: 1, truncated: false }, errorsCoverage: { limit: 10, shown: 1, truncated: false }, errorsSince: { at: at + 3, basis: "tag-prefix" } });
     const ctx = await buildContext(new Request(`https://${HOST}/`, { headers: w.h }), env);
-    for (const pid of [project.id, channel.project_id]) expect(await afterCommit(ctx, pid, B, at)).toEqual({ shipped: null, since: [], errors: [] });
+    for (const pid of [project.id, channel.project_id]) expect(await afterCommit(ctx, pid, B, at)).toMatchObject({ shipped: null, since: [], errors: [], sinceCoverage: { shown: 0, truncated: false }, errorsCoverage: { shown: 0, truncated: false } });
     const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
     expect(page).toContain("Own error");
     expect(page).not.toContain("Private deploy");
     expect(page).not.toContain("Private error");
+  });
+});
+
+describe("recorded commit deployment evidence", () => {
+  it("rejects malformed/contradictory matches and prefers exact full IDs to explicitly labelled prefix hints", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${HOST}/`, { headers: w.h }), env);
+    const at = 1791000000 * 1000;
+    const add = async (id: string, version: string, tag: string | null, offset: number) => env.HUB_DB.prepare("INSERT INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(id, w.t.id, w.p.id, id, version, tag, at + offset).run();
+    for (const [n, version, tag] of [[0, "v0", "bbbbbb_%"], [1, "v1", "b".repeat(41)], [2, "v2", "b".repeat(6)], [3, "v3", C.slice(0, 8)], [4, A, B.slice(0, 8)], [5, "v5", "release!"]] as const) await add(`bad-${n}`, version, tag, n);
+    const read = () => afterCommit(ctx, w.p.id, B.toUpperCase(), at);
+    expect(await read()).toMatchObject({ shipped: null, errorsSince: { at, basis: "commit-time" } });
+    await add("Hint", "runtime-uuid", B.slice(0, 8).toUpperCase(), 20);
+    expect(await read()).toMatchObject({ shipped: { script: "Hint", match: "tag-prefix", at: at + 20 }, errorsSince: { at: at + 20, basis: "tag-prefix" } });
+    const hintPage = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
+    expect(hintPage).toContain("tag-prefix hint");
+    await add("Exact<script>evil()</script>", B.toUpperCase(), null, 40);
+    for (const [id, offset] of [["before", 39], ["after", 40]] as const) await env.HUB_DB.prepare("INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, title, last_message, count, first_seen, last_seen) VALUES (?, ?, ?, 'app', ?, 'exception', ?, '', 1, ?, ?)").bind(id, w.t.id, w.p.id, id, id, at + offset, at + offset).run();
+    expect(await read()).toMatchObject({ shipped: { script: "Exact<script>evil()</script>", match: "full-commit", tag: null, at: at + 40 }, errors: [{ id: "after" }], errorsSince: { at: at + 40, basis: "full-commit" } });
+    const result = (await w.call(w.h, "repo.commit", { project: "site", oid: B })).result;
+    const { grant } = await seedGrant(w.t, w.pat);
+    const oauth = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
+    const mcp = await callTool(oauth, "repo_commit", { project: "site", oid: B });
+    expect(mcp.structuredContent).toMatchObject({ after: result.after });
+    expect(JSON.stringify(mcp.content)).toContain("exact full commit ID");
+    expect(JSON.stringify(mcp.content)).toContain("do not prove live rollout");
+    const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
+    expect(page).toContain("exact full commit ID");
+    expect(page).toContain("Exact&lt;script&gt;evil()&lt;/script&gt;");
+    expect(page).not.toContain("Exact<script>");
+    expect(page).not.toContain("<dt>Shipped</dt>");
+    expect(page).toContain("do not prove live rollout");
+  });
+
+  it("reports empty, exactly full and truncated samples with stable ties and invalid rows excluded before limits", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${HOST}/`, { headers: w.h }), env);
+    const at = 1791000000 * 1000;
+    const read = () => afterCommit(ctx, w.p.id, B, at);
+    expect(await read()).toMatchObject({ shipped: null, sinceCoverage: { limit: 10, shown: 0, truncated: false }, errorsCoverage: { limit: 10, shown: 0, truncated: false }, errorsSince: { at, basis: "commit-time" } });
+    const add = async (n: number, tenant = w.t.id, pid = w.p.id, offset = 1) => {
+      const id = `row-${String(n).padStart(3, "0")}`;
+      await env.HUB_DB.prepare("INSERT INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, seen_at) VALUES (?, ?, ?, ?, 'runtime', ?, ?)").bind(id, tenant, pid, id, id, at + offset).run();
+      await env.HUB_DB.prepare("INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, title, last_message, count, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, 'exception', ?, '', 1, ?, ?)").bind(id, tenant, pid, id, id, id, at + offset, at + offset).run();
+    };
+    for (let n = 0; n < 10; n++) await add(n);
+    expect(await read()).toMatchObject({ sinceCoverage: { shown: 10, truncated: false }, errorsCoverage: { shown: 10, truncated: false } });
+    const foreign = await seedTenant("bravo");
+    const project = await createProject(env.HUB_DB, { tenant_id: foreign.id, namespace_id: null, slug: "private", kind: "repo", display_name: "Private" }, Date.now());
+    const channel = await createChannel(env.HUB_DB, { tenant_id: w.t.id, slug: "private-channel", display_name: "Private channel", topic: "", created_by: w.pat.identity.id }, Date.now());
+    for (let n = 100; n < 133; n++) await add(n, n % 3 === 0 ? foreign.id : w.t.id, n % 3 === 0 ? w.p.id : n % 3 === 1 ? project.id : channel.project_id, 0);
+    expect(await read()).toMatchObject({ sinceCoverage: { shown: 10, truncated: false }, errorsCoverage: { shown: 10, truncated: false } });
+    await add(10);
+    const capped = await read();
+    expect(capped.sinceCoverage).toEqual({ limit: 10, shown: 10, truncated: true });
+    expect(capped.errorsCoverage).toEqual({ limit: 10, shown: 10, truncated: true });
+    expect(capped.since.map(d => d.script)).toEqual(Array.from({ length: 10 }, (_, n) => `row-${String(n).padStart(3, "0")}`));
+    expect(capped.errors.map(g => g.id)).toEqual(capped.since.map(d => d.script));
+    const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
+    expect(page.match(/capped at 10, more omitted/g)).toHaveLength(2);
+    expect(page).not.toContain("row-100");
   });
 });
 
