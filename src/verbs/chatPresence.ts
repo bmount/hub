@@ -90,6 +90,10 @@ export const chatPresence = defineVerb({
     const ch = await activeChannel(ctx, p.c);
     const rows = await conversationStub(ctx.env, ch.tenant_id, ch.project_id).presence(ch.tenant_id, ch.project_id) as PresenceRow[];
     const subjects = await presenceSubjects(ctx, ch.tenant_id, ch.project_id, rows);
+    // DO/subject lookups may outlast channel archival or an agent grant removal.
+    // A reused slug must not relabel the old conversation's activity either.
+    const current = await activeChannel(ctx, p.c);
+    if (current.project_id !== ch.project_id || current.tenant_id !== ch.tenant_id) throw notFound("no such active channel");
     const observed_at = Date.now();
     // The clock can roll back between DO sampling and the completed subject lookup.
     // Recheck against the actual snapshot time too, without renewing/writing reports.

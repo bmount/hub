@@ -1,5 +1,10 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as stubs from "../src/chat/stubs";
+import { agentMcpAuth } from "../src/mcp/agentAuth";
+import { callTool } from "../src/mcp/tools";
+import { buildContext } from "../src/auth/context";
+import { chatPresence } from "../src/verbs/chatPresence";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
 import { getChannelBySlug } from "../src/db/chat";
 import { presenceState, retainedPresence, PRESENCE_TTL_MS, PRESENCE_RETENTION_MS, PRESENCE_MAX, type PresenceRow } from "../src/chat/presence";
@@ -146,6 +151,56 @@ describe("explicit expiring channel presence", () => {
     await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE tenant_id = ? AND identity_id = ?").bind(w.acme.id, w.dev.identity.id).run();
     expect((await ok(w.lead.token, "chat.presence", { c: "general" })).entries).toEqual([]);
     expect((await call(w.dev.token, "chat.heartbeat", { c: "general", status: "online" })).status).toBe(404);
+  });
+
+  it("denies a completed presence snapshot when the reader's channel grant was removed during lookup", async () => {
+    const w = await chatWorld(); await channelWith(w, "general", ["scout"]);
+    await ok(w.dev.token, "chat.heartbeat", { c: "general", status: "online" });
+    const { stub, ch } = await stubFor(w.acme.id);
+    const stored = await inDO(stub, (_obj, state) => state.storage.get("presence:v1"));
+    const auth = await agentMcpAuth(new Request(`https://${HOST}/agent/mcp`, { headers: bearer(w.scout.longLived) }), env, "acme", Date.now());
+    if (auth.kind !== "ok") throw new Error("fixture auth refused");
+    const lookup = vi.spyOn(stubs, "conversationStub").mockReturnValue(new Proxy(stub, { get(target, prop) {
+      if (prop === "presence") return async (...args: [string, string]) => {
+        const rows = await target.presence(...args);
+        await env.HUB_DB.prepare("UPDATE conversation_member SET removed_at = ? WHERE tenant_id = ? AND conversation_id = ? AND identity_id = ?")
+          .bind(Date.now(), w.acme.id, ch.project_id, w.scout.agent.identity.id).run();
+        return rows;
+      };
+      return Reflect.get(target, prop, target);
+    } }));
+    try {
+      const result = await callTool(auth.ctx, "chat_presence", { c: "general" });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+      expect(JSON.stringify(result)).not.toContain(w.dev.identity.id);
+    } finally { lookup.mockRestore(); }
+    expect(await inDO(stub, (_obj, state) => state.storage.get("presence:v1"))).toEqual(stored);
+    expect(await stub.head(w.acme.id, ch.project_id)).toBe(0);
+  });
+
+  it.each(["archive", "replace"] as const)("denies a completed snapshot after channel %s during lookup", async (change) => {
+    const w = await chatWorld(); await channelWith(w);
+    await ok(w.dev.token, "chat.heartbeat", { c: "general", status: "online" });
+    const { stub, ch } = await stubFor(w.acme.id);
+    const stored = await inDO(stub, (_obj, state) => state.storage.get("presence:v1"));
+    const ctx = await buildContext(new Request(`https://${HOST}/api/chat.presence`, { headers: bearer(w.lead.token) }), env);
+    const lookup = vi.spyOn(stubs, "conversationStub").mockReturnValue(new Proxy(stub, { get(target, prop) {
+      if (prop === "presence") return async (...args: [string, string]) => {
+        const rows = await target.presence(...args);
+        if (change === "archive") await ok(w.lead.token, "channel.archive", { c: "general" });
+        else {
+          await env.HUB_DB.prepare("UPDATE project SET slug = 'previous' WHERE id = ? AND tenant_id = ?").bind(ch.project_id, w.acme.id).run();
+          await ok(w.lead.token, "channel.create", { slug: "general" });
+        }
+        return rows;
+      };
+      return Reflect.get(target, prop, target);
+    } }));
+    try {
+      await expect(chatPresence.run(ctx, { c: "general" })).rejects.toMatchObject({ status: 404, reason: "not_found" });
+    } finally { lookup.mockRestore(); }
+    expect(await inDO(stub, (_obj, state) => state.storage.get("presence:v1"))).toEqual(stored);
   });
 
   it("isolates channels/tenants including equal slugs, denies archived channels and wrong DO binding", async () => {
