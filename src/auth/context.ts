@@ -180,30 +180,44 @@ type Prefetched = { tenant: Tenant | null; session: Session | null; identity: Id
 /** The rows buildContext needs for a session token, in one batch. Same predicates as the single-row getters. */
 async function prefetch(db: D1Database, slug: string | null, tokenHash: string, now: number, wantRail = false): Promise<Prefetched> {
   const live = "SELECT identity_id FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?";
-  const [t, s, i, m, rp, rc] = await db.batch([
+  const [t, s, i, m, rc] = await db.batch([
     db.prepare("SELECT * FROM tenant WHERE slug = ?").bind(slug),
     db.prepare("SELECT * FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?").bind(tokenHash, now),
     db.prepare(`SELECT * FROM identity WHERE id = (${live})`).bind(tokenHash, now),
     db.prepare(`SELECT * FROM membership WHERE identity_id = (${live}) AND tenant_id = (SELECT id FROM tenant WHERE slug = ?)`).bind(tokenHash, now, slug),
-    ...(wantRail ? railStatements(db, slug, live, tokenHash, now) : []),
+    ...(wantRail ? [railStatement(db, slug, live, tokenHash, now)] : []),
   ]);
   const one = <T>(r: D1Result<unknown> | undefined): T | null => ((r?.results[0] as T | undefined) ?? null);
-  const counts = one<{ open: number; mine: number; held: number; needs: number }>(rc);
-  const rail = wantRail && counts ? { projects: (rp?.results ?? []) as RailData["projects"], ...counts } : null;
+  const counts = one<Omit<RailData, "projects"> & { projects: string }>(rc);
+  const rail: RailData | null = wantRail && counts ? { ...counts, projects: JSON.parse(counts.projects) } : null;
   return { tenant: one<Tenant>(t), session: one<Session>(s), identity: one<Identity>(i), membership: one<Membership>(m), rail };
 }
 
-/** The rail: projects with open work, and the organization's open, mine and held-mail counts. */
-function railStatements(db: D1Database, slug: string | null, live: string, tokenHash: string, now: number): D1PreparedStatement[] {
-  const tid = "(SELECT id FROM tenant WHERE slug = ?)";
-  return [
-    db.prepare(`SELECT p.slug, p.display_name, (SELECT COUNT(*) FROM work_item w WHERE w.project_id = p.id AND w.state IN ('open', 'doing')) AS open
-      FROM project p WHERE p.tenant_id = ${tid} AND p.kind <> 'channel' AND p.state = 'active' ORDER BY p.display_name LIMIT 60`).bind(slug),
-    db.prepare(`SELECT (SELECT COUNT(*) FROM work_item WHERE tenant_id = ${tid} AND state IN ('open', 'doing')) AS open,
-      (SELECT COUNT(*) FROM work_item WHERE tenant_id = ${tid} AND state IN ('open', 'doing') AND owner_id = (${live})) AS mine,
-      (SELECT COUNT(*) FROM inbound_mail WHERE tenant_id = ${tid} AND verdict = 'quarantined' AND released_at IS NULL) AS held,
-      (SELECT COUNT(*) FROM attention WHERE tenant_id = ${tid} AND identity_id = (${live}) AND done_at IS NULL) AS needs`).bind(slug, slug, tokenHash, now, slug, slug, tokenHash, now),
-  ];
+/** One request-local aggregate serves both project badges and uncapped work totals. */
+function railStatement(db: D1Database, slug: string | null, live: string, tokenHash: string, now: number): D1PreparedStatement {
+  // No cross-request cache: writes, identity changes and access revocation need no
+  // invalidation hooks. The sign-in checks still gate attaching this data to ctx.
+  return db.prepare(`WITH target AS MATERIALIZED (SELECT id FROM tenant WHERE slug = ?),
+      actor AS MATERIALIZED (${live}),
+      work_counts AS MATERIALIZED (
+        SELECT p.id AS project_id, COUNT(*) AS open,
+          SUM(w.owner_id = (SELECT identity_id FROM actor)) AS mine
+        FROM project p JOIN work_item w ON w.project_id = p.id AND w.tenant_id = p.tenant_id
+        WHERE p.tenant_id = (SELECT id FROM target) AND w.state IN ('open', 'doing')
+        GROUP BY p.id
+      ),
+      project_rows AS (
+        SELECT p.slug, p.display_name, COALESCE(c.open, 0) AS open
+        FROM project p LEFT JOIN work_counts c ON c.project_id = p.id
+        WHERE p.tenant_id = (SELECT id FROM target) AND p.kind <> 'channel' AND p.state = 'active'
+        ORDER BY p.display_name, p.slug LIMIT 60
+      )
+      SELECT (SELECT json_group_array(json_object('slug', slug, 'display_name', display_name, 'open', open)) FROM project_rows) AS projects,
+        COALESCE((SELECT SUM(open) FROM work_counts), 0) AS open,
+        COALESCE((SELECT SUM(mine) FROM work_counts), 0) AS mine,
+        (SELECT COUNT(*) FROM inbound_mail WHERE tenant_id = (SELECT id FROM target) AND verdict = 'quarantined' AND released_at IS NULL) AS held,
+        (SELECT COUNT(*) FROM attention WHERE tenant_id = (SELECT id FROM target) AND identity_id = (SELECT identity_id FROM actor) AND done_at IS NULL) AS needs`)
+    .bind(slug, tokenHash, now);
 }
 
 /** The context for one /mcp request, built from a grant that passed the per-request check (MCP spec 5.3, 8.5). */

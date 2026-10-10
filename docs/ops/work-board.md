@@ -1,7 +1,5 @@
 # Work board counts and list reads
 
-Increment for `pimwell#109`.
-
 ## Board contract
 
 `work.board` (API and MCP `work_board`) returns:
@@ -20,38 +18,15 @@ Browser badges and MCP headings show exact totals. Browser cards are further cap
 
 `work.list` gets project slugs in its item query, instead of one serial slug lookup per distinct project in the sample. The shared filter builder keeps the existing state, kind, owner, parent, timestamp, limit and ordering behavior. The joined variant requires the project's tenant to match the work row and excludes channel projects **before** applying LIMIT; malformed rows cannot consume the sample or expose another tenant's project slug. API/MCP still return the same work fields, `project` and `ref`.
 
-Native-Workers regression tests meter one item-query round trip for an unfiltered list spanning 25 distinct projects. A project-filtered list uses two trips (project validation and the joined item query), with no per-item or per-project follow-ups. These measurements exclude request authentication/context reads; they are not production latency benchmarks.
+## Request-local aggregation
 
-## Request-local quest child aggregation
+Quest progress aggregates direct children once per board read, grouping by parent and project. Both children and quests must match the requested tenant/project and exclude channel projects. Empty and dropped-only quests report zero. Nested quests count as one direct child; done children count regardless of age or closing time. Quest results remain uncapped.
 
-Quest progress uses one materialized child-count aggregation per board request, in
-place of two correlated `work_item` child scans per quest. It groups by parent **and
-project**, restricts children to the requested tenant/project and non-channel
-projects, then left-joins the active quests in that same scope. Tenant/project
-consistency checks remain on both sides. Empty and dropped-only quests report
-zero, not one from a synthetic left-join row. Children count directly, not
-recursively: a nested quest counts as one child of its parent. Done children still
-count regardless of their age or `closed_at`; dropped children do not count.
-Quest order and the existing uncapped result contract are unchanged.
+The signed-in browser rail reads one statement in the sign-in batch. A materialized per-project work aggregate supplies both project badges and organization open/mine totals. Work and project tenants must match. Project links show at most 60 active non-channel projects, sorted by display name then slug; organization totals remain uncapped and retain work in archived and channel projects. Held-mail counts retain the unreleased-quarantine predicate; Needs me counts only the current identity's unfinished attention in this tenant. Existing authentication and membership checks gate attaching rail data to the request.
 
-`MATERIALIZED` means a temporary result inside this SQL statement, **not** a
-persistent table or cross-request cache. Reopens, state changes and reparenting
-are reflected on the next read without invalidation machinery. No migration is
-required. The query still reads matching child rows and may use a temporary
-grouping table; this is not constant-cost access or a demonstrated improvement
-for every possible data distribution (for example, one quest with many unrelated
-parents).
+Materialization is temporary inside each SQL statement, not a persistent cache or table. State, ownership, project, mail and attention changes are reflected on the next read. Session, identity or membership revocation cannot reuse a previous rail snapshot. This avoids cross-request cache invalidation machinery and needs no migration.
 
-`test/board-quest-scaling.test.ts` compares actual query results with the previous
-correlated SQL for every fixture. Its native-Workers local D1 benchmark has 80
-quests and 4,000 children in one project, tested under both organization and
-project scopes. `EXPLAIN QUERY PLAN` must materialize child counts with no
-correlated subqueries; the previous plan has two correlated subqueries. D1
-`meta.rows_read` for the new **quest statement alone** must be less than one tenth
-of the previous statement's reads, with identical quest counts (4,000 total,
-2,000 done). This deliberately adverse local fixture is read-work evidence, not
-a production latency measurement or total page-cost benchmark. Other board
-queries, authentication reads and rail work are not included in that ratio.
+These queries still read matching rows and may use temporary grouping tables. Local query-plan/read-work benchmarks cover single-project and many-project fixtures; they are not production latency measurements or a universal speedup guarantee.
 
 ## Work inspector evidence links
 
@@ -68,18 +43,3 @@ Work inspectors open `mail` links and recorded mail sources when the reference i
 Authorized mail reads show work filed from the message or explicitly linked to it. The page distinguishes **Filed from this** from **Linked to this**; an item with both associations appears once as filed. API/MCP `mail_read` returns `relatedWork` and `relatedWorkCoverage`. These are recorded associations, not proof that a message authorized execution.
 
 Related work must have a matching tenant and non-channel project. The same mail-read predicate gates the association query. At most 50 items are shown across both association types, newest filing first with item ID as the tie-breaker. One extra item detects truncation, and both surfaces report coverage. Invalid tenant/project/channel rows are excluded before the limit. No mail is sent or model invoked by this navigation.
-
-## Evidence and remaining scope
-
-- `test/board-counts.test.ts`: more than 500 items, all stalled/recent-done items outside the sample, strict time boundaries, empty/exactly-500 completeness, deterministic ties, browser/API/MCP reporting and tenant/project/channel/quest-child boundaries.
-- `test/work-list-reads.test.ts`: constant query count across 25 projects, full fields/references, filter parity, parent filters, and malformed rows before LIMIT.
-- `test/board-quest-scaling.test.ts`: query-plan/read-work comparison, differential result parity, zero/mixed/dropped/nested/non-quest/old-done children, state/reparent/reopen freshness, absent/channel project scope and malformed tenant/project/parent boundaries; browser/MCP progress compatibility.
-- Existing work/page/performance-budget tests cover compatibility of the default non-joined shared statement.
-
-`#109` is **not complete**: rail aggregate caching/materialization and invalidation,
-broader large-tenant/many-project distribution and production latency benchmarks,
-and uncapped quest-result scaling remain. Counts require independent reads over
-matching data; the scoped local quest benchmark does not demonstrate a production
-speedup or an indexed large-tenant redesign. No schema migration, persistent
-cache, membership/data mutation, mail-auth policy change or scheduler change is
-required by these increments.
