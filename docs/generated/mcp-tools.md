@@ -69,7 +69,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `usage_report` | write | reader | no | Implemented | `at`, `cached_tokens`, `calls`, `client`, `cost_usd`, `input_tokens`, `model`, `output_tokens`, `provider`, `purpose`, `work` |
 | `usage_summary` | read | reader | no | Implemented | `days`, `everyone`, `project`, `work` |
 | `whoami` | read | public | no | Implemented | — |
-| `work_board` | read | reader | no | Implemented | `project` |
+| `work_board` | read | reader | no | Implemented | `actor`, `project` |
 | `work_bulk_update` | write | member | no | Implemented | **`ids`**, `kind`, `owner`, `parent`, `state` |
 | `work_claim` | write | member | no | Implemented | `expected_updated_at`, `id`, `number`, `project` |
 | `work_comment` | write | member | no | Implemented | **`body`**, **`id`**, `reply_to` |

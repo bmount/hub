@@ -16,6 +16,7 @@ export const CLOSURE_ACTOR_LIMIT = 50;
 export const CLOSURE_NOTE = "Distinct retained items with recorded done transitions per actor, including reopened items; one item can appear under multiple actors. Not current ownership, work quality or proof of execution. Historical prose events are not attributed; tracking starts with work.done events. Counts cover this scope, all recorded time, not the two-week done column.";
 export type ClosureCounts = {
   actors: Array<{ identity_id: string; name: string; kind: string; items: number }>;
+  actor_id: string | null;
   total_actors: number; limit: number; truncated: boolean;
   currently_done_without_record: number; note: string;
 };
@@ -29,7 +30,7 @@ export type Board = {
   closures: ClosureCounts;
 };
 
-export async function board(ctx: Ctx, project: string | null): Promise<Board> {
+export async function board(ctx: Ctx, project: string | null, actorId: string | null = null): Promise<Board> {
   // Counts and bounded examples share predicates and one D1 batch. Never infer totals
   // (especially old stalled items) from the globally newest-item sample.
   const scope = "w.tenant_id = ? AND p.tenant_id = w.tenant_id AND p.kind <> 'channel' AND (? IS NULL OR p.slug = ?)";
@@ -65,8 +66,9 @@ export async function board(ctx: Ctx, project: string | null): Promise<Board> {
       FROM event e JOIN work_item w ON w.id = e.target_id AND w.tenant_id = e.tenant_id
       JOIN project p ON p.id = w.project_id LEFT JOIN identity i ON i.id = e.identity_id
       WHERE ${scope} AND e.kind = 'work.done' AND e.target_kind = 'work_item'
+        AND (? IS NULL OR e.identity_id = ?)
       GROUP BY e.identity_id ORDER BY items DESC, e.identity_id LIMIT ?`)
-      .bind(ctx.tenant!.id, project, project, CLOSURE_ACTOR_LIMIT),
+      .bind(ctx.tenant!.id, project, project, actorId, actorId, CLOSURE_ACTOR_LIMIT),
     ctx.db.prepare(`SELECT COUNT(*) AS unattributed FROM work_item w JOIN project p ON p.id = w.project_id
       WHERE ${scope} AND w.state = 'done' AND NOT EXISTS (
         SELECT 1 FROM event e WHERE e.tenant_id = w.tenant_id AND e.target_id = w.id
@@ -86,6 +88,7 @@ export async function board(ctx: Ctx, project: string | null): Promise<Board> {
     totals: { open, doing, done }, stalled,
     examples: { limit: BOARD_ITEM_LIMIT, shown: items!.results.length, truncated: open + doing + done > items!.results.length },
     closures: {
+      actor_id: actorId,
       actors: (closers!.results as Array<ClosureCounts["actors"][number] & { total_actors: number }>).map(({ total_actors: _, ...actor }) => actor),
       total_actors: (closers!.results[0] as { total_actors: number } | undefined)?.total_actors ?? 0,
       limit: CLOSURE_ACTOR_LIMIT,
@@ -101,7 +104,7 @@ export const workBoard = defineVerb({
   summary: "The board: exact open, under-way, recent-done and stalled totals with bounded latest-item examples; each quest's progress. Done covers the last two weeks; stalled means under way, untouched for a week. Includes distinct-item recorded closure counts per actor with historical attribution gaps.",
   mcp: {
     scope: "read", destructive: false, title: "Board",
-    input: { type: "object", properties: { project: { type: "string", description: "Omit for the whole organization" } }, additionalProperties: false },
+    input: { type: "object", properties: { project: { type: "string", description: "Omit for the whole organization" }, actor: { type: "string", maxLength: 26, description: "Optional exact identity ID. Filters closure counts only, including actors outside the top 50; never widens tenant/project scope." } }, additionalProperties: false },
     render: (r) => {
       const b = r as Board;
       const line = (i: BoardItem) => `- **${i.ref}** ${KINDS[i.kind].name}: ${cleanText(i.title)}${i.owner ? ` (${cleanText(i.owner)})` : ""}${i.stalled ? " [stalled]" : ""}`;
@@ -112,12 +115,13 @@ export const workBoard = defineVerb({
         "", `Open (${b.totals.open}; showing ${Math.min(b.columns.open.length, 40)}):`, ...b.columns.open.slice(0, 40).map(line),
         "", `Done lately (${b.totals.done}; showing ${Math.min(b.columns.done.length, 20)}):`, ...b.columns.done.slice(0, 20).map(line),
         "", `Recorded closures by actor (showing ${b.closures.actors.length} of ${b.closures.total_actors}${b.closures.truncated ? "; truncated" : ""}):`,
-        b.closures.note, `Currently done without a structured closure record: ${b.closures.currently_done_without_record}.`,
+        ...(b.closures.actor_id ? [`Actor filter: ${cleanText(b.closures.actor_id)}. No matching records does not prove zero historical closures.`] : []),
+        b.closures.note, `Currently done without a structured closure record: ${b.closures.currently_done_without_record} (whole selected scope, independent of actor filter).`,
         ...b.closures.actors.map((a) => `- ${cleanText(a.name)} (${cleanText(a.kind)}, ${a.identity_id}): ${a.items} distinct items`)].join("\n");
     },
   },
-  parse: (i) => ({ project: optString(i, "project", { max: 63 }) }),
-  run: async (ctx, p) => board(ctx, p.project),
+  parse: (i) => ({ project: optString(i, "project", { max: 63 }), actor: optString(i, "actor", { max: 26 }) }),
+  run: async (ctx, p) => board(ctx, p.project, p.actor),
 });
 
 export const workBulkUpdate = defineVerb({
