@@ -25,7 +25,7 @@ function presenceText(result: unknown): string {
 
 type PresenceSubject = { identity_id: string; handle: string | null; display_name: string; kind: "human" | "agent" };
 
-/** Query-only lookup: presence polling must not invoke the chat directory's lazy handle writes. */
+/** Query-only lookup: no lazy handle writes. Agent operators must satisfy operatorActiveIn. */
 async function presenceSubjects(ctx: Ctx, tenant_id: string, conversation_id: string, rows: PresenceRow[]): Promise<Map<string, PresenceSubject>> {
   const ids = [...new Set(rows.map(r => r.identity_id))];
   const subjects = new Map<string, PresenceSubject>();
@@ -39,6 +39,13 @@ async function presenceSubjects(ctx: Ctx, tenant_id: string, conversation_id: st
         AND (i.kind = 'human' OR (i.kind = 'agent' AND EXISTS (
           SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = m.tenant_id
             AND cm.conversation_id = ? AND cm.identity_id = i.id AND cm.removed_at IS NULL
+        ) AND EXISTS (
+          SELECT 1 FROM identity op WHERE op.id = i.operator_id
+            AND op.kind = 'human' AND op.state = 'active'
+            AND (op.is_root = 1 OR EXISTS (
+              SELECT 1 FROM membership om WHERE om.identity_id = op.id
+                AND om.tenant_id = m.tenant_id AND om.state = 'active'
+            ))
         )))`).bind(tenant_id, ...chunk, conversation_id).all<PresenceSubject>();
     for (const subject of result.results) subjects.set(subject.identity_id, subject);
   }
