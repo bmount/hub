@@ -6,6 +6,12 @@ Successful turns append to the transcript. The model receives the latest 30 stor
 
 Chat, Conversations and Tools retain the current conversation. New chat starts a separate one. Opening the conversation list preserves the live composer and transcript; reloading restores the stored transcript. An error response that identifies a created conversation keeps its navigation, but failed turns may have no stored transcript. A dropped connection does not prove that tool effects failed; check the record before retrying a change.
 
+## Connecting a hosted assistant
+
+The Assistant's model instructions include the current organization's `/mcp` URL and browser OAuth flow for hosted ChatGPT or Claude. The person verifies their identity and organization and reviews read/write consent. This consent is separate from the built-in Assistant's conversation scope; neither bypasses role or resource permissions. Connector availability and labels depend on the client, plan and workspace policy; the guidance does not claim hosted-client acceptance has been tested.
+
+Headless coding agents instead claim a one-time Connect an agent link and use their own token at `/agent/mcp`. Tokens and login proofs must not be pasted into chat. Human connections can be reviewed and revoked at the hub's `/me` page.
+
 ## Storage
 
 D1 `assistant_thread` stores each conversation's identity, organization, title and scope. `assistant_message` stores completed user/assistant exchanges and tool summaries. `model_call` records observed provider calls and usage; tool calls are audited as `playground.call` events. These are distinct from channel chat, whose message bodies live in Conversation Durable Objects with a D1 `msg_index`.
