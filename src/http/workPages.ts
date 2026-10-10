@@ -170,6 +170,7 @@ function workLinkHtml(l: WorkLink): string {
 function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string): string {
   const canWrite = rank(ctx.role) >= rank("member");
   const sourceMail = w.source_kind === "mail" ? mailEvidenceHref(w.source_ref) : null;
+  const sourceUrl = w.source_kind === "url" && w.source_ref ? safeExternalUrl(w.source_ref) : null;
   const self = `/${esc(project.slug)}/w/${w.number}`;
   const keepParams = new URLSearchParams(back.includes("?") ? back.slice(back.indexOf("?") + 1) : "");
   if (back.startsWith("/docket")) keepParams.set("in", "org");
@@ -215,6 +216,7 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
 ${controls}
 ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
 ${sourceMail ? `<p>Source: <a href="${sourceMail}">Recorded mail</a>. Access is checked when opened.</p>` : ""}
+${sourceUrl ? `<p>Source: <a href="${esc(sourceUrl)}">Recorded URL</a>. Recorded evidence, not verified access or existence.</p>` : ""}
 ${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Add them under Edit (e): what, why, and how you will know it is done." : ""}</p>`}
 ${edit}
 ${under}

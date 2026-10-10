@@ -98,6 +98,21 @@ describe("work item editing", () => {
   });
 });
 
+describe("recorded URL sources", () => {
+  it("opens safe HTTPS sources without turning unsafe or credential-bearing references into links", async () => {
+    const w = await world();
+    const url = "https://example.test/apps?g=unknown&other=1";
+    const item = await w.create({ kind: "snag", title: "URL evidence", source_kind: "url", source_ref: url });
+    const page = await (await w.get(`/site/w/${item.number}`, w.rae.token)).text();
+    expect(page).toContain('<a href="https://example.test/apps?g=unknown&amp;other=1">Recorded URL</a>');
+    expect(page).toContain("Recorded evidence, not verified access or existence");
+    for (const source_ref of ["javascript:alert(1)", "http://example.test", "//example.test", "https://user:pass@example.test", "https://example.test\n/path", "/apps?g=unknown"]) {
+      const bad = await w.create({ kind: "snag", title: "Unsafe source", source_kind: "url", source_ref });
+      expect(await (await w.get(`/site/w/${bad.number}`)).text()).not.toContain(">Recorded URL</a>");
+    }
+  });
+});
+
 describe("browser work evidence creation", () => {
   it("renders a bounded member form and returns to the same filtered item after an audited link", async () => {
     const w = await world();
