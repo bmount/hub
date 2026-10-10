@@ -30,6 +30,13 @@ export function retainedPresence(rows: unknown, now: number): PresenceRow[] {
   // Validate persisted state before sorting/capping: one unusable row must not
   // poison valid peers or claim an unbounded lease. Reads omit as unknown only.
   // A clock rollback cannot turn a future observation into current activity.
-  return rows.filter(validPresenceRow).filter((r) => r.last_seen <= now && r.last_seen > now - PRESENCE_RETENTION_MS)
+  const eligible = rows.filter(validPresenceRow).filter((r) => r.last_seen <= now && r.last_seen > now - PRESENCE_RETENTION_MS);
+  const counts = new Map<string, number>();
+  for (const r of eligible) counts.set(r.identity_id, (counts.get(r.identity_id) ?? 0) + 1);
+  // Storage normally holds one report per identity. If that invariant is broken,
+  // omit the ambiguous subject as unknown rather than inventing a winner (even
+  // identical rows cannot prove ordering). Do this before the cap so duplicates
+  // cannot crowd out valid peers or invalidate the browser's entire snapshot.
+  return eligible.filter((r) => counts.get(r.identity_id) === 1)
     .sort((a, b) => b.last_seen - a.last_seen).slice(0, PRESENCE_MAX);
 }
