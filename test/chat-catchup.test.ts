@@ -54,7 +54,7 @@ describe("chat.catchup", () => {
     const w = await busyDay();
     const small = await ok(w.dev.token, "chat.catchup", { budget: 100 });
     expect(small.omitted).toBeGreaterThan(0);
-    expect(small.next).toMatch(/^c1\./);
+    expect(small.next).toMatch(/^c2\./);
     expect(small.text).toContain(`next: since=${small.next}`);
     const resumed = await ok(w.dev.token, "chat.catchup", { since: small.next });
     expect(resumed.for_you).toHaveLength(1);

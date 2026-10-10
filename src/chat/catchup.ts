@@ -22,32 +22,49 @@ export type CatchupResult = {
   text: string;
 };
 
-const PREFIX = "c1.";
+type CursorReader = { tenant_id: string; identity_id: string };
+const LEGACY_PREFIX = "c1.";
+const BOUND_PREFIX = "c2.";
+const isId = (v: unknown): v is string => typeof v === "string" && /^[0-9A-Z]{26}$/.test(v);
 const toB64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const fromB64url = (s: string) => atob(s.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (s.length % 4)) % 4));
 const firstLine = (s: string) => s.split(/\r\n|[\n\r\u0085\u2028\u2029]/)[0] ?? "";
 
-/** The `next` cursor: per-conversation seqs, opaque to callers, validated on the way back in. */
-export function encodeCursors(c: Record<string, number>): string {
-  return PREFIX + toB64url(JSON.stringify(c));
+/** Opaque activity cursors. Reader binding prevents accidental transfer, not deliberate forgery. */
+export function encodeCursors(c: Record<string, number>, reader?: CursorReader): string {
+  return reader
+    ? BOUND_PREFIX + toB64url(JSON.stringify({ tenant_id: reader.tenant_id, identity_id: reader.identity_id, cursors: c }))
+    : LEGACY_PREFIX + toB64url(JSON.stringify(c));
 }
 
-export function decodeCursors(s: string): Record<string, number> {
+export function decodeCursors(s: string, reader?: CursorReader): Record<string, number> {
   const bad = () => badRequest("since is not a catch-up cursor: pass the next value from chat.catchup");
-  if (!s.startsWith(PREFIX) || s.length > 8192) throw bad();
+  const bound = s.startsWith(BOUND_PREFIX);
+  if ((!bound && !s.startsWith(LEGACY_PREFIX)) || s.length > 8192) throw bad();
   let parsed: unknown;
   try {
-    parsed = JSON.parse(fromB64url(s.slice(PREFIX.length)));
+    parsed = JSON.parse(fromB64url(s.slice(3)));
   } catch {
     throw bad();
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw bad();
+  let binding: CursorReader | undefined;
+  if (bound) {
+    const envelope = parsed as Record<string, unknown>;
+    if (Object.keys(envelope).length !== 3 || !isId(envelope.tenant_id) || !isId(envelope.identity_id)
+      || !envelope.cursors || typeof envelope.cursors !== "object" || Array.isArray(envelope.cursors)) throw bad();
+    binding = { tenant_id: envelope.tenant_id, identity_id: envelope.identity_id };
+    parsed = envelope.cursors;
+  }
   const out: Record<string, number> = {};
-  for (const [k, v] of Object.entries(parsed)) {
-    if (!/^[0-9A-Z]{26}$/.test(k) || typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw bad();
+  for (const [k, v] of Object.entries(parsed as object)) {
+    if (!isId(k) || typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) throw bad();
     out[k] = v;
   }
   if (Object.keys(out).length > 500) throw bad();
+  if (binding && reader && (binding.tenant_id !== reader.tenant_id || binding.identity_id !== reader.identity_id)) {
+    throw new HubError(409, "conflict", "since belongs to a different tenant or reader; use this connection's own checkpoint");
+  }
   return out;
 }
 
@@ -60,8 +77,10 @@ export function decodeCursors(s: string): Record<string, number> {
 export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult> {
   const v = viewerOf(ctx);
   if (p.advance && ctx.authKind === "oauth") throw new HubError(403, "forbidden", "assistant connections read without moving cursors: advance is not available over MCP");
+  const reader = { tenant_id: v.tenant.id, identity_id: v.identity.id };
+  // Validate the namespace before channel/head lookups or any optional advancement.
   const box = inboxStub(ctx.env, v.tenant.id, v.identity.id);
-  const base = p.since ? decodeCursors(p.since) : ((await box.cursors(v.tenant.id, v.identity.id)) as Record<string, number>);
+  const base = p.since ? decodeCursors(p.since, reader) : ((await box.cursors(v.tenant.id, v.identity.id)) as Record<string, number>);
   let chans = await readableChannels(ctx.db, v, "active");
   const readable = new Set(chans.map((c) => c.project_id));
   if (p.scope) {
@@ -91,7 +110,7 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   const limit = textBudget(p.budget);
   const lines = [DATA_NOTE, CHAT_NOTE, ""];
   // Room for the trailer: the omitted count and a cursor of about 48 characters per channel.
-  let used = lines.join("\n").length + 64 + 48 * (Object.keys(base).length + active.length);
+  let used = lines.join("\n").length + 64 + encodeCursors({}, reader).length + 48 * (Object.keys(base).length + active.length);
   let omitted = 0;
   const incomplete = new Set<string>();
   const fits = (block: string[]) => {
@@ -176,7 +195,7 @@ export async function catchup(ctx: Ctx, p: CatchupParams): Promise<CatchupResult
   const done = active.filter(({ ch }) => covered.has(ch.project_id) && !incomplete.has(ch.project_id));
   for (const { ch, d } of done) nextCursors[ch.project_id] = d.head;
   if (p.advance) for (const { ch, d } of done) await box.markRead(v.tenant.id, v.identity.id, ch.project_id, d.head);
-  const next = encodeCursors(nextCursors);
+  const next = encodeCursors(nextCursors, reader);
   lines.push("", `omitted: ${omitted}`, `next: since=${next}`);
   // Bind even empty/budget-limited checkpoints to the authenticated reader, never input/body fields.
   return { tenant_id: v.tenant.id, identity_id: v.identity.id, budget: p.budget, used_tokens: Math.ceil(used / 4), omitted, next, advanced: p.advance, ...out, text: lines.join("\n") };

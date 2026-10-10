@@ -13,7 +13,7 @@ export const chatCatchup = defineVerb({
     input: {
       type: "object",
       properties: {
-        since: { type: "string", description: "The next value from an earlier catch-up; default is your read cursors." },
+        since: { type: "string", description: "The next value from an earlier catch-up in this tenant as the same reader; default is your read cursors. Unsigned activity state, not processing proof." },
         budget: { type: "integer", minimum: 100, maximum: LIMITS.BUDGET_MAX, description: "Token budget for the text, default 1500." },
         scope: { type: "string", description: "Only this channel." },
       },
