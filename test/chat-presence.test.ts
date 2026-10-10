@@ -24,7 +24,7 @@ describe("explicit expiring channel presence", () => {
     const now = PRESENCE_RETENTION_MS + 1000;
     expect(retainedPresence([row], now)).toEqual([]);
     expect(retainedPresence([row], now - 1)).toEqual([row]);
-    const rows = Array.from({ length: PRESENCE_MAX + 10 }, (_, i) => ({ ...row, identity_id: String(i), last_seen: now - i }));
+    const rows = Array.from({ length: PRESENCE_MAX + 10 }, (_, i) => ({ ...row, identity_id: String(i), last_seen: now - i, expires_at: now - i + PRESENCE_TTL_MS }));
     expect(retainedPresence(rows.reverse(), now).map((r) => r.identity_id)).toEqual(Array.from({ length: PRESENCE_MAX }, (_, i) => String(i)));
   });
 

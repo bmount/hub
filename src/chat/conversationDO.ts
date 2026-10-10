@@ -318,15 +318,16 @@ export class Conversation extends DurableObject<Env> {
     const now = Date.now();
     const row: PresenceRow = { identity_id, status, via_assistant, last_seen: now, expires_at: status === "offline" ? now : now + PRESENCE_TTL_MS };
     await this.ctx.storage.transaction(async (tx) => {
-      const rows = (await tx.get<PresenceRow[]>("presence:v1")) ?? [];
-      await tx.put("presence:v1", retainedPresence([row, ...rows.filter((r) => r.identity_id !== identity_id)], now));
+      const stored = await tx.get<unknown>("presence:v1");
+      const rows = Array.isArray(stored) ? stored : [];
+      await tx.put("presence:v1", retainedPresence([row, ...rows.filter((r) => r?.identity_id !== identity_id)], now));
     });
     return row;
   }
 
   async presence(tenant_id: string, conversation_id: string): Promise<PresenceRow[]> {
     this.#bind(tenant_id, conversation_id);
-    return retainedPresence((await this.ctx.storage.get<PresenceRow[]>("presence:v1")) ?? [], Date.now());
+    return retainedPresence(await this.ctx.storage.get<unknown>("presence:v1"), Date.now());
   }
 
   async head(tenant_id: string, conversation_id: string): Promise<number> {
