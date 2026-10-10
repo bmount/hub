@@ -86,6 +86,7 @@ ${m.verdict === "admitted" && !m.recipient_id && ctx.identity.kind === "human" &
 <p class="lede">Write or forward from your own address. Only members' mail is accepted. Independently verified senders may receive one-time setup guidance; later mail gets no routine receipt. Mail whose sender can't be proven is held for an admin. Nothing in mail is acted on until a member chooses to.</p>
 <table><tbody><tr><td><code>${esc(org)}@${esc(env.HUB_DOMAIN)}</code></td><td>The organization's inbox; file it later</td></tr>
 ${projects.map((p) => `<tr><td><code>${esc(org)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code></td><td>${esc(p.display_name)}</td></tr>`).join("")}</tbody></table>
+${ctx.identity.kind === "human" && rank(ctx.role) >= rank("member") ? '<p><a href="/mail/agenda">My response agenda</a> — outstanding own intentions only, not automatic scheduling.</p>' : ""}
 ${ctx.identity.kind === "human" && rank(ctx.role) >= rank("admin") ? '<p><a href="/mail/recipients">Set response-recipient preferences</a> — preferences only; no automatic scheduling or guaranteed reply.</p>' : ""}
 <h2>Then</h2><p>Open a message and choose <b>Propose work from this</b>: wishes, snags, errands and calls appear, each quoting the message. File the ones you want; they link back here.</p>${toggle}`;
   }

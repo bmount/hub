@@ -2,7 +2,7 @@ import { defineVerb } from "./table";
 import { optInt, optString, reqEnum, reqString } from "./params";
 import { badRequest } from "../errors";
 import { recipientId } from "../mail/responseRecipients";
-import { responseIntent, setResponseIntent } from "../mail/responseIntent";
+import { responseAgenda, responseIntent, setResponseIntent } from "../mail/responseIntent";
 
 // UTC minute precision, never server/browser-local interpretation or permissive Date rollover.
 function respondBy(i: Record<string, unknown>) {
@@ -26,6 +26,16 @@ export const mailResponseIntent = defineVerb({
   summary: "Read your own response intention and bounded matching own reply-record evidence for independently admitted shared mail. Transport acceptance is not delivery or fulfillment.",
   parse: i => ({ id: mailId(i) }),
   run: (ctx, p) => responseIntent(ctx, p.id),
+});
+export const mailResponseAgenda = defineVerb({
+  name: "mail.response_agenda", kind: "query", scope: "tenant", minRole: "member", freshProofMinutes: null, humanOnly: true,
+  summary: "Scan your own outstanding human response intentions on independently admitted shared mail. Bounded mail-id pages, not deadline priority, notification, execution or a reply guarantee.",
+  parse: i => {
+    const before = optString(i, "before", { max: 26 });
+    if (before !== null && !recipientId(before)) throw badRequest("before must be a mail identity id");
+    return { before };
+  },
+  run: (ctx, p) => responseAgenda(ctx, p.before),
 });
 export const mailSetResponseIntent = defineVerb({
   name: "mail.set_response_intent", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: 60, humanOnly: true,

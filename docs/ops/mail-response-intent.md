@@ -14,6 +14,10 @@ message, forwarded quotation, attachment or caller-supplied proof creates one.
 
 ## API and browser
 
+The read-only [own response agenda](mail-response-agenda.md) discovers outstanding
+intentions across messages in bounded scan pages. It is not deadline-priority
+ordering, automated scheduling, notification or a complete due queue.
+
 Tenant-host APIs (not MCP/assistant tools):
 
 - `POST /api/mail.response_intent`, `{ "id": "<mail id>" }`: reads only the
