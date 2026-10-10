@@ -6,10 +6,9 @@ import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
-import { usageQueries } from "../verbs/usage";
+import { usageQueries, usageWorkGroups, type Group, type WorkGroup } from "../verbs/usage";
 import { fmtUsd } from "../models/usage";
 
-type Group = { key: string; label: string; calls: number; input_tokens: number; output_tokens: number; cost_micros: number | null; unpriced: number };
 type Call = { created_at: number; source: string; client: string | null; purpose: string; provider: string; model: string; input_tokens: number | null; output_tokens: number | null; cost_micros: number | null; ok: number; ref: string | null };
 
 const n = (x: number) => x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${(x / 1e3).toFixed(1)}k` : String(x);
@@ -27,16 +26,25 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
   const who = admin ? whoParam || null : ctx.identity.email;
   const scopeId = admin ? null : ctx.identity.id;
   const q = usageQueries(ctx.db, ctx.tenant.id, since, scopeId);
-  const [t, w, m, s, d, calls] = await ctx.db.batch([q.total, q.byWho, q.byModel, q.bySource, q.byDay,
+  const [t, w, m, s, d, work, calls] = await ctx.db.batch([q.total, q.byWho, q.byModel, q.bySource, q.byDay, q.byWork,
     ctx.db.prepare(`SELECT m.created_at, m.source, m.client, m.purpose, m.provider, m.model, m.input_tokens, m.output_tokens, m.cost_micros, m.ok,
         CASE WHEN w.id IS NULL THEN NULL ELSE p.slug || '#' || w.number END AS ref
-      FROM model_call m LEFT JOIN identity i ON i.id = m.identity_id LEFT JOIN work_item w ON w.id = m.work_item_id LEFT JOIN project p ON p.id = w.project_id
+      FROM model_call m LEFT JOIN identity i ON i.id = m.identity_id
+      LEFT JOIN work_item w ON w.id = m.work_item_id AND w.tenant_id = m.tenant_id AND w.project_id = m.project_id
+      LEFT JOIN project p ON p.id = w.project_id AND p.tenant_id = m.tenant_id AND p.kind <> 'channel'
       WHERE m.tenant_id = ? AND m.created_at >= ? AND COALESCE(i.email, 'pimwell') = ? ORDER BY m.created_at DESC LIMIT 100`).bind(ctx.tenant.id, since, who ?? "")]);
   const total = t!.results[0] as Group;
-  const table = (title: string, rows: Group[], link: boolean) => rows.length ? `<h2>${esc(title)}</h2><table><thead><tr><th></th><th>Calls</th><th class="hide-s">Tokens in / out</th><th>Cost</th></tr></thead><tbody>${rows.map((g) => {
-    const href = `/usage?days=${days}&who=${encodeURIComponent(g.key)}`;
-    return `<tr${link ? ` data-href="${esc(href)}"${who === g.key ? ' aria-selected="true"' : ""}` : ""}><td>${link ? `<a href="${esc(href)}">${esc(g.label)}</a>` : esc(g.label)}</td><td class="when">${g.calls}</td><td class="when hide-s">${n(g.input_tokens)} / ${n(g.output_tokens)}</td><td>${cost(g)}</td></tr>`;
+  const table = (title: string, rows: Group[], hrefFor?: (g: Group) => string | null) => rows.length ? `<h2>${esc(title)}</h2><table><thead><tr><th></th><th>Calls</th><th class="hide-s">Tokens in / out</th><th>Cost</th></tr></thead><tbody>${rows.map((g) => {
+    const href = hrefFor?.(g);
+    return `<tr${href ? ` data-href="${esc(href)}"${who === g.key ? ' aria-selected="true"' : ""}` : ""}><td>${href ? `<a href="${esc(href)}">${esc(g.label)}</a>` : esc(g.label)}</td><td class="when">${g.calls}</td><td class="when hide-s">${n(g.input_tokens)} / ${n(g.output_tokens)}</td><td>${cost(g)}</td></tr>`;
   }).join("")}</tbody></table>` : "";
+  const { byWork, byWorkCoverage } = usageWorkGroups(work!.results as WorkGroup[]);
+  const workHref = (g: Group) => {
+    const ref = (g as WorkGroup).ref;
+    const match = ref && /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)#([1-9][0-9]{0,7})$/.exec(ref);
+    return match ? `/${match[1]}/w/${match[2]}` : null;
+  };
+  const workHtml = table("By work item", byWork, workHref) + (total.calls ? `<p class="lede">${byWorkCoverage.shown} work groups shown${byWorkCoverage.truncated ? `; capped at ${byWorkCoverage.limit}, more groups omitted` : "; complete for recorded calls in this scope"}. Recorded calls only, not the full cost of the work. Unpriced calls are not zero-cost calls.</p>` : "");
   const dayRows = d!.results as Group[];
   const peak = Math.max(1, ...dayRows.map((g) => g.calls));
   const daysHtml = dayRows.length ? `<h2>By day</h2><div class="bars">${dayRows.map((g) => `<div title="${esc(g.key)}: ${g.calls} calls, ${fmtUsd(g.cost_micros)}"><span style="height:${Math.max(2, Math.round((g.calls / peak) * 48))}px"></span><small>${esc(g.label.slice(3))}</small></div>`).join("")}</div>` : "";
@@ -45,7 +53,7 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
 <div class="chips">${range}</div>
 <div class="grid"><div class="card"><div class="stat">${total.calls}<small>calls</small></div></div><div class="card"><div class="stat">${n(total.input_tokens + total.output_tokens)}<small>tokens</small></div></div><div class="card"><div class="stat">${cost(total)}</div><p>${total.unpriced ? `${total.unpriced} calls have no price yet` : "every call priced"}</p></div></div>
 ${total.calls ? "" : `<p class="empty">No AI usage recorded yet. Pimwell records its own calls; agents and people report theirs with usage_report, and apps log theirs (see the onboard skill).</p>`}
-${admin ? table("By person or agent", w!.results as Group[], true) : ""}${table("By model", m!.results as Group[], false)}${table("By tool", s!.results as Group[], false)}${daysHtml}`;
+${admin ? table("By person or agent", w!.results as Group[], (g) => `/usage?days=${days}&who=${encodeURIComponent(g.key)}`) : ""}${table("By model", m!.results as Group[])}${table("By tool", s!.results as Group[])}${workHtml}${daysHtml}`;
   const callRows = calls!.results as Call[];
   const inspector = who ? `<a class="back" href="/usage?days=${days}">‹ AI usage</a><h1>${esc(who === "pimwell" ? "Pimwell" : who)}</h1>
 ${callRows.length ? `<table><thead><tr><th>When</th><th>Model</th><th class="hide-s">Tool</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${callRows.map((c) =>
