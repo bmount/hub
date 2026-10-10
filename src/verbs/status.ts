@@ -17,9 +17,9 @@ export type Status = {
   filed: Array<{ ref: string; kind: WorkKind; title: string; by: string | null }>;
   finished: Array<{ ref: string; kind: WorkKind; title: string; state: string }>;
   doing: Array<{ ref: string; title: string; owner: string | null; stalled: boolean }>;
-  commits: { count: number; by: Array<{ who: string; n: number }>; recent: Array<{ summary: string; at: number }> };
-  deploys: Array<{ tag: string | null; script: string; at: number }>;
-  errors: Array<{ title: string; lifetime_count: number; period_samples: number; period_count: null; first_seen: number; last_seen: number }>;
+  commits: { count: number; by: Array<{ who: string; n: number }>; recent: Array<{ summary: string; at: number; oid: string | null; href: string | null }> };
+  deploys: Array<{ id: string; tag: string | null; script: string; at: number }>;
+  errors: Array<{ id: string; title: string; lifetime_count: number; period_samples: number; period_count: null; first_seen: number; last_seen: number }>;
   reviews: Array<{ ref: string; title: string; status: string }>;
   mail: number; comments: number;
 };
@@ -35,7 +35,10 @@ export function parseSince(v: string | null, now: number): number {
 
 export async function projectStatus(ctx: Ctx, slug: string, since: number): Promise<Status> {
   const tenant = ctx.tenant!.id, now = ctx.now;
-  const p = await ctx.db.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel'").bind(tenant, slug.toLowerCase()).first<{ id: string; slug: string }>();
+  const p = await ctx.db.prepare(`SELECT p.id, p.slug, CASE WHEN p.kind = 'repo' AND NOT EXISTS
+    (SELECT 1 FROM project other WHERE other.tenant_id = p.tenant_id AND other.slug = p.slug AND other.kind = 'repo' AND other.id <> p.id)
+    THEN 1 ELSE 0 END AS code_links FROM project p WHERE p.tenant_id = ? AND p.slug = ? AND p.kind <> 'channel'`)
+    .bind(tenant, slug.toLowerCase()).first<{ id: string; slug: string; code_links: number }>();
   if (!p) throw notFound("no such project");
   const id = p.id;
   // D1 batch reads use one transaction, keeping counts and examples consistent. No unbounded time ranges.
@@ -46,14 +49,14 @@ export async function projectStatus(ctx: Ctx, slug: string, since: number): Prom
     ctx.db.prepare("SELECT w.number, w.title, w.updated_at, i.display_name AS owner FROM work_item w LEFT JOIN identity i ON i.id = w.owner_id WHERE w.tenant_id = ? AND w.project_id = ? AND w.state = 'doing' ORDER BY w.updated_at, w.number LIMIT 50").bind(tenant, id),
     period("code_event", "at", "AND kind = 'commit'"),
     ctx.db.prepare("SELECT COALESCE(i.display_name, 'someone outside Pimwell') AS who, COUNT(*) AS n FROM code_event e LEFT JOIN identity i ON i.id = e.identity_id WHERE e.tenant_id = ? AND e.project_id = ? AND e.kind = 'commit' AND e.at BETWEEN ? AND ? GROUP BY e.identity_id ORDER BY n DESC").bind(tenant, id, since, now),
-    ctx.db.prepare("SELECT tag, script_name AS script, seen_at AS at FROM app_deploy WHERE tenant_id = ? AND project_id = ? AND seen_at BETWEEN ? AND ? ORDER BY seen_at DESC, id DESC LIMIT 20").bind(tenant, id, since, now),
-    ctx.db.prepare(`SELECT g.title, g.count AS lifetime_count, g.first_seen, g.last_seen, NULL AS period_count,
+    ctx.db.prepare("SELECT id, tag, script_name AS script, seen_at AS at FROM app_deploy WHERE tenant_id = ? AND project_id = ? AND seen_at BETWEEN ? AND ? ORDER BY seen_at DESC, id DESC LIMIT 20").bind(tenant, id, since, now),
+    ctx.db.prepare(`SELECT g.id, g.title, g.count AS lifetime_count, g.first_seen, g.last_seen, NULL AS period_count,
       (SELECT COUNT(*) FROM app_event e WHERE e.tenant_id = g.tenant_id AND e.group_id = g.id AND e.at BETWEEN ? AND ?) AS period_samples
       FROM app_error_group g WHERE g.tenant_id = ? AND g.project_id = ? AND g.last_seen BETWEEN ? AND ? ORDER BY g.last_seen DESC, g.id DESC LIMIT 20`).bind(since, now, tenant, id, since, now),
     ctx.db.prepare("SELECT number, title, status FROM review WHERE tenant_id = ? AND project_id = ? AND updated_at BETWEEN ? AND ? ORDER BY updated_at DESC, number DESC LIMIT 20").bind(tenant, id, since, now),
     period("inbound_mail", "received_at", "AND verdict = 'admitted'"),
     ctx.db.prepare("SELECT COUNT(*) AS n FROM work_comment c JOIN work_item w ON w.id = c.item_id WHERE w.tenant_id = ? AND c.tenant_id = w.tenant_id AND w.project_id = ? AND c.created_at BETWEEN ? AND ?").bind(tenant, id, since, now),
-    ctx.db.prepare("SELECT summary, at FROM code_event WHERE tenant_id = ? AND project_id = ? AND kind = 'commit' AND at BETWEEN ? AND ? ORDER BY at DESC, ardi_id DESC LIMIT 10").bind(tenant, id, since, now),
+    ctx.db.prepare("SELECT summary, at, target FROM code_event WHERE tenant_id = ? AND project_id = ? AND kind = 'commit' AND at BETWEEN ? AND ? ORDER BY at DESC, ardi_id DESC LIMIT 10").bind(tenant, id, since, now),
     ctx.db.prepare(`SELECT
       (SELECT COUNT(*) FROM work_item WHERE tenant_id = ?1 AND project_id = ?2 AND created_at BETWEEN ?3 AND ?4) AS filed,
       (SELECT COUNT(*) FROM work_item WHERE tenant_id = ?1 AND project_id = ?2 AND closed_at BETWEEN ?3 AND ?4) AS finished,
@@ -84,7 +87,10 @@ export async function projectStatus(ctx: Ctx, slug: string, since: number): Prom
     filed: r<{ number: number; kind: WorkKind; title: string; by: string | null }>(filed).map((x) => ({ ref: `${p.slug}#${x.number}`, kind: x.kind, title: x.title, by: x.by })),
     finished: r<{ number: number; kind: WorkKind; title: string; state: string }>(finished).map((x) => ({ ref: `${p.slug}#${x.number}`, kind: x.kind, title: x.title, state: x.state })),
     doing: r<{ number: number; title: string; updated_at: number; owner: string | null }>(doing).map((x) => ({ ref: `${p.slug}#${x.number}`, title: x.title, owner: x.owner, stalled: now - x.updated_at > 7 * 86_400_000 })),
-    commits: { count: commitCount, by: r<{ who: string; n: number }>(byWho), recent: r(recent) },
+    commits: { count: commitCount, by: r<{ who: string; n: number }>(byWho), recent: r<{ summary: string; at: number; target: string | null }>(recent).map(c => {
+      const oid = c.target && /^[0-9a-f]{40}$/i.test(c.target) ? c.target.toLowerCase() : null;
+      return { summary: c.summary, at: c.at, oid, href: oid && p.code_links ? `/${encodeURIComponent(p.slug)}/code?c=${oid}` : null };
+    }) },
     deploys: r(deploys), errors: r(errors), reviews: r<{ number: number; title: string; status: string }>(reviews).map((x) => ({ ref: `${p.slug}!${x.number}`, title: x.title, status: x.status })),
     mail: r<{ n: number }>(mail)[0]!.n, comments: r<{ n: number }>(comments)[0]!.n,
   };
@@ -108,8 +114,9 @@ export function statusText(s: Status): string {
   lines.push(`- Finished or let go: ${s.totals.finished}. ${examples("finished", 8)} ${s.finished.slice(0, 8).map((f) => `${f.ref} ${cleanText(f.title)}`).join("; ")}`);
   lines.push(`- Under way now: ${s.totals.doing}. ${examples("doing", 50)} ${s.doing.map((d) => `${d.ref} ${cleanText(d.title)}${d.owner ? ` — ${cleanText(d.owner)}` : ""}${d.stalled ? " [stalled]" : ""}`).join("; ")}`);
   lines.push(`- Commits: ${s.commits.count}${s.commits.by.length ? ` (${s.commits.by.map((b) => `${cleanText(b.who)} ${b.n}`).join(", ")})` : ""}`);
-  lines.push(`- Deploys: ${s.totals.deploys}. ${examples("deploys", 5)} ${s.deploys.slice(0, 5).map((d) => cleanText(d.tag ?? d.script)).join(", ")}`);
-  lines.push(`- Error groups observed in period (including recurring): ${s.totals.errors}. ${examples("errors", 5)} ${s.errors.slice(0, 5).map((e) => `${cleanText(e.title)}: ${e.period_samples} retained period samples; ${e.lifetime_count} lifetime occurrences`).join("; ")}`);
+  lines.push(`- Recent recorded commits: ${statusExamples(s.commits.count, s.commits.recent.length)} ${s.commits.recent.map(c => `${c.href ? `${s.project}@${c.oid}` : c.oid ? `recorded target ${c.oid} (no supported code link)` : "no supported full target"}: ${cleanText(c.summary)}`).join("; ")}`);
+  lines.push(`- Deploys: ${s.totals.deploys}. ${examples("deploys", 5)} ${s.deploys.slice(0, 5).map(d => `${cleanText(d.id)} ${cleanText(d.tag ?? d.script)}`).join(", ")}`);
+  lines.push(`- Error groups observed in period (including recurring): ${s.totals.errors}. ${examples("errors", 5)} ${s.errors.slice(0, 5).map((e) => `${cleanText(e.id)} ${cleanText(e.title)}: ${e.period_samples} retained period samples; ${e.lifetime_count} lifetime occurrences`).join("; ")}`);
   lines.push(`- Reviews updated in period: ${s.totals.reviews}. ${examples("reviews", 20)} ${s.reviews.map((r) => `${r.ref} ${r.status}`).join(", ")}`);
   lines.push(`- Admitted mail received: ${s.mail}; comments on work: ${s.comments}`);
   return lines.join("\n");

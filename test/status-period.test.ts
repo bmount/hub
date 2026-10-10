@@ -2,8 +2,12 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { buildContext } from "../src/auth/context";
 import { createProject } from "../src/db/projects";
+import { createNamespace } from "../src/db/namespaces";
+import { oauthContext } from "../src/auth/context";
+import { liveGrant } from "../src/db/oauthGrants";
+import { callTool } from "../src/mcp/tools";
 import { projectStatus, projectStatusVerb, statusText, type Status } from "../src/verbs/status";
-import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
+import { apiPost, cookieHeaders, seedGrant, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
 const DAY = 86_400_000;
@@ -24,6 +28,67 @@ async function group(w: Awaited<ReturnType<typeof world>>, id: string, first: nu
   await env.HUB_DB.prepare("INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, title, last_message, count, first_seen, last_seen) VALUES (?, ?, ?, 'app', ?, 'error', ?, 'detail', ?, ?, ?)")
     .bind(id, w.t.id, w.p.id, id, id, count, first, last).run();
 }
+
+describe("project status evidence navigation", () => {
+  it("keeps record IDs and normalized full commit targets in API/MCP and opens safe inspector links", async () => {
+    const w = await world();
+    const sha = "A".repeat(40);
+    await env.HUB_DB.prepare("INSERT INTO code_event (tenant_id, project_id, ardi_id, kind, target, summary, at) VALUES (?, ?, 1, 'commit', ?, '<img src=x onerror=evil()>Commit', ?)").bind(w.t.id, w.p.id, sha, w.now - 1000).run();
+    await env.HUB_DB.prepare("INSERT INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, seen_at) VALUES ('deploy-A', ?, ?, 'app', 'runtime', '<script>deploy</script>', ?)").bind(w.t.id, w.p.id, w.now - 1000).run();
+    const gid = 'group?<x>"';
+    await group(w, gid, w.now - 1000, w.now - 1000);
+    const s = await projectStatus(w.ctx, "site", w.since);
+    expect(s.commits.recent).toEqual([{ summary: "<img src=x onerror=evil()>Commit", at: w.now - 1000, oid: sha.toLowerCase(), href: `/site/code?c=${sha.toLowerCase()}` }]);
+    expect(s.deploys[0]!.id).toBe("deploy-A");
+    expect(s.errors[0]!.id).toBe(gid);
+    const api = await apiPost(HOST, "project.status", { project: "site", since: new Date(w.since).toISOString() }, w.headers);
+    expect((await api.json() as { result: Status }).result.commits.recent).toEqual(s.commits.recent);
+    const { grant } = await seedGrant(w.t, w.h);
+    const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, w.now))!, ["read"], { now: w.now, ip: "203.0.113.1" });
+    const mcp = await callTool(ctx, "project_status", { project: "site", since: new Date(w.since).toISOString() });
+    expect(mcp.isError).not.toBe(true);
+    expect(mcp.structuredContent).toMatchObject({ deploys: s.deploys, errors: s.errors, commits: s.commits });
+    expect(JSON.stringify(mcp.content)).toContain(`site@${sha.toLowerCase()}`);
+    expect(JSON.stringify(mcp.content)).toContain("deploy-A");
+    const get = async () => (await SELF.fetch(`https://${HOST}/site/status`, { headers: w.headers })).text();
+    const page = await get();
+    expect(page).toContain(`href="/site/code?c=${sha.toLowerCase()}"`);
+    expect(page).toContain('href="/apps?d=deploy-A"');
+    expect(page).toContain(`href="/apps?g=${encodeURIComponent(gid)}"`);
+    expect(page).toContain("&lt;img src=x onerror=evil()&gt;Commit");
+    expect(page).toContain("&lt;script&gt;deploy&lt;/script&gt;");
+    expect(page).not.toContain('<img src=x');
+    expect(page).not.toContain("<script>deploy");
+    expect(page).toContain("zero records does not prove zero activity");
+    await env.HUB_DB.prepare("UPDATE app_error_group SET title = 'Changed recorded title' WHERE id = ?").bind(gid).run();
+    const refreshed = await get();
+    expect(refreshed).toContain("Changed recorded title");
+    expect(refreshed.match(/data-key="(status:[^"]*)"/)![1]).not.toBe(page.match(/data-key="(status:[^"]*)"/)![1]);
+  });
+
+  it("leaves missing, short and malformed targets inert and avoids code links for tracker/ambiguous histories", async () => {
+    const w = await world();
+    for (const [n, target] of [[1, null], [2, "a".repeat(7)], [3, "g".repeat(40)], [4, "a".repeat(40) + "\n"], [5, "b".repeat(40)]] as const) await env.HUB_DB.prepare("INSERT INTO code_event (tenant_id, project_id, ardi_id, kind, target, summary, at) VALUES (?, ?, ?, 'commit', ?, ?, ?)").bind(w.t.id, w.p.id, n, target, `Recorded ${n}`, w.now - 1000).run();
+    const read = () => projectStatus(w.ctx, "site", w.since);
+    const s = await read();
+    expect(s.commits.recent.map(c => c.oid)).toEqual(["b".repeat(40), null, null, null, null]);
+    expect(s.commits.recent.filter(c => c.href)).toHaveLength(1);
+    const page = await (await SELF.fetch(`https://${HOST}/site/status`, { headers: w.headers })).text();
+    expect(page).toContain(`href="/site/code?c=${"b".repeat(40)}"`);
+    expect(page).not.toContain(`href="/site/code?c=${"a".repeat(7)}"`);
+    await env.HUB_DB.prepare("UPDATE project SET kind = 'tracker' WHERE id = ?").bind(w.p.id).run();
+    expect((await read()).commits.recent.every(c => c.href === null)).toBe(true);
+    expect(statusText(await read())).toContain("no supported code link");
+    await env.HUB_DB.prepare("UPDATE project SET kind = 'repo', state = 'archived' WHERE id = ?").bind(w.p.id).run();
+    expect((await read()).commits.recent[0]!.href).not.toBeNull();
+    const ns = await createNamespace(env.HUB_DB, { tenant_id: w.t.id, slug: "team", display_name: "Team" }, w.now);
+    const other = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: ns.id, slug: "site", kind: "repo", display_name: "Other" }, w.now);
+    for (const state of ["active", "archived"]) {
+      await env.HUB_DB.prepare("UPDATE project SET state = ? WHERE id = ?").bind(state, other.id).run();
+      expect((await read()).commits.recent.every(c => c.href === null)).toBe(true);
+    }
+  });
+});
 
 describe("truthful project period status", () => {
   it("counts independently of 50/20/10 caps, discloses smaller MCP caps and renders totals in browser", async () => {
@@ -75,8 +140,8 @@ describe("truthful project period status", () => {
     const s = await projectStatus(w.ctx, "site", w.since);
     expect(s.totals.errors).toBe(2);
     expect(s.errors).toEqual([
-      { title: "new", lifetime_count: 2, period_count: null, period_samples: 0, first_seen: w.since, last_seen: w.now },
-      { title: "old-recurring", lifetime_count: 10000, period_count: null, period_samples: 2, first_seen: w.since - DAY, last_seen: w.now - 1 },
+      { id: "new", title: "new", lifetime_count: 2, period_count: null, period_samples: 0, first_seen: w.since, last_seen: w.now },
+      { id: "old-recurring", title: "old-recurring", lifetime_count: 10000, period_count: null, period_samples: 2, first_seen: w.since - DAY, last_seen: w.now - 1 },
     ]);
     expect(statusText(s)).toContain("2 retained period samples; 10000 lifetime occurrences");
     expect(s.examples.errors.truncated).toBe(false);

@@ -12,6 +12,12 @@
 - Example caps: 50 each for filed/finished/doing, 20 each for deploys/errors/reviews, 10 recent commits. `examples` contains `shown`, `limit` and `truncated` for each collection. MCP text uses smaller display caps (8 filed/finished, 5 deploys/errors), and discloses truncation at those actual caps. Browser headings show independent totals and describe displayed examples.
 - The existing example arrays and commit/mail/comment counts remain. Consumers must use `totals` and `examples` instead of interpreting array length as a total.
 
+## Evidence navigation
+
+Deploy and error examples retain their record `id`. Browser links open `/apps?d=<encoded-id>` and `/apps?g=<encoded-id>`; API/MCP callers can use `deploy_read` or `trace_read`. Recent commit examples retain a normalized full `oid` and `href` when supported. Missing, short or malformed mirrored targets give null fields, not guessed links. A full target remains visible but has no code link for trackers or ambiguous repository slugs, including archived duplicates. Archived unambiguous repository history remains linkable.
+
+Navigation does not establish destination existence, access, live deployment or causation; each destination checks its own access. MCP text carries recorded IDs and supported full references alongside the same totals and cap disclosures. The browser's status-list key reflects refreshed evidence, so a subsequent read does not retain stale example titles. No target fetching, model calls or writes are added to status reads.
+
 ## Errors: unknown occurrences, observed groups
 
 An old error group with `last_seen` in the period is included, even if its `first_seen` predates the period. `totals.errors` counts groups last observed in the period, not newly created groups. Ordering is latest observation, not lifetime popularity.
