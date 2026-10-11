@@ -15,7 +15,7 @@ export function reviewDraftStatement(ctx: Ctx, reference: string) {
     WHERE r.tenant_id = ? AND ${match ? "p.slug = ? AND r.number = ?" : "r.id = ?"}
       AND typeof(r.number) = 'integer' AND r.number BETWEEN 1 AND 99999999 AND NOT EXISTS
       (SELECT 1 FROM project other WHERE other.tenant_id = p.tenant_id AND other.slug = p.slug
-        AND other.kind <> 'channel' AND other.id <> p.id)`)
+        AND other.kind NOT IN ('channel', 'agent-src') AND other.id <> p.id)`)
     .bind(ctx.tenant!.id, ...(match ? [match[1], Number(match[2])] : [reference.trim()]));
 }
 
@@ -29,7 +29,7 @@ export function reviewWorkQuery(ctx: Ctx, review: { id: string; slug: string; nu
     FROM review r
     JOIN project rp ON rp.id = r.project_id AND rp.tenant_id = r.tenant_id AND rp.kind = 'repo'
     JOIN work_item w ON w.tenant_id = r.tenant_id
-    JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind <> 'channel'
+    JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
     WHERE r.id = ? AND r.tenant_id = ? AND typeof(w.number) = 'integer' AND w.number BETWEEN 1 AND 99999999 AND
       ((w.source_kind = 'url' AND w.source_ref = ?) OR EXISTS
         (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND

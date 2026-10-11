@@ -130,7 +130,7 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
       AND ${all("m.subject || ' ' || m.text || ' ' || m.from_email || ' ' || " + attachments, ts.length)} ORDER BY m.received_at DESC LIMIT ?`).bind(...access.bindings, ...ts.map(like), SOURCE_LIMITS.mail),
     ctx.db.prepare(`SELECT i.display_name, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active'
       AND ${all("i.display_name || ' ' || i.email", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.people),
-    ctx.db.prepare(`SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel' AND ${all("slug || ' ' || display_name", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.projects),
+    ctx.db.prepare(`SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND ${all("slug || ' ' || display_name", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.projects),
     ctx.db.prepare(`SELECT g.id, g.script_name, g.title, g.last_message, g.last_seen FROM app_error_group g WHERE g.tenant_id = ? AND ${all("g.title || ' ' || g.last_message || ' ' || g.script_name", ts.length)}
       ORDER BY g.last_seen DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.errors),
     ctx.db.prepare(`SELECT p.slug, r.number, r.title, r.updated_at, r.summary || ' ' || COALESCE((SELECT GROUP_CONCAT(c.body, ' ') FROM review_comment c WHERE c.review_id = r.id AND c.tenant_id = r.tenant_id), '') AS text

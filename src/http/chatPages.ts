@@ -225,7 +225,7 @@ export async function permalinkPage(request: Request, env: Env, msgId: string): 
     const related = await pc.ctx.db.prepare(`SELECT w.id, p.slug AS project, w.number, w.kind, w.state, w.title,
       CASE WHEN w.source_kind = 'message' AND w.source_ref = ? THEN 'filed' ELSE 'linked' END AS relationship
       FROM msg_index mi JOIN work_item w ON w.tenant_id = mi.tenant_id
-      JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind <> 'channel'
+      JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
       WHERE mi.msg_id = ? AND mi.tenant_id = ? AND mi.conversation_id = ? AND typeof(w.number) = 'integer' AND w.number BETWEEN 1 AND 99999999 AND
         ((w.source_kind = 'message' AND w.source_ref = ?) OR EXISTS
           (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND l.target_kind = 'message' AND l.target_ref = ?))

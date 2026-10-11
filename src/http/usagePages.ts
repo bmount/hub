@@ -43,7 +43,7 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
         CASE WHEN w.id IS NULL THEN NULL ELSE p.slug || '#' || w.number END AS ref
       FROM model_call m LEFT JOIN identity i ON i.id = m.identity_id
       LEFT JOIN work_item w ON w.id = m.work_item_id AND w.tenant_id = m.tenant_id AND w.project_id = m.project_id
-      LEFT JOIN project p ON p.id = w.project_id AND p.tenant_id = m.tenant_id AND p.kind <> 'channel'
+      LEFT JOIN project p ON p.id = w.project_id AND p.tenant_id = m.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
       WHERE m.tenant_id = ? AND m.created_at >= ? AND COALESCE(i.email, 'pimwell') = ?
         AND (? IS NULL OR (m.work_item_id = ? AND m.project_id = ?)) AND (? IS NULL OR m.project_id = ?)
       ORDER BY m.created_at DESC LIMIT 100`).bind(ctx.tenant.id, since, who ?? "", selectedWork?.id ?? null, selectedWork?.id ?? null, selectedWork?.project_id ?? null, selectedProject?.id ?? null, selectedProject?.id ?? null)]);

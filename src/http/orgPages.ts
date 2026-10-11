@@ -40,7 +40,7 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   const access = readableMail(ctx), eventAccess = readableMailEvents(ctx);
   const [projects, byKind, events, mail, people] = await ctx.db.batch([
     ctx.db.prepare(`SELECT p.slug, p.display_name, p.kind, (SELECT COUNT(*) FROM work_item w WHERE w.project_id = p.id AND w.state IN ('open','doing')) AS open_work,
-      (SELECT MAX(w.updated_at) FROM work_item w WHERE w.project_id = p.id) AS last_work FROM project p WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind <> 'channel' ORDER BY p.slug`).bind(t.id),
+      (SELECT MAX(w.updated_at) FROM work_item w WHERE w.project_id = p.id) AS last_work FROM project p WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind NOT IN ('channel', 'agent-src') ORDER BY p.slug`).bind(t.id),
     ctx.db.prepare("SELECT kind, COUNT(*) AS n FROM work_item WHERE tenant_id = ? AND state IN ('open','doing') GROUP BY kind").bind(t.id),
     ctx.db.prepare(`${EVENTS_SQL} WHERE e.tenant_id = ? AND ${eventAccess.sql} ORDER BY e.created_at DESC LIMIT 12`).bind(t.id, ...eventAccess.bindings),
     ctx.db.prepare(`SELECT m.id, m.subject, m.from_email, m.received_at, pr.slug AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id WHERE ${access.sql} AND m.verdict = 'admitted' ORDER BY m.received_at DESC LIMIT 5`).bind(...access.bindings),
@@ -77,7 +77,7 @@ export async function projectPage(request: Request, env: Env, slug: string): Pro
   const p = await ctx.db.prepare(`SELECT p.id, p.slug, p.display_name, p.kind, p.state,
       CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END AS usage_ref
     FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id
-    WHERE p.tenant_id = ? AND p.slug = ? AND p.kind <> 'channel'`).bind(t.id, slug)
+    WHERE p.tenant_id = ? AND p.slug = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(t.id, slug)
     .first<{ id: string; slug: string; display_name: string; kind: string; state: string; usage_ref: string | null }>();
   if (!p) return notFoundPage(extra);
   const eventAccess = readableMailEvents(ctx);

@@ -82,7 +82,7 @@ export function listWorkStatement(db: D1Database, tenant_id: string, f: WorkFilt
   if (f.parent_id) { where.push("w.parent_id = ?"); args.push(f.parent_id); }
   if (f.parent_number && f.project_id) { where.push("w.parent_id = (SELECT id FROM work_item WHERE project_id = ? AND number = ?)"); args.push(f.project_id, f.parent_number); }
   if (f.before) { where.push("w.updated_at < ?"); args.push(f.before); }
-  const join = withProject ? "JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind <> 'channel'" : "";
+  const join = withProject ? "JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')" : "";
   return db.prepare(`SELECT w.*${withProject ? ", p.slug AS project" : ""} FROM work_item w ${join} WHERE ${where.join(" AND ")} ORDER BY w.updated_at DESC, w.id DESC LIMIT ?`).bind(...args, f.limit);
 }
 

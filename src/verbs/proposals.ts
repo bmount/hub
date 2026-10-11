@@ -15,7 +15,7 @@ const END = { type: "string", description: "An item as project#number, or new:<k
 const EDGE = { type: "object", properties: { prerequisite: END, dependent: END }, required: ["prerequisite", "dependent"], additionalProperties: false };
 
 async function slugs(ctx: Ctx): Promise<Map<string, string>> {
-  const rows = (await ctx.db.prepare("SELECT id, slug FROM project WHERE tenant_id = ?").bind(ctx.tenant!.id).all<{ id: string; slug: string }>()).results;
+  const rows = (await ctx.db.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id).all<{ id: string; slug: string }>()).results;
   return new Map(rows.map((r) => [r.id, r.slug]));
 }
 

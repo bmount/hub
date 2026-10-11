@@ -137,7 +137,7 @@ export const mailProposeWork = defineVerb({
       tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, instructions: PROPOSE_INSTRUCTIONS, maxOutputTokens: 6000,
     });
     const { proposals, dropped } = parseProposals(answer.text, m.text);
-    const projects = (await ctx.db.prepare("SELECT slug FROM project WHERE tenant_id = ? AND state = 'active' AND kind <> 'channel' ORDER BY slug").bind(ctx.tenant!.id).all<{ slug: string }>()).results.map((r) => r.slug);
+    const projects = (await ctx.db.prepare("SELECT slug FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY slug").bind(ctx.tenant!.id).all<{ slug: string }>()).results.map((r) => r.slug);
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "mail.propose_work", target_kind: "inbound_mail", target_id: m.id, summary: `Proposed ${proposals.length} work items from mail: ${m.subject || "(no subject)"}`.slice(0, 300) }, ctx.now);
     return { mail_id: m.id, subject: m.subject, project: m.project, projects, proposals, dropped, model: `${answer.provider} ${answer.model}` };
   },

@@ -65,7 +65,7 @@ export const workSubscribe = defineVerb({
     let kind: "item" | "project"; let target: string; let label: string;
     const projectSlug = optString(i, "project", { max: 63 });
     if (projectSlug && !i.id) {
-      const p = await ctx.db.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel'").bind(ctx.tenant!.id, projectSlug.toLowerCase()).first<{ id: string; slug: string }>();
+      const p = await ctx.db.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, projectSlug.toLowerCase()).first<{ id: string; slug: string }>();
       if (!p) throw notFound("no such project");
       kind = "project"; target = p.id; label = p.slug;
     } else {

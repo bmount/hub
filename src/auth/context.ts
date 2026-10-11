@@ -209,7 +209,7 @@ function railStatement(db: D1Database, slug: string | null, live: string, tokenH
       project_rows AS (
         SELECT p.slug, p.display_name, COALESCE(c.open, 0) AS open
         FROM project p LEFT JOIN work_counts c ON c.project_id = p.id
-        WHERE p.tenant_id = (SELECT id FROM target) AND p.kind <> 'channel' AND p.state = 'active'
+        WHERE p.tenant_id = (SELECT id FROM target) AND p.kind NOT IN ('channel', 'agent-src') AND p.state = 'active'
         ORDER BY p.display_name, p.slug LIMIT 60
       )
       SELECT (SELECT json_group_array(json_object('slug', slug, 'display_name', display_name, 'open', open)) FROM project_rows) AS projects,

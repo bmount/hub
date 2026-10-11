@@ -33,7 +33,7 @@ export type Board = {
 export async function board(ctx: Ctx, project: string | null, actorId: string | null = null): Promise<Board> {
   // Counts and bounded examples share predicates and one D1 batch. Never infer totals
   // (especially old stalled items) from the globally newest-item sample.
-  const scope = "w.tenant_id = ? AND p.tenant_id = w.tenant_id AND p.kind <> 'channel' AND (? IS NULL OR p.slug = ?)";
+  const scope = "w.tenant_id = ? AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src') AND (? IS NULL OR p.slug = ?)";
   const visible = "(w.state IN ('open', 'doing') OR (w.state = 'done' AND w.closed_at > ?))";
   const args = [ctx.tenant!.id, project, project, ctx.now - DONE_WINDOW_MS];
   const [items, quests, counts, closers, closureGaps] = await ctx.db.batch([
@@ -46,14 +46,14 @@ export async function board(ctx: Ctx, project: string | null, actorId: string | 
     ctx.db.prepare(`WITH child_counts AS MATERIALIZED (
         SELECT c.parent_id, c.project_id, SUM(c.state = 'done') AS done, COUNT(*) AS total
         FROM work_item c JOIN project cp ON cp.id = c.project_id
-        WHERE c.tenant_id = ? AND cp.tenant_id = c.tenant_id AND cp.kind <> 'channel'
+        WHERE c.tenant_id = ? AND cp.tenant_id = c.tenant_id AND cp.kind NOT IN ('channel', 'agent-src')
           AND (? IS NULL OR cp.slug = ?) AND c.parent_id IS NOT NULL AND c.state <> 'dropped'
         GROUP BY c.parent_id, c.project_id
       )
       SELECT p.slug, q.number, q.title, q.state, COALESCE(c.done, 0) AS done, COALESCE(c.total, 0) AS total
       FROM work_item q JOIN project p ON p.id = q.project_id
       LEFT JOIN child_counts c ON c.parent_id = q.id AND c.project_id = q.project_id
-      WHERE q.tenant_id = ? AND p.tenant_id = q.tenant_id AND p.kind <> 'channel'
+      WHERE q.tenant_id = ? AND p.tenant_id = q.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
         AND (? IS NULL OR p.slug = ?) AND q.kind = 'quest' AND q.state IN ('open', 'doing') ORDER BY q.number, q.id`)
       .bind(ctx.tenant!.id, project, project, ctx.tenant!.id, project, project),
     ctx.db.prepare(`SELECT COALESCE(SUM(w.state = 'open'), 0) AS open,

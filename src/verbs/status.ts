@@ -37,7 +37,7 @@ export async function projectStatus(ctx: Ctx, slug: string, since: number): Prom
   const tenant = ctx.tenant!.id, now = ctx.now;
   const p = await ctx.db.prepare(`SELECT p.id, p.slug, CASE WHEN p.kind = 'repo' AND NOT EXISTS
     (SELECT 1 FROM project other WHERE other.tenant_id = p.tenant_id AND other.slug = p.slug AND other.kind = 'repo' AND other.id <> p.id)
-    THEN 1 ELSE 0 END AS code_links FROM project p WHERE p.tenant_id = ? AND p.slug = ? AND p.kind <> 'channel'`)
+    THEN 1 ELSE 0 END AS code_links FROM project p WHERE p.tenant_id = ? AND p.slug = ? AND p.kind NOT IN ('channel', 'agent-src')`)
     .bind(tenant, slug.toLowerCase()).first<{ id: string; slug: string; code_links: number }>();
   if (!p) throw notFound("no such project");
   const id = p.id;

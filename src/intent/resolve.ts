@@ -27,7 +27,7 @@ const SHOW: Record<string, { verb: string; page: string; title: string }> = {
 type WorkRow = { project: string; number: number; title: string; kind: string; state: string };
 function showHtml(what: string, result: unknown, verbName: string): string {
   if (what === "projects") {
-    const ps = (result as { projects: Array<{ slug: string; display_name: string; path: string; kind: string }> }).projects.filter((x) => x.kind !== "channel");
+    const ps = (result as { projects: Array<{ slug: string; display_name: string; path: string; kind: string }> }).projects.filter((x) => x.kind !== "channel" && x.kind !== "agent-src");
     return ps.length ? `<ul class="hits">${ps.map((x) => `<li><a href="/${esc(x.slug)}/docket">${esc(x.display_name)}</a> <small>${esc(x.path)}</small></li>`).join("")}</ul>` : `<p class="lede">No projects yet.</p>`;
   }
   if (verbName === "work.list") {
@@ -83,7 +83,7 @@ export async function resolve(ctx: Ctx, intent: Intent): Promise<Outcome> {
   const p = intent.params, say = intent.say;
   const str = (k: string) => (typeof p[k] === "string" ? (p[k] as string) : "");
   const [projR, peopleR] = await ctx.db.batch([
-    ctx.db.prepare("SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND state = 'active' AND kind <> 'channel' ORDER BY display_name").bind(ctx.tenant!.id),
+    ctx.db.prepare("SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name").bind(ctx.tenant!.id),
     ctx.db.prepare(`SELECT i.display_name AS name, i.email FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' ORDER BY i.display_name`).bind(ctx.tenant!.id),
   ]);
   const projects = projR!.results as Project[], people = peopleR!.results as Person[];

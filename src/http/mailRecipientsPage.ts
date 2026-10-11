@@ -26,7 +26,7 @@ export async function mailRecipientsPage(request: Request, env: Env): Promise<Re
   try { config = await responseRecipients(ctx, address); }
   catch (e) { if (e instanceof HubError && e.reason === "not_found") return notFoundPage(extra); throw e; }
   const [projectsR, choicesR] = await ctx.db.batch([
-    ctx.db.prepare("SELECT slug, display_name FROM project WHERE tenant_id = ? AND state = 'active' AND kind <> 'channel' ORDER BY display_name, id").bind(ctx.tenant.id),
+    ctx.db.prepare("SELECT slug, display_name FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name, id").bind(ctx.tenant.id),
     ctx.db.prepare(`SELECT i.id, i.display_name, i.email FROM identity i JOIN membership m ON m.identity_id = i.id
       WHERE m.tenant_id = ? AND m.state = 'active' AND m.role IN ('member', 'admin')
         AND i.kind = 'human' AND i.state = 'active' ORDER BY i.display_name, i.id LIMIT ?`).bind(ctx.tenant.id, MAX_CHOICES + 1),

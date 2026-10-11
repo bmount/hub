@@ -170,7 +170,7 @@ export const mailSend = defineVerb({
       from = ctx.identity!.email;
     } else {
       if (!p.from_project) throw badRequest("people send from a project's address: give from_project");
-      const pr = await ctx.db.prepare("SELECT slug FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel' AND state = 'active'").bind(ctx.tenant!.id, p.from_project.toLowerCase()).first<{ slug: string }>();
+      const pr = await ctx.db.prepare("SELECT slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active'").bind(ctx.tenant!.id, p.from_project.toLowerCase()).first<{ slug: string }>();
       if (!pr) throw notFound("no such project");
       from = `${ctx.tenant!.slug}.${pr.slug}@${ctx.env.HUB_DOMAIN}`;
     }

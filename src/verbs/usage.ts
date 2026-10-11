@@ -103,7 +103,7 @@ export async function resolveUsageWork(ctx: Ctx, reference: string | null): Prom
   if (reference.length > 80) throw badRequest("work is too long");
   const item = await itemRef(ctx, { id: reference });
   const work = await ctx.db.prepare(`SELECT w.id, w.project_id, p.slug || '#' || w.number AS ref
-    FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind <> 'channel'
+    FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
     WHERE w.id = ? AND w.tenant_id = ?`).bind(item.id, ctx.tenant!.id).first<UsageWork>();
   if (!work) throw notFound("no such work item");
   return work;
@@ -120,7 +120,7 @@ export async function resolveUsageProject(ctx: Ctx, reference: string | null, wo
   if (parts.length > 2 || parts.some(p => !isValidSlug(p))) throw notFound("no such project");
   const project = await ctx.db.prepare(`SELECT p.id, CASE WHEN n.id IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END AS ref
     FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id
-    WHERE p.tenant_id = ? AND p.kind <> 'channel' AND p.slug = ?
+    WHERE p.tenant_id = ? AND p.kind NOT IN ('channel', 'agent-src') AND p.slug = ?
       AND ((? IS NULL AND p.namespace_id IS NULL) OR n.slug = ?)`)
     .bind(ctx.tenant!.id, slug, namespace, namespace).first<UsageProject>();
   if (!project) throw notFound("no such project");
@@ -145,7 +145,7 @@ export function usageQueries(db: D1Database, tenant_id: string, since: number, i
         CASE WHEN p.id IS NULL THEN NULL ELSE p.slug || '#' || w.number END AS ref, ${cols}
       FROM model_call m
       LEFT JOIN work_item w ON w.id = m.work_item_id AND w.tenant_id = m.tenant_id AND w.project_id = m.project_id
-      LEFT JOIN project p ON p.id = w.project_id AND p.tenant_id = m.tenant_id AND p.kind <> 'channel'
+      LEFT JOIN project p ON p.id = w.project_id AND p.tenant_id = m.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
       WHERE ${where} GROUP BY key ORDER BY cost_micros DESC, calls DESC, key LIMIT ${WORK_GROUP_LIMIT + 1}`).bind(...args),
   };
 }

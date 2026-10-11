@@ -31,7 +31,7 @@ export async function appsPage(request: Request, env: Env): Promise<Response> {
   if (did !== null && (!did || did.length > 40 || params.has("g"))) return notFoundPage(extra);
   const [appsR, groupsR, oneR, eventsR, deploysR, relatedR, allDeploysR, selectedDeployR] = await ctx.db.batch([
     appsStatement(ctx.db, ctx.tenant.id, ctx.now),
-    ctx.db.prepare(`SELECT g.id, p.slug AS project, g.script_name, g.kind, g.title, g.last_message, g.count, g.first_seen, g.last_seen, g.last_version FROM app_error_group g JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind <> 'channel'
+    ctx.db.prepare(`SELECT g.id, p.slug AS project, g.script_name, g.kind, g.title, g.last_message, g.count, g.first_seen, g.last_seen, g.last_version FROM app_error_group g JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
       WHERE g.tenant_id = ? AND g.last_seen >= ? ORDER BY g.last_seen DESC LIMIT 100`).bind(ctx.tenant.id, ctx.now - 7 * 86_400_000),
     traceGroupStatement(ctx, gid),
     ctx.db.prepare("SELECT e.at, e.method, e.path, e.status, e.ray FROM app_event e JOIN app_error_group g ON g.id = e.group_id AND g.tenant_id = e.tenant_id WHERE g.id = ? AND g.tenant_id = ? ORDER BY e.at DESC LIMIT 20").bind(gid, ctx.tenant.id),

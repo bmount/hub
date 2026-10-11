@@ -4,15 +4,17 @@ import { getSessionByToken, touchSession } from "../db/sessions";
 import { getIdentityById } from "../db/identities";
 import { getMembership } from "../db/memberships";
 import { getTenantBySlug } from "../db/tenants";
-import type { Identity, Session, Tenant } from "../db/types";
+import type { Identity, Role, Session, Tenant } from "../db/types";
 
 export type GitGrant = {
   identity: Identity; session: Session; tenant: Tenant;
   project: { id: string; slug: string }; write: boolean; refPrefixes?: string[];
 };
 
-/** Check live credentials even if a storage token was cached for an earlier request. */
-export async function authorizeGit(env: Env, authorization: string | null, tenantSlug: string, repo: string, now = Date.now()): Promise<GitGrant | null> {
+export type GitCaller = { identity: Identity; session: Session; tenant: Tenant; role: Role };
+
+/** Who is calling, from a git session or agent run token, with an agent capped at its operator's role. Live checks every time. */
+export async function gitCaller(env: Env, authorization: string | null, tenantSlug: string, now = Date.now()): Promise<GitCaller | null> {
   if (!authorization || authorization.length > 512 || !/^Basic [A-Za-z0-9+/]+=*$/i.test(authorization)) return null;
   let decoded: string;
   try { decoded = atob(authorization.slice(6)); } catch { return null; }
@@ -34,6 +36,14 @@ export async function authorizeGit(env: Env, authorization: string | null, tenan
     if (rank(sponsorRole) < rank(role)) role = sponsorRole;
     if (rank(role) > rank("member")) role = "member";
   }
+  return { identity, session, tenant, role };
+}
+
+/** Check live credentials even if a storage token was cached for an earlier request. */
+export async function authorizeGit(env: Env, authorization: string | null, tenantSlug: string, repo: string, now = Date.now()): Promise<GitGrant | null> {
+  const caller = await gitCaller(env, authorization, tenantSlug, now);
+  if (!caller) return null;
+  const { identity, session, tenant, role } = caller;
   const project = await env.HUB_DB.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'")
     .bind(tenant.id, repo).first<{ id: string; slug: string }>();
   if (!project) return null;

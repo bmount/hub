@@ -23,7 +23,7 @@ async function resolveNamespace(ctx: Ctx, slug: string | null): Promise<Namespac
 async function setState(ctx: Ctx, nsSlug: string | null, slug: string, state: State, verb: string) {
   const project = await getProjectByPath(ctx.db, ctx.tenant!.id, nsSlug, slug);
   // Channels are managed only through channel.* (ruling C-2).
-  if (!project || project.kind === "channel") throw notFound("no such project");
+  if (!project || project.kind === "channel" || project.kind === "agent-src") throw notFound("no such project");
   if (project.state === state) throw conflict(`project already ${state}`);
   await setProjectState(ctx.db, ctx.tenant!.id, project.id, state);
   const path = nsSlug ? `${nsSlug}/${slug}` : slug;

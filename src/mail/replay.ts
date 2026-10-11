@@ -31,7 +31,7 @@ const ELIGIBLE = `EXISTS (SELECT 1 FROM identity i JOIN tenant t ON t.id = ?
       ON am.identity_id = a.id AND am.tenant_id = t.id AND am.state = 'active'
       WHERE a.id = ? AND a.kind = 'agent' AND a.state = 'active' AND a.email = ?)
     WHEN ? IS NOT NULL THEN EXISTS (SELECT 1 FROM project p
-      WHERE p.id = ? AND p.tenant_id = t.id AND p.state = 'active' AND p.kind <> 'channel'
+      WHERE p.id = ? AND p.tenant_id = t.id AND p.state = 'active' AND p.kind NOT IN ('channel', 'agent-src')
         AND ? = t.slug || '.' || p.slug || '@' || ?)
     ELSE ? = t.slug || '@' || ? END)`;
 const LEGACY = `EXISTS (SELECT 1 FROM inbound_mail

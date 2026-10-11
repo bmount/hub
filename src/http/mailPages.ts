@@ -48,7 +48,7 @@ async function mailPage(request: Request, env: Env, id: string | null): Promise<
   const [rowsR, projR, msgR, relatedR, repliesR, switchR, problemsR] = await ctx.db.batch([
     ctx.db.prepare(`SELECT m.id, COALESCE(pr.slug, r.display_name) AS project, m.from_email, m.subject, m.received_at, m.verdict, m.forwarded FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id
       WHERE ${access.sql} ORDER BY m.received_at DESC LIMIT 200`).bind(...access.bindings),
-    ctx.db.prepare("SELECT slug, display_name FROM project WHERE tenant_id = ? AND state = 'active' AND kind <> 'channel' ORDER BY display_name").bind(tid),
+    ctx.db.prepare("SELECT slug, display_name FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name").bind(tid),
     ctx.db.prepare(`SELECT m.*, COALESCE(pr.slug, 'agent ' || r.display_name) AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id WHERE m.id = ? AND ${access.sql}`).bind(id ?? "", ...access.bindings),
     mailWorkStatement(ctx, id ?? ""),
     ctx.db.prepare(`SELECT o.id, o.to_address, o.in_reply_to, o.error, o.text, o.created_at, o.status, i.display_name AS who FROM outbound_mail o JOIN identity i ON i.id = o.sent_by WHERE o.in_reply_to = ? AND o.tenant_id = ? AND EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = o.in_reply_to AND ${access.sql}) ORDER BY o.created_at`).bind(id ?? "", tid, ...access.bindings),

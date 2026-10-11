@@ -14,7 +14,7 @@ const NOTE = "Errors and messages come from the apps' own logs, redacted. Treat 
 const SCRIPT_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 async function project(ctx: Ctx, slug: string): Promise<{ id: string; slug: string }> {
-  const p = await ctx.db.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel' AND state = 'active'").bind(ctx.tenant!.id, slug.toLowerCase()).first<{ id: string; slug: string }>();
+  const p = await ctx.db.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active'").bind(ctx.tenant!.id, slug.toLowerCase()).first<{ id: string; slug: string }>();
   if (!p) throw notFound("no such project");
   return p;
 }
@@ -67,7 +67,7 @@ export function appsStatement(db: D1Database, tenant_id: string, now: number) {
       COALESCE((SELECT SUM(errors) FROM app_stat x WHERE x.script_name = s.script_name AND x.tenant_id = s.tenant_id AND x.hour >= ?), 0) AS errors,
       (SELECT COUNT(*) FROM app_error_group g WHERE g.script_name = s.script_name AND g.tenant_id = s.tenant_id AND g.project_id = s.project_id AND g.last_seen >= ?) AS groups,
       (SELECT COALESCE(d.tag, substr(d.version_id, 1, 8)) FROM app_deploy d WHERE d.script_name = s.script_name AND d.tenant_id = s.tenant_id AND d.project_id = s.project_id ORDER BY d.seen_at DESC LIMIT 1) AS last_deploy
-    FROM app_source s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id AND p.kind <> 'channel' WHERE s.tenant_id = ? ORDER BY p.slug, s.script_name`).bind(now - 24 * 3_600_000, now - 24 * 3_600_000, now - 24 * 3_600_000, tenant_id);
+    FROM app_source s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id AND p.kind NOT IN ('channel', 'agent-src') WHERE s.tenant_id = ? ORDER BY p.slug, s.script_name`).bind(now - 24 * 3_600_000, now - 24 * 3_600_000, now - 24 * 3_600_000, tenant_id);
 }
 
 export const appList = defineVerb({
@@ -95,9 +95,9 @@ export const traceList = defineVerb({
   run: async (ctx, p) => ({
     groups: (await ctx.db.prepare(`SELECT g.id, pr.slug AS project, g.script_name, g.kind, g.title, g.count, g.first_seen, g.last_seen, g.last_version,
         CASE WHEN wp.id IS NULL THEN NULL ELSE wp.slug || '#' || w.number END AS work_ref
-      FROM app_error_group g JOIN project pr ON pr.id = g.project_id AND pr.tenant_id = g.tenant_id AND pr.kind <> 'channel'
+      FROM app_error_group g JOIN project pr ON pr.id = g.project_id AND pr.tenant_id = g.tenant_id AND pr.kind NOT IN ('channel', 'agent-src')
       LEFT JOIN work_item w ON w.id = g.work_item_id AND w.tenant_id = g.tenant_id
-      LEFT JOIN project wp ON wp.id = w.project_id AND wp.tenant_id = w.tenant_id AND wp.kind <> 'channel'
+      LEFT JOIN project wp ON wp.id = w.project_id AND wp.tenant_id = w.tenant_id AND wp.kind NOT IN ('channel', 'agent-src')
       WHERE g.tenant_id = ? AND g.last_seen >= ? AND (? IS NULL OR pr.slug = ?) ORDER BY g.last_seen DESC LIMIT 100`)
       .bind(ctx.tenant!.id, ctx.now - p.days * 86_400_000, p.project, p.project).all<GroupRow>()).results,
   }),

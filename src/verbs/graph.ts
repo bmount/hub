@@ -107,7 +107,7 @@ export const workGraph = defineVerb({
         upstream: closure(c.g.edges, item.id, "up").map(c.refOf), downstream: closure(c.g.edges, item.id, "down").map(c.refOf),
       };
     }
-    const projectId = p.project ? (await ctx.db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ?").bind(ctx.tenant!.id, p.project.trim().toLowerCase()).first<{ id: string }>())?.id : null;
+    const projectId = p.project ? (await ctx.db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, p.project.trim().toLowerCase()).first<{ id: string }>())?.id : null;
     if (p.project && !projectId) throw badRequest("no such project");
     const openIds = new Set(c.g.nodes.filter((n) => (n.state === "open" || n.state === "doing") && (!projectId || n.project_id === projectId)).map((n) => n.id));
     for (const e of c.g.edges) if (openIds.has(e.dependent_id)) openIds.add(e.prereq_id);
@@ -139,7 +139,7 @@ export const workFrontier = defineVerb({
   parse: (i) => ({ project: optString(i, "project", { max: 63 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 20 }),
   run: async (ctx, p): Promise<FrontierResult> => {
     const c = await graphContext(ctx);
-    const projectId = p.project ? (await ctx.db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ?").bind(ctx.tenant!.id, p.project.trim().toLowerCase()).first<{ id: string }>())?.id : null;
+    const projectId = p.project ? (await ctx.db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, p.project.trim().toLowerCase()).first<{ id: string }>())?.id : null;
     if (p.project && !projectId) throw badRequest("no such project");
     // Only work can be started: quests, sparks and calls never appear on the frontier.
     const inScope = (id: string) => EXECUTABLE.has(c.byId.get(id)!.kind) && (!projectId || c.byId.get(id)!.project_id === projectId);

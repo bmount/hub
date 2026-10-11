@@ -7,7 +7,7 @@ const KINDS = new Set(["repo", "tracker"]);
 
 /** Built-in pages on an organization's host. A project page lives at /<project>, so a project may not take these names. */
 export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
-  "admin", "api", "apps", "archive", "assistant", "assets", "attention", "auth", "board", "c", "docket", "healthz", "inbox", "internal", "invite", "login", "logout", "m", "mail",
+  "admin", "agent-src", "api", "apps", "archive", "assistant", "assets", "attention", "auth", "board", "c", "docket", "healthz", "inbox", "internal", "invite", "login", "logout", "m", "mail",
   "mcp", "me", "jump", "new", "oauth", "people", "planned", "playground", "privacy", "projects", "reviews", "search", "settings", "setup", "signed-out", "situations", "skills", "static", "terms", "usage", "well-known",
 ]);
 
@@ -56,7 +56,7 @@ export function getProjectById(db: D1Database, tenant_id: string, id: string): P
 
 export function getProjectByPath(db: D1Database, tenant_id: string, namespace_slug: string | null, slug: string): Promise<Project | null> {
   if (namespace_slug === null) {
-    return db.prepare("SELECT * FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = ?").bind(tenant_id, slug).first<Project>();
+    return db.prepare("SELECT * FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = ? AND kind <> 'agent-src'").bind(tenant_id, slug).first<Project>();
   }
   return db.prepare(
     "SELECT p.* FROM project p JOIN namespace n ON n.id = p.namespace_id WHERE p.tenant_id = ? AND n.slug = ? AND p.slug = ?",
@@ -64,7 +64,7 @@ export function getProjectByPath(db: D1Database, tenant_id: string, namespace_sl
 }
 
 export async function listProjects(db: D1Database, tenant_id: string, state: State): Promise<Project[]> {
-  const r = await db.prepare("SELECT * FROM project WHERE tenant_id = ? AND state = ? AND kind <> 'channel' ORDER BY namespace_id, slug").bind(tenant_id, state).all<Project>();
+  const r = await db.prepare("SELECT * FROM project WHERE tenant_id = ? AND state = ? AND kind NOT IN ('channel', 'agent-src') ORDER BY namespace_id, slug").bind(tenant_id, state).all<Project>();
   return r.results;
 }
 

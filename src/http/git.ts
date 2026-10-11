@@ -2,14 +2,13 @@ import type { Env } from "../env";
 import { classifyHost } from "../tenant";
 import { getTenantBySlug } from "../db/tenants";
 import { notFoundPage } from "./pages";
-import { artifactGit } from "./artifactGit";
+import { GIT_PATH, artifactGit } from "./artifactGit";
 import { usesArtifacts } from "../code/gitBackend";
 
 /**
  * Git smart HTTP for one top-level repository, on the raw (undecoded) path (integration spec 3). Nested
  * `<namespace>/<repo>.git` waits until Ardi serves nested names; `.git` is required so no hub page is captured.
  */
-const GIT_PATH = /^\/[A-Za-z0-9][A-Za-z0-9._-]*\.git\/(?:info\/refs|git-upload-pack|git-receive-pack)$/;
 
 export function isGitPath(pathname: string): boolean {
   return GIT_PATH.test(pathname);
@@ -27,6 +26,8 @@ export async function forwardGit(request: Request, env: Env): Promise<Response |
   const tenant = await getTenantBySlug(env.HUB_DB, host.slug);
   if (!tenant || tenant.state !== "active") return notFoundPage();
   if (env.GIT_PROXY) return env.GIT_PROXY.fetch(request);
+  // An agent's own source is only ever on Artifacts.
+  if (url.pathname.startsWith("/agent-src/")) return env.GIT_BACKEND === "artifacts" ? artifactGit(request, env, tenant.slug) : notFoundPage();
   if (await usesArtifacts(env, tenant.slug, url.pathname.slice(1, url.pathname.indexOf(".git/")))) return artifactGit(request, env, tenant.slug);
   if (!env.ARDI) return new Response("git service unavailable\n", { status: 503, headers: { "content-type": "text/plain; charset=utf-8" } });
   // The original request, except the hub-wide session cookie, which Ardi never needs, and any `x-ardi-*` header.

@@ -36,7 +36,7 @@ const membersStatement = (ctx: Ctx) => ctx.db.prepare(
 const questsStatement = (ctx: Ctx, project_id: string) => ctx.db.prepare(
   "SELECT id, number, title FROM work_item WHERE project_id = ? AND kind = 'quest' AND state IN ('open', 'doing') ORDER BY number",
 ).bind(project_id);
-const projectsStatement = (ctx: Ctx) => ctx.db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel'").bind(ctx.tenant!.id);
+const projectsStatement = (ctx: Ctx) => ctx.db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id);
 
 async function tenantCtx(request: Request, env: Env) {
   const ctx = await buildContext(request, env);
@@ -48,7 +48,7 @@ async function tenantCtx(request: Request, env: Env) {
 async function projectCtx(request: Request, env: Env, slug: string) {
   const { ctx, extra, ok } = await tenantCtx(request, env);
   if (!ok) return { ctx, extra, project: null };
-  const project = await ctx.db.prepare("SELECT id, slug, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel'").bind(ctx.tenant!.id, slug)
+  const project = await ctx.db.prepare("SELECT id, slug, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, slug)
     .first<Project>();
   return { ctx, extra, project };
 }
@@ -323,7 +323,7 @@ export async function newWorkPage(request: Request, env: Env): Promise<Response>
     || reviewId !== null && (!reviewId || reviewId.length > 80)) return notFoundPage(extra);
   const f = readFilters(new URL("https://x/"), false);
   const [items, members, projects, sourceR] = await ctx.db.batch([listWorkStatement(ctx.db, ctx.tenant!.id, itemFilter(ctx, f, null)), membersStatement(ctx),
-    ctx.db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel' AND state = 'active' ORDER BY display_name").bind(ctx.tenant!.id),
+    ctx.db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active' ORDER BY display_name").bind(ctx.tenant!.id),
     ...(traceId !== null ? [traceDraftStatement(ctx, traceId)] : reviewId !== null ? [reviewDraftStatement(ctx, reviewId)] : [])]);
   const ps = projects!.results as Array<{ id: string; slug: string; display_name: string }>;
   type TraceSource = { id: string; project: string; script_name: string; title: string; last_message: string; count: number; last_version: string | null };
@@ -368,7 +368,7 @@ export async function jumpPage(request: Request, env: Env): Promise<Response> {
       ctx.db.prepare(`SELECT p.slug, w.number, w.title, w.kind FROM work_item w JOIN project p ON p.id = w.project_id
         WHERE w.tenant_id = ? AND w.owner_id = ? AND w.state IN ('open', 'doing') ORDER BY w.updated_at DESC LIMIT 4`).bind(tid, ctx.identity!.id),
       ctx.db.prepare(`SELECT p.slug, p.display_name, MAX(w.updated_at) AS last, SUM(w.state IN ('open', 'doing')) AS open FROM project p LEFT JOIN work_item w ON w.project_id = p.id
-        WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind <> 'channel' GROUP BY p.id ORDER BY last IS NULL, last DESC, p.display_name LIMIT 5`).bind(tid),
+        WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind NOT IN ('channel', 'agent-src') GROUP BY p.id ORDER BY last IS NULL, last DESC, p.display_name LIMIT 5`).bind(tid),
     ]);
     const needs = ctx.rail?.needs ?? 0;
     for (const [label, hint, href] of [
@@ -385,7 +385,7 @@ export async function jumpPage(request: Request, env: Env): Promise<Response> {
     const [refR, projR, workR, peopleR] = await ctx.db.batch([
       ctx.db.prepare(`SELECT p.slug, w.number, w.title FROM work_item w JOIN project p ON p.id = w.project_id WHERE w.tenant_id = ? AND p.slug = ? AND w.number = ?`)
         .bind(tid, ref?.[1]?.toLowerCase() ?? "", ref ? Number(ref[2]) : 0),
-      ctx.db.prepare(`SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind <> 'channel' AND (slug LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\') ORDER BY display_name LIMIT 5`).bind(tid, like, like),
+      ctx.db.prepare(`SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND (slug LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\') ORDER BY display_name LIMIT 5`).bind(tid, like, like),
       ctx.db.prepare(`SELECT p.slug, w.number, w.title, w.kind FROM work_item w JOIN project p ON p.id = w.project_id WHERE w.tenant_id = ? AND w.title LIKE ? ESCAPE '\\'
         ORDER BY w.state IN ('done', 'dropped'), w.updated_at DESC LIMIT 8`).bind(tid, like),
       ctx.db.prepare(`SELECT i.display_name, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active'

@@ -76,7 +76,7 @@ export async function createAgent(
       // Projects and agents share one name space per organization (mailboxes spec, amendment 2026-10-07 b); the check
       // is inside the insert, so a project created at the same moment cannot also win the name.
       db.prepare(`INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) SELECT ?, 'agent', ?, 0, ?, ?, 'active', ?
-        WHERE NOT EXISTS (SELECT 1 FROM project WHERE tenant_id = ? AND slug = ? AND kind <> 'channel')`)
+        WHERE NOT EXISTS (SELECT 1 FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src'))`)
         .bind(identity.id, display_name, email, input.operator_id, now, input.tenant.id, slug),
       db.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) SELECT ?, ?, ?, ?, 'active', ? WHERE EXISTS (SELECT 1 FROM identity WHERE id = ?)")
         .bind(membership.id, identity.id, input.tenant.id, input.role, now, identity.id),

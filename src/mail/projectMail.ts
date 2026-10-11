@@ -49,7 +49,7 @@ export async function resolveMailAddress(db: D1Database, hubDomain: string, to: 
   const t = await getTenantBySlug(db, orgSlug);
   if (!t || t.state !== "active") return null;
   if (projSlug === null) return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: null, project_slug: null, project_name: null };
-  const p = await db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND slug = ? AND state = 'active' AND kind <> 'channel'").bind(t.id, projSlug)
+  const p = await db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND slug = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src')").bind(t.id, projSlug)
     .first<{ id: string; slug: string; display_name: string }>();
   if (p) return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: p.id, project_slug: p.slug, project_name: p.display_name };
   const a = await db.prepare(`SELECT i.id, i.display_name FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ? AND m.state = 'active'

@@ -6,7 +6,7 @@ const SELECT = `SELECT d.id, p.slug AS project, d.script_name, d.version_id, d.t
   CASE WHEN p.kind = 'repo' AND NOT EXISTS
     (SELECT 1 FROM project other WHERE other.tenant_id = p.tenant_id AND other.slug = p.slug AND other.kind = 'repo' AND other.id <> p.id)
     THEN p.slug ELSE NULL END AS commit_project
-  FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind <> 'channel'`;
+  FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind NOT IN ('channel', 'agent-src')`;
 
 export function deployStatement(ctx: Ctx, id: string) {
   return ctx.db.prepare(`${SELECT} WHERE d.id = ? AND d.tenant_id = ?`).bind(id, ctx.tenant!.id);
@@ -33,9 +33,9 @@ export function deployWorkStatement(ctx: Ctx, row: DeployRow) {
       CASE WHEN w.source_kind = 'url' AND w.source_ref = ? THEN 'filed'
         WHEN EXISTS (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND l.target_kind = 'url' AND l.target_ref = ?) THEN 'linked'
         ELSE 'commit' END AS relationship
-    FROM app_deploy d JOIN project dp ON dp.id = d.project_id AND dp.tenant_id = d.tenant_id AND dp.kind <> 'channel'
+    FROM app_deploy d JOIN project dp ON dp.id = d.project_id AND dp.tenant_id = d.tenant_id AND dp.kind NOT IN ('channel', 'agent-src')
     JOIN work_item w ON w.tenant_id = d.tenant_id
-    JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind <> 'channel'
+    JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
     WHERE d.id = ? AND d.tenant_id = ? AND typeof(w.number) = 'integer' AND w.number BETWEEN 1 AND 99999999 AND
       ((w.source_kind = 'url' AND w.source_ref = ?) OR EXISTS
         (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND

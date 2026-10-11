@@ -31,7 +31,7 @@ export async function vocabulary(ctx: Ctx): Promise<Vocabulary> {
   const scope = t ? "= ?" : "IN (SELECT tenant_id FROM membership WHERE identity_id = ? AND state = 'active')";
   const key = t ? t.id : ctx.identity!.id;
   const [projR, peopleR, orgR] = await ctx.db.batch([
-    ctx.db.prepare(`SELECT slug, display_name AS name FROM project WHERE tenant_id ${scope} AND state = 'active' AND kind <> 'channel' ORDER BY display_name LIMIT 60`).bind(key),
+    ctx.db.prepare(`SELECT slug, display_name AS name FROM project WHERE tenant_id ${scope} AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name LIMIT 60`).bind(key),
     ctx.db.prepare(`SELECT DISTINCT i.display_name AS name, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id
       WHERE m.tenant_id ${scope} AND m.state = 'active' AND i.state = 'active' ORDER BY i.display_name LIMIT 100`).bind(key),
     ctx.db.prepare(`SELECT display_name AS name, slug FROM tenant WHERE id ${scope} AND state = 'active' ORDER BY display_name LIMIT 20`).bind(key),

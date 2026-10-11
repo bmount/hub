@@ -65,7 +65,7 @@ export async function sendNewcomerWelcome(env: Env, source: WelcomeSource, proof
       AND m.project_id IS ? AND m.recipient_id IS ?
       AND (m.recipient_id IS NOT NULL OR (m.project_id IS NULL AND m.to_address = t.slug || '@' || ?)
         OR EXISTS (SELECT 1 FROM project pr WHERE pr.id = m.project_id
-          AND pr.tenant_id = t.id AND pr.state = 'active' AND pr.kind <> 'channel'
+          AND pr.tenant_id = t.id AND pr.state = 'active' AND pr.kind NOT IN ('channel', 'agent-src')
           AND m.to_address = t.slug || '.' || pr.slug || '@' || ?))
       AND (m.recipient_id IS NULL OR EXISTS (SELECT 1 FROM identity a JOIN membership am ON am.identity_id = a.id
         WHERE a.id = m.recipient_id AND a.kind = 'agent' AND a.state = 'active' AND a.email = m.to_address

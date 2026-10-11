@@ -81,7 +81,7 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
           EXISTS (SELECT 1 FROM meta c WHERE c.key = ? AND c.value = ?)
           AND (m.project_id IS NULL AND EXISTS (SELECT 1 FROM tenant t WHERE t.id = m.tenant_id AND m.to_address = t.slug || '@' || ?)
             OR EXISTS (SELECT 1 FROM project pr JOIN tenant t ON t.id = pr.tenant_id
-              WHERE pr.id = m.project_id AND pr.tenant_id = m.tenant_id AND pr.state = 'active' AND pr.kind <> 'channel'
+              WHERE pr.id = m.project_id AND pr.tenant_id = m.tenant_id AND pr.state = 'active' AND pr.kind NOT IN ('channel', 'agent-src')
                 AND m.to_address = t.slug || '.' || pr.slug || '@' || ?))))
       ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE meta.value = ?`)
       .bind(key, value, ...e.bindings, e.row.project_id, e.row.identity_id, e.row.from_email, e.row.to_address, e.row.message_id,

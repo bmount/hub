@@ -68,7 +68,7 @@ export async function setResponseRecipients(ctx: Ctx, address: string, recipient
         AND EXISTS (SELECT 1 FROM identity actor WHERE actor.id = ? AND actor.kind = 'human' AND actor.state = 'active'
           AND (actor.is_root = 1 OR EXISTS (SELECT 1 FROM membership am WHERE am.identity_id = actor.id
             AND am.tenant_id = t.id AND am.state = 'active' AND am.role = 'admin')))
-        AND (? IS NULL OR EXISTS (SELECT 1 FROM project p WHERE p.id = ? AND p.tenant_id = t.id AND p.state = 'active' AND p.kind <> 'channel'))
+        AND (? IS NULL OR EXISTS (SELECT 1 FROM project p WHERE p.id = ? AND p.tenant_id = t.id AND p.state = 'active' AND p.kind NOT IN ('channel', 'agent-src')))
         AND (SELECT COUNT(*) FROM identity i JOIN membership m ON m.identity_id = i.id
           WHERE m.tenant_id = t.id AND m.state = 'active' AND m.role IN ('member', 'admin')
             AND i.kind = 'human' AND i.state = 'active' AND i.id IN (SELECT value FROM json_each(?))) = ?
