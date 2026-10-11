@@ -13,7 +13,7 @@ Parents (`parent`, the quest an item belongs to) and links (`work.link`) are inf
 | `work.update` `{…, priority, estimate}` | Priority 0 (urgent) to 3 (low), default 2. Estimate in hours. |
 | `work.resources` `{id, resources}` | What the item needs while under way, e.g. `"prod-db, replica:shared"`. Exclusive unless marked `:shared`. |
 | `work.graph` `{id}` or `{project}` | For one item: what it waits on and what waits on it, direct and all the way. Otherwise: the open items in dependency order. |
-| `work.frontier` `{project, limit}` | What can start now, best first, with counts of what is blocked, claimed or waiting for a resource. Also lists work stuck behind dropped items. |
+| `work.frontier` `{project, limit}` | Snags, errands and wishes that can start now, best first, with counts of what is blocked, claimed or waiting for a resource. Also lists work stuck behind dropped items. |
 | `work.claim` / `work.release` | Take an item for an hour (claim again to renew) / hand it back to open. |
 | `work.delete` `{id, confirm}` | Delete an item for good. `confirm` repeats its `project#number`. |
 

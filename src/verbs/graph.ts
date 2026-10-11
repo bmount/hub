@@ -120,9 +120,11 @@ type GraphResult =
   | { item: View; prerequisites: View[]; dependents: View[]; upstream: string[]; downstream: string[] }
   | { items: View[]; edges: Array<{ prerequisite: string; dependent: string }> };
 
+const EXECUTABLE = new Set(["snag", "errand", "wish"]);
+
 export const workFrontier = defineVerb({
   name: "work.frontier", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "What can be started now, best first (priority, then the longest chain of open work behind it, then how much waits on it, then the shortest), with counts of what is blocked, claimed or waiting for a resource.",
+  summary: "Snags, errands and wishes that can be started now (quests, sparks and calls are goals, ideas and decisions, not work), best first (priority, then the longest chain of open work behind it, then how much waits on it, then the shortest), with counts of what is blocked, claimed or waiting for a resource.",
   mcp: {
     scope: "read", destructive: false, title: "Execution frontier",
     input: { type: "object", properties: { project: { type: "string", description: "Only this project." }, limit: { type: "integer", minimum: 1, maximum: 100, description: "Default 20." } }, additionalProperties: false },
@@ -138,7 +140,8 @@ export const workFrontier = defineVerb({
     const c = await graphContext(ctx);
     const projectId = p.project ? (await ctx.db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ?").bind(ctx.tenant!.id, p.project.trim().toLowerCase()).first<{ id: string }>())?.id : null;
     if (p.project && !projectId) throw badRequest("no such project");
-    const inScope = (id: string) => !projectId || c.byId.get(id)!.project_id === projectId;
+    // Only work can be started: quests, sparks and calls never appear on the frontier.
+    const inScope = (id: string) => EXECUTABLE.has(c.byId.get(id)!.kind) && (!projectId || c.byId.get(id)!.project_id === projectId);
     const counts = { ready: 0, blocked: 0, claimed: 0, conflict: 0 };
     for (const [id, r] of c.ready) if (r.status !== "closed" && inScope(id)) counts[r.status]++;
     const ranked = rankReady(c.g.nodes, c.g.edges, c.ready).filter((r) => inScope(r.id));

@@ -181,6 +181,7 @@ describe("work graph acceptance", () => {
     const low = await w.file("Low", { priority: 3 });
     const base = await w.file("Base", { estimate: 4 });
     await w.file("Top", { estimate: 2, after: [base.ref] });
+    await w.ok(await w.call.pat("work.create", { project: "site", kind: "quest", title: "A goal, not work" }));
     const gone = await w.file("Abandoned idea");
     await w.file("Needs the idea", { after: gone.ref });
     await w.ok(await w.call.pat("work.update", { id: gone.ref, state: "dropped" }));
@@ -188,7 +189,7 @@ describe("work graph acceptance", () => {
     expect(f.ready.map((x) => x.ref)).toEqual([base.ref, low.ref]);
     expect(f.ready[0]).toMatchObject({ critical: 6, downstream: 1 });
     expect(f.counts).toEqual({ ready: 2, blocked: 2, claimed: 0, conflict: 0 });
-    expect(f.stuck.map((x) => x.ref)).toEqual(["site#5"]);
+    expect(f.stuck.map((x) => x.ref)).toEqual(["site#6"]);
     const order = await w.ok<{ items: Array<{ ref: string }> }>(await w.call.pat("work.graph", { project: "site" }));
     expect(order.items.map((x) => x.ref).indexOf(base.ref)).toBeLessThan(order.items.map((x) => x.ref).indexOf("site#3"));
   });

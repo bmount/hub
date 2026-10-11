@@ -7,7 +7,7 @@ import { eventStatement } from "../db/events";
 import { findCycle, type Edge, type GraphNode, type Resource } from "./graph";
 import type { WorkItem } from "../db/work";
 
-export type GraphItem = GraphNode & { ref: string; title: string; project_id: string; owner_email: string | null };
+export type GraphItem = GraphNode & { kind: string; ref: string; title: string; project_id: string; owner_email: string | null };
 export type Graph = { rev: number; nodes: GraphItem[]; edges: Edge[]; resources: Resource[] };
 export type Actor = { tenant_id: string; identity_id: string; session_id: string | null };
 
@@ -17,7 +17,7 @@ const MAX_ATTEMPTS = 4;
 export function graphStatements(db: D1Database, tenant_id: string): D1PreparedStatement[] {
   return [
     db.prepare("SELECT COALESCE(MAX(rev), 0) AS rev FROM work_graph_rev WHERE tenant_id = ?").bind(tenant_id),
-    db.prepare(`SELECT w.id, w.state, w.owner_id, w.lease_until, w.priority, w.estimate, w.created_at, w.title, w.project_id, p.slug || '#' || w.number AS ref, o.email AS owner_email
+    db.prepare(`SELECT w.id, w.kind, w.state, w.owner_id, w.lease_until, w.priority, w.estimate, w.created_at, w.title, w.project_id, p.slug || '#' || w.number AS ref, o.email AS owner_email
       FROM work_item w JOIN project p ON p.id = w.project_id LEFT JOIN identity o ON o.id = w.owner_id WHERE w.tenant_id = ?`).bind(tenant_id),
     db.prepare("SELECT prereq_id, dependent_id FROM work_dep WHERE tenant_id = ?").bind(tenant_id),
     db.prepare("SELECT item_id, name, mode FROM work_resource WHERE tenant_id = ?").bind(tenant_id),
