@@ -26,7 +26,9 @@ export async function artifactGit(request: Request, env: Env, tenant: string): P
     const info = await api.info(namespace, grant.project.slug);
     if (info.description !== repoOwnership(grant.tenant.id, grant.project.id)) throw new HubError(503, "unavailable", "repository migration is not ready");
     if (write && info.read_only) return new Response("repository is read-only\n", { status: 403 });
-    if (tail === "git-receive-pack") return await artifactPush(request, env, grant, api);
+    if (tail === "git-receive-pack") return await artifactPush(request, env, grant, api, agentSrc
+      ? async () => { const again = await agentSrcGrant(env, request.headers.get("authorization"), tenant, repo); return typeof again === "string" ? null : again; }
+      : undefined);
     const upstream = await api.git(namespace, grant.project.slug, tail, request, request.body, write);
     if (!upstream.ok) throw new HubError(502, "unavailable", "Git storage is temporarily unavailable");
     const headers = new Headers({ "cache-control": "no-store" });

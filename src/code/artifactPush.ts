@@ -61,7 +61,9 @@ function statusResponse(outcomes: RefOutcome[], capabilities: string[]): Respons
 }
 
 /** Stage the pack using native Git, prove allowed changes, then replay it to the published repo using Git's old-OID checks. */
-export async function artifactPush(request: Request, env: Env, grant: GitGrant, api: ArtifactsRest): Promise<Response> {
+export async function artifactPush(request: Request, env: Env, grant: GitGrant, api: ArtifactsRest,
+  // Access is checked again before publishing, by the same rule that granted it (project repo or agent source).
+  reauthorize: () => Promise<GitGrant | null> = () => authorizeGit(env, request.headers.get("authorization"), grant.tenant.slug, grant.project.slug)): Promise<Response> {
   if (!env.GIT_PUSH_STAGING) throw new HubError(503, "unavailable", "Git push validation storage is not configured");
   if (!request.body) throw new HubError(400, "bad_request", "push body required");
   if (request.headers.get("content-encoding") && request.headers.get("content-encoding") !== "identity")
@@ -113,7 +115,7 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
       return statusResponse(outcomes, capabilities);
     }
     // Revocation during staging must prevent publishing, without exposing the storage credential.
-    const current = await authorizeGit(env, request.headers.get("authorization"), grant.tenant.slug, repo);
+    const current = await reauthorize();
     if (!current?.write || updates.some(update => !refAllowed(update.ref, current.refPrefixes)))
       throw new HubError(403, "forbidden", "Git access ended before publishing");
     const outcomes: RefOutcome[] = updates.map(update => ({ ...update, outcome: "ng", reason: refused.get(update.ref) }));
