@@ -19,6 +19,20 @@ Parents (`parent`, the quest an item belongs to) and links (`work.link`) are inf
 
 `work.read` and `work.list` show each item's readiness too.
 
+## Proposals
+
+An agent (or person) that finds new work or a missing prerequisite while on an item proposes it instead of editing the live graph:
+
+| Verb | What it does |
+|---|---|
+| `work.propose` `{for, reason, new_items, add, remove}` | Record a proposed change. `add` and `remove` are `{prerequisite, dependent}` pairs. Either end can be `project#number` or `new:<key>`, one of the proposal's own new items. The proposal is checked against the graph when it is filed. |
+| `work.proposals` `{state}` | Pending proposals by default. `work.frontier` also shows how many are waiting. |
+| `work.review` `{id, decision, note}` | Approve or reject. Any member except the proposer can decide. |
+
+Nothing in the live graph changes until approval. Approval rechecks the proposal against the graph as it is then, and refuses (changing nothing) if it now makes a cycle or refers to a deleted item. It then creates the new items, applies the dependency changes and records the decision in one batch (`src/work/proposals.ts`).
+
+Items created this way are filed by the approver, who decided the work should exist; the proposer and reason become the item's source. Each proposal has at most one decision: a second reviewer's decision is refused. Proposals never edit an item's description.
+
 ## Readiness
 
 Lifecycle state (open, doing, done, dropped) is what people and agents set. Readiness is computed from the graph whenever it is read, so it is never stale:
@@ -57,4 +71,4 @@ The activity log keeps a `work.delete` event with the item's reference and title
 
 ## Audit
 
-Graph changes record `work.depend`, `work.undepend`, `work.resources` and `work.delete` events, each in the same batch as the change. Claims and releases record `work.claim` and `work.release`.
+Graph changes record `work.depend`, `work.undepend`, `work.resources`, `work.delete`, `work.propose`, `work.approve` and `work.reject` events, each in the same batch as the change. Claims and releases record `work.claim` and `work.release`.

@@ -61,34 +61,44 @@ export type DepChange = { add: Edge[]; remove: Edge[] };
 export async function changeDeps(db: D1Database, actor: Actor, change: DepChange, now: number): Promise<{ added: Edge[]; removed: Edge[] }> {
   let result = { added: [] as Edge[], removed: [] as Edge[] };
   await commitGraphEdit(db, actor.tenant_id, now, (g) => {
-    const known = new Map(g.nodes.map((n) => [n.id, n])), key = (e: Edge) => `${e.prereq_id}>${e.dependent_id}`;
-    for (const e of [...change.add, ...change.remove]) {
-      if (!known.has(e.prereq_id) || !known.has(e.dependent_id)) throw badRequest("both items must exist in this organization");
-      if (e.prereq_id === e.dependent_id) throw badRequest("an item cannot depend on itself");
-    }
-    const current = new Set(g.edges.map(key)), dropping = new Set(change.remove.map(key));
-    const added = change.add.filter((e, i) => !current.has(key(e)) && !dropping.has(key(e)) && change.add.findIndex((x) => key(x) === key(e)) === i);
-    const removed = change.remove.filter((e) => current.has(key(e)));
-    const next = [...g.edges.filter((e) => !dropping.has(key(e))), ...added];
-    const cycle = findCycle(next);
-    if (cycle) throw badRequest(`that would make a dependency cycle: ${cycle.map((id) => known.get(id)!.ref).join(" → ")}; nothing was changed`);
-    result = { added, removed };
-    const ref = (id: string) => known.get(id)!.ref;
-    const event = (kind: string, e: Edge, summary: string) => eventStatement(db, { ...actorFields(actor), kind, target_kind: "work_item", target_id: e.dependent_id, summary }, now);
-    return [
-      ...added.flatMap((e) => [
-        db.prepare("INSERT INTO work_dep (tenant_id, prereq_id, dependent_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)").bind(actor.tenant_id, e.prereq_id, e.dependent_id, actor.identity_id, now),
-        event("work.depend", e, `${ref(e.dependent_id)} now waits on ${ref(e.prereq_id)}`),
-      ]),
-      ...removed.flatMap((e) => [
-        db.prepare("DELETE FROM work_dep WHERE prereq_id = ? AND dependent_id = ?").bind(e.prereq_id, e.dependent_id),
-        event("work.undepend", e, `${ref(e.dependent_id)} no longer waits on ${ref(e.prereq_id)}`),
-      ]),
-      // Stale snapshots of a dependent (an agent about to claim it) must not survive a change to what it waits on.
-      ...[...new Set([...added, ...removed].map((e) => e.dependent_id))].map((id) => db.prepare("UPDATE work_item SET updated_at = MAX(updated_at + 1, ?) WHERE id = ?").bind(now, id)),
-    ];
+    const planned = depStatements(db, actor, g, change, new Map(), now);
+    result = { added: planned.added, removed: planned.removed };
+    return planned.statements;
   });
   return result;
+}
+
+/**
+ * Validate a dependency change against graph `g` (plus items about to be created in the same batch, by id → ref)
+ * and return the statements that apply it. Throws, changing nothing, on unknown items, self-dependencies or cycles.
+ */
+export function depStatements(db: D1Database, actor: Actor, g: Graph, change: DepChange, creating: Map<string, string>, now: number): { statements: D1PreparedStatement[]; added: Edge[]; removed: Edge[] } {
+  const known = new Map(g.nodes.map((n) => [n.id, n.ref]));
+  for (const [id, r] of creating) known.set(id, r);
+  const key = (e: Edge) => `${e.prereq_id}>${e.dependent_id}`;
+  for (const e of [...change.add, ...change.remove]) {
+    if (!known.has(e.prereq_id) || !known.has(e.dependent_id)) throw badRequest("that change refers to an item that does not exist in this organization; nothing was changed");
+    if (e.prereq_id === e.dependent_id) throw badRequest("an item cannot depend on itself");
+  }
+  const current = new Set(g.edges.map(key)), dropping = new Set(change.remove.map(key));
+  const added = change.add.filter((e, i) => !current.has(key(e)) && !dropping.has(key(e)) && change.add.findIndex((x) => key(x) === key(e)) === i);
+  const removed = change.remove.filter((e) => current.has(key(e)));
+  const cycle = findCycle([...g.edges.filter((e) => !dropping.has(key(e))), ...added]);
+  if (cycle) throw badRequest(`that would make a dependency cycle: ${cycle.map((id) => known.get(id)!).join(" → ")}; nothing was changed`);
+  const ref = (id: string) => known.get(id)!;
+  const event = (kind: string, e: Edge, summary: string) => eventStatement(db, { ...actorFields(actor), kind, target_kind: "work_item", target_id: e.dependent_id, summary }, now);
+  return { added, removed, statements: [
+    ...added.flatMap((e) => [
+      db.prepare("INSERT INTO work_dep (tenant_id, prereq_id, dependent_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)").bind(actor.tenant_id, e.prereq_id, e.dependent_id, actor.identity_id, now),
+      event("work.depend", e, `${ref(e.dependent_id)} now waits on ${ref(e.prereq_id)}`),
+    ]),
+    ...removed.flatMap((e) => [
+      db.prepare("DELETE FROM work_dep WHERE prereq_id = ? AND dependent_id = ?").bind(e.prereq_id, e.dependent_id),
+      event("work.undepend", e, `${ref(e.dependent_id)} no longer waits on ${ref(e.prereq_id)}`),
+    ]),
+    // Stale snapshots of a dependent (an agent about to claim it) must not survive a change to what it waits on.
+    ...[...new Set([...added, ...removed].map((e) => e.dependent_id))].map((id) => db.prepare("UPDATE work_item SET updated_at = MAX(updated_at + 1, ?) WHERE id = ?").bind(now, id)),
+  ] };
 }
 
 /** Replace the resources an item needs while under way. */
@@ -119,6 +129,7 @@ export async function deleteWork(db: D1Database, actor: Actor, item: WorkItem, r
       db.prepare("UPDATE work_comment SET reply_to = NULL WHERE item_id = ?").bind(item.id),
       db.prepare("DELETE FROM work_comment WHERE item_id = ?").bind(item.id),
       db.prepare("DELETE FROM attention WHERE item_id = ?").bind(item.id),
+      db.prepare("UPDATE work_proposal SET item_id = NULL WHERE item_id = ?").bind(item.id),
       db.prepare("UPDATE work_item SET parent_id = NULL, updated_at = MAX(updated_at + 1, ?) WHERE parent_id = ?").bind(now, item.id),
       db.prepare("UPDATE model_call SET work_item_id = NULL WHERE work_item_id = ?").bind(item.id),
       db.prepare("UPDATE app_error_group SET work_item_id = NULL WHERE work_item_id = ?").bind(item.id),

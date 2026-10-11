@@ -225,3 +225,67 @@ describe("work graph acceptance", () => {
     expect(kinds).toEqual(expect.arrayContaining(["work.depend", "work.undepend", "work.resources", "work.claim", "work.release"]));
   });
 });
+
+describe("proposed graph changes", () => {
+  type Shown = { id: string; state: string; changes: string[]; created: string[] };
+  const proposeNewPrereq = (w: Awaited<ReturnType<typeof world>>, target: string) => w.call.pat("work.propose", {
+    for: target, reason: "Found while on it: the schema has to change first",
+    new_items: [{ key: "schema", kind: "errand", title: "Change the schema", body: "Done when: migrated.", priority: 1, estimate: 2 }],
+    add: [{ prerequisite: "new:schema", dependent: target }],
+  });
+
+  it("leaves the live graph and a running claim alone until another member approves, then applies it all at once", async () => {
+    const w = await world();
+    const target = await w.file("Feature under way");
+    await w.ok(await w.call.sam("work.claim", { id: target.ref }));
+    const before = { deps: await w.deps(), items: (await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_item").first<{ n: number }>())!.n };
+    const proposed = await w.ok<Shown>(await proposeNewPrereq(w, target.ref));
+    expect(proposed.state).toBe("pending");
+    expect(proposed.changes).toEqual(["new:schema — new errand in site: Change the schema", `${target.ref} waits on new:schema`]);
+    expect(await w.deps()).toEqual(before.deps);
+    expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_item").first<{ n: number }>())!.n).toBe(before.items);
+    expect((await w.readiness(target.ref)).status).toBe("claimed");
+    const frontier = await w.ok<{ proposals_pending: number }>(await w.call.pat("work.frontier", {}));
+    expect(frontier.proposals_pending).toBe(1);
+
+    expect((await w.call.pat("work.review", { id: proposed.id, decision: "approve" })).status).toBe(403);
+    const approved = await w.ok<Shown>(await w.call.sam("work.review", { id: proposed.id, decision: "approve", note: "yes" }));
+    expect(approved.state).toBe("approved");
+    expect(approved.created).toEqual(["new:schema = site#2"]);
+    const made = await env.HUB_DB.prepare("SELECT * FROM work_item WHERE number = 2").first<{ created_by: string; priority: number; estimate: number; source_quote: string }>();
+    expect(made).toMatchObject({ created_by: w.sam.identity.id, priority: 1, estimate: 2 });
+    expect(made!.source_quote).toContain("Proposed by pat@example.com");
+    expect(await w.readiness(target.ref)).toEqual({ status: "blocked", waiting_on: ["site#2"], claimed: true });
+    expect((await w.call.sam("work.review", { id: proposed.id, decision: "reject" })).status).toBe(409);
+    const pending = await w.ok<{ proposals: Shown[] }>(await w.call.pat("work.proposals", {}));
+    expect(pending.proposals).toEqual([]);
+  });
+
+  it("refuses an approval that would now form a cycle, changing nothing; the proposal stays pending", async () => {
+    const w = await world();
+    const [a, b] = [await w.file("A"), await w.file("B")];
+    const proposed = await w.ok<Shown>(await w.call.pat("work.propose", { reason: "b first", add: [{ prerequisite: b.ref, dependent: a.ref }] }));
+    await w.ok(await w.call.sam("work.depend", { id: b.ref, on: a.ref }));
+    const before = await w.deps();
+    const refused = await w.call.sam("work.review", { id: proposed.id, decision: "approve" });
+    expect(refused.status).toBe(400);
+    expect(await refused.text()).toContain("dependency cycle");
+    expect(await w.deps()).toEqual(before);
+    expect((await w.ok<{ proposals: Shown[] }>(await w.call.pat("work.proposals", {}))).proposals.map((p) => p.id)).toEqual([proposed.id]);
+    await w.ok(await w.call.sam("work.review", { id: proposed.id, decision: "reject", note: "superseded" }));
+  });
+
+  it("checks a proposal when it is filed, and again against deleted items when it is approved", async () => {
+    const w = await world();
+    const [a, b] = [await w.file("A"), await w.file("B")];
+    await w.ok(await w.call.pat("work.depend", { id: b.ref, on: a.ref }));
+    expect((await w.call.pat("work.propose", { reason: "loop", add: [{ prerequisite: b.ref, dependent: a.ref }] })).status).toBe(400);
+    expect((await w.call.pat("work.propose", { reason: "typo", add: [{ prerequisite: "new:nope", dependent: a.ref }] })).status).toBe(400);
+    expect((await w.call.pat("work.propose", { reason: "empty" })).status).toBe(400);
+    const c = await w.file("C");
+    const proposed = await w.ok<Shown>(await w.call.pat("work.propose", { reason: "c before a", add: [{ prerequisite: c.ref, dependent: a.ref }] }));
+    await w.ok(await w.call.sam("work.delete", { id: c.ref, confirm: c.ref }));
+    expect((await w.call.sam("work.review", { id: proposed.id, decision: "approve" })).status).toBe(400);
+    expect(await w.deps()).toEqual([{ prereq_id: a.item.id, dependent_id: b.item.id }]);
+  });
+});

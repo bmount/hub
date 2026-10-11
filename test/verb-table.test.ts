@@ -73,6 +73,8 @@ const TABLE: Record<string, Decl> = {
   "work.depend": T("tenant", "member", null, { mcp: "write" }), "work.resources": T("tenant", "member", null, { mcp: "write" }),
   "work.release": T("tenant", "member", null, { mcp: "write" }), "work.delete": T("tenant", "member", null, { mcp: "write" }),
   "work.graph": T("tenant", "reader", null, { mcp: "read" }), "work.frontier": T("tenant", "reader", null, { mcp: "read" }),
+  "work.propose": T("tenant", "member", null, { mcp: "write" }), "work.review": T("tenant", "member", null, { mcp: "write" }),
+  "work.proposals": T("tenant", "reader", null, { mcp: "read" }),
   "skill.list": T("public", "public", null, { mcp: "read" }), "skill.read": T("public", "public", null, { mcp: "read" }),
   "capabilities": T("public", "public", null, { mcp: "read" }), "project.history": T("tenant", "reader", null, { mcp: "read" }),
   "provider.status": T("hub", "root", null), "provider.key_verify": T("hub", "root", null), "model.test": T("hub", "root", null),

@@ -81,9 +81,12 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `work_graph` | read | reader | no | Implemented | `id`, `project` |
 | `work_link` | write | member | no | Implemented | `id`, `note`, `number`, `project`, **`target_kind`**, **`target_ref`** |
 | `work_list` | read | reader | no | Implemented | `kind`, `limit`, `owner`, `project`, `state` |
+| `work_proposals` | read | reader | no | Implemented | `limit`, `state` |
+| `work_propose` | write | member | no | Implemented | `add`, `for`, `new_items`, **`reason`**, `remove` |
 | `work_read` | read | reader | no | Implemented | `id`, `number`, `project` |
 | `work_release` | write | member | no | Implemented | **`id`** |
 | `work_resources` | write | member | no | Implemented | **`id`**, **`resources`** |
+| `work_review` | write | member | no | Implemented | **`decision`**, **`id`**, `note` |
 | `work_search` | read | reader | no | Implemented | `project`, **`q`** |
 | `work_subscribe` | write | reader | no | Implemented | `follow`, `id`, `project` |
 | `work_update` | write | member | no | Implemented | `body`, `estimate`, `expected_updated_at`, `id`, `kind`, `number`, `owner`, `parent`, `priority`, `project`, `state`, `title` |

@@ -132,7 +132,8 @@ export const workFrontier = defineVerb({
       const x = r as FrontierResult;
       return [DATA_NOTE, NOTE, "", `**Ready now** (${x.counts.ready}; blocked ${x.counts.blocked}, claimed ${x.counts.claimed}, waiting for a resource ${x.counts.conflict}):`,
         ...x.ready.map((v) => `${line(v)} — ${v.critical}h chain, ${v.downstream} waiting on it`),
-        ...(x.stuck.length ? ["", "**Stuck behind dropped items** (remove the dependency or reopen the prerequisite):", ...x.stuck.map(line)] : [])].join("\n");
+        ...(x.stuck.length ? ["", "**Stuck behind dropped items** (remove the dependency or reopen the prerequisite):", ...x.stuck.map(line)] : []),
+        ...(x.proposals_pending ? ["", `${x.proposals_pending} proposed graph change${x.proposals_pending === 1 ? "" : "s"} waiting for review (work_proposals).`] : [])].join("\n");
     },
   },
   parse: (i) => ({ project: optString(i, "project", { max: 63 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 20 }),
@@ -146,10 +147,12 @@ export const workFrontier = defineVerb({
     for (const [id, r] of c.ready) if (r.status !== "closed" && inScope(id)) counts[r.status]++;
     const ranked = rankReady(c.g.nodes, c.g.edges, c.ready).filter((r) => inScope(r.id));
     const stuck = c.g.nodes.filter((n) => inScope(n.id)).filter((n) => { const r = c.ready.get(n.id); return r?.status === "blocked" && r.waiting_on.some((w) => c.byId.get(w)?.state === "dropped"); });
-    return { ready: ranked.slice(0, p.limit).map((r) => ({ ...c.view(c.byId.get(r.id)!), critical: r.critical, downstream: r.downstream })), counts, stuck: stuck.map(c.view) };
+    const pending = await ctx.db.prepare("SELECT COUNT(*) AS n FROM work_proposal p LEFT JOIN work_proposal_decision d ON d.proposal_id = p.id WHERE p.tenant_id = ? AND d.proposal_id IS NULL")
+      .bind(ctx.tenant!.id).first<{ n: number }>();
+    return { ready: ranked.slice(0, p.limit).map((r) => ({ ...c.view(c.byId.get(r.id)!), critical: r.critical, downstream: r.downstream })), counts, stuck: stuck.map(c.view), proposals_pending: pending?.n ?? 0 };
   },
 });
-type FrontierResult = { ready: Array<View & { critical: number; downstream: number }>; counts: { ready: number; blocked: number; claimed: number; conflict: number }; stuck: View[] };
+type FrontierResult = { ready: Array<View & { critical: number; downstream: number }>; counts: { ready: number; blocked: number; claimed: number; conflict: number }; stuck: View[]; proposals_pending: number };
 
 export const workRelease = defineVerb({
   name: "work.release", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
