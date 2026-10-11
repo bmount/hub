@@ -74,13 +74,19 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `work_bulk_update` | write | member | no | Implemented | **`ids`**, `kind`, `owner`, `parent`, `state` |
 | `work_claim` | write | member | no | Implemented | `expected_updated_at`, `id`, `number`, `project` |
 | `work_comment` | write | member | no | Implemented | **`body`**, **`id`**, `reply_to` |
-| `work_create` | write | member | no | Implemented | `body`, **`kind`**, `owner`, `parent`, **`project`**, `source_at`, `source_kind`, `source_quote`, `source_ref`, `state`, **`title`** |
+| `work_create` | write | member | no | Implemented | `after`, `body`, `estimate`, **`kind`**, `owner`, `parent`, `priority`, **`project`**, `source_at`, `source_kind`, `source_quote`, `source_ref`, `state`, **`title`** |
+| `work_delete` | write | member | yes | Implemented | **`confirm`**, **`id`** |
+| `work_depend` | write | member | no | Implemented | **`id`**, `on`, `remove` |
+| `work_frontier` | read | reader | no | Implemented | `limit`, `project` |
+| `work_graph` | read | reader | no | Implemented | `id`, `project` |
 | `work_link` | write | member | no | Implemented | `id`, `note`, `number`, `project`, **`target_kind`**, **`target_ref`** |
 | `work_list` | read | reader | no | Implemented | `kind`, `limit`, `owner`, `project`, `state` |
 | `work_read` | read | reader | no | Implemented | `id`, `number`, `project` |
+| `work_release` | write | member | no | Implemented | **`id`** |
+| `work_resources` | write | member | no | Implemented | **`id`**, **`resources`** |
 | `work_search` | read | reader | no | Implemented | `project`, **`q`** |
 | `work_subscribe` | write | reader | no | Implemented | `follow`, `id`, `project` |
-| `work_update` | write | member | no | Implemented | `body`, `expected_updated_at`, `id`, `kind`, `number`, `owner`, `parent`, `project`, `state`, `title` |
+| `work_update` | write | member | no | Implemented | `body`, `estimate`, `expected_updated_at`, `id`, `kind`, `number`, `owner`, `parent`, `priority`, `project`, `state`, `title` |
 
 Destructive hints are client guidance, not authorization. Commands require the appropriate scope and current role; per-verb confirmation and runtime policy still apply. No tool can create credentials, change memberships or approve OAuth grants through MCP.
 

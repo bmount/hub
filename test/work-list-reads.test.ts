@@ -35,7 +35,7 @@ describe("joined work-list project references", () => {
       expect(i.ref).toBe(`${i.project}#1`); expect(i.project).toBe(`p${i.id.slice(4)}`);
       expect(i.tenant_id).toBe(w.t.id); expect(i.created_by).toBe(w.h.identity.id);
     }
-    expect(w.meter).toMatchObject({ trips: 1, statements: 1 });
+    expect(w.meter).toMatchObject({ trips: 1, statements: 5 }); // the list and the graph reads for readiness, one round trip
     expect(workList.mcp!.render!(r)).toContain("p0#1");
   });
 
@@ -47,7 +47,7 @@ describe("joined work-list project references", () => {
     await row(w, p2.id, "other-project", 1, "done", "spark");
     const r = await workList.run(w.ctx, workList.parse({ project: "site", state: "done", kind: "idea", owner: "me", limit: 1 }));
     expect(r.items.map(i => i.ref)).toEqual(["site#1"]);
-    expect(w.meter).toMatchObject({ trips: 2, statements: 2 }); // one project validation, one joined item query
+    expect(w.meter).toMatchObject({ trips: 2, statements: 6 }); // project validation, then the joined list with the graph reads
     const filtered = await listWorkWithProjects(env.HUB_DB, w.t.id, { project_id: p.id, states: [], owner_email: " READER@EXAMPLE.COM ", before: w.now, limit: 50 });
     expect(filtered.map(i => i.id)).toEqual(["mine"]);
   });
@@ -64,7 +64,7 @@ describe("joined work-list project references", () => {
     const r = await workList.run(w.ctx, workList.parse({ limit: 1 }));
     expect(r.items.map(i => i.ref)).toEqual(["site#1"]);
     expect(JSON.stringify(r)).not.toContain("secret");
-    expect(w.meter).toMatchObject({ trips: 1, statements: 1 });
+    expect(w.meter).toMatchObject({ trips: 1, statements: 5 }); // the list and the graph reads for readiness, one round trip
   });
 
   it("retains parent-id and project-local parent-number filtering in the shared statement", async () => {

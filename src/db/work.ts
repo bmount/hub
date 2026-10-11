@@ -8,7 +8,7 @@ import type { WorkKind, WorkState } from "../work/names";
 
 export type WorkItem = {
   id: string; tenant_id: string; project_id: string; number: number; kind: WorkKind; title: string; body: string; state: WorkState;
-  owner_id: string | null; lease_until: number | null; parent_id: string | null;
+  owner_id: string | null; lease_until: number | null; parent_id: string | null; priority: number; estimate: number | null;
   source_kind: string | null; source_ref: string | null; source_quote: string | null; source_at: number | null;
   created_by: string; created_at: number; updated_at: number; closed_at: number | null;
 };
@@ -30,7 +30,7 @@ export async function createWork(
   db: D1Database,
   input: {
     tenant_id: string; project_id: string; kind: WorkKind; title: string; body: string; created_by: string;
-    state?: WorkState; owner_id?: string | null; parent_id?: string | null;
+    state?: WorkState; owner_id?: string | null; parent_id?: string | null; priority?: number; estimate?: number | null;
     source_kind?: string | null; source_ref?: string | null; source_quote?: string | null; source_at?: number | null; created_at?: number;
   },
   now: number, closureActor?: ClosureActor,
@@ -45,9 +45,9 @@ export async function createWork(
   const created = input.created_at ?? now;
   const state = input.state ?? "open";
   const insert = db.prepare(
-    `INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, owner_id, parent_id, source_kind, source_ref, source_quote, source_at, created_by, created_at, updated_at, closed_at)
-     SELECT ?, ?, ?, COALESCE(MAX(number), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM work_item WHERE project_id = ?`,
-  ).bind(id, input.tenant_id, input.project_id, input.kind, title, input.body.trim(), state, input.owner_id ?? null, input.parent_id ?? null,
+    `INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, owner_id, parent_id, priority, estimate, source_kind, source_ref, source_quote, source_at, created_by, created_at, updated_at, closed_at)
+     SELECT ?, ?, ?, COALESCE(MAX(number), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM work_item WHERE project_id = ?`,
+  ).bind(id, input.tenant_id, input.project_id, input.kind, title, input.body.trim(), state, input.owner_id ?? null, input.parent_id ?? null, input.priority ?? 2, input.estimate ?? null,
     input.source_kind ?? null, input.source_ref ?? null, input.source_quote ?? null, input.source_at ?? null, input.created_by, created, now,
     state === "done" || state === "dropped" ? now : null, input.project_id);
   if (state === "done" && closureActor) await db.batch([insert, doneEventStatement(db, { id, tenant_id: input.tenant_id }, closureActor, now)]);
@@ -107,7 +107,7 @@ function snapshotPredicate(item: WorkItem): { sql: string; args: Array<string | 
 
 export async function updateWork(
   db: D1Database, item: WorkItem,
-  ch: { title?: string; body?: string; kind?: WorkKind; state?: WorkState; owner_id?: string | null; parent_id?: string | null },
+  ch: { title?: string; body?: string; kind?: WorkKind; state?: WorkState; owner_id?: string | null; parent_id?: string | null; priority?: number; estimate?: number | null },
   now: number, closureActor?: ClosureActor,
 ): Promise<WorkItem> {
   const next = { ...item, ...Object.fromEntries(Object.entries(ch).filter(([, v]) => v !== undefined)) } as WorkItem;
@@ -119,8 +119,8 @@ export async function updateWork(
   const lease = next.state === "doing" && next.owner_id === item.owner_id ? item.lease_until : null;
   const updated_at = Math.max(now, item.updated_at + 1);
   const snapshot = snapshotPredicate(item);
-  const write = db.prepare(`UPDATE work_item SET title = ?, body = ?, kind = ?, state = ?, owner_id = ?, parent_id = ?, lease_until = ?, closed_at = ?, updated_at = ? WHERE ${snapshot.sql}`)
-    .bind(next.title.trim(), next.body, next.kind, next.state, next.owner_id, next.parent_id, lease, closed_at, updated_at, ...snapshot.args);
+  const write = db.prepare(`UPDATE work_item SET title = ?, body = ?, kind = ?, state = ?, owner_id = ?, parent_id = ?, priority = ?, estimate = ?, lease_until = ?, closed_at = ?, updated_at = ? WHERE ${snapshot.sql}`)
+    .bind(next.title.trim(), next.body, next.kind, next.state, next.owner_id, next.parent_id, next.priority, next.estimate, lease, closed_at, updated_at, ...snapshot.args);
   const r = next.state === "done" && item.state !== "done" && closureActor
     ? (await db.batch([write, doneEventStatement(db, item, closureActor, now)]))[0]!
     : await write.run();
@@ -128,17 +128,54 @@ export async function updateWork(
   return { ...next, title: next.title.trim(), lease_until: lease, closed_at, updated_at };
 }
 
-/** Claim an item: owner and "under way" with a one-hour lease. Refused while someone else's lease is live. */
+/**
+ * Claim an item: owner and "under way" with a one-hour lease; claim again to renew. One statement decides it, so two
+ * claimers cannot both win. It is refused while someone else's lease is live, while a hard prerequisite is not done
+ * (including one added a moment ago), and while another live claim holds a resource this item needs exclusively or
+ * holds exclusively one it needs (docs/ops/work-graph.md).
+ */
 export async function claimWork(db: D1Database, item: WorkItem, identity_id: string, now: number): Promise<WorkItem> {
   if (item.state === "done" || item.state === "dropped") throw conflict("that item is closed");
   const snapshot = snapshotPredicate(item);
   const updated_at = Math.max(now, item.updated_at + 1);
   const r = await db.prepare(
     `UPDATE work_item SET owner_id = ?, state = 'doing', lease_until = ?, closed_at = NULL, updated_at = ? WHERE ${snapshot.sql}
-     AND state IN ('open', 'doing') AND (owner_id IS NULL OR owner_id = ? OR lease_until IS NULL OR lease_until < ?)`,
-  ).bind(identity_id, now + LEASE_MS, updated_at, ...snapshot.args, identity_id, now).run();
-  if (r.meta.changes !== 1) throw conflict("that item changed or has another live claim; read it again before retrying your claim");
+     AND state IN ('open', 'doing') AND (owner_id IS NULL OR owner_id = ? OR lease_until IS NULL OR lease_until < ?)
+     AND NOT EXISTS (${WAITING_SQL}) AND NOT EXISTS (${CONFLICT_SQL})`,
+  ).bind(identity_id, now + LEASE_MS, updated_at, ...snapshot.args, identity_id, now, item.id, item.id, now).run();
+  if (r.meta.changes !== 1) throw conflict(await claimRefusal(db, item, identity_id, now));
   return { ...item, owner_id: identity_id, state: "doing", lease_until: now + LEASE_MS, closed_at: null, updated_at };
+}
+
+// Prerequisites of ?1 that are not done.
+const WAITING_SQL = `SELECT 1 FROM work_dep d JOIN work_item p ON p.id = d.prereq_id WHERE d.dependent_id = ? AND p.state <> 'done'`;
+// Other items with a live claim on a resource ?1 needs, where either side is exclusive (?2 = now).
+const CONFLICT_SQL = `SELECT 1 FROM work_resource mine JOIN work_resource other ON other.tenant_id = mine.tenant_id AND other.name = mine.name AND other.item_id <> mine.item_id
+  JOIN work_item o ON o.id = other.item_id WHERE mine.item_id = ? AND (mine.mode = 'exclusive' OR other.mode = 'exclusive')
+  AND o.state = 'doing' AND o.owner_id IS NOT NULL AND o.lease_until >= ?`;
+
+/** Why a claim was refused, in terms the claimer can act on. */
+async function claimRefusal(db: D1Database, item: WorkItem, identity_id: string, now: number): Promise<string> {
+  const refs = (sql: string, ...args: unknown[]) => db.prepare(sql).bind(...args).all<{ ref: string }>().then((r) => r.results.map((x) => x.ref));
+  const waiting = await refs(`SELECT p2.slug || '#' || p.number AS ref FROM work_dep d JOIN work_item p ON p.id = d.prereq_id JOIN project p2 ON p2.id = p.project_id
+    WHERE d.dependent_id = ? AND p.state <> 'done' ORDER BY ref`, item.id);
+  if (waiting.length) return `that item waits on ${waiting.join(", ")}, which ${waiting.length === 1 ? "is" : "are"} not done`;
+  const holders = await refs(`SELECT DISTINCT p2.slug || '#' || o.number AS ref FROM work_resource mine JOIN work_resource other ON other.tenant_id = mine.tenant_id AND other.name = mine.name AND other.item_id <> mine.item_id
+    JOIN work_item o ON o.id = other.item_id JOIN project p2 ON p2.id = o.project_id WHERE mine.item_id = ? AND (mine.mode = 'exclusive' OR other.mode = 'exclusive')
+    AND o.state = 'doing' AND o.owner_id IS NOT NULL AND o.lease_until >= ? ORDER BY ref`, item.id, now);
+  if (holders.length) return `a resource it needs is held by ${holders.join(", ")}; try again when that claim ends`;
+  const current = await db.prepare("SELECT owner_id, lease_until FROM work_item WHERE id = ?").bind(item.id).first<{ owner_id: string | null; lease_until: number | null }>();
+  if (current?.owner_id && current.owner_id !== identity_id && (current.lease_until ?? 0) >= now) return `someone else holds a live claim until ${new Date(current.lease_until!).toISOString()}`;
+  return "that item changed or has another live claim; read it again before retrying your claim";
+}
+
+/** End a live claim without finishing: the item goes back to open and keeps its owner. */
+export async function releaseWork(db: D1Database, item: WorkItem, now: number): Promise<WorkItem> {
+  if (item.state !== "doing") throw conflict("that item is not under way");
+  const updated_at = Math.max(now, item.updated_at + 1), snapshot = snapshotPredicate(item);
+  const r = await db.prepare(`UPDATE work_item SET state = 'open', lease_until = NULL, updated_at = ? WHERE ${snapshot.sql}`).bind(updated_at, ...snapshot.args).run();
+  if (r.meta.changes !== 1) throw conflict("that item changed; read it again before releasing it");
+  return { ...item, state: "open", lease_until: null, updated_at };
 }
 
 export async function linkWork(

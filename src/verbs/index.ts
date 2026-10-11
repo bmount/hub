@@ -12,6 +12,7 @@ import { attentionDone, attentionList, workComment, workSubscribe } from "./coll
 import { memberRemove, memberSetRole } from "./member";
 import { registerVerbs } from "./table";
 import { plannedVerbs } from "./planned";
+import { workDelete, workDepend, workFrontier, workGraph, workRelease, workResources } from "./graph";
 import { bootstrap } from "./bootstrap";
 import { whoami } from "./whoami";
 import { tenantArchive, tenantCreate, tenantDelete, tenantList, tenantUnarchive } from "./tenant";
@@ -56,6 +57,7 @@ export function registerAllVerbs(): void {
     appRegister, appApprove, appList, traceList, traceRead, deployList, deployRead, deployRecord,
     mailReply, mailSend, mailSending,
     workSearch, messageSearch, searchQuery,
+    workDepend, workResources, workGraph, workFrontier, workRelease, workDelete,
     repoBranches, repoLog, repoCommit, repoFile, repoDiff, repoSearch, repoList, repoConnect,
     reviewRequest, reviewList, reviewRead, reviewComment, reviewVerdict,
     workBoard, workBulkUpdate,

@@ -14,6 +14,12 @@ export async function recordEvent(
   return row;
 }
 
+/** An event to put in the same batch as the change it records, so both commit or neither does. */
+export function eventStatement(db: D1Database, e: Omit<EventRow, "id" | "created_at">, now: number): D1PreparedStatement {
+  return db.prepare("INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(ulid(now), e.tenant_id, e.identity_id, e.session_id, e.kind, e.target_kind, e.target_id, e.summary.slice(0, 300), now);
+}
+
 /** Batch alongside a create-if-absent insert. Only the attempt's fresh internal ID may authorize an event. */
 export function creationEventStatement(
   db: D1Database, e: Omit<EventRow, "id" | "created_at">, now: number,
