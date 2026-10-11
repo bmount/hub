@@ -6,11 +6,11 @@ test:
 	npm run typecheck
 	npm test
 
-# Test the current main, upload, deploy, smoke-check, record the rollback version.
+# Test the current main, then upload, deploy and smoke-check pimwell-hub and pimwell-git together; record rollback versions.
 release:
 	scripts/cf/with-deploy-token.sh node scripts/release.mjs
 
-# Put a previous version back: make rollback VERSION=<version id from the release record>
+# Put a previous version back: make rollback VERSION=<version id from the release record> [WORKER=pimwell-git]
 rollback:
 	@test -n "$(VERSION)" || { echo "usage: make rollback VERSION=<version id>" >&2; exit 2; }
-	scripts/cf/with-deploy-token.sh npx wrangler versions deploy $(VERSION)@100% --yes
+	scripts/cf/with-deploy-token.sh npx wrangler versions deploy --name $(or $(WORKER),pimwell-hub) $(VERSION)@100% --yes
