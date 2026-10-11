@@ -21,6 +21,9 @@ function join(...parts: Uint8Array[]): Uint8Array {
 function stream(...parts: Uint8Array[]): ReadableStream<Uint8Array> {
   return new ReadableStream({ start(controller) { for (const part of parts) controller.enqueue(part);controller.close(); } });
 }
+async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
+  return new Uint8Array(await new Response(stream(bytes).pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
+}
 const command = (ref = update.ref, oldOid = OID, newOid = NEXT) => `${oldOid} ${newOid} ${ref}`;
 const flush = encode.encode("0000");
 
@@ -122,9 +125,43 @@ describe("Artifacts REST transport", () => {
       for (const name of ["cookie", "x-ardi-principal", "x-hub-internal"]) expect(headers.get(name)).toBeNull();
       expect(init?.redirect).toBe("manual");return new Response("synthetic Git response");
     });
-    const request = new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: "Basic client", cookie: "private", "content-encoding": "gzip", "x-ardi-principal": "admin", "x-hub-internal": "forged" } });
-    const response = await configured().git("acme", "site", "info/refs", request, null, false);
-    expect(await response.text()).toBe("synthetic Git response");expect(String(fake.mock.calls[1]![0])).toBe(`https://${account}.artifacts.cloudflare.net/git/acme/site.git/info/refs?service=git-upload-pack`);
+    const request = new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", headers: { authorization: "Basic client", cookie: "private", "content-encoding": "gzip", "x-ardi-principal": "admin", "x-hub-internal": "forged" } });
+    const response = await configured().git("acme", "site", "git-receive-pack", request, null, true);
+    expect(await response.text()).toBe("synthetic Git response");expect(String(fake.mock.calls[1]![0])).toBe(`https://${account}.artifacts.cloudflare.net/git/acme/site.git/git-receive-pack`);
+  });
+  it("normalizes advertised HEAD to the Artifacts default branch tip", async () => {
+    const token = issued(), stale = "1".repeat(40), main = "2".repeat(40);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const text = String(url);
+      if (text.endsWith("/tokens")) return Response.json({ success: true, result: token });
+      if (text.includes("/git/acme/site.git/info/refs")) return new Response(join(packet("# service=git-upload-pack\n"), flush, packet(`${stale} HEAD\0multi_ack symref=HEAD:refs/heads/old agent=x\n`), packet(`${main} refs/heads/main\n`), packet(`${stale} refs/heads/old\n`), flush));
+      if (text.endsWith("/repos/site")) return Response.json({ success: true, result: { name: "site", remote: `https://${account}.artifacts.cloudflare.net/git/acme/site.git`, description: null, default_branch: "main", read_only: false } });
+      if (text.includes("/repos/site/log?")) return Response.json({ success: true, result: [{ hash: main }] });
+      throw new Error(`unexpected ${text} ${init?.method ?? "GET"}`);
+    });
+    const response = await configured().git("acme", "site", "info/refs", new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack"), null, false);
+    const advertised = new TextDecoder().decode(await response.arrayBuffer());
+    expect(advertised).toContain(`${main} HEAD\0multi_ack symref=HEAD:refs/heads/main agent=x\n`);
+    expect(advertised).toContain(`${stale} refs/heads/old\n`);
+  });
+  it("normalizes compressed v2 ls-refs HEAD without decoding pack responses", async () => {
+    const token = issued(), stale = "1".repeat(40), main = "2".repeat(40), plain = join(packet("command=ls-refs\n"), flush, packet("symrefs\n"), flush), compressed = await gzip(plain);
+    let sawUpstreamBody = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const text = String(url);
+      if (text.endsWith("/tokens")) return Response.json({ success: true, result: token });
+      if (text.includes("/git/acme/site.git/git-upload-pack")) {
+        sawUpstreamBody = (await new Response(init?.body as BodyInit).arrayBuffer()).byteLength === compressed.length;
+        return new Response(join(packet(`${stale} HEAD symref-target:refs/heads/old\n`), packet(`${main} refs/heads/main\n`), flush));
+      }
+      if (text.endsWith("/repos/site")) return Response.json({ success: true, result: { name: "site", remote: `https://${account}.artifacts.cloudflare.net/git/acme/site.git`, description: null, default_branch: "main", read_only: false } });
+      if (text.includes("/repos/site/log?")) return Response.json({ success: true, result: [{ hash: main }] });
+      throw new Error(`unexpected ${text} ${init?.method ?? "GET"}`);
+    });
+    const body = stream(compressed);
+    const response = await configured().git("acme", "site", "git-upload-pack", new Request("https://acme.pimwell.test/site.git/git-upload-pack", { method: "POST", headers: { "content-encoding": "gzip" } }), body, false);
+    expect(sawUpstreamBody).toBe(true);
+    expect(new TextDecoder().decode(await response.arrayBuffer())).toContain(`${main} HEAD symref-target:refs/heads/main\n`);
   });
   it("does not include upstream error messages or credentials in errors", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ success: false, errors: [{ message: apiToken }] }, { status: 403 }));

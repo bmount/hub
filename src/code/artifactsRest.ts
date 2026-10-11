@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { HubError } from "../errors";
+import { packet } from "./gitProtocol";
 
 export type ArtifactRepo = { name: string; remote: string; description: string | null; default_branch: string; read_only: boolean };
 export type ArtifactCommit = {
@@ -15,6 +16,85 @@ export function artifactNamespace(tenant: string): string {
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(tenant)) throw new HubError(400, "bad_request", "invalid Git organization");
   // Pimwell permits one-character names; Artifacts requires at least two. '_' cannot occur in a tenant slug.
   return tenant.length === 1 ? `${tenant}_` : tenant;
+}
+
+const pktDecode = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+function pktLen(bytes: Uint8Array, offset: number): number {
+  const text = pktDecode.decode(bytes.subarray(offset, offset + 4));
+  if (!/^[0-9a-fA-F]{4}$/.test(text)) throw new Error("bad packet");
+  const length = Number.parseInt(text, 16);
+  if (length !== 0 && (length < 4 || length > 65520)) throw new Error("bad packet");
+  return length;
+}
+function joinPackets(parts: Uint8Array[]): Uint8Array {
+  const result = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let offset = 0;for (const part of parts) { result.set(part, offset);offset += part.length; }return result;
+}
+function replaceHeadAdvert(bytes: Uint8Array, branch: string, target: string): Uint8Array {
+  const out: Uint8Array[] = [];
+  let sawHead = false;
+  for (let offset = 0; offset < bytes.length;) {
+    if (bytes.length - offset < 4) throw new Error("truncated advertisement");
+    const length = pktLen(bytes, offset);
+    if (!length) { out.push(bytes.subarray(offset, offset + 4));offset += 4;continue; }
+    if (offset + length > bytes.length) throw new Error("truncated advertisement");
+    const payload = bytes.subarray(offset + 4, offset + length), nul = payload.indexOf(0);
+    const text = pktDecode.decode(nul < 0 ? payload : payload.subarray(0, nul));
+    const caps = nul < 0 ? "" : "\0" + pktDecode.decode(payload.subarray(nul + 1));
+    if (/^[0-9a-f]{40} HEAD\n?$/.test(text)) {
+      const cleanCaps = caps ? caps.replace(/symref=HEAD:[^ \n\0]+/, `symref=HEAD:refs/heads/${branch}`) : "";
+      out.push(packet(`${target} HEAD${cleanCaps}\n`));sawHead = true;
+    } else out.push(bytes.subarray(offset, offset + length));
+    offset += length;
+  }
+  return sawHead ? joinPackets(out) : bytes;
+}
+function replaceV2Head(bytes: Uint8Array, branch: string, target: string): Uint8Array {
+  const out: Uint8Array[] = [];
+  let sawHead = false;
+  for (let offset = 0; offset < bytes.length;) {
+    if (bytes.length - offset < 4) throw new Error("truncated advertisement");
+    const length = pktLen(bytes, offset);
+    if (!length) { out.push(bytes.subarray(offset, offset + 4));offset += 4;continue; }
+    if (offset + length > bytes.length) throw new Error("truncated advertisement");
+    const text = pktDecode.decode(bytes.subarray(offset + 4, offset + length));
+    if (/^[0-9a-f]{40} HEAD(?: |\n)/.test(text)) {
+      const attrs = text.replace(/^[0-9a-f]{40} HEAD/, "").replace(/symref-target:[^ \n]+/, `symref-target:refs/heads/${branch}`);
+      out.push(packet(`${target} HEAD${attrs}`));sawHead = true;
+    } else out.push(bytes.subarray(offset, offset + length));
+    offset += length;
+  }
+  return sawHead ? joinPackets(out) : bytes;
+}
+async function looksLikeV2LsRefs(source: ReadableStream<Uint8Array> | null, encoding: string | null): Promise<boolean> {
+  if (!source) return false;
+  let stream: ReadableStream<Uint8Array> = source;
+  if (encoding) {
+    if (encoding !== "gzip") return false;
+    stream = source.pipeThrough(new DecompressionStream("gzip"));
+  }
+  const reader = stream.getReader();
+  let bytes = new Uint8Array(0);
+  try {
+    for (;;) {
+      const next = await reader.read();if (next.done) break;
+      if (bytes.length + next.value.length > 4096) return false;
+      const joined = new Uint8Array(bytes.length + next.value.length);joined.set(bytes);joined.set(next.value, bytes.length);bytes = joined;
+    }
+  } catch { return false; }
+  finally { reader.releaseLock(); }
+  try {
+    for (let offset = 0; offset < bytes.length;) {
+      if (bytes.length - offset < 4) return false;
+      const length = pktLen(bytes, offset);offset += 4;
+      if (!length) continue;
+      if (offset + length - 4 > bytes.length) return false;
+      const line = pktDecode.decode(bytes.subarray(offset, offset + length - 4)).trim();
+      if (line === "command=ls-refs") return true;
+      offset += length - 4;
+    }
+  } catch { return false; }
+  return false;
 }
 
 export class ArtifactsRest {
@@ -118,14 +198,28 @@ export class ArtifactsRest {
   }
   async git(namespace: string, repo: string, tail: string, request: Request, body: ReadableStream<Uint8Array> | null, write: boolean): Promise<Response> {
     if (!["info/refs", "git-upload-pack", "git-receive-pack"].includes(tail)) throw new HubError(400, "bad_request", "invalid Git operation");
-    const upstream = new URL(`${this.remote(namespace, repo)}/${tail}`);
-    upstream.search = new URL(request.url).search;
+    const url = new URL(request.url), upstream = new URL(`${this.remote(namespace, repo)}/${tail}`);
+    upstream.search = url.search;
     const headers = new Headers();
     for (const name of ["content-type", "content-encoding", "accept", "git-protocol", "user-agent"]) {
       const value = request.headers.get(name);if (value) headers.set(name, value);
     }
+    let inspect: ReadableStream<Uint8Array> | null = null;
+    if (tail === "git-upload-pack" && request.method === "POST" && body) [body, inspect] = body.tee();
+    const normalizeV0 = tail === "info/refs" && url.searchParams.get("service") === "git-upload-pack";
+    const normalizeV2 = tail === "git-upload-pack" && request.method === "POST" && await looksLikeV2LsRefs(inspect, request.headers.get("content-encoding"));
     headers.set("authorization", `Bearer ${await this.repoToken(namespace, repo, write ? "write" : "read")}`);
-    try { return await fetch(upstream, { method: request.method, headers, body, redirect: "manual" }); }
+    let response: Response;
+    try { response = await fetch(upstream, { method: request.method, headers, body, redirect: "manual" }); }
     catch { throw new HubError(503, "unavailable", "Git storage did not answer"); }
+    if (!normalizeV0 && !normalizeV2) return response;
+    const [info, commits] = await Promise.all([this.info(namespace, repo), this.log(namespace, repo, "main", 1).catch(() => [])]);
+    const branch = info.default_branch || "main", target = branch === "main" ? commits[0]?.hash : (await this.log(namespace, repo, branch, 1).catch(() => []))[0]?.hash;
+    if (!/^[0-9a-f]{40}$/.test(target ?? "")) return response;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let replaced: Uint8Array;
+    try { replaced = normalizeV0 ? replaceHeadAdvert(bytes, branch, target!) : replaceV2Head(bytes, branch, target!); }
+    catch { return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers }); }
+    return new Response(replaced, { status: response.status, statusText: response.statusText, headers: response.headers });
   }
 }

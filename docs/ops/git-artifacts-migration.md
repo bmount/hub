@@ -25,3 +25,5 @@ The proxy fence only covers requests that reach the shared proxy. It does not st
 The private cutover operator is `/home/pio/pio/artifacts-cutover-operator.py`. Its default mode is dry-run: it writes before/after manifests and SQL under `/home/pio/.auth/artifacts-cutover`, derives commit metadata from the verified local mirrors, and prints only non-secret paths. `--execute` is reserved for supervised cutover and applies only the four MCC repositories.
 
 Rejected non-fast-forward Artifacts pushes may preserve the proposed tip under `refs/ardi/forks/...`. Metadata collection now follows the renamed fork ref by the proposed object id when that ref is not present in the staging advertisement.
+
+The Git transport advertises `HEAD` from the Artifacts repository's configured default branch tip for upload-pack advertisements and protocol v2 `ls-refs`. This keeps ordinary clones on the default branch even when the storage provider has a stale native `HEAD`. Other refs, capabilities, peeled tags and pack streams pass through unchanged.
