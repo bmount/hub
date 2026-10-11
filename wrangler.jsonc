@@ -12,8 +12,7 @@
     { "pattern": "pimwell.com", "custom_domain": true },
     { "pattern": "*.pimwell.com/*", "zone_name": "pimwell.com" }
   ],
-  // Making a repo project creates its repository (src/code/ardi.ts createRepo); Ardi accepts repo_create since 2026-10-08.
-  "vars": { "HUB_DOMAIN": "pimwell.com", "ARDI_REPO_CREATE": "on" },
+  "vars": { "HUB_DOMAIN": "pimwell.com" },
   // Push sync from the git host every five minutes (src/code/sync.ts).
   "triggers": { "crons": ["*/5 * * * *"] },
   "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
@@ -28,8 +27,6 @@
   // Outbound mail: sign-in links from login@, and replies and agent mail from org, project and agent addresses
   // (src/verbs/mailOut.ts decides the From address; nobody passes one in).
   "send_email": [{ "name": "MAIL" }],
-  // Git smart HTTP on tenant hosts goes to Ardi (docs/superpowers/specs/2026-10-06-ardi-hub-integration.md).
-  "services": [{ "binding": "ARDI", "service": "ardi-pimwell" }],
   "kv_namespaces": [
     { "binding": "RATE", "id": "bb594176ceb94d83ac5a74ff160ac53c" },
     { "binding": "OAUTH_KV", "id": "f4d9750c9bdd4cbc839b8efc7d17ab3c" }

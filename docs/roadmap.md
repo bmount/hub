@@ -40,9 +40,8 @@ The milestone tables below keep their original statuses. This is the current pic
   - status from records (`project_status`);
   - every verb over MCP, including write.
 - **Code (M1, M3, M6 in part):**
-  - **Reading Ardi:** branches, commits with diffs computed in the hub, files and compare, through Ardi's JSON API
-    (a person's sealed git session, or an agent's own token).
-  - **Push sync:** every five minutes; commits that mention project#n link to that item.
+  - **Reading code:** branches, commits with diffs computed in the hub, files and compare, from Cloudflare Artifacts through Pimwell authorization.
+  - **Push recording:** commits that mention project#n link to that item.
   - **"What came after this commit":** the deploy that shipped it, later deploys, and new errors.
   - **Reviews:** request, comments, verdicts tied to the commit reviewed, and a reviewer agent (`review_ai`).
 - **Apps (M3, M4 in part):** `pimwell-tail` with redaction at the source, error groups, deploys from script
@@ -59,9 +58,7 @@ The milestone tables below keep their original statuses. This is the current pic
 - **Administration:** people, roles, invites, app approvals, model keys and prices, organization delete, request
   logging with who acted, the audit trail. MCP calls cost 2 round trips; pages cost 4 at most.
 
-**Waiting on the Ardi session** (requests in docs/requests/2026-10-07-ardi-source-tracking.md):
-- service-to-service reads;
-- push notification, so pushes arrive in seconds instead of five minutes;
+**Git follow-ups after the Artifacts cutover:**
 - diff with merge base and renames;
 - blame, which errors-to-lines (M4) needs;
 - reflog;
@@ -137,7 +134,7 @@ before they configure anything.
 | Agents: named helpers with a sponsoring person, run sessions, API tokens | done | identity phase 3 |
 | Sign in with Google behind root-managed rules and grants | done | identity spec amendment, `docs/ops/google-signin.md` |
 | MCP: OAuth 2.1 at the apex, per-tenant `/mcp`, explicit read/write scopes and current-role checks | done | [Checked tool inventory](generated/mcp-tools.md), [security contract](ops/mcp-contract.md); planned stubs remain labeled |
-| Git hosting via Ardi on tenant hosts, hub-issued git credentials | done | Ardi-hub integration spec |
+| Git hosting via Artifacts behind Pimwell authorization | done | `docs/ops/git-artifacts-migration.md` |
 | Messaging: channels, threads, links, agent wakeups with loop limits, catch-up | done | messaging spec, plan |
 | Landing page, privacy policy, terms | done | `site/` |
 | First real projects imported into the organization tenant | done | two repos, full history |
@@ -151,16 +148,16 @@ Goal: open the organization and understand each project's code and history witho
 | Project-level access: per-project grants (admin, member, reader) beside organization membership | now | amends identity spec; sign-in grants can target a project |
 | Fold the interim Commons tenant into the organization as a project | next | needs project-level access first |
 | Organization home: projects, recent activity, people and helpers | now | today a signed-in page is nearly empty |
-| Project page: branches, commits, files, blame, diffs | now | reads Ardi through the hub; builds on Ardi `/internal/resolve` |
-| Create a repo project from the hub; the hub creates the Ardi repo | done | 2026-10-08: any member or agent; a one-minute `repo_create` session the hub spends on that one `repo.create`, which Ardi limits to that verb |
+| Project page: branches, commits, files, blame, diffs | now | reads Artifacts through the hub |
+| Create a repo project from the hub | next | create the Artifacts repository and project row together |
 | Git credentials and clone instructions on the project page | next | `session.git` exists; this is the UX |
 | Upstream sync: keep imported repos current with their GitHub upstreams, mirroring in or out | now | manual public-GitHub inbound branch updates use [the sync helper](ops/upstream-sync.md); automatic sync and outbound mirroring are not implemented |
 | One timeline across all branches: who or what works where, divergence, stale branches | next | `docs/direction.md`, Source control that sees every branch |
 | Integration by default: long-lived branches flagged, merges proposed, agents told to integrate early | next | |
 | Every push, merge, rebase and abandoned branch recorded and joined to tasks, sessions, deploys | next | |
-| Large pushes: one push of any reasonable size | now | Ardi; the deployed git host still crashes on a 13.5 MB push (2026-10-07). No workarounds: the imported repos are re-imported by one push once fixed |
-| Repository and organization purge in the git host | now | Ardi; needed to re-import cleanly and to release deleted organizations' names |
-| Super-admin delete of organizations | done | 2026-10-07: /admin/orgs; the name stays reserved until the git host can purge |
+| Large pushes: one push of any reasonable size | done | Artifacts handles the imported repositories through the proxy |
+| Repository and organization purge in the git host | next | use Artifacts deletion plus Pimwell metadata cleanup |
+| Super-admin delete of organizations | done | 2026-10-07: /admin/orgs; names stay reserved until metadata purge marks Git storage gone |
 | Landing copy matches the model: an organization's own address, projects inside it | done | 2026-10-06 |
 
 Exit test: the owner opens the organization, picks the larger imported project, reads its last 20

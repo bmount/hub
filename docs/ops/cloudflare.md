@@ -41,6 +41,8 @@ The hub is meant to become self-modifying. When it does, the running hub should 
 | Catch-all on pimwell.com goes to `pimwell-hub` (was: drop). The hub accepts `<org>@` and `<org>.<project>@` from proven members and refuses everything else at delivery | Email Routing API as pimwell-001 (2026-10-07) |
 | Rules `privacy@` and `legal@` forward to the owner's verified address (the contacts on /privacy and /terms) | Email Routing API as pimwell-001; destination verified by the owner (2026-10-06) |
 | Email Sending on pimwell.com, SPF, DKIM, DMARC `p=reject` | Email Sending onboarding |
-| Worker `ardi-pimwell`, R2 `ardi-pimwell-large` | Ardi repo, branch `hub-identity`, `worker/wrangler.cloudflare.jsonc` |
+| Worker `pimwell-git`, R2 `pimwell-git-staging`, Artifacts namespace `mcc` | `git-proxy/wrangler.jsonc` and the Artifacts import operator |
+
+The retired Ardi Workers `ardi` and `ardi-pimwell`, their Durable Object classes and the R2 buckets `ardi-large` and `ardi-pimwell-large` have been deleted from Cloudflare. Ardi source history stays in the `ardi` repository on Artifacts as an archive.
 
 The account also holds unrelated projects' resources (other D1 databases, KV namespaces including one titled `OAUTH_KV`). Pimwell never touches them.

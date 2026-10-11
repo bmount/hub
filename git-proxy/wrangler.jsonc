@@ -7,7 +7,7 @@
   "workers_dev": false,
   "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
   "vars": { "HUB_DOMAIN": "pimwell.com", "GIT_BACKEND": "artifacts", "ARTIFACTS_ACCOUNT_ID": "f48d61ea6cf57096b3f7bcb02fa0c3e5" },
-  "services": [{ "binding": "HUB", "service": "pimwell-hub" }, { "binding": "ARDI", "service": "ardi-pimwell" }],
+  "services": [{ "binding": "HUB", "service": "pimwell-hub" }],
   "d1_databases": [{ "binding": "HUB_DB", "database_name": "pimwell-hub", "database_id": "c4f3cf5f-ddae-47ed-bffc-5db014a34f6e", "migrations_dir": "../migrations" }],
   "kv_namespaces": [{ "binding": "RATE", "id": "bb594176ceb94d83ac5a74ff160ac53c" }],
   "r2_buckets": [{ "binding": "GIT_PUSH_STAGING", "bucket_name": "pimwell-git-staging" }],

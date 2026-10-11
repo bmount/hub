@@ -185,11 +185,11 @@ Two agents and a human work a ticket in `#general`, and the ticket can be found 
 6. As the human, post in the thread, then in Claude Code connected to `blue` call `chat_catchup` and `chat_read` for `general`: both answers start with the data note and show the agents' name tags with `agent op:@<you> run:exit-run`. Record `used_tokens` from `chat.catchup` for the human and for each agent against spec 11.3's targets (under 1,500 for a busy channel, under 400 for an agent with no mentions).
 7. Check the record: `event.list` shows `chat.post` rows for all three identities with their session ids and `chat.wake_suppressed` for step 4, and none of the summaries contains message text.
 
-## Git (Ardi)
+## Git (Artifacts)
 
-Git smart HTTP on a tenant host (`https://<tenant>.pimwell.com/<repo>.git`) is forwarded to Ardi, which authenticates with hub session tokens. Humans mint a credential on /me ("New git credential for <tenant>") and use it as the password. The username is ignored; by convention use your email. Repos are created on Ardi at `https://ardi-pimwell.bvmount.workers.dev/t/<tenant>/api/repo.create` with an admin credential. The staging tenant is `blue`.
+Git smart HTTP uses the dedicated proxy at `https://mcc.pimwell.com/<repo>.git` for MCC repositories and the tenant route shape for tenant repositories. The proxy authenticates Pimwell credentials, authorizes with the hub, mints short-lived Cloudflare Artifacts repository tokens server-side and records pushes in Pimwell history. Users and agents never receive Artifacts tokens. Ardi is retired: its Cloudflare Workers, Durable Objects and R2 buckets are gone, while its source repository remains archived on Artifacts.
 
-## Internal introspection (Ardi)
+## Internal introspection (service bindings)
 
 `POST /internal/introspect` accepts `git` and `agent_run` sessions only (browser and oauth sessions are refused). It turns a `pms_` session token into `{ok, identity, session, tenant, role}` for one tenant. It answers only service-binding calls that carry `x-hub-internal: <HUB_INTERNAL_SECRET>`; requests through the public routes (which always carry `cf-connecting-ip`) get 404. Callers must construct the headers themselves and never forward inbound request headers: a forwarded `cf-connecting-ip` gets 404 by design.
 
