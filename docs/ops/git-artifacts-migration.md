@@ -26,4 +26,4 @@ The private cutover operator is `/home/pio/pio/artifacts-cutover-operator.py`. I
 
 Rejected non-fast-forward Artifacts pushes may preserve the proposed tip under `refs/ardi/forks/...`. Metadata collection now follows the renamed fork ref by the proposed object id when that ref is not present in the staging advertisement.
 
-The Git transport advertises `HEAD` from the Artifacts repository's configured default branch tip for upload-pack advertisements and protocol v2 `ls-refs`. This keeps ordinary clones on the default branch even when the storage provider has a stale native `HEAD`. Other refs, capabilities, peeled tags and pack streams pass through unchanged.
+The Git transport advertises `HEAD` from the Artifacts repository's configured default branch tip for upload-pack advertisements and protocol v2 `ls-refs`. This keeps ordinary clones on the default branch even when the storage provider has a stale native `HEAD`. Other refs, capabilities, peeled tags and pack streams pass through unchanged. The migrated repositories use `main` as their default branch.
