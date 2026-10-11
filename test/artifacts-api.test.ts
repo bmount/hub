@@ -10,6 +10,9 @@ import { createGitSession } from "../src/db/sessions";
 import { createProject } from "../src/db/projects";
 import { packet } from "../src/code/gitProtocol";
 import { seedHuman, seedTenant } from "./helpers";
+import { createHash } from "node:crypto";
+import { deflateSync } from "node:zlib";
+import { searchFiles } from "../src/verbs/code";
 
 const hash = (n: number) => n.toString(16).padStart(40, "0");
 const account = "0".repeat(32);
@@ -34,8 +37,14 @@ async function setup(role: "member" | "reader" = "member") {
   const owned = repoOwnership(tenant.id, project.id);
   let description = owned;
   const requests: string[] = [];
+  let uploadPack: Uint8Array | null = null;
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = new URL(String(input));requests.push(url.pathname);
+    if (url.pathname.endsWith("/git-upload-pack") && uploadPack) {
+      expect(new Headers(init?.headers).get("git-protocol")).toBe("version=2");
+      expect(await new Response(init?.body).text()).toMatch(/deepen 1\n.*want [0-9a-f]{40}\n/s);
+      return new Response(uploadPack);
+    }
     if (url.hostname.endsWith(".artifacts.cloudflare.net")) return new Response(concat(packet("# service=git-upload-pack\n"), new TextEncoder().encode("0000"),
       packet(`${hash(4)} HEAD\0symref=HEAD:refs/heads/main\n`), packet(`${hash(4)} refs/heads/main\n`), packet(`${hash(50)} refs/tags/v1\n`), packet(`${hash(4)} refs/tags/v1^{}\n`), new TextEncoder().encode("0000")));
     if (url.pathname.endsWith("/tokens")) return Response.json({ success: true, result: { plaintext: "opaque-synthetic-token", expires_at: new Date(Date.now() + 300_000).toISOString() } });
@@ -51,6 +60,7 @@ async function setup(role: "member" | "reader" = "member") {
     throw new Error("unexpected synthetic request");
   });
   return { tenant, human, project, configured, auth, fetch, requests, setDescription(value: string) { description = value; },
+    serve(commit: ArtifactCommit, response: Uint8Array) { commits.set(commit.hash, commit);uploadPack = response; },
     read: <T>(verb: string, body: Record<string, unknown> = {}) => artifactRead<T>(configured, "acme", auth, verb, { repo: "site", ...body }) };
 }
 
@@ -94,5 +104,76 @@ describe("Artifacts compatibility adapter", () => {
       expect(response.status).toBe(authorization ? 403 : 401);
     }
     expect(s.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// A minimal pack: whole objects, plus one REF_DELTA and one OFS_DELTA against the first blob.
+function syntheticSnapshot() {
+  const enc = new TextEncoder(), sha = (type: string, data: Uint8Array) => createHash("sha1").update(`${type} ${data.length}\0`).update(data).digest("hex");
+  const raw = (hex: string) => Uint8Array.from(hex.match(/../g)!, (b) => Number.parseInt(b, 16));
+  const header = (type: number, size: number) => {
+    const out = [(type << 4) | (size & 15)];size >>= 4;
+    while (size) { out[out.length - 1]! |= 0x80;out.push(size & 0x7f);size >>= 7; }return Uint8Array.from(out);
+  };
+  const base = enc.encode("export const alpha = 1;\n// TODO find the Needle\n");
+  const extra = enc.encode("needle again\n"), derived = concat(base, extra);
+  const delta = concat(Uint8Array.from([base.length, derived.length, 0x90, base.length, extra.length]), extra);
+  const binary = Uint8Array.from([0x89, 0x50, 0, 1, 2, 0x6e, 0x65, 0x65, 0x64, 0x6c, 0x65]);
+  const entry = (mode: string, name: string, oid: string) => concat(enc.encode(`${mode} ${name}\0`), raw(oid));
+  const sub = concat(entry("100644", "b.ts", sha("blob", derived)), entry("100644", "c.ts", sha("blob", derived)));
+  const root = concat(entry("100644", "a.ts", sha("blob", base)), entry("100644", "logo.png", sha("blob", binary)), entry("40000", "src", sha("tree", sub)));
+  const commitBody = enc.encode(`tree ${sha("tree", root)}\nauthor A <a@example.invalid> 1 +0000\ncommitter A <a@example.invalid> 1 +0000\n\nSynthetic\n`);
+  const objects: Uint8Array[] = [];
+  const whole = (type: number, data: Uint8Array) => objects.push(concat(header(type, data.length), deflateSync(data)));
+  whole(3, base);
+  objects.push(concat(header(7, delta.length), raw(sha("blob", base)), deflateSync(delta)));
+  const ofsStart = 12 + objects[0]!.length + objects[1]!.length;
+  objects.push(concat(header(6, delta.length), Uint8Array.from([ofsStart - 12]), deflateSync(delta)));
+  whole(3, binary);whole(2, sub);whole(2, root);whole(1, commitBody);
+  const head = new Uint8Array(12);head.set(enc.encode("PACK"));new DataView(head.buffer).setUint32(4, 2);new DataView(head.buffer).setUint32(8, objects.length);
+  const pack = concat(head, ...objects);
+  const band = (bytes: Uint8Array) => { const out = new Uint8Array(bytes.length + 5);out.set(enc.encode((bytes.length + 5).toString(16).padStart(4, "0")));out[4] = 1;out.set(bytes, 5);return out; };
+  const response = concat(band(enc.encode("packfile\n")), band(pack), enc.encode("0000"));
+  const oid = sha("commit", commitBody);
+  return { response, commit: { ...metadata(9), hash: oid, treeHash: sha("tree", root) } };
+}
+
+describe("Artifacts code snapshots", () => {
+  it("reads a commit's files from one shallow fetch, resolving deltas, then serves repeats from the cache", async () => {
+    const s = await setup(), { response, commit } = syntheticSnapshot();
+    s.serve(commit, response);
+    const first = await s.read<{ oid: string; files: Array<{ path: string; text: string | null; binary: boolean }> }>("snapshot", { rev: commit.hash });
+    expect(first.result.oid).toBe(commit.hash);
+    expect(first.result.files.map((f) => [f.path, f.binary])).toEqual([["a.ts", false], ["logo.png", true], ["src/b.ts", false], ["src/c.ts", false]]);
+    expect(first.result.files[2]!.text).toBe(first.result.files[3]!.text);
+    expect(first.result.files[2]!.text).toContain("needle again");
+    const again = await s.read<{ files: unknown[] }>("snapshot", { rev: commit.hash });
+    expect(again.result.files).toEqual(first.result.files);
+    expect(s.requests.filter((path) => path.endsWith("/git-upload-pack"))).toHaveLength(1);
+  });
+
+  it("checks the caller's access before answering from the cache", async () => {
+    const s = await setup(), { response, commit } = syntheticSnapshot();
+    s.serve(commit, response);
+    await s.read("snapshot", { rev: commit.hash });
+    await expect(artifactRead(s.configured, "acme", "Basic " + btoa("x:not-a-session"), "snapshot", { repo: "site", rev: commit.hash })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("searches literally and case-insensitively by default, or by regex, under a path, within a limit", () => {
+    const files = [
+      { path: "src/b.ts", text: "const Needle = 1;\nnothing\nneedle()\n", size: 0, binary: false },
+      { path: "a.ts", text: "a needle.*\n", size: 0, binary: false },
+      { path: "logo.png", text: null, size: 9, binary: true },
+      { path: "big.json", text: null, size: 500_000, binary: false },
+    ];
+    const all = searchFiles(files, "needle", { regex: false, caseSensitive: false, path: "", limit: 50 });
+    expect(all.matches).toEqual([{ path: "a.ts", line: 1, text: "a needle.*" }, { path: "src/b.ts", line: 1, text: "const Needle = 1;" }, { path: "src/b.ts", line: 3, text: "needle()" }]);
+    expect(all).toMatchObject({ searched: 2, skipped_binary: 1, skipped_large: 1, truncated: false });
+    expect(searchFiles(files, "needle.*", { regex: false, caseSensitive: false, path: "", limit: 50 }).matches).toHaveLength(1);
+    expect(searchFiles(files, "Needle", { regex: false, caseSensitive: true, path: "", limit: 50 }).matches).toHaveLength(1);
+    expect(searchFiles(files, "^needle\\(", { regex: true, caseSensitive: false, path: "", limit: 50 }).matches).toEqual([{ path: "src/b.ts", line: 3, text: "needle()" }]);
+    expect(searchFiles(files, "needle", { regex: false, caseSensitive: false, path: "src/", limit: 50 }).matches).toHaveLength(2);
+    expect(searchFiles(files, "needle", { regex: false, caseSensitive: false, path: "", limit: 2 })).toMatchObject({ truncated: true, matches: [{}, {}] });
+    expect(() => searchFiles(files, "(", { regex: true, caseSensitive: false, path: "", limit: 50 })).toThrow(/regular expression/);
   });
 });

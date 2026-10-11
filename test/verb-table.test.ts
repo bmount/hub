@@ -50,6 +50,7 @@ const TABLE: Record<string, Decl> = {
   "review.comment": T("tenant", "member", null, { mcp: "write" }),
   "review.verdict": T("tenant", "member", null, { mcp: "write" }),
   "repo.log": T("tenant", "reader", null, { mcp: "read" }),
+  "repo.search": T("tenant", "reader", null, { mcp: "read" }),
   "repo.commit": T("tenant", "reader", null, { mcp: "read" }),
   "repo.file": T("tenant", "reader", null, { mcp: "read" }),
   "repo.diff": T("tenant", "reader", null, { mcp: "read" }),

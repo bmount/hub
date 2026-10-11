@@ -4,6 +4,7 @@ import { ArtifactsRest, artifactNamespace, type ArtifactCommit } from "./artifac
 import { authorizeGit } from "./gitAccess";
 import { repoOwnership } from "./artifactPush";
 import { parseAdvertisedRefs } from "./gitProtocol";
+import { packFromResponse, readPack, shallowFetchBody, snapshotFiles, type SnapshotFile } from "./gitPack";
 import type { ArdiChange, ArdiCommit, ArdiEntry, ArdiEvent, ArdiPage, ArdiRef } from "./ardi";
 
 async function refs(api: ArtifactsRest, namespace: string, repo: string): Promise<ArdiRef[]> {
@@ -92,6 +93,20 @@ export async function artifactRead<T>(env: Env, org: string, authorization: stri
     if (!entry || entry.type !== "tree") throw new HubError(404, "not_found", "directory not found");
     return page({ entries: (await tree(entry.hash)).map(item => ({ name: item.name, oid: item.hash, mode: item.mode,
       kind: item.type === "tree" ? "tree" : item.type === "gitlink" ? "commit" : "blob" } satisfies ArdiEntry)) });
+  }
+  if (verb === "snapshot") {
+    // A commit's files never change, so one fetch per commit serves every later search of it.
+    const oid = await resolve(at), key = new Request(`https://code-snapshot.internal/${grant.project.id}/${oid}`);
+    const hit = await caches.default.match(key);
+    if (hit) return page({ oid, files: await hit.json() });
+    const request = new Request(`https://git.internal/${repo}.git/git-upload-pack`, { method: "POST", headers: { "content-type": "application/x-git-upload-pack-request", "git-protocol": "version=2" } });
+    const response = await api.git(namespace, repo, "git-upload-pack", request, new Blob([shallowFetchBody(oid)]).stream(), false);
+    if (!response.ok) throw new HubError(502, "unavailable", "Git snapshot unavailable");
+    let files: SnapshotFile[];
+    try { files = snapshotFiles(readPack(packFromResponse(new Uint8Array(await response.arrayBuffer()))), oid); }
+    catch { throw new HubError(502, "unavailable", "Git snapshot unreadable"); }
+    await caches.default.put(key, Response.json(files, { headers: { "cache-control": "max-age=604800" } }));
+    return page({ oid, files });
   }
   if (verb === "commit.show") {
     const commit = await api.readCommit<ArtifactCommit>(namespace, repo, String(body.oid ?? ""));

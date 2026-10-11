@@ -25,11 +25,6 @@ const S = (description: string) => ({ type: "string", description });
 const I = (description: string) => ({ type: "integer", minimum: 1, description });
 
 const PLANS: Plan[] = [
-  // Project work
-  { name: "repo.search", area: "code", kind: "query", minRole: "reader", title: "Search code",
-    summary: "Search the code of a repository at a ref.",
-    spec: "Literal and regular-expression search with file and line results, across all branches on request.",
-    input: { project: S("Repository"), q: S("What to find"), ref: S("Default main") }, required: ["project", "q"] },
   // Reviews
   { name: "review.integrate", area: "review", kind: "command", minRole: "member", title: "Integrate",
     summary: "Merge an approved review into its base branch.",

@@ -62,7 +62,6 @@ The milestone tables below keep their original statuses. This is the current pic
 - diff with merge base and renames;
 - blame, which errors-to-lines (M4) needs;
 - reflog;
-- code search (`repo_search` is still planned);
 - a merge verb (`review_integrate` is still planned);
 - `/internal/resolve`.
 

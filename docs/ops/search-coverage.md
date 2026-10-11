@@ -31,7 +31,15 @@ All effective words must match. Queries use the first six whitespace-separated w
 
 Results are bounded: 20 work items, 15 each for mail, chat, reviews, situations, assistant conversations and outgoing mail, and 10 each for people, projects and app errors. Chat searches up to 40 readable channels and returns up to 10 matches from each. Search scope and limits are available beneath the search form; hitting a cap is not an exact total.
 
-Repository file contents, binary/unextracted attachments and raw telemetry logs are not indexed. Attachment matches cover stored extracts, which may themselves be truncated. Total matches and ingestion freshness are not claimed. A failed source fails the request rather than pretending to have no matches.
+Binary/unextracted attachments and raw telemetry logs are not indexed. Repository files are searched separately, below. Attachment matches cover stored extracts, which may themselves be truncated. Total matches and ingestion freshness are not claimed. A failed source fails the request rather than pretending to have no matches.
+
+## Code search
+
+MCP `repo_search` (`repo.search` in `src/verbs/code.ts`) searches one repository's files at a branch, tag or commit, defaulting to the main branch. `q` is literal and case-insensitive unless `case_sensitive` or `regex` is set; `path` limits it to a path prefix. It returns matching lines with file and line number, up to `limit` (default 50, at most 200), and says when more exist.
+
+Artifacts has no grep or archive endpoint, and reading files one REST call at a time would cost hundreds of API requests per search. Instead the Artifacts adapter (`snapshot` in `src/code/artifactRead.ts`) makes one Git protocol-v2 fetch with `deepen 1`, reads the pack in the Worker (`src/code/gitPack.ts`) and caches the commit's files in the Workers cache keyed by project and commit. Commits never change, so the first search of a commit pays for the fetch and later ones read the cache. Access is checked through the caller's Git session before the cache is read.
+
+Binary files and files over 400 KB are skipped and counted. Regex matching looks at the first 2,000 characters of each line. Submodules are not followed.
 
 ## Verifying and shipping a change
 

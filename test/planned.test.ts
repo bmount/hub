@@ -11,11 +11,7 @@ beforeAll(() => registerAllVerbs());
 
 describe("planned capabilities", () => {
   it("are exactly these, each a tenant verb inside the MCP rules", () => {
-    expect([...PLANNED.keys()].sort()).toEqual([
-            "repo.search",
-      "review.integrate",
-      
-    ]);
+    expect([...PLANNED.keys()].sort()).toEqual(["review.integrate"]);
     for (const v of listVerbs().filter((x) => PLANNED.has(x.name))) {
       expect(mcpViolations(v), v.name).toEqual([]);
       expect(v.scope, v.name).toBe("tenant");

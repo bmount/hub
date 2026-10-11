@@ -169,7 +169,7 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
   return { ...groups, coverage: {
     scope: "caller_readable_records", matching: "all_terms_substring", terms_used: ts, freshness: "unknown", sources,
     conversations: messages.coverage,
-    not_searched: ["repository file contents", "binary or unextracted mail attachments", "raw telemetry logs"],
+    not_searched: ["repository file contents (use repo_search)", "binary or unextracted mail attachments", "raw telemetry logs"],
   } };
 }
 

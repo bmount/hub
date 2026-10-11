@@ -25,7 +25,7 @@ describe("search coverage", () => {
     }
     expect(r.coverage.scope).toBe("caller_readable_records");
     expect(r.coverage.freshness).toBe("unknown");
-    expect(r.coverage.not_searched).toEqual(["repository file contents", "binary or unextracted mail attachments", "raw telemetry logs"]);
+    expect(r.coverage.not_searched).toEqual(["repository file contents (use repo_search)", "binary or unextracted mail attachments", "raw telemetry logs"]);
     expect(r.coverage.conversations).toEqual({ readable_active_channels: 0, readable_archived_channels: 0, searched_channels: 0, channel_limit: 40, per_channel_limit: 10, channels_at_hit_limit: 0 });
   });
 
@@ -126,7 +126,7 @@ describe("search coverage", () => {
         expect(response.isError, JSON.stringify(response)).toBeUndefined();
         const text = (response.content[0] as { text: string }).text;
         expect(text).toContain("Coverage: caller-readable records");
-        expect(text).toContain("Not searched: repository file contents, binary or unextracted mail attachments, raw telemetry logs");
+        expect(text).toContain("Not searched: repository file contents (use repo_search), binary or unextracted mail attachments, raw telemetry logs");
         expect(text).toContain("Total matches and source freshness unknown");
         expect((response.structuredContent as SearchResult).coverage.conversations.searched_channels).toBe(1);
         expect(text).not.toContain("**coverage**");
