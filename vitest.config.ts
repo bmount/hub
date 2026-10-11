@@ -1,16 +1,17 @@
 import path from "node:path";
 import { defineConfig, defineProject } from "vitest/config";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
+import { writeLocalTestWranglerConfig } from "./test/wrangler-test-config";
 
 // Storage is isolated per test file by the pool; test/apply-migrations.ts resets D1 and KV before every test,
 // so each test still starts from an empty, migrated database.
 const workers = defineProject({
   plugins: [
     cloudflareTest(async () => ({
-      wrangler: { configPath: "./wrangler.jsonc" },
+      wrangler: { configPath: writeLocalTestWranglerConfig() },
       miniflare: {
         bindings: {
-          TEST_MIGRATIONS: await readD1Migrations(path.join(__dirname, "migrations")),
+          TEST_MIGRATIONS: await readD1Migrations(path.join(import.meta.dirname, "migrations")),
           HUB_DOMAIN: "pimwell.test",
           HUB_BOOTSTRAP_TOKEN: "test-bootstrap-token",
           HUB_INTERNAL_SECRET: "test-internal-secret",
@@ -18,6 +19,7 @@ const workers = defineProject({
           GOOGLE_CLIENT_SECRET: "test-google-secret",
           HUB_SECRETS_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
           EVAL_KEY: "test-eval-key",
+          GIT_BACKEND: "",
           ARDI_REPO_CREATE: "on",
         },
         // Stands in for the Ardi Worker: echoes what reached it, so tests can check the forward.

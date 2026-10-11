@@ -1,5 +1,6 @@
 node_modules
 .wrangler
+.wrangler-vitest.jsonc
 .dev.vars
 dist
 

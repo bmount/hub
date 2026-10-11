@@ -4,6 +4,8 @@ Pimwell serves tenant repositories from Cloudflare Artifacts through the shared 
 
 The former Ardi source of truth is retired. Its Cloudflare Workers, Durable Object namespaces and R2 buckets have been deleted; the Ardi source repository remains archived on Artifacts.
 
+The standard hub release configuration declares `GIT_BACKEND=artifacts`, `ARTIFACTS_ACCOUNT_ID`, `ARDI_REPO_CREATE=on`, the `GIT_PROXY` service binding to `pimwell-git`, and the `GIT_PUSH_STAGING` R2 binding to `pimwell-git-staging`. `ARTIFACTS_API_TOKEN` is a production secret and is not stored in the Wrangler file. Local Vitest runs derive a temporary Wrangler config from production, but remove only the production Git proxy binding and clear `GIT_BACKEND` so legacy forwarding fixtures stay isolated.
+
 ## Legacy write fence
 
 `git_repository.legacy_write_fenced_at` is the historical per-repository legacy write fence used during the cutover. When it was set, the shared Git proxy refused new legacy `git-receive-pack` requests for that repository with 403 while fetches still drained from Ardi.
