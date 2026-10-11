@@ -60,6 +60,22 @@ function statusResponse(outcomes: RefOutcome[], capabilities: string[]): Respons
   return new Response(new ReadableStream({ start(controller) { for (const chunk of chunks) controller.enqueue(chunk);controller.close(); } }), { headers: { "content-type": "application/x-git-receive-pack-result" } });
 }
 
+async function defaultBranchTip(api: ArtifactsRest, namespace: string, repo: string): Promise<{ ref: string; oid: string | null }> {
+  const branch = (await api.info(namespace, repo)).default_branch || "main";
+  const tip = (await api.log(namespace, repo, branch, 1).catch(() => []))[0]?.hash ?? null;
+  return { ref: `refs/heads/${branch}`, oid: tip };
+}
+
+/** A branch other than the default whose tip the default branch already contains (by the commit index), so deleting it loses nothing. */
+async function mergedIntoDefault(update: RefUpdate, tip: () => Promise<{ ref: string; oid: string | null }>, db: D1Database, grant: GitGrant): Promise<boolean> {
+  if (!update.ref.startsWith("refs/heads/") || update.oldOid === ZERO_OID) return false;
+  const main = await tip();
+  if (update.ref === main.ref || !main.oid) return false;
+  return !!await db.prepare(`WITH RECURSIVE reachable(oid) AS (
+      SELECT ? UNION SELECT parent.value FROM reachable r JOIN git_commit c ON c.oid = r.oid AND c.project_id = ? JOIN json_each(c.parents_json) parent
+    ) SELECT 1 FROM reachable WHERE oid = ? LIMIT 1`).bind(main.oid, grant.project.id, update.oldOid).first();
+}
+
 /** Stage the pack using native Git, prove allowed changes, then replay it to the published repo using Git's old-OID checks. */
 export async function artifactPush(request: Request, env: Env, grant: GitGrant, api: ArtifactsRest,
   // Access is checked again before publishing, by the same rule that granted it (project repo or agent source).
@@ -92,13 +108,14 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
     if (stagedOutcomes.some(update => update.outcome !== "ok"))
       throw new HubError(409, "conflict", "Git could not stage every ref; fetch before retrying");
     const publish: RefUpdate[] = [], refused = new Map<string, string>(), forks = new Map<string, string>();
+    let defaultTip: Promise<{ ref: string; oid: string | null }> | undefined;
     let calls = 0;
     for (const update of updates) {
       try {
         await protectGitHistory([update], async ref => {
           if (++calls > 512) throw new HubError(503, "unavailable", "push ancestry validation limit reached");
           return (await api.log(namespace, shadow, ref)).map(commit => ({ hash: commit.hash, parents: commit.parents }));
-        });
+        }, deletion => mergedIntoDefault(deletion, () => defaultTip ??= defaultBranchTip(api, namespace, repo), db, grant));
         publish.push(update);
       } catch (error) {
         if (!(error instanceof HubError) || error.status !== 403) throw error;
@@ -148,6 +165,8 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
       if (!canonical.ok) throw new HubError(502, "unavailable", "Git publishing response unavailable; fetch before retrying");
       actual = reportOutcomes(await responseBytes(canonical), publish);
       for (const outcome of outcomes) {
+        // A refusal with nothing saved in its place stays a refusal, with its reason.
+        if (refused.has(outcome.ref) && !forks.has(outcome.ref)) continue;
         const ref = forks.get(outcome.ref) ?? outcome.ref, result = actual.find(update => update.ref === ref);
         if (forks.has(outcome.ref)) {
           outcome.reason = `${refused.get(outcome.ref)}${result?.outcome === "ok" ? `; saved as ${ref}` : ""}`;

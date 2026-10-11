@@ -8,6 +8,7 @@ import { cleanupGitStages } from "../src/code/gitStageCleanup";
 import { packet, parseAdvertisedRefs, peekCommands, refAllowed, reportOutcomes, validGitRef, ZERO_OID } from "../src/code/gitProtocol";
 import { createGitSession, revokeSession } from "../src/db/sessions";
 import { createProject } from "../src/db/projects";
+import { indexCommitNodes } from "../src/code/gitCommitIndex";
 import { HubError } from "../src/errors";
 import { seedAgent, seedHuman, seedTenant } from "./helpers";
 
@@ -287,6 +288,37 @@ describe("Artifacts push recovery boundaries", () => {
     expect(res.status).toBe(200);expect(publishedRef).toMatch(/^refs\/ardi\/forks\/heads\/main\//);
     expect((await env.HUB_DB.prepare("SELECT oid FROM git_commit").first<{ oid: string }>())!.oid).toBe(rewritten);
     expect((await env.HUB_DB.prepare("SELECT target FROM code_event WHERE kind = 'commit'").first<{ target: string }>())!.target).toBe(rewritten);
+  });
+
+  it("deletes branches main already contains, and refuses main itself and unmerged branches", async () => {
+    const { grant: g, git } = await grant(), r2 = bucket();
+    const [root, tip, merged, unmerged] = [oid(1), oid(2), oid(1), oid(7)];
+    await indexCommitNodes(env.HUB_DB, g.tenant.id, g.project.id, [
+      { hash: root, treeHash: oid(11), parents: [], committedAt: 1 }, { hash: tip, treeHash: oid(12), parents: [root], committedAt: 2 },
+    ] as any);
+    const deletions = [["refs/heads/old-feature", merged], ["refs/heads/stray", unmerged], ["refs/heads/main", tip]] as const;
+    const body = join(...deletions.map(([ref, old], i) => packet(`${old} ${ZERO_OID} ${ref}${i === 0 ? "\0report-status delete-refs" : ""}\n`)), flush);
+    const published: string[] = [];
+    const api = {
+      async fork() {}, async deleteTemporary() {},
+      async info() { return { default_branch: "main" }; },
+      async log(_ns: string, repo: string, ref: string) { return repo === "site" && ref === "main" ? [{ hash: tip, parents: [root] }] : []; },
+      async readCommit() { throw new HubError(404, "not_found", "missing"); },
+      async git(_ns: string, repo: string, tail: string, _request: Request, supplied: ReadableStream<Uint8Array> | null) {
+        if (tail === "info/refs") return new Response(flush);
+        const parsed = await peekCommands(supplied!);await new Response(parsed.stream).arrayBuffer();
+        if (repo === "site") published.push(...parsed.updates.map(u => u.ref));
+        return new Response(join(packet("unpack ok\n"), ...parsed.updates.map(u => packet(`ok ${u.ref}\n`)), flush));
+      },
+    };
+    const res = await artifactPush(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", headers: { authorization: basic(git.token) }, body }), { ...env, GIT_PUSH_STAGING: r2 }, g, api as any);
+    expect(res.status).toBe(200);
+    const report = await res.text();
+    expect(report).toContain("ok refs/heads/old-feature");
+    expect(report).toContain("ng refs/heads/stray only a branch that main already contains can be deleted");
+    expect(report).toContain("ng refs/heads/main only a branch that main already contains can be deleted");
+    expect(published).toEqual(["refs/heads/old-feature"]);
+    expect((await env.HUB_DB.prepare("SELECT state FROM git_push").first<{ state: string }>())!.state).toBe("complete");
   });
 
   it("indexes tag-only peeled history and non-head commit refs with real attribution", async () => {

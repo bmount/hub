@@ -11,7 +11,7 @@ Each agent can keep its own source at `https://<org>.pimwell.com/agent-src/<agen
 | Organization admins | Read |
 | Anyone else | "not found", whether or not the repository exists |
 
-The repository is created the first time the agent or its operator fetches or pushes. Credentials are the same as for any Pimwell repository: the agent's Git session or agent-run token, or a person's Git credential. History is kept like every other repository: no force pushes, no deleted branches.
+The repository is created the first time the agent or its operator fetches or pushes. Credentials are the same as for any Pimwell repository: the agent's Git session or agent-run token, or a person's Git credential. History is kept like every other repository: no force pushes, and only branches that main already contains can be deleted.
 
 `<agent>` is the agent's name, the part of its address between the organization and `@` (`mcc.pio@pimwell.com` → `pio`).
 
