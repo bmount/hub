@@ -25,6 +25,15 @@ The hub is meant to become self-modifying. When it does, the running hub should 
 
 ## Deploying
 
+Pushing to `main` never deploys. A release is a separate step for whoever holds a deploy token:
+
+    make release                           # test current main, upload, deploy, smoke-check, record rollback
+    make rollback VERSION=<version id>     # put a previous version back
+
+`make release` runs `scripts/release.mjs` from a clean checkout of `origin/main`. It reinstalls, typechecks and runs the full suite on that exact commit, uploads with `--keep-vars`, and refuses to deploy if bindings, runtime or migrations changed. Only then does it deploy at 100% and smoke-check. Logs and a record (version, rollback version, smoke results) go to `~/.local/state/pimwell/releases/<commit>/`, or `$RELEASE_DIR`. It runs once per commit: if a record exists, read it instead of retrying. Migrations and binding changes are deployed by hand after review.
+
+The raw commands, for setup and repairs:
+
     npm run deploy                         # wrangler deploy as pimwell-001
     npm run migrate:remote                 # D1 migrations as pimwell-001
     npm run cf -- <any wrangler command>   # e.g. npm run cf -- tail
