@@ -6,7 +6,7 @@ import { join } from 'node:path';
 export async function deployRecorder(project, { fetchImpl = fetch, tokenFile = process.env.PIMWELL_TOKEN_FILE ?? join(homedir(), '.config/pimwell/mcc.token'), origin = process.env.PIMWELL_ORIGIN ?? 'https://mcc.pimwell.com' } = {}) {
   const url = new URL(origin);
   if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/') throw new Error('Pimwell origin must be an HTTPS origin');
-  const token = readFileSync(tokenFile, 'utf8').trim();
+  let token = readFileSync(tokenFile, 'utf8').trim();
   async function call(verb, input) {
     const r = await fetchImpl(new URL(`/api/${verb}`, url), { method: 'POST', redirect: 'error',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -16,6 +16,11 @@ export async function deployRecorder(project, { fetchImpl = fetch, tokenFile = p
     return j.result;
   }
   // Refuse missing/invalid reporting credentials before uploading or deploying anything.
+  if (token.startsWith('pmw_')) {
+    const session = await call('session.start', { label: 'make release', ttl: 3600 });
+    if (typeof session.session_token !== 'string' || !session.session_token) throw new Error('Pimwell reporting session missing');
+    token = session.session_token;
+  }
   const caller = await call('whoami', {});
   if (!caller.identity?.email || !['member', 'admin'].includes(caller.tenant?.role)) throw new Error('Pimwell reporting member identity missing');
   return async (target, commit) => call('deploy.record', { project, commit, worker: target.worker,
