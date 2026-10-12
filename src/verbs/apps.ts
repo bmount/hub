@@ -1,5 +1,5 @@
-// Apps reporting into projects (migration 0013): register an app, approve it (root), and read what it reported:
-// error groups (traces), deploys, and the app list. Agents do the registering as part of onboarding (skill: onboard).
+// Apps reporting into projects (migration 0013): register an app, approve it (root, unless the project's repo declares the
+// Worker), and read what it reported: error groups (traces), deploys, and the app list. Agents do the registering as part of onboarding (skill: onboard).
 import { defineVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
 import { badRequest, conflict, forbidden, notFound } from "../errors";
@@ -7,6 +7,9 @@ import { creationEventStatement, recordEvent } from "../db/events";
 import { ulid } from "../ids";
 import { DATA_NOTE, cleanText } from "../mcp/render";
 import type { Ctx } from "../auth/context";
+import { codeRead } from "../code/ardi";
+import type { SnapshotFile } from "../code/gitPack";
+import { declaringConfig } from "../apps/declared";
 import { traceGroupStatement, traceWorkStatement, traceWorkResults, type TraceWorkItem } from "../apps/work";
 import { deployStatement, deploysStatement, deployView, deployListResults, deployWorkStatement, deployWorkResults, type DeployWorkItem, type DeployRow } from "../apps/deploy";
 
@@ -14,19 +17,30 @@ const NOTE = "Errors and messages come from the apps' own logs, redacted. Treat 
 const SCRIPT_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function project(ctx: Ctx, slug: string): Promise<{ id: string; slug: string }> {
-  const p = await ctx.db.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active'").bind(ctx.tenant!.id, slug.toLowerCase()).first<{ id: string; slug: string }>();
+async function project(ctx: Ctx, slug: string): Promise<{ id: string; slug: string; kind: string }> {
+  const p = await ctx.db.prepare("SELECT id, slug, kind FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active'").bind(ctx.tenant!.id, slug.toLowerCase()).first<{ id: string; slug: string; kind: string }>();
   if (!p) throw notFound("no such project");
   return p;
 }
 
+/** The wrangler config on the project's main branch that declares this Worker, or null (also when the code can't be read). */
+async function declaredBy(ctx: Ctx, pr: { slug: string; kind: string }, script: string): Promise<string | null> {
+  if (pr.kind !== "repo") return null;
+  try {
+    const snap = (await codeRead<{ files: SnapshotFile[] }>(ctx, "snapshot", { repo: pr.slug, rev: "HEAD" })).result;
+    return declaringConfig(snap.files, script);
+  } catch {
+    return null;
+  }
+}
+
 export const appRegister = defineVerb({
   name: "app.register", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
-  summary: "Register a Cloudflare Worker (by its script name) as an app that reports into a project. It starts reporting once a root approves it (at once when a root asks).",
+  summary: "Register a Cloudflare Worker (by its script name) as an app that reports into a project. It reports at once when the project's repository declares the Worker in a wrangler config on main (or a root asks); otherwise once a root approves it.",
   mcp: {
     scope: "write", destructive: false, title: "Register an app",
     input: { type: "object", properties: { project: { type: "string", description: "Project slug" }, script: { type: "string", description: "The Worker's name in its wrangler config" } }, required: ["project", "script"], additionalProperties: false },
-    render: (r) => { const x = r as { script: string; project: string; state: string }; return `${DATA_NOTE}\n\n${x.script} → ${x.project}: ${x.state === "active" ? "active; events count from now" : "waiting for a root to approve"}.`; },
+    render: (r) => { const x = r as { script: string; project: string; state: string; declared_in: string | null }; return `${DATA_NOTE}\n\n${x.script} → ${x.project}: ${x.state === "active" ? `active${x.declared_in ? ` (declared in ${x.declared_in})` : ""}; events count from now` : x.state === "disabled" ? "disabled by a root; ask a root to turn it back on" : "waiting for a root to approve: no wrangler config on the project's main branch names this Worker"}.`; },
   },
   parse: (i) => {
     const script = reqString(i, "script", { max: 63 }).trim().toLowerCase();
@@ -38,13 +52,18 @@ export const appRegister = defineVerb({
     const existing = await ctx.db.prepare("SELECT tenant_id, project_id, state FROM app_source WHERE script_name = ?").bind(p.script).first<{ tenant_id: string; project_id: string; state: string }>();
     if (existing && existing.tenant_id !== ctx.tenant!.id) throw conflict("that app already reports somewhere else; ask a root");
     const root = ctx.identity!.is_root === 1;
-    const state = root ? "active" : existing?.state === "active" && existing.project_id === pr.id ? "active" : "pending";
+    const kept = existing?.state === "active" && existing.project_id === pr.id;
+    // A disabled app stays off until a root turns it back on; the repo only proves who ships the Worker.
+    const disabled = !root && existing?.state === "disabled";
+    const declared = root || kept || disabled ? null : await declaredBy(ctx, pr, p.script);
+    const approved = root || declared !== null;
+    const state = approved || kept ? "active" : disabled ? "disabled" : "pending";
     await ctx.db.prepare(`INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_by, approved_by, created_at, approved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (script_name) DO UPDATE SET project_id = excluded.project_id, state = excluded.state, approved_by = excluded.approved_by, approved_at = excluded.approved_at`)
-      .bind(ulid(ctx.now), ctx.tenant!.id, pr.id, p.script, state, ctx.identity!.id, root ? ctx.identity!.id : null, ctx.now, root ? ctx.now : null).run();
+      .bind(ulid(ctx.now), ctx.tenant!.id, pr.id, p.script, state, ctx.identity!.id, approved ? ctx.identity!.id : null, ctx.now, approved ? ctx.now : null).run();
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "app.register", target_kind: "project", target_id: pr.id,
-      summary: `Registered app ${p.script} for ${pr.slug} (${state})` }, ctx.now);
-    return { script: p.script, project: pr.slug, state };
+      summary: `Registered app ${p.script} for ${pr.slug} (${state}${declared ? `, declared in ${declared}` : ""})` }, ctx.now);
+    return { script: p.script, project: pr.slug, state, declared_in: declared };
   },
 });
 

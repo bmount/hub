@@ -1,6 +1,6 @@
 // App telemetry (migration 0013): redaction at the source, registration and approval, grouping, deploys, usage.
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
 import { redact, mask } from "../src/apps/redact";
 import { ingest, normalize } from "../src/apps/ingest";
@@ -10,6 +10,8 @@ import { createNamespace } from "../src/db/namespaces";
 import { oauthContext } from "../src/auth/context";
 import { liveGrant } from "../src/db/oauthGrants";
 import { callTool } from "../src/mcp/tools";
+import { setArdiForTest } from "../src/code/ardi";
+import { declaringConfig, stripJsonc } from "../src/apps/declared";
 import { apiPost, cookieHeaders, seedGrant, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
@@ -498,6 +500,51 @@ describe("app telemetry", () => {
     const page = await (await SELF.fetch(`https://${HOST}/apps`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
     expect(page).toContain("<code>pricebench</code>");
     expect(page).toContain("x is undefined");
+  });
+
+  it("approves an app at once when the project's main branch declares the Worker, and not otherwise", async () => {
+    const w = await world();
+    const files = [
+      { path: "workers/feed/wrangler.jsonc", text: '{\n  // https://example.com/docs\n  "name": "pricebench-feed",\n  "services": [{ "binding": "X", "service": "someone-else" }],\n  "env": { "staging": { "name": "pricebench-feed-staging" } },\n}\n', size: 1, binary: false },
+      { path: "README.md", text: 'name = "pricebench-readme"', size: 1, binary: false },
+    ];
+    const seen: string[] = [];
+    setArdiForTest({ fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push(String(input) + " " + String(init?.body));
+      return Response.json({ ok: true, result: { oid: "a".repeat(40), files }, next: null });
+    } } as unknown as Fetcher);
+    try {
+      expect((await w.call(w.pat.token, "app.register", { project: "pricebench", script: "pricebench-feed" })).result).toMatchObject({ state: "active", declared_in: "workers/feed/wrangler.jsonc" });
+      expect(seen[0]).toContain("/api/snapshot");
+      expect(seen[0]).toContain('"repo":"pricebench"');
+      expect((await w.call(w.pat.token, "app.register", { project: "pricebench", script: "pricebench-feed-staging" })).result).toMatchObject({ state: "active" });
+      for (const script of ["someone-else", "pricebench-readme", "other"])
+        expect((await w.call(w.pat.token, "app.register", { project: "pricebench", script })).result).toMatchObject({ state: "pending", declared_in: null });
+      expect((await ingest(env, [redact(tail({ scriptName: "pricebench-feed" }))], Date.now())).accepted).toBe(1);
+      const row = await env.HUB_DB.prepare("SELECT approved_by FROM app_source WHERE script_name = 'pricebench-feed'").first<{ approved_by: string }>();
+      expect(row!.approved_by).toBe(w.pat.identity.id);
+      // A root's off switch beats the repo: re-registering a disabled app leaves it off.
+      await env.HUB_DB.prepare("UPDATE app_source SET state = 'disabled' WHERE script_name = 'pricebench-feed'").run();
+      expect((await w.call(w.pat.token, "app.register", { project: "pricebench", script: "pricebench-feed" })).result).toMatchObject({ state: "disabled" });
+      // Another organization can't take it over by declaring it too.
+      const other = await seedTenant("bravo");
+      await createProject(env.HUB_DB, { tenant_id: other.id, namespace_id: null, slug: "x", kind: "repo", display_name: "X" }, Date.now());
+      const eve = await seedHuman("eve@example.com", { memberships: [{ tenant_id: other.id, role: "admin" }] });
+      expect((await w.call(eve.token, "app.register", { project: "x", script: "pricebench-feed-staging" }, "bravo.pimwell.test")).status).toBe(409);
+    } finally {
+      setArdiForTest(null);
+    }
+  });
+
+  it("reads Worker names only from wrangler configs' top level and environments", () => {
+    const f = (path: string, text: string) => ({ path, text, size: text.length, binary: false });
+    const toml = 'name = "hub"\n[env.prod]\nname = "hub-prod" # live\n[[durable_objects.bindings]]\nname = "room"\n[vars]\nname = "var"\n';
+    expect(declaringConfig([f("wrangler.toml", toml)], "hub-prod")).toBe("wrangler.toml");
+    expect(declaringConfig([f("wrangler.toml", toml)], "room")).toBeNull();
+    expect(declaringConfig([f("wrangler.toml", toml)], "var")).toBeNull();
+    expect(declaringConfig([f("a/wrangler.json", '{"name":"a"}'), f("a/notwrangler.json", '{"name":"b"}')], "b")).toBeNull();
+    expect(declaringConfig([f("a/wrangler.json", "{ broken")], "a")).toBeNull();
+    expect(stripJsonc('{"u": "https://x/*y*/", /* c */ "n": 1,}')).toBe('{"u": "https://x/*y*/",  "n": 1}');
   });
 
   it("shows root the registrations to approve, and nobody else", async () => {
