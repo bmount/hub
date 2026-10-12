@@ -146,6 +146,18 @@ describe("recorded commit/work evidence", () => {
 });
 
 describe("recorded commit deployment evidence", () => {
+  it("matches explicit Worker deployment commits exactly and never links unknown history", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${HOST}/`, { headers: w.h }), env);
+    const input = { project: "site", worker: "site-worker", version: "11111111-1111-4111-8111-111111111111", deployment: "22222222-2222-4222-8222-222222222222", commit: "unknown" };
+    await w.call(w.h, "deploy.record", input);
+    expect((await afterCommit(ctx, w.p.id, B, 0)).shipped).toBeNull();
+    const recorded = (await w.call(w.h, "deploy.record", { ...input, commit: B.toUpperCase(), deployment: "33333333-3333-4333-8333-333333333333" })).result;
+    expect((await afterCommit(ctx, w.p.id, B, 0)).shipped).toMatchObject({ id: (recorded.deploy as { id: string }).id, script: "site-worker", match: "full-commit", tag: B });
+    const { grant } = await seedGrant(w.t, w.pat);
+    const oauth = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
+    expect(JSON.stringify((await callTool(oauth, "repo_commit", { project: "site", oid: B })).content)).toContain("Deployed in site-worker");
+  });
   it("rejects malformed/contradictory matches and prefers exact full IDs to explicitly labelled prefix hints", async () => {
     const w = await world();
     const ctx = await buildContext(new Request(`https://${HOST}/`, { headers: w.h }), env);

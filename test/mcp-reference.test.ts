@@ -66,7 +66,7 @@ describe("deploy record schema/validator contract", () => {
   it("advertises the enforced lengths and commit syntax", () => {
     const properties = toolDefinition(getVerb("deploy.record")!).inputSchema.properties!;
     expect(properties.project).toMatchObject({ minLength: 1, maxLength: 63 });
-    expect(properties.commit).toMatchObject({ minLength: 7, maxLength: 64, pattern: "^[0-9a-fA-F]{7,64}$" });
+    expect(properties.commit).toMatchObject({ minLength: 7, maxLength: 64, pattern: "^([0-9a-fA-F]{7,64}|unknown)$" });
     expect(properties.environment).toMatchObject({ maxLength: 30 });
     expect(properties.message).toMatchObject({ maxLength: 200 });
   });

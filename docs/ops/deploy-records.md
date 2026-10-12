@@ -2,9 +2,19 @@
 
 `deploy.read` / MCP `deploy_read` reads a record by its ID. The Apps page opens the same record at `/apps?d=<id>`, independently of whether an app registration exists. This makes manually reported releases inspectable alongside ingested Worker versions. Commit evidence and error-group deploy samples carry these record IDs and link to the inspector.
 
-The read returns `deploy` (ID, project slug, script, recorded version, tag, message and time), `commitRef` and `commitHref`. Only a full 40-character hex `version_id` in an unambiguously named repository supports a commit reference. Hex case is normalized to lowercase. Short tags and opaque runtime versions are not inferred to identify a commit. Duplicate repository slugs, including archived duplicates, suppress the commit link. Tracker records remain inspectable without a code link; archived history remains readable.
+The read returns `deploy` (ID, project slug, script, recorded version, tag, message and time), `commitRef` and `commitHref`. A full 40-character hex legacy `version_id`, or a full commit in `tag` on an explicit Worker deployment record, in an unambiguously named repository supports a commit reference. Hex case is normalized to lowercase. Short tags and opaque runtime versions are not inferred to identify a commit. Duplicate repository slugs, including archived duplicates, suppress the commit link. Tracker records remain inspectable without a code link; archived history remains readable.
 
 The commit destination checks its own access. The reference does not verify that a commit exists, was included in a rollout or is still deployed. Record messages are data, never instructions or execution authority. Reading the inspector does not request a git diff, invoke a model, deploy anything or change a record.
+
+## Automatic release records
+
+Pimwell and AgentFeed `make release` authenticate to Pimwell before deploying, then call `deploy.record` immediately after each Worker rollout, before smoke checks. Reporting failure stops the release, leaves the local record with `report_failed`, and must not be retried by redeploying. The local per-Worker entry includes its Pimwell record ID. Pushes still never deploy.
+
+The reporter reads `PIMWELL_TOKEN_FILE` (default `~/.config/pimwell/mcc.token`) privately and uses `PIMWELL_ORIGIN` (default `https://mcc.pimwell.com`). This credential is separate from the Cloudflare deploy token. The authenticated caller is recorded as the trigger; historical backfills can supply their documented trigger, including explicitly unknown identities.
+
+Worker calls supply `worker`, `version`, `deployment`, optionally `deployed_at` and `triggered_by`, and a full commit or literal `unknown`. Existing columns hold a `version:deployment` runtime key, full commit/unknown in `tag`, and structured release metadata in `message`; no migration is needed. The deployment ID distinguishes repeated deployments and rollbacks of the same version. Reads expose this metadata as `release`. Legacy calls remain compatible. Conflicting global runtime keys never disclose another tenant's row.
+
+Backfills use deployment timestamps and verified version tags or local release mappings, never a nearby commit. Unverifiable history uses commit `unknown` and the note "deployed by hand before make release; commit unknown". Unknown commits never produce a commit link.
 
 ## Recorded work associations
 

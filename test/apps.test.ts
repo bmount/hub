@@ -133,6 +133,31 @@ describe("deployment/work associations", () => {
 });
 
 describe("deployment record inspection", () => {
+  it("records Worker deployments, exact commits, unknown history and repeated versions separately", async () => {
+    const w = await world();
+    const sha = "a".repeat(40), version = "11111111-1111-4111-8111-111111111111";
+    const deployment = "22222222-2222-4222-8222-222222222222";
+    const input = { project: "pricebench", commit: sha, worker: "pricebench", version, deployment, deployed_at: 123456789, triggered_by: "historical operator", message: "release" };
+    const first = (await w.call(w.pat.token, "deploy.record", input)).result;
+    expect(first.created).toBe(true);
+    expect((await w.call(w.pat.token, "deploy.record", input)).result.created).toBe(false);
+    const id = (first.deploy as { id: string }).id;
+    expect((await w.call(w.pat.token, "deploy.read", { id })).result).toMatchObject({
+      commitRef: `pricebench@${sha}`, deploy: { script_name: "pricebench", seen_at: 123456789 },
+      release: { version, deployment, commit: sha, triggered_by: "historical operator", recorded_by: "pat@example.com" },
+    });
+    const unknown = (await w.call(w.pat.token, "deploy.record", { ...input, deployment: "33333333-3333-4333-8333-333333333333", commit: "unknown", message: "deployed by hand before make release; commit unknown" })).result;
+    expect(unknown.created).toBe(true);
+    expect((await w.call(w.pat.token, "deploy.read", { id: (unknown.deploy as { id: string }).id })).result.commitRef).toBeNull();
+    for (const bad of [{ version: "bad" }, { deployment: "" }, { worker: "bad/worker" }, { commit: "abcdef0" }, { deployed_at: -1 }]) {
+      expect((await w.call(w.pat.token, "deploy.record", { ...input, ...bad })).status).toBe(400);
+    }
+    const other = await seedTenant("other");
+    await createProject(env.HUB_DB, { tenant_id: other.id, namespace_id: null, slug: "pricebench", kind: "repo", display_name: "Other" }, Date.now());
+    const stranger = await seedHuman("stranger@example.com", { memberships: [{ tenant_id: other.id, role: "member" }] });
+    expect((await w.call(stranger.token, "deploy.record", input, "other.pimwell.test")).status).toBe(409);
+    expect((await w.call(stranger.token, "deploy.read", { id }, "other.pimwell.test")).status).toBe(404);
+  });
   it("reads a manually recorded deployment without an app registration through API/MCP/UI", async () => {
     const w = await world();
     const sha = "A".repeat(40);

@@ -4,6 +4,7 @@
 // version that keeps the dashboard's vars, refuses binding or runtime changes, records the rollback version, deploys
 // and smoke-checks. Logs and a record go to $RELEASE_DIR/<commit>/ (default ~/.local/state/pimwell/releases).
 import { spawnSync } from 'node:child_process';
+import { deployRecorder } from './deploy-record.mjs';
 import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -41,6 +42,7 @@ dir = join(process.env.RELEASE_DIR ?? join(process.env.XDG_STATE_HOME ?? join(ho
 if (existsSync(join(dir, 'record.json'))) fail(`${short} was already released or attempted; read ${join(dir, 'record.json')} instead of retrying`);
 mkdirSync(dir, { recursive: true, mode: 0o700 });
 
+const recordDeploy = await deployRecorder('pimwell').catch(() => fail('Pimwell deploy reporting preflight failed; nothing was deployed'));
 console.log(`Releasing ${short}: install, typecheck, full test suite (a few minutes)…`);
 run('npm', ['ci', '--ignore-scripts'], { log: 'install.log', env: withoutToken });
 run('npm', ['run', 'typecheck'], { log: 'types.log', env: withoutToken, failure: 'typecheck failed; nothing was released' });
@@ -84,11 +86,13 @@ for (const t of targets) {
   run('npx', ['wrangler', 'versions', 'deploy', '--name', t.worker, `${t.version}@100%`, '--yes'], { log: `deploy-${t.worker}.log`, failure: `deploying ${t.worker} failed; check production before anything else (${rollbacks()})` });
   for (let i = 0; i < 6 && !t.deployment; i++) {
     const d = (await api(t.worker, '/deployments')).deployments[0];
-    if (d.versions.length === 1 && d.versions[0].version_id === t.version && d.versions[0].percentage === 100) t.deployment = d.id;
+    if (d.versions.length === 1 && d.versions[0].version_id === t.version && d.versions[0].percentage === 100) { t.deployment = d.id; t.deployed_at = Date.parse(d.created_on); }
     else await new Promise((r) => setTimeout(r, 2000));
   }
   if (!t.deployment) fail(`${t.worker} live outcome unclear; check the dashboard before anything else. Record: ${join(dir, 'record.json')}`);
   save();
+  try { t.deploy_record = (await recordDeploy(t, commit)).deploy.id; save(); }
+  catch { record.phase = 'report_failed'; save(); fail(`Pimwell deploy recording failed for ${t.worker}; deployment is live. Inspect ${join(dir, 'record.json')}; do not redeploy.`); }
 }
 record.phase = 'deployed'; save();
 

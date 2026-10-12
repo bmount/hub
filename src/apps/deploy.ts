@@ -19,8 +19,15 @@ export function deploysStatement(ctx: Ctx, project: string | null = null) {
 
 export function deployView(row: DeployRow) {
   const { commit_project, ...deploy } = row;
-  const oid = commit_project && /^[0-9a-f]{40}$/i.test(row.version_id) ? row.version_id.toLowerCase() : null;
-  return { deploy, commitRef: oid ? `${commit_project}@${oid}` : null,
+  const commit = /^[0-9a-f]{40}$/i.test(row.version_id) ? row.version_id :
+    /^[0-9a-f-]{36}:[0-9a-f-]{36}$/i.test(row.version_id) ? row.tag : null;
+  const oid = commit_project && commit && /^[0-9a-f]{40}$/i.test(commit) ? commit.toLowerCase() : null;
+  let release = null;
+  try {
+    const metadata = JSON.parse(row.message ?? "null");
+    if (metadata?.release === 1 && row.version_id === `${metadata.version}:${metadata.deployment}` && metadata.commit === row.tag) release = metadata;
+  } catch { /* Legacy messages are plain text. */ }
+  return { deploy, release, commitRef: oid ? `${commit_project}@${oid}` : null,
     commitHref: oid ? `/${encodeURIComponent(commit_project!)}/code?c=${oid}` : null };
 }
 
