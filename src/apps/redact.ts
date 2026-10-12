@@ -61,15 +61,17 @@ export function usageFrom(parts: unknown[]): AppUsage | null {
 }
 
 type TailLike = {
-  scriptName?: string | null; outcome?: string; eventTimestamp?: number | null;
+  scriptName?: string | null; entrypoint?: string; outcome?: string; eventTimestamp?: number | null;
   scriptVersion?: { id?: string; tag?: string; message?: string } | null;
-  event?: { request?: { url?: string; method?: string; headers?: Record<string, string> }; response?: { status?: number } } | null;
+  event?: { rpcMethod?: string; request?: { url?: string; method?: string; headers?: Record<string, string> }; response?: { status?: number } } | null;
   logs?: Array<{ level?: string; message?: unknown[] }>; exceptions?: Array<{ name?: string; message?: string }>;
 };
 
 /** One tail item to what Pimwell may keep, or null when there is nothing worth sending. */
 export function redact(t: TailLike): AppEvent | null {
   if (!t.scriptName) return null;
+  // Tail delivery itself is a hub invocation. Forwarding it would create an endless RPC/tail feedback loop.
+  if (t.scriptName === "pimwell-hub" && (t.entrypoint === "Ingest" || t.event?.rpcMethod === "events")) return null;
   const req = t.event?.request;
   const logs: AppLog[] = [];
   const usage: AppUsage[] = [];

@@ -130,12 +130,12 @@ export const traceRead = defineVerb({
     scope: "read", destructive: false, title: "Read an error",
     input: { type: "object", properties: { id: { type: "string", description: "Error group id from trace_list" } }, required: ["id"], additionalProperties: false },
     render: (r) => {
-      const x = r as ReturnType<typeof traceWorkResults> & { group: GroupRow & { last_message: string }; events: Array<{ at: number; method: string | null; path: string | null; status: number | null; ray: string | null; version_id: string | null }>; deploys: Array<{ id: string; tag: string | null; version_id: string; seen_at: number }> };
+      const x = r as ReturnType<typeof traceWorkResults> & { group: GroupRow & { last_message: string }; events: Array<{ at: number; method: string | null; path: string | null; status: number | null; ray: string | null; version_id: string | null; commit: string | null }>; deploys: Array<{ id: string; tag: string | null; version_id: string; seen_at: number }> };
       return [DATA_NOTE, NOTE, "", `**${x.group.script_name}** ${x.group.kind} ×${x.group.count}: ${cleanText(x.group.title)}`, "```text", cleanText(x.group.last_message).replace(/```/g, "'''"), "```",
         `Related work (${x.relatedWorkCoverage.shown} shown${x.relatedWorkCoverage.truncated ? `; capped at ${x.relatedWorkCoverage.limit}, more omitted` : "; complete for recorded associations"}):`,
         ...x.relatedWork.map(w => `- ${cleanText(w.ref)}: ${cleanText(w.title)} [${w.relationship}, ${w.kind}, ${w.state}]`),
         "Recorded associations do not prove these logs authorized the work.",
-        "Recent:", ...x.events.map((e) => `- ${new Date(e.at).toISOString().slice(0, 19)} ${e.method ?? ""} ${cleanText(e.path ?? "")} ${e.status ?? ""} ray ${e.ray ?? "?"} version ${e.version_id?.slice(0, 8) ?? "?"}`),
+        "Recent:", ...x.events.map((e) => `- ${new Date(e.at).toISOString().slice(0, 19)} ${e.method ?? ""} ${cleanText(e.path ?? "")} ${e.status ?? ""} ray ${e.ray ?? "?"} version ${e.version_id?.slice(0, 8) ?? "?"} commit ${e.commit ?? "unknown"}`),
         "Deploys:", ...x.deploys.map((d) => `- ${cleanText(d.id)} ${new Date(d.seen_at).toISOString().slice(0, 16)} ${cleanText(d.tag ?? d.version_id.slice(0, 8))}`)].join("\n");
     },
   },
@@ -144,7 +144,9 @@ export const traceRead = defineVerb({
     const group = await traceGroupStatement(ctx, p.id).first<GroupRow & { last_message: string; project_id: string }>();
     if (!group) throw notFound("no such error group");
     const [events, deploys, related] = await ctx.db.batch([
-      ctx.db.prepare("SELECT at, method, path, status, ray, version_id FROM app_event WHERE group_id = ? AND tenant_id = ? ORDER BY at DESC LIMIT 20").bind(group.id, ctx.tenant!.id),
+      ctx.db.prepare(`SELECT e.at, e.method, e.path, e.status, e.ray, e.version_id,
+        (SELECT d.tag FROM app_deploy d WHERE d.script_name = ? AND d.version_id = e.version_id AND d.tenant_id = e.tenant_id AND d.project_id = ? LIMIT 1) AS "commit"
+        FROM app_event e WHERE e.group_id = ? AND e.tenant_id = ? ORDER BY e.at DESC LIMIT 20`).bind(group.script_name, group.project_id, group.id, ctx.tenant!.id),
       ctx.db.prepare("SELECT id, tag, version_id, seen_at FROM app_deploy WHERE script_name = ? AND tenant_id = ? AND project_id = ? ORDER BY seen_at DESC LIMIT 5").bind(group.script_name, ctx.tenant!.id, group.project_id),
       traceWorkStatement(ctx, group.id),
     ]);
@@ -238,6 +240,10 @@ export const deployRecord = defineVerb({
       }, ctx.now, { table: "app_deploy", id }),
       ctx.db.prepare("SELECT * FROM app_deploy WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ?")
         .bind(script, versionKey, ctx.tenant!.id, pr.id),
+      // An event can arrive before its release report; backfill only this tenant/project/version.
+      ctx.db.prepare(`UPDATE app_deploy SET tag = (SELECT tag FROM app_deploy WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ?)
+        WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ? AND tag IS NULL`)
+        .bind(script, versionKey, ctx.tenant!.id, pr.id, script, p.version, ctx.tenant!.id, pr.id),
     ]);
     const deploy = results[2]!.results[0];
     // The legacy global script/version key can collide between tenants. Never return or audit a foreign row.

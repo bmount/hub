@@ -37,6 +37,12 @@ async function world() {
 }
 
 describe("redaction at the source", () => {
+  it("does not recursively forward telemetry delivery RPCs", () => {
+    expect(redact(tail({ scriptName: "pimwell-hub", entrypoint: "Ingest" }))).toBeNull();
+    expect(redact(tail({ scriptName: "pimwell-hub", event: { rpcMethod: "events" } }))).toBeNull();
+    expect(redact(tail({ scriptName: "pimwell-hub", event: { rpcMethod: "other" } }))).not.toBeNull();
+    expect(redact(tail({ scriptName: "agentfeed-feed", event: { rpcMethod: "events" } }))).not.toBeNull();
+  });
   it("never forwards user content even in paths, query names, errors or version messages", () => {
     const content = "private post interview mail body secret";
     const e = redact(tail({
@@ -477,6 +483,35 @@ describe("recorded app-error work evidence", () => {
 });
 
 describe("app telemetry", () => {
+  it("links tagless native versions to scoped commits in either arrival order", async () => {
+    const w = await world();
+    await w.call(w.root.token, "app.register", { project: "pricebench", script: "pricebench" });
+    const commit = "a".repeat(40);
+    const version = "11111111-1111-4111-8111-111111111111";
+    const deployment = "22222222-2222-4222-8222-222222222222";
+    const event = () => redact(tail({ scriptVersion: { id: version },
+      exceptions: [{ name: "Error", message: "Pimwell telemetry test exception" }] }))!;
+    await ingest(env, [event()], Date.now());
+    expect((await env.HUB_DB.prepare("SELECT tag FROM app_deploy WHERE version_id = ?").bind(version).first<{ tag: string | null }>())!.tag).toBeNull();
+    await w.call(w.pat.token, "deploy.record", { project: "pricebench", worker: "pricebench", version, deployment, commit });
+    expect((await env.HUB_DB.prepare("SELECT tag FROM app_deploy WHERE version_id = ?").bind(version).first<{ tag: string }>())!.tag).toBe(commit);
+    const id = (await env.HUB_DB.prepare("SELECT id FROM app_error_group WHERE kind = 'exception'").first<{ id: string }>())!.id;
+    const detail = (await w.call(w.pat.token, "trace.read", { id })).result;
+    expect((detail.events as Array<{ commit: string }>)[0]!.commit).toBe(commit);
+
+    // A foreign record for the same Worker name must not provide a commit.
+    const foreign = await seedTenant("other");
+    await env.HUB_DB.prepare("UPDATE app_deploy SET tenant_id = ?, tag = ? WHERE version_id = ?").bind(foreign.id, "b".repeat(40), version + ":" + deployment).run();
+    const v2 = "33333333-3333-4333-8333-333333333333";
+    await env.HUB_DB.prepare("UPDATE app_deploy SET version_id = ? WHERE version_id = ?").bind(v2 + ":" + deployment, version + ":" + deployment).run();
+    await ingest(env, [redact(tail({ scriptVersion: { id: v2 } }))], Date.now());
+    expect((await env.HUB_DB.prepare("SELECT tag FROM app_deploy WHERE version_id = ?").bind(v2).first<{ tag: string | null }>())!.tag).toBeNull();
+
+    const v3 = "44444444-4444-4444-8444-444444444444";
+    await w.call(w.pat.token, "deploy.record", { project: "pricebench", worker: "pricebench", version: v3, deployment, commit });
+    await ingest(env, [redact(tail({ scriptVersion: { id: v3 } }))], Date.now());
+    expect((await env.HUB_DB.prepare("SELECT tag FROM app_deploy WHERE version_id = ?").bind(v3).first<{ tag: string }>())!.tag).toBe(commit);
+  });
   it("drops unregistered and pending apps, and counts approved ones", async () => {
     const w = await world();
     expect(await ingest(env, [redact(tail())], Date.now())).toEqual({ accepted: 0, dropped: 1 });

@@ -14,11 +14,11 @@ The first middleware in `src/index.ts` emits only `msg: "request"`, `status`, `m
 
 Workers Observability is enabled at full sampling on every Pimwell and AgentFeed Worker. Invocation logs and raw log persistence are disabled: native exceptions may contain provider text or user data. The ephemeral Cloudflare tail stream still carries raw URLs/exceptions, so never archive or paste it. `pimwell-tail` replaces arbitrary URL paths/query names, exception messages and log strings before sending anything to the hub over the `Ingest` service binding. Only fixed operational labels, standard exception types, counts, Ray IDs, Worker/version identifiers and hexadecimal commit tags cross this boundary. Structured AI usage accepts known model/provider names and numeric usage only; arbitrary purposes are discarded.
 
-The hub and Git proxy and all seven AgentFeed Workers name `pimwell-tail` as their consumer. The tail itself has Observability enabled but no self-consumer: recursively tailing delivery would create a feedback loop. It logs only a fixed delivery-failure label and batch count, and never retries an ambiguous send. Source-to-project registration supplies the app identity. Releases tag versions with the full commit and record each Worker rollout; deploy commands use the individual Worker config so non-versioned observability/consumer settings are synchronized too.
+The hub and Git proxy and all seven AgentFeed Workers name `pimwell-tail` as their consumer. The tail itself has Observability enabled but no self-consumer. Hub `Ingest` entrypoint / `events` RPC invocations are also excluded at the tail boundary: forwarding delivery itself would create a feedback loop. It logs only a fixed delivery-failure label and batch count, and never retries an ambiguous send. Source-to-project registration supplies the app identity. `trace.read` occurrences carry a commit resolved from tenant/project-scoped release records, since native tail items may omit the version tag. Reports backfill an observed version that arrived before its release record. Releases tag versions with the full commit and record each Worker rollout; deploy commands use the individual Worker config so non-versioned observability/consumer settings are synchronized too.
 
 ## End-to-end check
 
-An authenticated, authorized `POST /api/project.status` with header `x-pimwell-telemetry-probe: exception` schedules the fixed `Pimwell telemetry test exception` after a successful status read. The normal response is unchanged; anonymous, refused or failed reads cannot induce it. Inspect `app.errors` / `app.error` and `project.status` for delivery and source coverage. Never use actual user content for a probe.
+An authenticated, authorized `POST /api/project.status` with header `x-pimwell-telemetry-probe: exception` schedules the fixed `Pimwell telemetry test exception` after a successful status read. The normal response is unchanged; anonymous, refused or failed reads cannot induce it. Inspect `trace.list` / `trace.read` and `project.status` for delivery and source coverage. Never use actual user content for a probe.
 
 ## Confirmed-empty tool polling (#99 increment)
 
@@ -43,7 +43,7 @@ The prior all-calls audit design is qualified only by this explicit empty-query 
 
 ## Looking at logs
 
-- **Pimwell:** Apps (`/apps`), `app.errors`, `app.error`, and `project.status` show content-safe errors and coverage.
+- **Pimwell:** Apps (`/apps`), `trace.list`, `trace.read`, and `project.status` show content-safe errors and coverage.
 - **Cloudflare:** Observability is enabled, but raw Workers Logs are not persisted. Do not use raw tail captures as an archive.
 - **From a Ray ID:** the error page and the `cf-ray` response header carry it; forwarded error examples retain the Ray ID.
 

@@ -53,8 +53,26 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
 
   // What is already known: deploys and error groups touched by this batch.
   const versions = [...new Set(mine.map((e) => e.version).filter((v): v is string => !!v))];
-  const known = new Set(versions.length ? (await db.prepare(`SELECT script_name || ':' || version_id AS k FROM app_deploy WHERE version_id IN (${versions.map(() => "?").join(",")})`)
-    .bind(...versions).all<{ k: string }>()).results.map((r) => r.k) : []);
+  // Cloudflare tail items carry the version UUID, but not consistently its tag. Resolve the commit from
+  // authenticated release records, scoped to the exact source tenant/project (never another tenant's record).
+  const deployRows = versions.length ? (await db.prepare(`SELECT tenant_id, project_id, script_name, version_id, tag FROM app_deploy
+    WHERE version_id IN (${versions.map(() => "?").join(",")}) OR substr(version_id, 1, 36) IN (${versions.map(() => "?").join(",")})`)
+    .bind(...versions, ...versions).all<{ tenant_id: string; project_id: string; script_name: string; version_id: string; tag: string | null }>()).results : [];
+  const known = new Set<string>();
+  const commits = new Map<string, string | null>();
+  for (const d of deployRows) {
+    const src = sources.get(d.script_name);
+    if (!src || src.tenant_id !== d.tenant_id || src.project_id !== d.project_id) continue;
+    known.add(`${d.script_name}:${d.version_id}`);
+    if (!/^[0-9a-f-]{36}:[0-9a-f-]{36}$/i.test(d.version_id) || !/^[0-9a-f]{40}$/.test(d.tag ?? "")) continue;
+    const k = `${d.script_name}:${d.version_id.slice(0, 36)}`;
+    const prior = commits.get(k);
+    commits.set(k, prior === undefined || prior === d.tag ? d.tag : null);
+  }
+  for (const e of mine) {
+    const commit = commits.get(`${e.script}:${e.version}`);
+    if (commit) e.tag = commit;
+  }
   const found: Array<{ e: AppEvent; p: Problem; fp: string }> = [];
   for (const e of mine) for (const p of problems(e)) found.push({ e, p, fp: fnv(`${e.script}|${p.kind}|${normalize(p.title)}`) });
   const fps = [...new Set(found.map((f) => f.fp))];
@@ -86,9 +104,14 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
   for (const e of mine) {
     if (!e.version) continue;
     const k = `${e.script}:${e.version}`;
-    if (known.has(k) || seenVersions.has(k)) continue;
+    if (seenVersions.has(k)) continue;
     seenVersions.add(k);
     const src = sources.get(e.script)!;
+    if (known.has(k)) {
+      if (e.tag) stmts.push(db.prepare("UPDATE app_deploy SET tag = ? WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ? AND tag IS NULL")
+        .bind(e.tag, e.script, e.version, src.tenant_id, src.project_id));
+      continue;
+    }
     stmts.push(db.prepare("INSERT OR IGNORE INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
       .bind(ulid(now), src.tenant_id, src.project_id, e.script, e.version, e.tag, e.message, e.at));
     notices.push({ src, text: `Deployed ${e.script}${e.tag ? ` ${e.tag}` : ""}${e.message ? `: ${e.message}` : ""} (version ${e.version.slice(0, 8)}).` });
