@@ -290,7 +290,7 @@ describe("Artifacts push recovery boundaries", () => {
     expect((await env.HUB_DB.prepare("SELECT target FROM code_event WHERE kind = 'commit'").first<{ target: string }>())!.target).toBe(rewritten);
   });
 
-  it("deletes branches main already contains, and refuses main itself and unmerged branches", async () => {
+  it("deletes any branch but main, merged or not, and refuses main itself", async () => {
     const { grant: g, git } = await grant(), r2 = bucket();
     const [root, tip, merged, unmerged] = [oid(1), oid(2), oid(1), oid(7)];
     await indexCommitNodes(env.HUB_DB, g.tenant.id, g.project.id, [
@@ -315,9 +315,9 @@ describe("Artifacts push recovery boundaries", () => {
     expect(res.status).toBe(200);
     const report = await res.text();
     expect(report).toContain("ok refs/heads/old-feature");
-    expect(report).toContain("ng refs/heads/stray only a branch that main already contains can be deleted");
-    expect(report).toContain("ng refs/heads/main only a branch that main already contains can be deleted");
-    expect(published).toEqual(["refs/heads/old-feature"]);
+    expect(report).toContain("ok refs/heads/stray");
+    expect(report).toContain("ng refs/heads/main the default branch cannot be deleted");
+    expect(published).toEqual(["refs/heads/old-feature", "refs/heads/stray"]);
     expect((await env.HUB_DB.prepare("SELECT state FROM git_push").first<{ state: string }>())!.state).toBe("complete");
   });
 

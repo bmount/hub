@@ -25,13 +25,13 @@ describe("published Git history protection", () => {
   });
   it("rejects published tag changes and ref deletion without attempting publication", async () => {
     await expect(protectGitHistory([update(1, 2, "refs/tags/v1")], async () => [])).rejects.toThrow("tags cannot be changed");
-    await expect(protectGitHistory([{ ...update(1, 0), newOid: ZERO_OID }], async () => [])).rejects.toThrow("only a branch that main already contains can be deleted");
+    await expect(protectGitHistory([{ ...update(1, 0), newOid: ZERO_OID }], async () => [])).rejects.toThrow("the default branch cannot be deleted");
     await expect(protectGitHistory([{ ...update(1, 0, "refs/tags/v1"), newOid: ZERO_OID }], async () => [])).rejects.toThrow("tags cannot be deleted");
   });
-  it("deletes a branch only when the caller confirms main already contains it", async () => {
+  it("deletes a branch only when the caller says it may", async () => {
     const gone = { ...update(1, 0, "refs/heads/old-feature"), newOid: ZERO_OID };
     await protectGitHistory([gone], async () => { throw new Error("should not read"); }, async (u) => u.ref === "refs/heads/old-feature");
-    await expect(protectGitHistory([gone], async () => [], async () => false)).rejects.toThrow("only a branch that main already contains");
+    await expect(protectGitHistory([gone], async () => [], async () => false)).rejects.toThrow("the default branch cannot be deleted");
   });
   it("fails closed on missing, substituted, or discontinuous commit data", async () => {
     for (const data of [[], [commit(4)], [commit(3, 2), commit(5, 1)]])

@@ -8,14 +8,14 @@ type ReadLog = (ref: string) => Promise<CommitParents[]>;
 const oid = /^[0-9a-f]{40}$/;
 
 /** Artifacts has no protected refs. Prove ancestry in a private fork BEFORE publishing the incoming pack. */
-export async function protectGitHistory(updates: RefUpdate[], readLog: ReadLog, merged: (update: RefUpdate) => Promise<boolean> = async () => false): Promise<void> {
+export async function protectGitHistory(updates: RefUpdate[], readLog: ReadLog, deletable: (update: RefUpdate) => Promise<boolean> = async () => false): Promise<void> {
   let calls = 0;
   const pages = new Map<string, CommitParents[]>();
   for (const update of updates) {
-    // A merged branch can go: the default branch already holds every commit on it. Nothing else can be deleted.
+    // Any branch but the default one can go (the caller decides which is the default). Tags stay.
     if (update.newOid === ZERO_OID) {
-      if (await merged(update)) continue;
-      throw new HubError(403, "forbidden", update.ref.startsWith("refs/heads/") ? "only a branch that main already contains can be deleted" : "published tags cannot be deleted");
+      if (await deletable(update)) continue;
+      throw new HubError(403, "forbidden", update.ref.startsWith("refs/heads/") ? "the default branch cannot be deleted" : "published tags cannot be deleted");
     }
     if (update.oldOid === ZERO_OID || update.oldOid === update.newOid) continue;
     if (update.ref.startsWith("refs/tags/")) throw new HubError(403, "forbidden", "published tags cannot be changed");
