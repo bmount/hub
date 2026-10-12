@@ -1,0 +1,25 @@
+#!/usr/bin/env node
+import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { runCli } from "./cli.mjs";
+
+try {
+  const url = process.env.PIMWELL_URL;
+  if (!url) throw new Error("Set PIMWELL_URL to your organization's HTTPS origin");
+  let token = process.env.PIMWELL_TOKEN;
+  if (process.env.PIMWELL_TOKEN_FILE) token = (await readFile(process.env.PIMWELL_TOKEN_FILE, "utf8")).trim();
+  if (!token && !process.argv.slice(2).includes("--help") && process.argv.length > 2) {
+    const origin = new URL(url);
+    if (origin.protocol !== "https:" || origin.username || origin.password) throw new Error("Invalid credential origin");
+    const credential = execFileSync("git", ["credential", "fill"], {
+      input: "protocol=https\nhost=" + origin.host + "\n\n",
+      encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    token = credential.split("\n").find(line => line.startsWith("password="))?.slice(9);
+  }
+  await runCli(process.argv.slice(2), { url, token });
+} catch (error) {
+  // Do not echo helper stderr: credentials belong only in memory.
+  console.error("pimwell: " + (error.code ? "credential lookup failed" : error.message));
+  process.exitCode = 1;
+}

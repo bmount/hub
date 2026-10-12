@@ -1,11 +1,15 @@
 // The work graph (docs/ops/work-graph.md): pure graph rules, then the acceptance scenarios end to end through /api.
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
+// @ts-expect-error The no-build Node CLI is shared with this transport test.
+import { runCli, parseArgs } from "../bin/cli.mjs";
+import { listVerbs } from "../src/verbs/table";
+import { rpcBody } from "./oauth-helpers";
 import { describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
 import { claimWork, getWork, LEASE_MS } from "../src/db/work";
 import { changeDeps } from "../src/work/graphEdit";
 import { closure, criticalPath, findCycle, rankReady, readiness, topoOrder, type Edge, type GraphNode } from "../src/work/graph";
-import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
+import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
 const e = (prereq_id: string, dependent_id: string): Edge => ({ prereq_id, dependent_id });
@@ -70,7 +74,130 @@ async function world() {
   return { t, pat, sam, call, ok, file, readiness, deps };
 }
 
+describe("CLI arguments", () => {
+  const schemas = () => listVerbs().map(v => ({ name: v.name, inputSchema: v.mcp?.input ?? null }));
+  it("types flags, positional references and nested JSON without changing string values", () => {
+    const verbs = schemas();
+    expect(parseArgs(["work", "frontier", "--limit", "3", "--json"], verbs)).toEqual({
+      name: "work.frontier", input: { limit: 3 }, json: true,
+    });
+    expect(parseArgs(["work", "depend", "site#3", "--on", '["site#1","site#2"]'], verbs).input)
+      .toEqual({ id: "site#3", on: ["site#1", "site#2"] });
+    expect(parseArgs(["work", "update", "site#3", "--priority", "0", "--estimate", "2"], verbs).input)
+      .toEqual({ id: "site#3", priority: 0, estimate: 2 });
+    expect(parseArgs(["work", "subscribe", "--follow", "false"], verbs).input).toEqual({ follow: false });
+    expect(parseArgs(["work", "subscribe", "--follow"], verbs).input).toEqual({ follow: true });
+    expect(parseArgs(["session", "start", "--input", '{"label":"cli","ttl":3600}'], verbs).input)
+      .toEqual({ label: "cli", ttl: 3600 });
+    expect(parseArgs(["work", "create", "--title", "123"], verbs).input.title).toBe("123");
+    expect(parseArgs(["work", "create", "--title", "[not JSON]"], verbs).input.title).toBe("[not JSON]");
+    for (const args of [
+      ["work", "frontier", "--limit", "oops"],
+      ["work", "frontier", "--limit", "1.2"],
+      ["work", "frontier", "--limit"],
+      ["work", "frontier", "--unknown", "x"],
+      ["work", "subscribe", "--follow", "maybe"],
+      ["work", "depend", "site#3", "site#4"],
+      ["work", "propose", "--input", "[]"],
+    ]) expect(() => parseArgs(args, verbs)).toThrow();
+  });
+
+  it("refuses insecure origins, redirects and API errors, and renders human output", async () => {
+    const verbs = schemas();
+    const requests: string[] = [];
+    const options = { url: "https://acme.pimwell.test", token: "pms_test",
+      fetch: async (url: URL) => { requests.push(url.pathname); return Response.json({
+        ok: true, result: url.pathname === "/api/schema" ? { verbs } : { ready: [], counts: { ready: 0 } },
+      }); }, write: (text: string) => { output = text; } };
+    let output = "";
+    await runCli(["work", "frontier"], options);
+    expect(output).toContain("counts:");
+    expect(output).toContain("ready: 0");
+    expect(requests).toEqual(["/api/schema", "/api/work.frontier"]);
+    for (const url of ["http://evil.example", "https://user:secret@evil.example", "https://acme.pimwell.test/path"]) {
+      await expect(runCli(["work", "frontier"], { ...options, url })).rejects.toThrow("HTTPS origin");
+    }
+    await expect(runCli(["work", "frontier"], { ...options,
+      fetch: async () => new Response(null, { status: 302, headers: { location: "https://evil.example" } }),
+    })).rejects.toThrow("redirect refused");
+    await expect(runCli(["work", "frontier"], { ...options,
+      fetch: async (url: URL) => url.pathname === "/api/schema" ? Response.json({ ok: true, result: { verbs } }) :
+        Response.json({ ok: false, error: "forbidden", detail: "reader" }, { status: 403 }),
+    })).rejects.toThrow("forbidden: reader");
+  });
+});
+
 describe("work graph acceptance", () => {
+  it("runs file, depend, frontier, claim, done, frontier equally through REST, MCP and CLI", async () => {
+    const w = await world();
+    const agent = await seedAgent(w.t, w.pat.identity);
+    const schemaResponse = await SELF.fetch("https://" + HOST + "/api/schema");
+    expect(schemaResponse.status).toBe(200);
+    const schemas = ((await schemaResponse.json()) as any).result.verbs;
+    expect(schemas.map((v: any) => v.name)).toEqual(listVerbs().map(v => v.name));
+    expect(schemas.every((v: any) => v.inputSchema.type === "object")).toBe(true);
+    for (const v of listVerbs().filter(v => v.mcp)) {
+      expect(schemas.find((s: any) => s.name === v.name)).toEqual({
+        name: v.name, summary: v.summary, minRole: v.minRole, inputSchema: v.mcp!.input,
+      });
+      expect(parseArgs([v.name, "--input", "{}"], schemas).name).toBe(v.name);
+    }
+    const transcripts = [];
+    for (const transport of ["rest", "mcp", "cli"]) {
+      const project = "via-" + transport;
+      await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: null, slug: project, kind: "tracker", display_name: project }, Date.now());
+      const call = async (verb: string, input: Record<string, unknown>) => {
+        if (transport === "rest") return w.ok<any>(await apiPost(HOST, verb, input, bearer(agent.token)));
+        if (transport === "mcp") {
+          const response = await SELF.fetch("https://" + HOST + "/agent/mcp", {
+            method: "POST", headers: { ...bearer(agent.longLived), "content-type": "application/json", accept: "application/json, text/event-stream" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: verb.replaceAll(".", "_"), arguments: input } }),
+          });
+          const body = await rpcBody(response);
+          expect(body.result.isError).not.toBe(true);
+          return body.result.structuredContent;
+        }
+        const argv = [...verb.split("."), ...Object.entries(input).flatMap(([key, value]) =>
+          key === "id" ? [String(value)] : ["--" + key.replaceAll("_", "-"), typeof value === "string" ? value : JSON.stringify(value)]), "--json"];
+        let output = "";
+        const result = await runCli(argv, { url: "https://" + HOST, token: agent.longLived,
+          fetch: (url: URL, init: RequestInit) => SELF.fetch(url.toString(), init),
+          write: (text: string) => { output = text; } });
+        expect(JSON.parse(output)).toEqual(result);
+        return result;
+      };
+      // Generated ids and clock values differ between worlds; normalize only those
+      // and the project name, leaving all business fields in the comparison.
+      const ids = new Map<string, string>([[w.t.id, "tenant"], [agent.agent.identity.id, "agent"]]);
+      const normalize = (value: any, key = ""): any => {
+        if (typeof value === "number" && /(_at|_until|until)$/.test(key)) return "<clock>";
+        if (typeof value === "string") {
+          if (/^[0-9A-HJKMNP-TV-Z]{26}$/.test(value)) {
+            if (!ids.has(value)) ids.set(value, "id" + ids.size);
+            return ids.get(value);
+          }
+          return value.replaceAll(project, "site");
+        }
+        if (Array.isArray(value)) return value.map(v => normalize(v));
+        if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, normalize(v, k)]));
+        return value;
+      };
+      const results = [];
+      const a = await call("work.create", { project, kind: "errand", title: "Schema" }); results.push(a);
+      const b = await call("work.create", { project, kind: "wish", title: "Feature" }); results.push(b);
+      results.push(await call("work.depend", { id: b.ref, on: a.ref }));
+      results.push(await call("work.frontier", { project }));
+      results.push(await call("work.claim", { id: a.ref }));
+      results.push(await call("work.update", { id: a.ref, state: "done" }));
+      results.push(await call("work.frontier", { project }));
+      expect(results[3].ready.map((v: any) => v.ref)).toEqual([a.ref]);
+      expect(results[6].ready.map((v: any) => v.ref)).toEqual([b.ref]);
+      transcripts.push(normalize(results));
+    }
+    expect(transcripts[1]).toEqual(transcripts[0]);
+    expect(transcripts[2]).toEqual(transcripts[0]);
+  });
+
   it("refuses a cyclic hard dependency and changes nothing", async () => {
     const w = await world();
     const [a, b, c] = [await w.file("A"), await w.file("B"), await w.file("C")];

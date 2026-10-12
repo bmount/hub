@@ -97,6 +97,7 @@ app.get("/assets/:file", (c) => assetResponse(new URL(c.req.url).pathname));
 app.get("/signed-out", (c) => htmlResponse(page("Signed out", `<h1>You're signed out</h1><p><a href="https://${c.env.HUB_DOMAIN}/login">Sign in again</a></p>`)));
 app.get("/privacy", () => privacyPage());
 app.get("/terms", () => termsPage());
+app.get("/api/schema", (c) => handleApi(c.req.raw, c.env));
 app.post("/api/*", (c) => handleApi(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.get("/", (c) => homePage(c.req.raw, c.env));
 app.get("/archive", (c) => archivePage(c.req.raw, c.env));

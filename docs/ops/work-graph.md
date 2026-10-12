@@ -19,6 +19,35 @@ Parents (`parent`, the quest an item belongs to) and links (`work.link`) are inf
 
 `work.read` and `work.list` show each item's readiness too.
 
+## CLI and REST schemas
+
+The no-build Node CLI is `bin/pimwell` (Node 22 or later). Put `bin/` on your
+PATH, set `PIMWELL_URL=https://your-org.pimwell.com`, and use
+`PIMWELL_TOKEN_FILE` (a private file) or `PIMWELL_TOKEN`. Otherwise it asks
+`git credential fill` for that host's password. The agent git helper returns
+a run token; human git-only credentials remain git-only and are refused by REST.
+Long-lived agent tokens are traded for an hour-long run via `session.start`.
+
+```sh
+pimwell work frontier --project site
+pimwell work depend site#3 --on site#1
+pimwell work claim site#1 --json
+pimwell work update site#1 --state done
+pimwell work resources site#3 --resources '["prod-db","replica:shared"]'
+```
+
+Commands and flags are discovered from `GET /api/schema`, which lists every
+verb's name, summary, minimum role and JSON input schema. MCP-exposed verbs
+reuse their MCP schema exactly; other verbs have a generic object schema and
+still rely on their server-side parser for validation. `--help` lists them; `--input '{"key":"value"}'` supplies
+arbitrary JSON, including nested proposal inputs and inputs for non-MCP verbs.
+An item's reference may be positional where the schema declares `id`.
+Flags use hyphens or underscores; booleans accept true/false, numbers are
+typed, and arrays/objects use JSON. Human-readable output is the default;
+`--json` prints only the verb result, not the REST envelope. Errors go to
+stderr with a nonzero exit status. No CLI permission bypass: the API still
+checks the caller and validates every input.
+
 ## Proposals
 
 An agent (or person) that finds new work or a missing prerequisite while on an item proposes it instead of editing the live graph:

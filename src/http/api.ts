@@ -7,7 +7,7 @@ import { checkAccess, checkScope } from "../verbs/dispatch";
 import { clearSessionCookie } from "../auth/cookie";
 import { HubError } from "../errors";
 import { htmlResponse, page } from "../html";
-import { getVerb } from "../verbs/table";
+import { getVerb, listVerbs } from "../verbs/table";
 import { note } from "../log";
 import { recordEvent } from "../db/events";
 import { esc } from "../html";
@@ -92,6 +92,12 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
   const ct = request.headers.get("content-type") ?? "";
   const isForm = ct.startsWith("application/x-www-form-urlencoded") || ct.startsWith("multipart/form-data");
   try {
+    if (request.method === "GET" && name === "schema") {
+      return json({ ok: true, result: { verbs: listVerbs().map((v) => ({
+        name: v.name, summary: v.summary, minRole: v.minRole, inputSchema: v.mcp?.input ?? { type: "object", properties: {}, additionalProperties: true,
+          description: "No MCP argument declaration; the verb parser validates this object." },
+      })) } }, 200);
+    }
     const verb = getVerb(name);
     if (!verb) throw new HubError(404, "unknown_verb");
     ctx = await buildContext(request, env, Date.now(), waitUntil, { longLivedToken: true });
