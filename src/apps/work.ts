@@ -1,3 +1,4 @@
+import { errorOriginColumns } from "./origin";
 import type { Ctx } from "../auth/context";
 import type { WorkKind, WorkState } from "../work/names";
 
@@ -9,7 +10,7 @@ export function traceEvidenceUrl(ctx: Ctx, id: string): string {
 }
 
 export function traceGroupStatement(ctx: Ctx, id: string) {
-  return ctx.db.prepare(`SELECT g.*, p.slug AS project FROM app_error_group g
+  return ctx.db.prepare(`SELECT g.*, ${errorOriginColumns()}, p.slug AS project FROM app_error_group g
     JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
     WHERE g.id = ? AND g.tenant_id = ?`).bind(id, ctx.tenant!.id);
 }

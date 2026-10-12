@@ -140,8 +140,8 @@ describe("truthful project period status", () => {
     const s = await projectStatus(w.ctx, "site", w.since);
     expect(s.totals.errors).toBe(2);
     expect(s.errors).toEqual([
-      { id: "new", title: "new", lifetime_count: 2, period_count: null, period_samples: 0, first_seen: w.since, last_seen: w.now },
-      { id: "old-recurring", title: "old-recurring", lifetime_count: 10000, period_count: null, period_samples: 2, first_seen: w.since - DAY, last_seen: w.now - 1 },
+      { id: "new", script: "app", first_version: null, first_deploy: null, first_commit: null, title: "new", lifetime_count: 2, period_count: null, period_samples: 0, first_seen: w.since, last_seen: w.now },
+      { id: "old-recurring", script: "app", first_version: null, first_deploy: null, first_commit: null, title: "old-recurring", lifetime_count: 10000, period_count: null, period_samples: 2, first_seen: w.since - DAY, last_seen: w.now - 1 },
     ]);
     expect(statusText(s)).toContain("2 retained period samples; 10000 lifetime occurrences");
     expect(s.examples.errors.truncated).toBe(false);

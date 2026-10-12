@@ -2,6 +2,9 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
+import tailWorker from "../tail/index";
+import { validatedAppEvent } from "../src/apps/validate";
+import { exceptionFingerprint } from "../src/apps/fingerprint";
 import { redact, mask } from "../src/apps/redact";
 import { ingest, normalize } from "../src/apps/ingest";
 import { ensureProjectChannels } from "../src/chat/defaults";
@@ -483,6 +486,71 @@ describe("recorded app-error work evidence", () => {
 });
 
 describe("app telemetry", () => {
+  it("forwards only a bounded cause digest from the actual tail handler", async () => {
+    const raw = tail({ exceptions: [{ name: "TypeError", message: 'private interview for "person@example.com" token=pms_secretsecret',
+      stack: "TypeError: private interview\n    at privateMailBody (worker.js:10:20)" }] });
+    const batches: unknown[][] = [];
+    await tailWorker.tail([raw as unknown as TraceItem], { HUB: { events: async batch => {
+      batches.push(batch);
+      return { accepted: batch.length, dropped: 0 };
+    } } });
+    const e = batches[0]![0];
+    expect(JSON.stringify(e)).not.toMatch(/private interview|person@example|secretsecret|privateMailBody/);
+    expect(validatedAppEvent(e, Date.now())?.exceptions[0]?.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    const invalid = structuredClone(e) as { exceptions: Array<{ fingerprint: string }> };
+    invalid.exceptions[0]!.fingerprint = "private frame";
+    expect(validatedAppEvent(invalid, Date.now())).toBeNull();
+  });
+
+  it("fingerprints message templates and top frames without forwarding their content", async () => {
+    const make = (message: string, frame = "lookup", name = "TypeError", line = 10) =>
+      exceptionFingerprint({ name, message, stack: `${name}: ${message}\n    at ${frame} (worker.js:${line}:20)\n    at handle (worker.js:90:3)` });
+    const a = await make('failed id 123 for "private value"');
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).toBe(await make('failed id 456 for "another value"', "lookup", "TypeError", 50));
+    expect(a).not.toBe(await make("different failure"));
+    expect(a).not.toBe(await make('failed id 789 for "secret"', "save"));
+    expect(a).not.toBe(await make('failed id 789 for "secret"', "lookup", "Error"));
+  });
+
+  it("keeps earliest/latest evidence across out-of-order deliveries and exposes first deploy in status and situations", async () => {
+    const w = await world();
+    await w.call(w.root.token, "app.register", { project: "pricebench", script: "pricebench" });
+    const now = Date.now(), v1 = "11111111-1111-4111-8111-111111111111", v2 = "22222222-2222-4222-8222-222222222222";
+    const commit = "a".repeat(40), deployment = "33333333-3333-4333-8333-333333333333";
+    const recorded = await w.call(w.pat.token, "deploy.record", { project: "pricebench", worker: "pricebench", version: v1, deployment, commit, deployed_at: now - 5000 });
+    const deployId = (recorded.result.deploy as { id: string }).id;
+    const fp = await exceptionFingerprint({ name: "Error", message: "test id 10", stack: "Error\n at run (worker.js:1:2)" });
+    const event = (version: string, at: number) => {
+      const e = redact(tail({ logs: [], scriptVersion: { id: version }, eventTimestamp: at,
+        exceptions: [{ name: "Error", message: "private message" }] }))!;
+      e.exceptions[0]!.fingerprint = fp;
+      return e;
+    };
+    await ingest(env, [event(v2, now - 1000)], now);
+    await ingest(env, [event(v1, now - 4000), event(v2, now - 2000)], now);
+    const list = (await w.call(w.pat.token, "trace.list", {})).result.groups as Array<{ id: string }>;
+    expect(list).toHaveLength(1);
+    const detail = (await w.call(w.pat.token, "trace.read", { id: list[0]!.id })).result;
+    expect(detail.group).toMatchObject({ count: 3, first_seen: now - 4000, last_seen: now - 1000, first_version: v1, last_version: v2,
+      first_deploy: deployId, first_commit: commit });
+    const status = (await w.call(w.pat.token, "project.status", { project: "pricebench" })).result;
+    expect(status.errors).toMatchObject([{ script: "pricebench", lifetime_count: 3, first_deploy: deployId, first_commit: commit }]);
+    const page = await (await SELF.fetch(`https://${HOST}/situations`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    expect(page).toContain("New error groups");
+    expect(page).toContain(`href="/apps?g=${list[0]!.id}"`);
+    expect(page).toContain(`href="/apps?d=${deployId}"`);
+    expect(page).toContain(commit);
+    expect(page).not.toContain("private message");
+    const inspector = await (await SELF.fetch(`https://${HOST}/apps?g=${list[0]!.id}`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
+    expect(inspector).toContain(`href="/apps?d=${deployId}"`);
+    expect(inspector).toContain(`href="/pricebench/code?c=${commit}"`);
+    const foreign = await seedTenant("foreign");
+    await env.HUB_DB.prepare("UPDATE app_deploy SET tenant_id = ? WHERE id = ?").bind(foreign.id, deployId).run();
+    await env.HUB_DB.prepare("UPDATE app_deploy SET tag = NULL WHERE version_id = ?").bind(v1).run();
+    expect((await w.call(w.pat.token, "trace.read", { id: list[0]!.id })).result.group).toMatchObject({ first_commit: null });
+  });
+
   it("links tagless native versions to scoped commits in either arrival order", async () => {
     const w = await world();
     await w.call(w.root.token, "app.register", { project: "pricebench", script: "pricebench" });

@@ -5,6 +5,7 @@ import { badRequest, notFound } from "../errors";
 import type { Ctx } from "../auth/context";
 import { DATA_NOTE, cleanText } from "../mcp/render";
 import { KINDS, type WorkKind } from "../work/names";
+import { errorOriginColumns } from "../apps/origin";
 import { gitSyncCoverage } from "../code/syncState";
 
 export const STATUS_COVERAGE_NOTE = "Recorded evidence only; zero records does not prove zero activity or healthy operation. Error occurrences in the period are unavailable: retained events are sampled and capped, and group counts are lifetime counts. Telemetry last-received times do not prove continuous coverage. Git records may lag upstream.";
@@ -19,7 +20,7 @@ export type Status = {
   doing: Array<{ ref: string; title: string; owner: string | null; stalled: boolean }>;
   commits: { count: number; by: Array<{ who: string; n: number }>; recent: Array<{ summary: string; at: number; oid: string | null; href: string | null }> };
   deploys: Array<{ id: string; tag: string | null; script: string; at: number }>;
-  errors: Array<{ id: string; title: string; lifetime_count: number; period_samples: number; period_count: null; first_seen: number; last_seen: number }>;
+  errors: Array<{ id: string; script: string; first_version: string | null; first_deploy: string | null; first_commit: string | null; title: string; lifetime_count: number; period_samples: number; period_count: null; first_seen: number; last_seen: number }>;
   reviews: Array<{ ref: string; title: string; status: string }>;
   mail: number; comments: number;
 };
@@ -50,7 +51,7 @@ export async function projectStatus(ctx: Ctx, slug: string, since: number): Prom
     period("code_event", "at", "AND kind = 'commit'"),
     ctx.db.prepare("SELECT COALESCE(i.display_name, 'someone outside Pimwell') AS who, COUNT(*) AS n FROM code_event e LEFT JOIN identity i ON i.id = e.identity_id WHERE e.tenant_id = ? AND e.project_id = ? AND e.kind = 'commit' AND e.at BETWEEN ? AND ? GROUP BY e.identity_id ORDER BY n DESC").bind(tenant, id, since, now),
     ctx.db.prepare("SELECT id, tag, script_name AS script, seen_at AS at FROM app_deploy WHERE tenant_id = ? AND project_id = ? AND seen_at BETWEEN ? AND ? ORDER BY seen_at DESC, id DESC LIMIT 20").bind(tenant, id, since, now),
-    ctx.db.prepare(`SELECT g.id, g.title, g.count AS lifetime_count, g.first_seen, g.last_seen, NULL AS period_count,
+    ctx.db.prepare(`SELECT g.id, g.script_name AS script, ${errorOriginColumns()}, g.title, g.count AS lifetime_count, g.first_seen, g.last_seen, NULL AS period_count,
       (SELECT COUNT(*) FROM app_event e WHERE e.tenant_id = g.tenant_id AND e.group_id = g.id AND e.at BETWEEN ? AND ?) AS period_samples
       FROM app_error_group g WHERE g.tenant_id = ? AND g.project_id = ? AND g.last_seen BETWEEN ? AND ? ORDER BY g.last_seen DESC, g.id DESC LIMIT 20`).bind(since, now, tenant, id, since, now),
     ctx.db.prepare("SELECT number, title, status FROM review WHERE tenant_id = ? AND project_id = ? AND updated_at BETWEEN ? AND ? ORDER BY updated_at DESC, number DESC LIMIT 20").bind(tenant, id, since, now),
@@ -116,7 +117,7 @@ export function statusText(s: Status): string {
   lines.push(`- Commits: ${s.commits.count}${s.commits.by.length ? ` (${s.commits.by.map((b) => `${cleanText(b.who)} ${b.n}`).join(", ")})` : ""}`);
   lines.push(`- Recent recorded commits: ${statusExamples(s.commits.count, s.commits.recent.length)} ${s.commits.recent.map(c => `${c.href ? `${s.project}@${c.oid}` : c.oid ? `recorded target ${c.oid} (no supported code link)` : "no supported full target"}: ${cleanText(c.summary)}`).join("; ")}`);
   lines.push(`- Deploys: ${s.totals.deploys}. ${examples("deploys", 5)} ${s.deploys.slice(0, 5).map(d => `${cleanText(d.id)} ${cleanText(d.tag ?? d.script)}`).join(", ")}`);
-  lines.push(`- Error groups observed in period (including recurring): ${s.totals.errors}. ${examples("errors", 5)} ${s.errors.slice(0, 5).map((e) => `${cleanText(e.id)} ${cleanText(e.title)}: ${e.period_samples} retained period samples; ${e.lifetime_count} lifetime occurrences`).join("; ")}`);
+  lines.push(`- Error groups observed in period (including recurring): ${s.totals.errors}. ${examples("errors", 5)} ${s.errors.slice(0, 5).map((e) => `${cleanText(e.id)} ${cleanText(e.title)}: ${e.period_samples} retained period samples; ${e.lifetime_count} lifetime occurrences in ${cleanText(e.script)}; first deploy ${e.first_deploy ?? "unknown"}, commit ${e.first_commit ?? "unknown"}`).join("; ")}`);
   lines.push(`- Reviews updated in period: ${s.totals.reviews}. ${examples("reviews", 20)} ${s.reviews.map((r) => `${r.ref} ${r.status}`).join(", ")}`);
   lines.push(`- Admitted mail received: ${s.mail}; comments on work: ${s.comments}`);
   return lines.join("\n");

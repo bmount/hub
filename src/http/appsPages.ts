@@ -19,7 +19,7 @@ const ago = (ms: number | null, now: number) => {
 };
 
 type App = { script_name: string; project: string; state: string; last_event_at: number | null; requests: number; errors: number; groups: number; last_deploy: string | null };
-type Group = { id: string; project: string; script_name: string; kind: string; title: string; last_message: string; count: number; first_seen: number; last_seen: number; last_version: string | null };
+type Group = { id: string; project: string; script_name: string; kind: string; title: string; last_message: string; count: number; first_seen: number; last_seen: number; last_version: string | null; first_deploy: string | null; first_commit: string | null };
 
 export async function appsPage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
@@ -43,6 +43,8 @@ export async function appsPage(request: Request, env: Env): Promise<Response> {
   const apps = appsR!.results as App[];
   const groups = groupsR!.results as Group[];
   const g = (oneR!.results[0] as Group | undefined) ?? null;
+  const origin = g?.first_deploy ? await deployStatement(ctx, g.first_deploy).first<DeployRow>() : null;
+  const originView = origin ? deployView(origin) : null;
   const selected = (selectedDeployR?.results[0] as DeployRow | undefined) ?? null;
   if (did !== null && !selected) return notFoundPage(extra);
   const { deploys: recordedDeploys, coverage } = deployListResults(allDeploysR!.results as DeployRow[]);
@@ -60,13 +62,14 @@ ${groups.length ? `<table><tbody>${groups.map((x) => `<tr data-href="/apps?g=${e
   let inspector = g ? `<a class="back" href="/apps">‹ Apps</a><div class="head"><span>${esc(g.kind)}</span><code>${esc(g.script_name)}</code><span>×${g.count}</span></div>
 <h1>${esc(g.title)}</h1>
 <dl class="meta"><dt>Project</dt><dd><a href="/${esc(g.project)}/docket">${esc(g.project)}</a></dd><dt>First seen</dt><dd>${new Date(g.first_seen).toISOString().slice(0, 16).replace("T", " ")}</dd><dt>Last seen</dt><dd>${ago(g.last_seen, ctx.now)} ago</dd><dt>Version</dt><dd><code>${esc(g.last_version?.slice(0, 8) ?? "unknown")}</code></dd></dl>
+<p class="lede">First observed deploy: ${g.first_deploy ? `<a href="/apps?d=${esc(g.first_deploy)}">${esc(g.first_deploy)}</a>` : "unknown"}; commit ${originView?.commitHref ? `<a href="${esc(originView.commitHref)}">${esc(g.first_commit ?? "unknown")}</a>` : esc(g.first_commit ?? "unknown")}. Correlation, not proof of causation.</p>
 ${rank(ctx.role) >= rank("member") ? `<p><a class="button" href="/new?trace=${esc(encodeURIComponent(g.id))}">File a snag</a></p>` : ""}
 ${relatedHtml}
 <pre>${esc(g.last_message)}</pre>
 <h2>Recent</h2><table><tbody>${(eventsR!.results as Array<{ at: number; method: string | null; path: string | null; status: number | null; ray: string | null }>).map((e) =>
     `<tr><td class="when">${ago(e.at, ctx.now)}</td><td><code>${esc(`${e.method ?? ""} ${e.path ?? ""}`.trim())}</code></td><td class="when">${e.status ?? ""}</td><td class="when hide-s">${esc(e.ray ?? "")}</td></tr>`).join("")}</tbody></table>
 <h2>Deploys</h2>${(deploysR!.results as Array<{ id: string; tag: string | null; version_id: string; message: string | null; seen_at: number }>).map((d) => `<p><a href="/apps?d=${esc(encodeURIComponent(d.id))}"><code>${esc(d.tag ?? d.version_id.slice(0, 8))}</code></a> ${esc(d.message ?? "")} <small>${ago(d.seen_at, ctx.now)} ago</small></p>`).join("") || "<p class=\"lede\">None seen.</p>"}` : null;
-  let inspectorKey = g ? `group:${g.id}:${g.count}:${relatedWork.length}:${relatedWorkCoverage.truncated}` : "";
+  let inspectorKey = g ? `group:${g.id}:${g.count}:${g.first_deploy}:${g.first_commit}:${relatedWork.length}:${relatedWorkCoverage.truncated}` : "";
   if (selected) {
     const { deploy: d, commitRef, commitHref } = deployView(selected);
     const { relatedWork: work, relatedWorkCoverage: workCoverage } = deployWorkResults((await deployWorkStatement(ctx, selected).all<DeployWorkItem>()).results);

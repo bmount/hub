@@ -39,8 +39,9 @@ export function validatedAppEvent(raw: unknown, now: number): AppEvent | null {
     }
     const exceptions: AppEvent["exceptions"] = [];
     for (const x of e.exceptions) {
-      if (!record(x, ["name", "message"]) || !text(x.name, 101) || !text(x.message, 1001)) return null;
-      exceptions.push({ name: x.name, message: x.message });
+      if (!record(x, ["name", "message", "fingerprint"]) || !text(x.name, 101) || !text(x.message, 1001) ||
+          !(x.fingerprint === undefined || (typeof x.fingerprint === "string" && /^[0-9a-f]{64}$/.test(x.fingerprint)))) return null;
+      exceptions.push({ name: x.name, message: x.message, ...(x.fingerprint === undefined ? {} : { fingerprint: x.fingerprint }) });
     }
     const usage: AppUsage[] = [];
     for (const u of e.usage) {

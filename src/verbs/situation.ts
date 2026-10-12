@@ -12,6 +12,7 @@ import { instructions, runTurn } from "../assistant/run";
 import type { Ctx } from "../auth/context";
 
 export const DIAGNOSIS = `This is a situation report. Investigate before answering: look at recent work, commits, deploys, errors, reviews and mail with your tools.
+Use trace_list and project_status to distinguish newly observed error groups from recurring ones. Read each relevant group with trace_read and cite its first_deploy and first_commit when known; these are correlation, not proof of causation. Unknown commits must remain unknown.
 Answer in exactly these sections, plainly:
 Cause: the most likely cause, in one or two sentences. If the record doesn't show it, say so.
 Evidence: a list; each item names its record (project#n, a commit id, a deploy tag, an error, a mail subject) and why it matters.

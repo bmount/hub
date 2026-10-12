@@ -3,6 +3,7 @@
 // to the hub over a service binding to its Ingest entrypoint. There is no HTTP route: nothing here is reachable from
 // the internet, and the script name in each event is set by Cloudflare, not by the app.
 import { redact, type AppEvent } from "../src/apps/redact";
+import { exceptionFingerprint } from "../src/apps/fingerprint";
 
 interface Env {
   HUB: { events(batch: AppEvent[]): Promise<{ accepted: number; dropped: number }> };
@@ -13,7 +14,12 @@ export default {
     const batch: AppEvent[] = [];
     for (const e of events.slice(0, 500)) {
       const r = redact(e as never);
-      if (r) batch.push(r);
+      if (r) {
+        for (let i = 0; i < r.exceptions.length; i++) {
+          r.exceptions[i]!.fingerprint = await exceptionFingerprint(e.exceptions[i] as { name?: string; message?: string; stack?: string });
+        }
+        batch.push(r);
+      }
     }
     if (!batch.length) return;
     try {

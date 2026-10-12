@@ -1,5 +1,6 @@
 // Apps reporting into projects (migration 0013): register an app, approve it (root, unless the project's repo declares the
 // Worker), and read what it reported: error groups (traces), deploys, and the app list. Agents do the registering as part of onboarding (skill: onboard).
+import { errorOriginColumns } from "../apps/origin";
 import { defineVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
 import { badRequest, conflict, forbidden, notFound } from "../errors";
@@ -113,7 +114,7 @@ export const traceList = defineVerb({
   },
   parse: (i) => ({ project: optString(i, "project", { max: 63 }), days: optInt(i, "days", { min: 1, max: 30 }) ?? 7 }),
   run: async (ctx, p) => ({
-    groups: (await ctx.db.prepare(`SELECT g.id, pr.slug AS project, g.script_name, g.kind, g.title, g.count, g.first_seen, g.last_seen, g.last_version,
+    groups: (await ctx.db.prepare(`SELECT g.id, pr.slug AS project, g.script_name, g.kind, g.title, g.count, g.first_seen, g.last_seen, g.last_version, ${errorOriginColumns()},
         CASE WHEN wp.id IS NULL THEN NULL ELSE wp.slug || '#' || w.number END AS work_ref
       FROM app_error_group g JOIN project pr ON pr.id = g.project_id AND pr.tenant_id = g.tenant_id AND pr.kind NOT IN ('channel', 'agent-src')
       LEFT JOIN work_item w ON w.id = g.work_item_id AND w.tenant_id = g.tenant_id
@@ -130,8 +131,9 @@ export const traceRead = defineVerb({
     scope: "read", destructive: false, title: "Read an error",
     input: { type: "object", properties: { id: { type: "string", description: "Error group id from trace_list" } }, required: ["id"], additionalProperties: false },
     render: (r) => {
-      const x = r as ReturnType<typeof traceWorkResults> & { group: GroupRow & { last_message: string }; events: Array<{ at: number; method: string | null; path: string | null; status: number | null; ray: string | null; version_id: string | null; commit: string | null }>; deploys: Array<{ id: string; tag: string | null; version_id: string; seen_at: number }> };
+      const x = r as ReturnType<typeof traceWorkResults> & { group: GroupRow & { last_message: string; first_deploy: string | null; first_commit: string | null }; events: Array<{ at: number; method: string | null; path: string | null; status: number | null; ray: string | null; version_id: string | null; commit: string | null }>; deploys: Array<{ id: string; tag: string | null; version_id: string; seen_at: number }> };
       return [DATA_NOTE, NOTE, "", `**${x.group.script_name}** ${x.group.kind} ×${x.group.count}: ${cleanText(x.group.title)}`, "```text", cleanText(x.group.last_message).replace(/```/g, "'''"), "```",
+        `First observed deploy: ${x.group.first_deploy ?? "unknown"}; commit ${x.group.first_commit ?? "unknown"} (correlation, not proof of causation).`,
         `Related work (${x.relatedWorkCoverage.shown} shown${x.relatedWorkCoverage.truncated ? `; capped at ${x.relatedWorkCoverage.limit}, more omitted` : "; complete for recorded associations"}):`,
         ...x.relatedWork.map(w => `- ${cleanText(w.ref)}: ${cleanText(w.title)} [${w.relationship}, ${w.kind}, ${w.state}]`),
         "Recorded associations do not prove these logs authorized the work.",

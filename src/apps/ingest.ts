@@ -3,7 +3,7 @@
 // cause, new script versions become deploys, AI usage lines join the usage ledger, and anything new is posted to the
 // project's #<project>-ops channel by Pimwell itself.
 import type { Env } from "../env";
-import { ulid } from "../ids";
+import { ulid, sha256Hex } from "../ids";
 import { usageStatement } from "../models/usage";
 import { conversationStub } from "../chat/stubs";
 import type { AppEvent } from "./redact";
@@ -14,7 +14,7 @@ const QUIET_MS = 24 * HOUR;          // an error group that comes back after a d
 const EXAMPLES_PER_GROUP = 50;
 
 type Source = { script_name: string; tenant_id: string; project_id: string; slug: string; display_name: string };
-type Problem = { kind: "exception" | "error" | "warn" | "status"; title: string; message: string };
+type Problem = { kind: "exception" | "error" | "warn" | "status"; title: string; message: string; fingerprint?: string };
 
 function fnv(s: string): string {
   let h = 0x811c9dc5;
@@ -31,7 +31,7 @@ export function normalize(s: string): string {
 
 function problems(e: AppEvent): Problem[] {
   const out: Problem[] = [];
-  for (const x of e.exceptions) out.push({ kind: "exception", title: `${x.name}: ${x.message}`.slice(0, 200), message: x.message });
+  for (const x of e.exceptions) out.push({ kind: "exception", title: `${x.name}: ${x.message}`.slice(0, 200), message: x.message, fingerprint: x.fingerprint });
   for (const l of e.logs) out.push({ kind: l.level === "error" ? "error" : "warn", title: l.text.slice(0, 200), message: l.text });
   if (!e.exceptions.length && e.status !== null && e.status >= 500) out.push({ kind: "status", title: `${e.method ?? ""} ${e.path ?? ""} answered ${e.status}`.trim(), message: `status ${e.status}` });
   return out;
@@ -74,7 +74,13 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
     if (commit) e.tag = commit;
   }
   const found: Array<{ e: AppEvent; p: Problem; fp: string }> = [];
-  for (const e of mine) for (const p of problems(e)) found.push({ e, p, fp: fnv(`${e.script}|${p.kind}|${normalize(p.title)}`) });
+  for (const e of mine) for (const p of problems(e)) {
+    const src = sources.get(e.script)!;
+    found.push({ e, p, fp: p.fingerprint
+      ? await sha256Hex(`${src.tenant_id}|${src.project_id}|${e.script}|${p.kind}|${p.fingerprint}`)
+      : fnv(`${e.script}|${p.kind}|${normalize(p.title)}`) });
+  }
+  found.sort((a, b) => a.e.at - b.e.at);
   const fps = [...new Set(found.map((f) => f.fp))];
   const groups = new Map(fps.length ? (await db.prepare(`SELECT id, fingerprint, last_seen FROM app_error_group WHERE fingerprint IN (${fps.map(() => "?").join(",")})`)
     .bind(...fps).all<{ id: string; fingerprint: string; last_seen: number }>()).results.map((g) => [g.fingerprint, g]) : []);
@@ -130,8 +136,8 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
     } else {
       if (now - g.last_seen > QUIET_MS) notices.push({ src, text: `Back again after a quiet day in ${f.e.script}: ${f.p.title}` });
       g.last_seen = f.e.at;
-      stmts.push(db.prepare("UPDATE app_error_group SET count = count + 1, last_seen = MAX(last_seen, ?), last_message = ?, last_version = COALESCE(?, last_version) WHERE id = ?")
-        .bind(f.e.at, f.p.message, f.e.version, g.id));
+      stmts.push(db.prepare("UPDATE app_error_group SET count = count + 1, first_version = CASE WHEN ? < first_seen THEN ? ELSE first_version END, first_seen = MIN(first_seen, ?), last_message = CASE WHEN ? >= last_seen THEN ? ELSE last_message END, last_version = CASE WHEN ? >= last_seen THEN COALESCE(?, last_version) ELSE last_version END, last_seen = MAX(last_seen, ?) WHERE id = ?")
+        .bind(f.e.at, f.e.version, f.e.at, f.e.at, f.p.message, f.e.at, f.e.version, f.e.at, g.id));
     }
     const n = (perGroup.get(g.id) ?? 0) + 1;
     perGroup.set(g.id, n);

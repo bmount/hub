@@ -7,7 +7,7 @@ export type AppUsage = { provider: string; model: string; input_tokens: number; 
 export type AppEvent = {
   script: string; version: string | null; tag: string | null; message: string | null; at: number; outcome: string;
   method: string | null; path: string | null; status: number | null; ray: string | null;
-  logs: AppLog[]; exceptions: Array<{ name: string; message: string }>; usage: AppUsage[];
+  logs: AppLog[]; exceptions: Array<{ name: string; message: string; fingerprint?: string }>; usage: AppUsage[];
 };
 
 const TEXT_MAX = 1000;
