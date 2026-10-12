@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `make release`: put the current main into production (the hub and the Git proxy). Pushing never deploys; releasing is this separate step, for
+// `make release`: put the current main into production (the hub, the Git proxy and the tail Worker). Pushing never deploys; releasing is this separate step, for
 // whoever holds the deploy token (scripts/cf/with-deploy-token.sh supplies it). It tests the exact commit, uploads a
 // version that keeps the dashboard's vars, refuses binding or runtime changes, records the rollback version, deploys
 // and smoke-checks. Logs and a record go to $RELEASE_DIR/<commit>/ (default ~/.local/state/pimwell/releases).
@@ -8,8 +8,8 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-// The hub and the Git proxy share src/, so they ship together from the same commit.
-const WORKERS = [{ name: 'pimwell-hub', config: 'wrangler.jsonc' }, { name: 'pimwell-git', config: 'git-proxy/wrangler.jsonc' }];
+// Pimwell's Workers ship together from the same commit: the hub, the Git proxy (shares src/) and the tail Worker that forwards logs to the hub.
+const WORKERS = [{ name: 'pimwell-hub', config: 'wrangler.jsonc' }, { name: 'pimwell-git', config: 'git-proxy/wrangler.jsonc' }, { name: 'pimwell-tail', config: 'tail/wrangler.jsonc' }];
 const SMOKE = [['https://pimwell.com/', 200], ['https://pimwell.com/login', 200], ['https://pimwell.com/healthz', 200],
   ['https://mcc.pimwell.com/setup', 200], ['https://mcc.pimwell.com/.well-known/oauth-protected-resource/mcp', 200],
   ['https://mcc.pimwell.com/mail', 404], ['https://mcc.pimwell.com/agent/mcp', 401],

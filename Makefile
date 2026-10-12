@@ -6,7 +6,7 @@ test:
 	npm run typecheck
 	npm test
 
-# Test the current main, then upload, deploy and smoke-check pimwell-hub and pimwell-git together; record rollback versions.
+# Test the current main, then upload, deploy and smoke-check pimwell-hub, pimwell-git and pimwell-tail together; record rollback versions.
 release:
 	scripts/cf/with-deploy-token.sh node scripts/release.mjs
 
