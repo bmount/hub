@@ -1,6 +1,6 @@
-// What leaves an app's tail stream for Pimwell (design 2026-10-07, A1.2). Runs inside pimwell-tail, before anything
-// is sent: paths without query values, no headers but the Ray ID, only warnings, errors and exceptions (info lines
-// are dropped), credentials and email addresses masked, everything capped. AI usage lines are kept as numbers.
+// Content-safe tail boundary: arbitrary messages, URL paths/query names and version messages never leave
+// the tail Worker. Keep fixed operational labels, exception types, counts, Ray IDs and commit/version metadata.
+// Invocation logs and raw Workers Logs persistence are disabled in every source configuration.
 
 export type AppLog = { level: "warn" | "error"; text: string };
 export type AppUsage = { provider: string; model: string; input_tokens: number; output_tokens: number; cached_tokens: number | null; cost_usd: number | null; purpose: string | null };
@@ -12,6 +12,14 @@ export type AppEvent = {
 
 const TEXT_MAX = 1000;
 const LOGS_MAX = 20;
+// Only fixed operational labels can cross the boundary; never arbitrary error strings.
+const SAFE_LOGS = new Set([
+  "early adopter alert", "early adopter alert failed", "sign-in email failed", "pre-publish AI review failed",
+  "auto moderation failed", "recording usage failed", "ai review failed", "merchant assessment failed",
+  "reply rejected (sender likely failed DMARC)", "early adopter review failed", "sandbox turn failed",
+  "voice request failed", "interview turn failed", "suggest edits failed", "request exception",
+  "verb failed", "mcp error", "push sync failed", "Pimwell telemetry test exception",
+]);
 
 /** Anything shaped like a credential or an address becomes a placeholder. */
 export function mask(s: string): string {
@@ -30,16 +38,13 @@ export function redactPath(url: string | undefined | null): string | null {
   if (!url) return null;
   try {
     const u = new URL(url);
-    const keys = [...new Set([...u.searchParams.keys()])].slice(0, 20);
-    return cap(mask(u.pathname) + (keys.length ? `?${keys.map((k) => `${encodeURIComponent(k)}=…`).join("&")}` : ""), 300);
+    // Even path segments and query *names* can contain user content or credentials.
+    return u.pathname === "/" ? "/" : "/[redacted]";
   } catch { return null; }
 }
 
-function stringify(parts: unknown[]): string {
-  return parts.map((p) => (typeof p === "string" ? p : (() => { try { return JSON.stringify(p); } catch { return String(p); } })())).join(" ");
-}
-
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : null);
+const SAFE_MODELS = new Set(["gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-4o-transcribe", "gpt-4o-mini-transcribe", "omni-moderation-latest"]);
 const name = (v: unknown, max: number) => (typeof v === "string" && v.length > 0 && v.length <= max && /^[\w.:/@+-]+$/.test(v) ? v : null);
 
 /** A structured AI usage line: console.log(JSON.stringify({ pimwell: "ai_usage", provider, model, input_tokens, output_tokens, ... })). */
@@ -50,9 +55,9 @@ export function usageFrom(parts: unknown[]): AppUsage | null {
   const x = o as Record<string, unknown>;
   if (x.pimwell !== "ai_usage") return null;
   const provider = name(x.provider, 40), model = name(x.model, 80), i = num(x.input_tokens), out = num(x.output_tokens);
-  if (!provider || !model || i === null || out === null) return null;
+  if (provider !== "openai" || !model || !SAFE_MODELS.has(model) || i === null || out === null) return null;
   const cost = typeof x.cost_usd === "number" && Number.isFinite(x.cost_usd) && x.cost_usd >= 0 && x.cost_usd <= 10_000 ? x.cost_usd : null;
-  return { provider: provider.toLowerCase(), model, input_tokens: Math.min(i, 50_000_000), output_tokens: Math.min(out, 50_000_000), cached_tokens: num(x.cached_tokens), cost_usd: cost, purpose: name(x.purpose, 40) };
+  return { provider: provider.toLowerCase(), model, input_tokens: Math.min(i, 50_000_000), output_tokens: Math.min(out, 50_000_000), cached_tokens: num(x.cached_tokens), cost_usd: cost, purpose: null };
 }
 
 type TailLike = {
@@ -72,14 +77,20 @@ export function redact(t: TailLike): AppEvent | null {
     const parts = Array.isArray(l.message) ? l.message : [l.message];
     const u = usageFrom(parts);
     if (u) { if (usage.length < 50) usage.push(u); continue; }
-    if ((l.level === "warn" || l.level === "error") && logs.length < LOGS_MAX) logs.push({ level: l.level, text: cap(mask(stringify(parts))) });
+    if ((l.level === "warn" || l.level === "error") && logs.length < LOGS_MAX) {
+      const label = parts.length === 1 && typeof parts[0] === "string" && SAFE_LOGS.has(parts[0]) ? parts[0] : `[redacted ${l.level}]`;
+      logs.push({ level: l.level, text: label });
+    }
   }
-  const exceptions = (t.exceptions ?? []).slice(0, 10).map((e) => ({ name: cap(String(e.name ?? "Error"), 100), message: cap(mask(String(e.message ?? ""))) }));
+  const exceptions = (t.exceptions ?? []).slice(0, 10).map((e) => ({
+    name: ["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError"].includes(e.name ?? "") ? e.name! : "Error",
+    message: e.message === "Pimwell telemetry test exception" ? e.message : "[redacted exception]",
+  }));
   return {
     script: cap(t.scriptName, 100), version: t.scriptVersion?.id ? cap(t.scriptVersion.id, 64) : null,
-    tag: t.scriptVersion?.tag ? cap(mask(t.scriptVersion.tag), 100) : null, message: t.scriptVersion?.message ? cap(mask(t.scriptVersion.message), 200) : null,
+    tag: /^[0-9a-f]{7,40}$/.test(t.scriptVersion?.tag ?? "") ? t.scriptVersion!.tag! : null, message: null,
     at: typeof t.eventTimestamp === "number" ? t.eventTimestamp : Date.now(), outcome: cap(t.outcome ?? "unknown", 40),
-    method: req?.method ? cap(req.method, 10) : null, path: redactPath(req?.url), status: typeof t.event?.response?.status === "number" ? t.event.response.status : null,
+    method: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(req?.method ?? "") ? req!.method! : null, path: redactPath(req?.url), status: typeof t.event?.response?.status === "number" ? t.event.response.status : null,
     ray: req?.headers?.["cf-ray"] ? cap(req.headers["cf-ray"], 40) : null, logs, exceptions, usage,
   };
 }

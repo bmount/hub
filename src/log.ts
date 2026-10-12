@@ -68,7 +68,8 @@ export function requestLine(request: Request, status: number, ms: number, db: { 
 
 /** One structured line: errors at error level so they stand out in Workers Logs. */
 export function emit(line: Record<string, unknown> & { status?: number }): void {
-  const text = JSON.stringify(line);
+  // Do not serialize arbitrary paths, query names, user agents or error details.
+  const text = JSON.stringify({ msg: line.msg, status: line.status, ms: line.ms, db: line.db });
   if ((line.status ?? 0) >= 500) console.error(text);
   else if ((line.status ?? 0) >= 400) console.warn(text);
   else console.log(text);

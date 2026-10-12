@@ -71,7 +71,7 @@ app.use("*", async (c, next) => {
   if (c.error) {
     const e = c.error;
     note(c.req.raw, { error: { reason: "exception", detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e) } });
-    console.error(JSON.stringify({ msg: "exception", path: new URL(c.req.url).pathname, ray: c.req.header("cf-ray") ?? null, stack: e instanceof Error ? e.stack ?? null : null }));
+    console.error("request exception");
   }
   if (c.res && !c.res.headers.has("server-timing")) {
     try { c.res.headers.set("server-timing", serverTiming(Date.now() - started, meter)); } catch { /* immutable response: leave it */ }
@@ -191,7 +191,7 @@ export default {
   email: handleEmail,
   // Every five minutes: push sync from the git host (src/code/sync.ts).
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(syncAll(env, Date.now()).then((r) => console.log(JSON.stringify({ msg: "push sync", ...r })), (e) => console.error(JSON.stringify({ msg: "push sync failed", error: e instanceof Error ? e.message : "error" }))));
+    ctx.waitUntil(syncAll(env, Date.now()).then((r) => console.log(JSON.stringify({ msg: "push sync", ...r })), () => console.error("push sync failed")));
   },
 } satisfies ExportedHandler<Env>;
 

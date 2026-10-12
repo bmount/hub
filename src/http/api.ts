@@ -125,6 +125,11 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     if (isForm && name === "login.verify") throw new HubError(400, "bad_request", "login.verify does not accept form bodies");
     const params = verb.parse(body.input);
     const result = await verb.run(ctx, params);
+    // Opt-in end-to-end tail check: only after an authenticated, authorized status read.
+    // The fixed exception contains no request data, and does not change the response.
+    if (name === "project.status" && ctx.identity && waitUntil && request.headers.get("x-pimwell-telemetry-probe") === "exception") {
+      waitUntil(Promise.reject(new Error("Pimwell telemetry test exception")));
+    }
     if (isForm && verb.renderForm) return finish(ctx, env, htmlResponse(page(verb.name, verb.renderForm(result))));
     if (isForm) {
       const self = `${url.protocol}//${url.host}`;
@@ -168,7 +173,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     }
     if (e instanceof SyntaxError) return finish(ctx, env, json({ ok: false, error: "bad_request", detail: "invalid JSON" }, 400));
     note(request, { error: { reason: "internal", detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e) } });
-    console.error(JSON.stringify({ msg: "verb failed", verb: name, ray: request.headers.get("cf-ray"), stack: e instanceof Error ? e.stack ?? null : null }));
+    console.error("verb failed");
     if (isForm) return finish(ctx, env, htmlResponse(page("Not done", `<h1>That didn't work</h1><p>${name === "mail.reply" || name === "mail.send" ? 'Mail delivery is uncertain. Check Mail and confirm with recipients before sending again; a retry could duplicate delivery. <a href="/mail">Review Mail</a>.' : "Something went wrong on our side, and it is in the log. Nothing was changed."}</p><p><a href="/">Go home</a></p>${reference(request)}`), 500));
     return finish(ctx, env, json({ ok: false, error: "internal", detail: null }, 500));
   }

@@ -18,9 +18,9 @@ export default {
     if (!batch.length) return;
     try {
       await env.HUB.events(batch);
-    } catch (err) {
+    } catch {
       // Never log the batch itself: only that delivery failed.
-      console.error(JSON.stringify({ msg: "ingest failed", events: batch.length, error: err instanceof Error ? err.name : "error" }));
+      console.error(JSON.stringify({ msg: "ingest failed", events: batch.length }));
     }
   },
 } satisfies ExportedHandler<Env>;

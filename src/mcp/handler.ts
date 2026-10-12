@@ -49,7 +49,7 @@ function mcpHandler(): McpHttpHandler {
     const ctx = rc.authInfo?.extra?.hub as Ctx | undefined;
     if (!ctx) throw new Error("MCP request without hub authentication");
     return serverFor(ctx);
-  }, { legacy: "stateless", maxRequestBodySize: MAX_MCP_BODY_BYTES, onerror: (e) => console.error(JSON.stringify({ msg: "mcp error", error: `${e.name}: ${e.message}`, stack: e.stack ?? null })) });
+  }, { legacy: "stateless", maxRequestBodySize: MAX_MCP_BODY_BYTES, onerror: () => console.error("mcp error") });
   return mcp;
 }
 

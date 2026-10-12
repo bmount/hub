@@ -67,7 +67,7 @@ for (const { name, config } of WORKERS) {
   if (before.versions.length !== 1 || before.versions[0].percentage !== 100) fail(`${name} is not one version at 100%; settle that first. Nothing was released.`);
   const rollback = before.versions[0].version_id, old = await api(name, `/versions/${rollback}`);
   console.log(`Uploading a new version of ${name}…`);
-  const upload = run('npx', ['wrangler', 'versions', 'upload', '-c', config, '--keep-vars', '--tag', short, '--message', `release ${short}`], { log: `upload-${name}.log`, failure: 'upload failed; nothing was deployed' });
+  const upload = run('npx', ['wrangler', 'versions', 'upload', '-c', config, '--keep-vars', '--tag', commit, '--message', `release ${short}`], { log: `upload-${name}.log`, failure: 'upload failed; nothing was deployed' });
   const version = /Worker Version ID:\s*([0-9a-f-]{36})/.exec(upload)?.[1];
   if (!version) fail(`${name} upload outcome unknown; nothing was deployed; see ${join(dir, `upload-${name}.log`)}`);
   const fresh = await api(name, `/versions/${version}`);
@@ -83,7 +83,7 @@ const rollbacks = () => targets.map((t) => `make rollback WORKER=${t.worker} VER
 save();
 for (const t of targets) {
   console.log(`Deploying ${t.worker} ${t.version}…`);
-  run('npx', ['wrangler', 'versions', 'deploy', '--name', t.worker, `${t.version}@100%`, '--yes'], { log: `deploy-${t.worker}.log`, failure: `deploying ${t.worker} failed; check production before anything else (${rollbacks()})` });
+  run('npx', ['wrangler', 'versions', 'deploy', '-c', WORKERS.find(w => w.name === t.worker).config, '--name', t.worker, `${t.version}@100%`, '--yes'], { log: `deploy-${t.worker}.log`, failure: `deploying ${t.worker} failed; check production before anything else (${rollbacks()})` });
   for (let i = 0; i < 6 && !t.deployment; i++) {
     const d = (await api(t.worker, '/deployments')).deployments[0];
     if (d.versions.length === 1 && d.versions[0].version_id === t.version && d.versions[0].percentage === 100) { t.deployment = d.id; t.deployed_at = Date.parse(d.created_on); }

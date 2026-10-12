@@ -4,27 +4,21 @@ Two records, for two jobs:
 
 | | Request log (Workers Logs) | Audit trail (`event` table in D1) |
 | --- | --- | --- |
-| What | Every request and every inbound message: path, status, timing, who, the verb, why it failed | Every change, with who and which session; refused sensitive actions (`verb.refused`) |
-| Kept | About a week (Workers Logs retention) | As long as the organization exists; part of the product |
+| What | Content-safe error labels, exception types, request counts and deploy metadata in Pimwell | Every change, with who and which session; refused sensitive actions (`verb.refused`) |
+| Kept | Raw Workers Logs persistence is off; redacted events are stored in Pimwell | As long as the organization exists; part of the product |
 | For | "What went wrong at 17:31?", "Is this slow?", abuse | "Who changed this, and when?" |
 
 ## The request line
 
-The first middleware in `src/index.ts` writes one JSON line per request with `msg: "request"`. Fields:
-- **The request:** `method`, `host`, `path`, `status` and `ms`.
-- **The database:** `db` (round trips, statements, ms).
-- **Where it came from:** `ray` (the Cloudflare Ray ID; it is also in the browser's response headers), `ip`, `country` and `ua`.
-- **Who acted:** `actor` (`id`, `kind`, `email`, plus `root` when they are root), `tenant`, and `auth` (cookie, bearer, token or oauth).
-- **What they did:** `via` (api, mcp or playground) and `verb` (an API verb, or `tool:<name>` for MCP and the Playground).
-- **What went wrong:** `error` (`reason`, plus `detail` if there is one).
+The first middleware in `src/index.ts` emits only `msg: "request"`, `status`, `ms` and bounded database timing/counts. `note` still supplies internal request context, but `emit` deliberately excludes paths, query names, user agents, identity fields and error details. Stack traces and dynamic exception messages are not explicitly logged. Status 500 and above logs at error level, 400 and above at warn level, and everything else at info.
 
-Handlers add facts with `note(request, …)` from `src/log.ts`, and `buildContext` notes the actor on every request.
-Status 500 and above logs at error level, 400 and above at warn level, and everything else at info.
-Crashes add a separate `msg: "exception"` or `msg: "verb failed"` line with the stack. Inbound mail writes
-`msg: "mail"`, with to, from, size, timing and any error.
+Workers Observability is enabled at full sampling on every Pimwell and AgentFeed Worker. Invocation logs and raw log persistence are disabled: native exceptions may contain provider text or user data. The ephemeral Cloudflare tail stream still carries raw URLs/exceptions, so never archive or paste it. `pimwell-tail` replaces arbitrary URL paths/query names, exception messages and log strings before sending anything to the hub over the `Ingest` service binding. Only fixed operational labels, standard exception types, counts, Ray IDs, Worker/version identifiers and hexadecimal commit tags cross this boundary. Structured AI usage accepts known model/provider names and numeric usage only; arbitrary purposes are discarded.
 
-**Never stored:** Cloudflare's own invocation entries are off, because they record full URLs. Live `tail` still shows full URLs, but it isn't stored. Also never logged: tokens, cookies, request bodies and query values. `/invite/<token>` and `/auth/<token>` become
-`/invite/:token` and `/auth/:token`, and a query keeps only its key names (`/docket?owner=…`).
+The hub and Git proxy and all seven AgentFeed Workers name `pimwell-tail` as their consumer. The tail itself has Observability enabled but no self-consumer: recursively tailing delivery would create a feedback loop. It logs only a fixed delivery-failure label and batch count, and never retries an ambiguous send. Source-to-project registration supplies the app identity. Releases tag versions with the full commit and record each Worker rollout; deploy commands use the individual Worker config so non-versioned observability/consumer settings are synchronized too.
+
+## End-to-end check
+
+An authenticated, authorized `POST /api/project.status` with header `x-pimwell-telemetry-probe: exception` schedules the fixed `Pimwell telemetry test exception` after a successful status read. The normal response is unchanged; anonymous, refused or failed reads cannot induce it. Inspect `app.errors` / `app.error` and `project.status` for delivery and source coverage. Never use actual user content for a probe.
 
 ## Confirmed-empty tool polling (#99 increment)
 
@@ -49,10 +43,9 @@ The prior all-calls audit design is qualified only by this explicit empty-query 
 
 ## Looking at logs
 
-- **Dashboard:** Workers & Pages → pimwell-hub → Logs. Filter by `$metadata.message`, or by fields such as
-  `actor.email`, `status`, `verb`, `ray`.
-- **Live:** `npm run cf -- tail --format pretty`, or `--format json` piped to `jq`.
-- **From a Ray ID:** the error page and the `cf-ray` response header carry it. Search the logs for it.
+- **Pimwell:** Apps (`/apps`), `app.errors`, `app.error`, and `project.status` show content-safe errors and coverage.
+- **Cloudflare:** Observability is enabled, but raw Workers Logs are not persisted. Do not use raw tail captures as an archive.
+- **From a Ray ID:** the error page and the `cf-ray` response header carry it; forwarded error examples retain the Ray ID.
 
 ## Who did what, later
 

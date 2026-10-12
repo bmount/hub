@@ -1,7 +1,9 @@
 // Request logging (docs/ops/logging.md): one structured line per request, with who acted, and no secrets.
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { redactUrl } from "../src/log";
+import { redactUrl, emit } from "../src/log";
+import { handleApi } from "../src/http/api";
+import { createProject } from "../src/db/projects";
 import { cookieHeaders, seedHuman, seedTenant } from "./helpers";
 
 const lines = () => {
@@ -25,14 +27,42 @@ describe("redaction", () => {
 });
 
 describe("request lines", () => {
-  it("name who acted, in which organization, and the verb", async () => {
+  it("drops content placed in arbitrary log fields", () => {
+    const out = lines();
+    emit({ msg: "request", status: 500, path: "/private-mail-body", ua: "private interview", error: { detail: "private post" } });
+    expect(out).toEqual([{ msg: "request", status: 500 }]);
+  });
+
+  it("only induces the fixed exception after an authorized status read", async () => {
+    const t = await seedTenant("acme");
+    await createProject(env.HUB_DB, { tenant_id: t.id, namespace_id: null, slug: "site", kind: "repo", display_name: "Site" }, Date.now());
+    const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    const errors: string[] = [];
+    const pending: Promise<unknown>[] = [];
+    const wait = (p: Promise<unknown>) => { pending.push(p.catch(e => { errors.push(e.message); })); };
+    const call = (authenticated: boolean, project = "site") => handleApi(new Request("https://acme.pimwell.test/api/project.status", {
+      method: "POST", headers: { ...(authenticated ? cookieHeaders(pat.token, "acme.pimwell.test") : {}), origin: "https://acme.pimwell.test",
+        "content-type": "application/json", "x-pimwell-telemetry-probe": "exception" }, body: JSON.stringify({ project }),
+    }), env, wait);
+    expect((await call(false)).status).not.toBe(200);
+    expect((await call(true, "missing")).status).not.toBe(200);
+    await Promise.all(pending);
+    expect(errors).toEqual([]);
+    expect((await call(true)).status).toBe(200);
+    await Promise.all(pending);
+    expect(errors).toEqual(["Pimwell telemetry test exception"]);
+  });
+  it("logs status and timing without identifying or arbitrary request content", async () => {
     const t = await seedTenant("acme");
     const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
     const out = lines();
     const res = await SELF.fetch("https://acme.pimwell.test/api/whoami", { method: "POST", headers: { ...cookieHeaders(pat.token, "acme.pimwell.test"), origin: "https://acme.pimwell.test", "content-type": "application/json" }, body: "{}" });
     expect(res.status).toBe(200);
-    const line = out.find((l) => l.msg === "request" && l.path === "/api/whoami");
-    expect(line).toMatchObject({ method: "POST", status: 200, tenant: "acme", auth: "cookie", verb: "whoami", via: "api", actor: { id: pat.identity.id, kind: "human", email: "pat@example.com" } });
+    const line = out.find((l) => l.msg === "request");
+    expect(line).toMatchObject({ status: 200 });
+    expect(line).not.toHaveProperty("path");
+    expect(line).not.toHaveProperty("actor");
+    expect(line).not.toHaveProperty("error");
     expect(JSON.stringify(out)).not.toContain(pat.token);
   });
 
@@ -48,7 +78,8 @@ describe("request lines", () => {
     expect(res.status).toBe(403);
     expect(res.headers.get("content-type")).toContain("text/html");
     expect(await res.text()).toContain("have permission to do that here.");
-    expect(out.find((l) => l.msg === "request" && l.path === "/api/tenant.delete")).toMatchObject({ status: 403, verb: "tenant.delete", error: { reason: "forbidden" }, actor: { email: "pat@example.com" } });
+    expect(out.find((l) => l.msg === "request")).toMatchObject({ status: 403 });
+    expect(JSON.stringify(out)).not.toContain("pat@example.com");
     const ev = await env.HUB_DB.prepare("SELECT identity_id, target_id, summary FROM event WHERE kind = 'verb.refused'").first<{ identity_id: string; target_id: string; summary: string }>();
     expect(ev).toMatchObject({ identity_id: pat.identity.id, target_id: "tenant.delete" });
   });

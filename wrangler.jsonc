@@ -7,7 +7,8 @@
   "workers_dev": false,
   // Workers Logs: every console line is stored and searchable (docs/ops/logging.md). Cloudflare's own invocation
   // entries are off: they record full URLs, which can carry invite and sign-in tokens. Our request line is redacted.
-  "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "enabled": true, "invocation_logs": false } },
+  "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "enabled": true, "invocation_logs": false, "persist": false } },
+  "tail_consumers": [{ "service": "pimwell-tail" }],
   "routes": [
     { "pattern": "pimwell.com", "custom_domain": true },
     { "pattern": "*.pimwell.com/*", "zone_name": "pimwell.com" }

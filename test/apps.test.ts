@@ -19,7 +19,7 @@ const tail = (over: Record<string, unknown> = {}) => ({
   scriptName: "pricebench", outcome: "ok", eventTimestamp: Date.now(), scriptVersion: { id: "v-1111aaaa", tag: "abc1234", message: "Fix prices" },
   event: { request: { url: "https://pb.example.com/api/price?ndc=123&token=pms_secretsecretsecret", method: "GET", headers: { "cf-ray": "ray1", authorization: "Bearer abcdefghijklmnop", cookie: "s=1" } }, response: { status: 200 } },
   logs: [{ level: "log", message: ["hello pat@example.com"] }, { level: "error", message: ["lookup failed for id 42 with key sk-abcdefghijkl"] },
-    { level: "log", message: [JSON.stringify({ pimwell: "ai_usage", provider: "openai", model: "m-1", input_tokens: 100, output_tokens: 20 })] }],
+    { level: "log", message: [JSON.stringify({ pimwell: "ai_usage", provider: "openai", model: "gpt-6.1-sol", input_tokens: 100, output_tokens: 20 })] }],
   exceptions: [], ...over,
 });
 
@@ -37,13 +37,28 @@ async function world() {
 }
 
 describe("redaction at the source", () => {
+  it("never forwards user content even in paths, query names, errors or version messages", () => {
+    const content = "private post interview mail body secret";
+    const e = redact(tail({
+      event: { request: { url: "https://example.com/" + encodeURIComponent(content) + "?" + encodeURIComponent(content) + "=secret" } },
+      scriptVersion: { id: "v-1", tag: content, message: content },
+      logs: [{ level: "warn", message: [content, { body: content }] },
+        { level: "log", message: [{ pimwell: "ai_usage", provider: "secret", model: "private-post", input_tokens: 1, output_tokens: 1 }] }],
+      exceptions: [{ name: content, message: content }],
+    }))!;
+    expect(JSON.stringify(e)).not.toContain(content);
+    expect(e).toMatchObject({ path: "/[redacted]", tag: null, message: null,
+      logs: [{ level: "warn", text: "[redacted warn]" }],
+      exceptions: [{ name: "Error", message: "[redacted exception]" }] });
+    expect(redact(tail({ exceptions: [{ name: "Error", message: "Pimwell telemetry test exception" }] }))!.exceptions[0]!.message).toBe("Pimwell telemetry test exception");
+  });
   it("keeps paths without query values, no headers but the ray, only warnings and errors, masked", () => {
     const e = redact(tail())!;
-    expect(e.path).toBe("/api/price?ndc=…&token=…");
+    expect(e.path).toBe("/[redacted]");
     expect(e.ray).toBe("ray1");
     expect(JSON.stringify(e)).not.toMatch(/pms_secret|abcdefghijklmnop|pat@example\.com|sk-abcdefghijkl|cookie/);
-    expect(e.logs).toEqual([{ level: "error", text: "lookup failed for id 42 with key [key]" }]);
-    expect(e.usage).toEqual([{ provider: "openai", model: "m-1", input_tokens: 100, output_tokens: 20, cached_tokens: null, cost_usd: null, purpose: null }]);
+    expect(e.logs).toEqual([{ level: "error", text: "[redacted error]" }]);
+    expect(e.usage).toEqual([{ provider: "openai", model: "gpt-6.1-sol", input_tokens: 100, output_tokens: 20, cached_tokens: null, cost_usd: null, purpose: null }]);
     expect(mask('password: "hunter2" token=abc eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4')).toBe('password: [redacted]" token=[redacted] [jwt]');
     expect(redact({ scriptName: null } as never)).toBeNull();
   });
@@ -275,7 +290,7 @@ describe("recorded app-error work evidence", () => {
     const field = (name: string) => form.match(new RegExp(`name="${name}" value="([^"]*)"`))![1]!;
     const textarea = (name: string) => form.match(new RegExp(`name="${name}"[^>]*>([\\s\\S]*?)</textarea>`))![1]!;
     const fields = { project: "pricebench", kind: "snag", title: "Investigate lookup", body: textarea("body"), owner: "", _back: field("_back"), source_kind: field("source_kind"), source_ref: field("source_ref"), source_quote: textarea("source_quote") };
-    expect(fields.source_quote).toBe("lookup failed for id 42 with key [key]");
+    expect(fields.source_quote).toBe("[redacted error]");
     expect(fields.body).toContain(`Recorded app error group: ${w.id}`);
     expect(fields.body).toContain("Latest recorded version: v-1111aaaa");
     const post = (origin: boolean) => SELF.fetch(`https://${HOST}/api/work.create`, { method: "POST", redirect: "manual", headers: { cookie: `pmw_session=${w.pat.token}`, "content-type": "application/x-www-form-urlencoded", ...(origin ? { origin: `https://${HOST}` } : {}) }, body: new URLSearchParams(fields).toString() });
@@ -470,7 +485,7 @@ describe("app telemetry", () => {
     expect((await w.call(w.root.token, "app.register", { project: "pricebench", script: "pricebench" })).result).toMatchObject({ state: "active" });
     expect((await ingest(env, [redact(tail()), redact(tail({ logs: [{ level: "error", message: ["lookup failed for id 77 with key sk-zzzzzzzzzzzz"] }] }))], Date.now())).accepted).toBe(2);
     const groups = (await env.HUB_DB.prepare("SELECT kind, count, title FROM app_error_group").all()).results;
-    expect(groups).toEqual([{ kind: "error", count: 2, title: "lookup failed for id 42 with key [key]" }]);
+    expect(groups).toEqual([{ kind: "error", count: 2, title: "[redacted error]" }]);
     expect((await env.HUB_DB.prepare("SELECT version_id, tag FROM app_deploy").all()).results).toEqual([{ version_id: "v-1111aaaa", tag: "abc1234" }]);
     expect((await env.HUB_DB.prepare("SELECT requests FROM app_stat").first<{ requests: number }>())!.requests).toBe(2);
     expect((await env.HUB_DB.prepare("SELECT COUNT(*) AS n, MIN(source) AS s, MIN(client) AS c FROM model_call").first())).toEqual({ n: 1, s: "app", c: "pricebench" });
@@ -499,7 +514,7 @@ describe("app telemetry", () => {
     expect(((await w.call(w.pat.token, "deploy.list", {})).result.deploys as unknown[]).length).toBe(1);
     const page = await (await SELF.fetch(`https://${HOST}/apps`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
     expect(page).toContain("<code>pricebench</code>");
-    expect(page).toContain("x is undefined");
+    expect(page).toContain("[redacted exception]");
   });
 
   it("approves an app at once when the project's main branch declares the Worker, and not otherwise", async () => {

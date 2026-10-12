@@ -7,5 +7,5 @@
   "compatibility_date": "2026-09-01",
   "workers_dev": false,
   "services": [{ "binding": "HUB", "service": "pimwell-hub", "entrypoint": "Ingest" }],
-  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } }
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false, "persist": false } }
 }
