@@ -25,7 +25,7 @@ export function setArdiForTest(f: Fetcher | null): void { testArdi = f; }
 
 /** One Ardi verb. Throws HubError with Ardi's reason, or 503 when Ardi can't be reached. */
 export async function ardiCall<T>(env: Env, org: string, authorization: string, verb: string, body: Record<string, unknown>): Promise<ArdiPage<T>> {
-  if (await usesArtifacts(env, org, String(body.repo ?? ""))) return artifactRead<T>(env, org, authorization, verb, body);
+  if (String(body.repo ?? "").startsWith("agent-src/") || await usesArtifacts(env, org, String(body.repo ?? ""))) return artifactRead<T>(env, org, authorization, verb, body);
   const ardi = testArdi ?? env.ARDI;
   if (!ardi) throw new HubError(503, "unavailable", "the git host is not connected");
   let res: Response;

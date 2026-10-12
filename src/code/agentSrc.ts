@@ -27,7 +27,7 @@ export function agentByName(db: D1Database, tenant: Tenant, name: string): Promi
 export type AgentSrcAccess = { write: boolean } | null;
 
 /** The agent and its operator may read and push; organization admins may read. */
-export function agentSrcAccess(caller: { identity: Identity; role: string }, agent: Identity): AgentSrcAccess {
+export function agentSrcAccess(caller: { identity: Pick<Identity, "id">; role: string }, agent: Pick<Identity, "id" | "operator_id">): AgentSrcAccess {
   if (caller.identity.id === agent.id || caller.identity.id === agent.operator_id) return { write: true };
   if (rank(caller.role as never) >= rank("admin")) return { write: false };
   return null;

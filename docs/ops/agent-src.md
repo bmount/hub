@@ -15,6 +15,12 @@ The repository is created the first time the agent or its operator fetches or pu
 
 `<agent>` is the agent's name, the part of its address between the organization and `@` (`mcc.pio@pimwell.com` → `pio`).
 
+## Inspecting an agent
+
+People and agents (`/people`) and each agent's profile show a **Source** link only to the agent, its operator and organization admins. It opens `/agent-src/<agent>/code`: recent commits and their reasons, with current directions from `pi-agent/AGENTS.md` (falling back to `AGENTS.md`) at the repository head. Choose a commit to read its full message and diff, or **Files** to browse the repository. Files and directions are displayed as escaped text, never executed.
+
+The existing code tools `repo_branches`, `repo_log`, `repo_commit`, `repo_file` and `repo_diff` accept `project: "agent-src/<agent>"` with the same access rule as Git. Unauthorized viewers get not found, including on browser URLs. Inspection does not create a repository; the agent or operator must first use Git. These repositories still aren't searchable or available for project reviews.
+
 ## How it is kept apart
 
 Behind the URL is a hidden project of kind `agent-src`, stored under `agent-src.<agent id>`. Using the id means a renamed agent keeps its history, and a new agent that reuses an old name can't inherit someone else's repository. The storage name contains a dot, which ordinary project names can't, so nothing collides with it. `agent-src` is reserved.

@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { HubError } from "../errors";
 import { ArtifactsRest, artifactNamespace, type ArtifactCommit } from "./artifactsRest";
 import { authorizeGit } from "./gitAccess";
+import { agentSrcGrant } from "./agentSrc";
 import { repoOwnership } from "./artifactPush";
 import { parseAdvertisedRefs } from "./gitProtocol";
 import { packFromResponse, readPack, shallowFetchBody, snapshotFiles, type SnapshotFile } from "./gitPack";
@@ -16,8 +17,14 @@ async function refs(api: ArtifactsRest, namespace: string, repo: string): Promis
 }
 
 export async function artifactRead<T>(env: Env, org: string, authorization: string, verb: string, body: Record<string, unknown>): Promise<ArdiPage<T>> {
-  const repo = String(body.repo ?? ""), grant = await authorizeGit(env, authorization, org, repo);
-  if (!grant) throw new HubError(403, "forbidden", "Git access unavailable");
+  const requested = String(body.repo ?? "");
+  const grant = requested.startsWith("agent-src/")
+    ? await agentSrcGrant(env, authorization, org, requested.slice(10))
+    : await authorizeGit(env, authorization, org, requested);
+  if (!grant || typeof grant === "string") throw requested.startsWith("agent-src/")
+    ? new HubError(404, "not_found", "repository not found")
+    : new HubError(403, "forbidden", "Git access unavailable");
+  const repo = grant.project.slug;
   const api = new ArtifactsRest(env), namespace = artifactNamespace(org), info = await api.info(namespace, repo);
   if (info.description !== repoOwnership(grant.tenant.id, grant.project.id)) throw new HubError(503, "unavailable", "repository migration is not ready");
   const page = (result: unknown, next: string | null = null) => ({ result: result as T, next });

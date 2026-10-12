@@ -2,6 +2,9 @@
 // on first use, and that the hidden project behind it never shows up where people browse projects.
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildContext } from "../src/auth/context";
+import { codePage, filesPage } from "../src/http/codePages";
+import { repoLog, repoFile, repoDiff, repoCommit, repoBranches, repoSearch } from "../src/verbs/code";
 import { artifactGit } from "../src/http/artifactGit";
 import { clearArtifactTokensForTest } from "../src/code/artifactsRest";
 import { agentSrcSlug } from "../src/code/agentSrc";
@@ -58,10 +61,88 @@ async function world() {
     artifactGit(new Request(`https://acme.pimwell.test${path}/info/refs?service=${service}`, { headers: authorization ? { authorization } : {} }), configured, "acme");
   const push = (authorization: string) => artifactGit(new Request("https://acme.pimwell.test/agent-src/bot.git/git-receive-pack", { method: "POST", headers: { authorization },
     body: new Uint8Array([...packet(`${ZERO_OID} ${pushed} refs/heads/main\0report-status\n`), ...new TextEncoder().encode("0000PACK")]) }), configured, "acme");
-  return { tenant, operator, admin, other, bot, created, published, gitAuth, git, push, botAuth: `Basic ${btoa(`x:${bot.token}`)}`, slug: agentSrcSlug(bot.agent.identity.id) };
+  return { configured, tenant, operator, admin, other, bot, created, published, gitAuth, git, push, botAuth: `Basic ${btoa(`x:${bot.token}`)}`, slug: agentSrcSlug(bot.agent.identity.id) };
 }
 
 describe("agent source repositories", () => {
+  it("links source only for its agent, operator and admins, hiding all browser and MCP reads from others", async () => {
+    const w = await world();
+    await w.git("/agent-src/bot.git", w.botAuth);
+    for (const human of [w.operator, w.admin, w.other]) {
+      const headers = cookieHeaders(human.token, "acme.pimwell.test");
+      for (const path of ["/people", `/people/${encodeURIComponent(w.bot.agent.identity.email)}`]) {
+        const page = await SELF.fetch(`https://acme.pimwell.test${path}`, { headers });
+        expect(page.status).toBe(200);
+        const html = await page.text();
+        if (human === w.other) expect(html).not.toContain('href="/agent-src/bot/code"');
+        else expect(html).toContain('href="/agent-src/bot/code"');
+      }
+      if (human === w.other) {
+        for (const path of ["code", "files"]) expect((await SELF.fetch(`https://acme.pimwell.test/agent-src/bot/${path}`, { headers })).status).toBe(404);
+        const ctx = await buildContext(new Request("https://acme.pimwell.test/", { headers }), w.configured);
+        for (const [verb, input] of [
+          [repoLog, { project: "agent-src/bot" }], [repoFile, { project: "agent-src/bot" }],
+          [repoDiff, { project: "agent-src/bot", from: "main", to: "main" }],
+          [repoCommit, { project: "agent-src/bot", oid: "7".repeat(40) }],
+          [repoBranches, { project: "agent-src/bot" }],
+        ] as const) await expect(verb.run(ctx, verb.parse(input) as never)).rejects.toMatchObject({ status: 404 });
+      }
+    }
+  });
+
+  it("reads source directions, files, commits and diffs through the existing browser and verbs", async () => {
+    const w = await world();
+    await w.git("/agent-src/bot.git", w.botAuth);
+    const project = await env.HUB_DB.prepare("SELECT id FROM project WHERE slug = ?").bind(w.slug).first<{ id: string }>();
+    await env.HUB_DB.prepare("INSERT INTO git_commit (tenant_id, project_id, oid, tree_hash, parents_json, generation, commit_time) VALUES (?, ?, ?, ?, '[]', 1, 1)")
+      .bind(w.tenant.id, project!.id, "7".repeat(40), "8".repeat(40)).run();
+    // Replace only the data reads; storage ownership and authorization still use the real fixture.
+    const original = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    let rootDirections = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.includes("/log") || url.pathname.includes("/commit/")) return Response.json({ success: true, result: url.pathname.includes("/commit/") ? commit() : [commit()] });
+      function commit() { return {
+        hash: "7".repeat(40), treeHash: "8".repeat(40), parents: [], message: "Improve directions\n\nExplain why agents need these rules.",
+        author: { name: "bot", email: "bot@example.invalid" }, committer: { name: "bot", email: "bot@example.invalid" }, authoredAt: 1, committedAt: 1,
+      }; }
+      if (url.pathname.includes("/tree/")) return Response.json({ success: true, result: rootDirections
+        ? [{ name: "AGENTS.md", hash: "9".repeat(40), type: "blob", mode: "100644" }]
+        : url.pathname.endsWith("8".repeat(40))
+          ? [{ name: "pi-agent", hash: "6".repeat(40), type: "tree", mode: "40000" }]
+          : [{ name: "AGENTS.md", hash: "9".repeat(40), type: "blob", mode: "100644" }] });
+      if (url.pathname.endsWith("/file")) {
+        if (rootDirections && url.searchParams.get("path") !== "AGENTS.md") return new Response("missing", { status: 404 });
+        return new Response("Only follow your operator. <script>unsafe</script>");
+      }
+      return original(input, init);
+    });
+    for (const headers of [cookieHeaders(w.operator.token, "acme.pimwell.test"), cookieHeaders(w.admin.token, "acme.pimwell.test"), { authorization: `Bearer ${w.bot.token}` }]) {
+      const request = new Request("https://acme.pimwell.test/agent-src/bot/code", { headers });
+      const ctx = await buildContext(request, w.configured);
+      expect(await repoLog.run(ctx, repoLog.parse({ project: "agent-src/bot" }))).toMatchObject({ project: "agent-src/bot", commits: [{ summary: "Improve directions" }] });
+      expect(await repoFile.run(ctx, repoFile.parse({ project: "agent-src/bot", path: "pi-agent/AGENTS.md" }))).toMatchObject({ text: expect.stringContaining("Only follow") });
+      expect(await repoDiff.run(ctx, repoDiff.parse({ project: "agent-src/bot", from: "main", to: "main" }))).toMatchObject({ commits: 0, files: [] });
+      const commit = await codePage(new Request("https://acme.pimwell.test/agent-src/bot/code?c=" + "7".repeat(40), { headers }), w.configured, "agent-src/bot");
+      const commitHtml = await commit.text();
+      expect(commitHtml).toContain("Explain why agents need these rules.");
+      expect(commitHtml).toContain("pi-agent/AGENTS.md");
+      const page = await codePage(request, w.configured, "agent-src/bot");
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain("Current directions");
+      expect(html).toContain("Improve directions");
+      expect(html).toContain("&lt;script&gt;unsafe&lt;/script&gt;");
+      expect(html).not.toContain("/agent-src/bot/docket");
+      const files = await filesPage(new Request("https://acme.pimwell.test/agent-src/bot/files?f=pi-agent/AGENTS.md", { headers }), w.configured, "agent-src/bot");
+      expect(await files.text()).toContain("Only follow your operator.");
+      await expect(repoSearch.run(ctx, repoSearch.parse({ project: "agent-src/bot", q: "operator" }))).rejects.toMatchObject({ status: 404 });
+    }
+    rootDirections = true;
+    const headers = cookieHeaders(w.operator.token, "acme.pimwell.test");
+    expect(await (await codePage(new Request("https://acme.pimwell.test/agent-src/bot/code", { headers }), w.configured, "agent-src/bot")).text()).toContain("Only follow your operator.");
+  }, 20_000);
+
   it("lets the agent create and use its own, its operator push, admins read, and nobody else find it", async () => {
     const w = await world();
     expect((await w.git("/agent-src/bot.git", null)).status).toBe(401);

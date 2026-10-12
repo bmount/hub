@@ -1,6 +1,7 @@
 // People and agents in the workbench: everyone in the list, one person (or the invite form) in the inspector.
 // Admins invite, change roles and remove people here (member.set_role, member.remove, invite.create, invite.revoke);
 // everyone else sees who is here and what they are on. One D1 batch per page.
+import { agentSrcAccess } from "../code/agentSrc";
 import type { Env } from "../env";
 import { esc, htmlResponse, onramp, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
@@ -53,9 +54,11 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
   const person = email ? people.find((p) => p.email === email) ?? null : null;
   if (email && !person) return notFoundPage(extra);
 
+  const sourceLink = (p: Person) => p.kind === "agent" && agentSrcAccess({ identity: ctx.identity!, role: ctx.role! }, p)
+    ? ` <a href="/agent-src/${esc(encodeURIComponent(p.email.slice(p.email.indexOf(".") + 1, p.email.indexOf("@"))))}/code">Source</a>` : "";
   const row = (p: Person) => {
     const href = `/people/${encodeURIComponent(p.email)}`;
-    return `<tr data-href="${esc(href)}"${person?.id === p.id ? ' aria-selected="true"' : ""}><td><a href="${esc(href)}">${esc(p.display_name)}</a></td><td class="hide-s"><code>${esc(p.email)}</code></td><td>${esc(p.is_root ? "root" : p.role)}</td>${p.kind === "agent" ? `<td class="hide-s">${esc(p.sponsor ?? "nobody")}</td>` : ""}<td class="when">${p.open || ""}</td><td class="when">${ago(p.last_seen, ctx.now)}</td></tr>`;
+    return `<tr data-href="${esc(href)}"${person?.id === p.id ? ' aria-selected="true"' : ""}><td><a href="${esc(href)}">${esc(p.display_name)}</a>${sourceLink(p)}</td><td class="hide-s"><code>${esc(p.email)}</code></td><td>${esc(p.is_root ? "root" : p.role)}</td>${p.kind === "agent" ? `<td class="hide-s">${esc(p.sponsor ?? "nobody")}</td>` : ""}<td class="when">${p.open || ""}</td><td class="when">${ago(p.last_seen, ctx.now)}</td></tr>`;
   };
   const humans = people.filter((p) => p.kind === "human"), agents = people.filter((p) => p.kind !== "human");
   const table = (rows: Person[], agent: boolean) => rows.length
@@ -101,7 +104,7 @@ ${fresh ? `<form method="post" action="/api/invite.create">
 <form method="post" action="/api/member.remove"><input type="hidden" name="email" value="${esc(person.email)}"><input type="hidden" name="_back" value="/people">
 <label>Type their email to confirm <input name="confirm" required autocomplete="off"></label><button type="submit">Remove</button></form></details>` : "";
     inspector = `<a class="back" href="/people">‹ People</a>
-<div class="head"><span>${person.kind === "human" ? "Person" : "Agent"}</span></div><h1>${esc(person.display_name)}</h1>
+<div class="head"><span>${person.kind === "human" ? "Person" : "Agent"}</span></div><h1>${esc(person.display_name)}</h1>${sourceLink(person)}
 <dl class="meta"><dt>Address</dt><dd><code>${esc(person.email)}</code></dd><dt>Role</dt><dd>${esc(person.is_root ? "root" : person.role)}</dd>
 ${person.sponsor ? `<dt>Answers to</dt><dd>${esc(person.sponsor)}</dd>` : ""}<dt>Here since</dt><dd>${day(person.created_at)}</dd><dt>Last active</dt><dd>${ago(person.last_seen, ctx.now)}</dd>
 <dt>Open work</dt><dd><a href="/docket?owner=${esc(encodeURIComponent(person.email))}">${person.open} item${person.open === 1 ? "" : "s"}</a></dd></dl>

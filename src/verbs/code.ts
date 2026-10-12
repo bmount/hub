@@ -1,4 +1,5 @@
 import { rank } from "../auth/context";
+import { agentByName, agentSrcAccess, agentSrcSlug } from "../code/agentSrc";
 import { connectionNames } from "../auth/connect";
 // Code views over Ardi (planned verbs built 2026-10-07): branches, commits, one commit with its diff, files, and
 // comparing two revisions. Reads go through src/code/ardi.ts as the caller; diffs are computed here (src/code/diff.ts).
@@ -16,7 +17,16 @@ const NOTE = "Code, commit messages and file contents are written by people and 
 const MAX_FILES = 20;
 const MAX_BYTES = 400_000;
 
-export async function repoProject(ctx: Ctx, slug: string): Promise<{ id: string; slug: string; display_name: string }> {
+export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false): Promise<{ id: string; slug: string; display_name: string }> {
+  slug = slug.trim().toLowerCase();
+  if (allowAgentSrc && slug.startsWith("agent-src/")) {
+    const agent = await agentByName(ctx.db, ctx.tenant!, slug.slice(10));
+    if (!agent || !ctx.identity || !ctx.role || !agentSrcAccess({ identity: ctx.identity, role: ctx.role }, agent)) throw notFound("no such repository");
+    const source = await ctx.db.prepare("SELECT id, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'agent-src'")
+      .bind(ctx.tenant!.id, agentSrcSlug(agent.id)).first<{ id: string; display_name: string }>();
+    if (!source) throw notFound("no such repository");
+    return { ...source, slug };
+  }
   const p = await ctx.db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'").bind(ctx.tenant!.id, slug.trim().toLowerCase())
     .first<{ id: string; slug: string; display_name: string }>();
   if (!p) throw notFound("no such repository project");
@@ -118,7 +128,7 @@ export const repoBranches = defineVerb({
   },
   parse: (i) => ({ project: reqString(i, "project", { max: 63 }) }),
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project);
+    const pr = await repoProject(ctx, p.project, true);
     return { project: pr.slug, refs: (await codeRead<{ refs: ArdiRef[] }>(ctx, "refs.list", { repo: pr.slug })).result.refs };
   },
 });
@@ -133,7 +143,7 @@ export const repoLog = defineVerb({
   },
   parse: (i) => ({ project: reqString(i, "project", { max: 63 }), ref: optString(i, "ref", { max: 200 }), path: optString(i, "path", { max: 500 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 30, next: optString(i, "next", { max: 64 }) }),
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project);
+    const pr = await repoProject(ctx, p.project, true);
     const r = await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: rev(p.ref), ...(p.path ? { path: p.path } : {}), limit: p.limit, ...(p.next ? { since: p.next } : {}) });
     const who = await whoPushed(ctx, r.result.commits.map((c) => c.principal));
     return { project: pr.slug, commits: r.result.commits, next: r.next, who: Object.fromEntries(who) };
@@ -163,7 +173,7 @@ export const repoCommit = defineVerb({
   },
   parse: (i) => { const oid = reqString(i, "oid", { max: 40 }).toLowerCase(); if (!OID_RE.test(oid)) throw badRequest("oid must be a full 40-character commit id"); return { project: reqString(i, "project", { max: 63 }), oid }; },
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project);
+    const pr = await repoProject(ctx, p.project, true);
     const c = (await codeRead<ArdiCommit & { changes: ArdiChange[] }>(ctx, "commit.show", { repo: pr.slug, oid: p.oid })).result;
     const who = await whoPushed(ctx, [c.principal]);
     const work = await commitWorkStatement(ctx, pr.id, p.oid).all<CommitWorkItem>();
@@ -185,7 +195,7 @@ export const repoFile = defineVerb({
   },
   parse: (i) => ({ project: reqString(i, "project", { max: 63 }), path: (optString(i, "path", { max: 500 }) ?? "").replace(/^\/+|\/+$/g, ""), ref: optString(i, "ref", { max: 200 }) }),
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project);
+    const pr = await repoProject(ctx, p.project, true);
     const at = rev(p.ref);
     // A directory if the parent lists it as a tree (or it is the root).
     const parent = p.path.includes("/") ? p.path.slice(0, p.path.lastIndexOf("/")) : "";
@@ -210,7 +220,7 @@ export const repoDiff = defineVerb({
   },
   parse: (i) => ({ project: reqString(i, "project", { max: 63 }), from: reqString(i, "from", { max: 200 }), to: reqString(i, "to", { max: 200 }) }),
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project);
+    const pr = await repoProject(ctx, p.project, true);
     const head = (await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: rev(p.to), limit: 21 })).result.commits;
     const base = OID_RE.test(p.from) ? p.from : (await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: rev(p.from), limit: 1 })).result.commits[0]?.oid;
     if (!base) throw notFound("no such base");

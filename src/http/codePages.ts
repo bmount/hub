@@ -10,7 +10,7 @@ import { HubError } from "../errors";
 import { getVerb } from "../verbs/table";
 import { type ArdiCommit, type ArdiEntry, type ArdiRef } from "../code/ardi";
 import type { FileDiff } from "../code/diff";
-import type { After, FileChange } from "../verbs/code";
+import { repoProject, type After, type FileChange } from "../verbs/code";
 import type { commitWorkResults } from "../work/commitEvidence";
 import { KINDS, STATES } from "../work/names";
 import { sha256Hex } from "../ids";
@@ -38,8 +38,14 @@ async function base(request: Request, env: Env, slug: string) {
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return { ctx, extra, project: null };
-  const project = await ctx.db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'").bind(ctx.tenant.id, slug).first<{ id: string; slug: string; display_name: string }>();
-  return { ctx, extra, project };
+  try { return { ctx, extra, project: await repoProject(ctx, slug, true) }; }
+  catch (e) { if (e instanceof HubError && e.status === 404) return { ctx, extra, project: null }; throw e; }
+}
+
+function navigation(ctx: Ctx, project: { slug: string; display_name: string }, view: string): string {
+  const source = project.slug.startsWith("agent-src/");
+  return `<p class="crumbs"><a href="/${source ? "people" : ""}">${source ? "People and agents" : esc(ctx.tenant!.display_name)}</a> / ${esc(project.display_name)}</p>
+<div class="chips">${source ? "" : `<a class="chip" href="/${esc(project.slug)}/docket">Docket</a>`}<a class="chip" href="/${esc(project.slug)}/code"${view === "code" ? ' aria-current="true"' : ""}>Commits</a><a class="chip" href="/${esc(project.slug)}/files"${view === "files" ? ' aria-current="true"' : ""}>Files</a></div>`;
 }
 
 const unavailable = (e: unknown) => `<p class="empty">${esc(e instanceof HubError ? e.detail ?? e.reason : "The git host could not be read.")}</p>`;
@@ -51,8 +57,7 @@ export async function codePage(request: Request, env: Env, slug: string): Promis
   const ref = url.searchParams.get("ref") ?? "";
   const oid = url.searchParams.get("c") ?? "";
   let list: string; let inspector: string | null = null; let inspectorKey = "";
-  const crumbs = `<p class="crumbs"><a href="/">${esc(ctx.tenant!.display_name)}</a> / <a href="/${esc(project.slug)}/docket">${esc(project.display_name)}</a></p>
-<div class="chips"><a class="chip" href="/${esc(project.slug)}/docket">Docket</a><a class="chip" href="/${esc(project.slug)}/code" aria-current="true">Commits</a><a class="chip" href="/${esc(project.slug)}/files">Files</a></div>`;
+  const crumbs = navigation(ctx, project, "code");
   try {
     const [refs, log] = await Promise.all([
       run<{ refs: ArdiRef[] }>(ctx, "repo.branches", { project: project.slug }),
@@ -78,6 +83,18 @@ ${c.relatedWork.length ? `<table><tbody>${c.relatedWork.map(w => `<tr><td class=
 <dt>Recorded error groups</dt><dd>${c.after.errors.length ? c.after.errors.map((e) => `<a href="/apps?g=${esc(encodeURIComponent(e.id))}">${esc(e.title)}</a> ×${e.count}`).join("<br>") : "none recorded"}<br>${c.after.errorsCoverage.shown} shown${c.after.errorsCoverage.truncated ? "; capped at 10, more omitted" : "; complete for the recorded time window"}<br>First recorded at or after ${new Date(c.after.errorsSince.at).toISOString()} (${c.after.errorsSince.basis})</dd></dl>
 ${c.commit.parents.length ? `<p class="lede">Parent${c.commit.parents.length > 1 ? "s" : ""}: ${c.commit.parents.map((p) => `<a href="/${esc(project.slug)}/code?c=${p}"><code>${p.slice(0, 8)}</code></a>`).join(" ")}</p>` : ""}
 ${c.files.map((f) => diffHtml(f.path, f.diff, f.note, f.kind)).join("")}`;
+    } else if (project.slug.startsWith("agent-src/")) {
+      let directions: { text: string | null; binary: boolean; size: number } | null = null;
+      let path = "";
+      for (const candidate of ["pi-agent/AGENTS.md", "AGENTS.md"]) {
+        try {
+          directions = await run(ctx, "repo.file", { project: project.slug, path: candidate });
+          path = candidate; break;
+        } catch (e) { if (!(e instanceof HubError && e.status === 404)) throw e; }
+      }
+      inspector = `<h1>Current directions</h1><p class="lede">At the repository head. Commit messages in the list explain self-changes.</p>
+${directions ? `<p><a href="/${esc(project.slug)}/files?f=${esc(encodeURIComponent(path))}"><code>${esc(path)}</code></a></p>${directions.binary ? "<p>Binary file.</p>" : directions.text === null ? "<p>Too large to show.</p>" : `<pre class="prose">${esc(directions.text)}</pre>`}` : "<p>No pi-agent/AGENTS.md or AGENTS.md at the head.</p>"}`;
+      inspectorKey = `directions:${project.id}:${await sha256Hex(JSON.stringify(directions))}`;
     } else {
       inspector = `<div class="head"><span>Repository</span></div><h1>${esc(project.display_name)}</h1>
 <dl class="meta"><dt>Branches</dt><dd>${heads.length}</dd><dt>Tags</dt><dd>${refs.refs.length - heads.length}</dd><dt>Clone</dt><dd><code>git clone https://${esc(ctx.tenant!.slug)}.${esc(env.HUB_DOMAIN)}/${esc(project.slug)}.git</code></dd></dl>
@@ -87,7 +104,7 @@ ${c.files.map((f) => diffHtml(f.path, f.diff, f.note, f.kind)).join("")}`;
     list = `${crumbs}${unavailable(e)}`;
   }
   return htmlResponse(workbench(`${project.display_name}: commits`, { list, listKey: `code:${project.slug}:${ref}:${url.searchParams.get("next") ?? ""}`, inspector, inspectorKey },
-    shellFor(ctx, env, "project", project.slug)!), 200, extra);
+    shellFor(ctx, env, project.slug.startsWith("agent-src/") ? "people" : "project", project.slug)!), 200, extra);
 }
 
 export async function filesPage(request: Request, env: Env, slug: string): Promise<Response> {
@@ -99,8 +116,7 @@ export async function filesPage(request: Request, env: Env, slug: string): Promi
   const file = url.searchParams.get("f") ?? "";
   const link = (p: string, f = "") => `/${esc(project.slug)}/files?${ref ? `ref=${esc(encodeURIComponent(ref))}&amp;` : ""}path=${esc(encodeURIComponent(p))}${f ? `&amp;f=${esc(encodeURIComponent(f))}` : ""}`;
   let list: string; let inspector: string | null = null;
-  const crumbs = `<p class="crumbs"><a href="/">${esc(ctx.tenant!.display_name)}</a> / <a href="/${esc(project.slug)}/docket">${esc(project.display_name)}</a></p>
-<div class="chips"><a class="chip" href="/${esc(project.slug)}/docket">Docket</a><a class="chip" href="/${esc(project.slug)}/code">Commits</a><a class="chip" href="/${esc(project.slug)}/files" aria-current="true">Files</a></div>`;
+  const crumbs = navigation(ctx, project, "files");
   try {
     const d = await run<{ entries: ArdiEntry[] }>(ctx, "repo.file", { project: project.slug, path: dir, ...(ref ? { ref } : {}) });
     const parts = dir ? dir.split("/") : [];
@@ -120,5 +136,5 @@ ${f.binary ? `<p class="lede">Binary file.</p>` : f.text === null ? `<p class="l
     list = `${crumbs}${unavailable(e)}`;
   }
   return htmlResponse(workbench(`${project.display_name}: files`, { list, listKey: `files:${project.slug}:${ref}:${dir}`, inspector, inspectorKey: file ? `file:${file}` : "" },
-    shellFor(ctx, env, "project", project.slug)!), 200, extra);
+    shellFor(ctx, env, project.slug.startsWith("agent-src/") ? "people" : "project", project.slug)!), 200, extra);
 }
