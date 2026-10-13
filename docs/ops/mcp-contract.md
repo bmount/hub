@@ -2,6 +2,8 @@
 
 Pimwell is **not read-only over MCP**. Human OAuth connections use the tenant's `/mcp`; operator-configured agent connections use `/agent/mcp`. OAuth binds the consenting human, grant and tenant; it does not authenticate an agent or authorize another tenant. Agent credentials bind the agent, not the operator's identity. Neither transport interprets message text as administrative authority.
 
+`initialize` identifies the authenticated organization: serverInfo `name` is `pimwell-<org-slug>`, `title` is `Pimwell · <org display name>`, and the first line of `instructions` repeats that title. Both transports use the current organization record on each request. Project endpoints are separate work; these organization endpoints do not infer a project from tool arguments.
+
 ## Discovery versus authorization
 
 The [generated inventory](../generated/mcp-tools.md) is derived from the same registered verb table, `exposedVerbs` policy and `toolDefinition` used by `tools/list`. It shows the maximum member-role inventory, required argument names, read/write scopes, minimum roles, destructive hints and implemented versus declared/planned entries. It is not an authorization snapshot: every request recomputes current role, grant scopes and applicable resource policy. Planned entries still return `not_implemented` and must not be described as shipped features.

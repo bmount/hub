@@ -4,7 +4,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
 import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
-import { connectWithTokens, mcpPost, rpcBody } from "./oauth-helpers";
+import { INIT, connectWithTokens, mcpPost, rpcBody } from "./oauth-helpers";
 const MCP_TRIP_BUDGET = 3;
 
 const HOST = "acme.pimwell.test";
@@ -95,6 +95,13 @@ describe("/agent/mcp", () => {
 
   it("works as the agent, within member rights, on the record, within the round-trip budget", async () => {
     const { ann, agent, token } = await connected("admin");
+    const init = await rpcBody(await agentMcp(token, "initialize", INIT));
+    expect(init.result.serverInfo).toMatchObject({ name: "pimwell-acme", title: "Pimwell · ACME" });
+    expect(init.result.instructions.split("\n")[0]).toBe(init.result.serverInfo.title);
+    await env.HUB_DB.prepare("UPDATE tenant SET display_name = ? WHERE slug = ?").bind("Acme Team", "acme").run();
+    const renamed = await rpcBody(await agentMcp(token, "initialize", INIT));
+    expect(renamed.result.serverInfo).toMatchObject({ name: "pimwell-acme", title: "Pimwell · Acme Team" });
+    expect(renamed.result.instructions.split("\n")[0]).toBe(renamed.result.serverInfo.title);
     const list = await rpcBody(await agentMcp(token, "tools/list"));
     const names = (list.result.tools as Array<{ name: string }>).map((x) => x.name);
     expect(names).toContain("work_create");

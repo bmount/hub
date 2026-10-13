@@ -19,7 +19,8 @@ describe("/mcp with a token", () => {
   it("initializes, lists tools for the role, and calls one as the grant's session", async () => {
     const { acme, h, access, grant } = await connected();
     const init = await rpcBody(await mcpPost("acme", access, "initialize", INIT));
-    expect(init.result.serverInfo.name).toBe("pimwell");
+    expect(init.result.serverInfo).toMatchObject({ name: "pimwell-acme", title: "Pimwell · ACME" });
+    expect(init.result.instructions.split("\n")[0]).toBe(init.result.serverInfo.title);
     expect(init.result.capabilities.tools).toBeDefined();
     expect(live(await toolNames(access))).toEqual(["app_list", "attention_list", "capabilities", "chat_catchup", "chat_history", "chat_inbox", "chat_post_status", "chat_presence", "chat_read", "chat_read_status", "chat_response_status", "chat_run_status", "chat_thread", "deploy_list", "deploy_read", "event_list", "inbox_ack_status", "mail_list", "mail_propose_work", "mail_read", "message_search", "project_history", "project_list", "project_status", "ref_backlinks", "repo_branches", "repo_commit", "repo_connect", "repo_diff", "repo_file", "repo_list", "repo_log", "repo_search", "review_list", "review_read", "search_query", "situation_list", "skill_list", "skill_read", "trace_list", "trace_read", "usage_summary", "whoami", "work_board", "work_frontier", "work_graph", "work_list", "work_proposals", "work_read", "work_search"]);
     await apiPost("acme.pimwell.test", "project.create", { slug: "site", kind: "repo", display_name: "Site" }, bearer(h.token));
