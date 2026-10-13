@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SELF } from "cloudflare:test";
 import { ASSETS } from "../src/assets";
-import { breadcrumb, emptyState, esc, formRow, HTML_CSP, htmlResponse, inspectorSection, kitList, kitTable, kitTabs, kitTree, page, statusChip, toolbar } from "../src/html";
+import { breadcrumb, emptyState, esc, formRow, HTML_CSP, htmlResponse, inspectorSection, kitList, kitTable, kitTabs, kitTree, page, statusChip, toolbar, workbench } from "../src/html";
 
 describe("workbench kit", () => {
   it("renders selectable table/list rows with native links and scoped headings", () => {
@@ -84,6 +84,19 @@ describe("html", () => {
     expect(doc.startsWith("<!doctype html>")).toBe(true);
     expect(doc).toContain("<title>Acme &lt;1&gt;</title>");
     expect(doc).toContain("<p>hi</p>");
+  });
+
+  it("collapses unselected summaries and supplies shared inspector controls", () => {
+    const shell = {brandHref: "/", org: null, nav: [], tip: "", me: {name: "Pat", email: "pat@example.test", role: "member", href: "/me"}};
+    const panes = {list: "Rows", listKey: "rows", inspector: "Summary"};
+    const closed = workbench("Rows", panes, shell);
+    expect(closed).toContain('<main class="panes one">');
+    expect(closed).not.toContain('>Summary</section>');
+    const opened = workbench("Row", {...panes, inspectorKey: "row:1"}, shell);
+    expect(opened).toContain('<main class="panes">');
+    expect(opened).toContain('aria-label="Inspector width"');
+    expect(opened).toContain('data-close-inspector');
+    expect(workbench("Create", {...panes, focus: "inspector"}, shell)).toContain('<main class="panes">');
   });
 
   it("escapes account names, addresses and roles in both account displays", () => {

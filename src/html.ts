@@ -120,10 +120,11 @@ ${tabs}
 
 /** A two-pane workbench page. Without an inspector the list takes the whole width. */
 export function workbench(title: string, p: Panes, shell: Shell): string {
-  const two = p.inspector !== null;
+  const two = p.inspector !== null && (Boolean(p.inspectorKey) || p.focus === "inspector");
   const main = `<main class="panes${two ? "" : " one"}">
 <section id="list" class="pane" data-key="${esc(p.listKey)}">${p.list}</section>
-<section id="inspector" class="pane" data-key="${esc(p.inspectorKey ?? "")}">${p.inspector ?? ""}</section>
+<div class="wb-resizer" role="separator" aria-label="Inspector width" aria-orientation="vertical" tabindex="0"></div>
+<section id="inspector" class="pane" data-key="${esc(p.inspectorKey ?? "")}">${two ? '<button type="button" class="quiet wb-close" data-close-inspector aria-label="Close inspector">Close · Esc</button>' : ""}${two ? p.inspector : ""}</section>
 </main>`;
   return frame(title, main, shell, p.focus ?? (two && p.inspectorKey ? "inspector" : "list"));
 }

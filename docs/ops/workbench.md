@@ -11,7 +11,7 @@ Pimwell's signed-in application is a compact, desktop-first project console, not
 - **Inspector:** the selected object's details, inline edits and actions, without removing the list.
 - **Status bar:** request timing, sync state, keyboard hints.
 
-The shared frame supplies this navigation on every signed-in page. The Docket demonstrates the working-pane kit and overview inspector; other pages retain their existing content markup until their pass.
+The shared frame supplies this navigation on every signed-in page. The Docket demonstrates the working-pane kit and inline field inspector; other pages retain their existing content markup until their pass.
 
 ### Project context and navigation
 
@@ -26,7 +26,7 @@ The rail and explorer containers survive pane swaps. The rail retains scroll; ex
 ## Rules
 
 1. **URL is state.** Project, view, shared filters, sort and selection belong in paths or query parameters. Back, forward, reload and copied links must restore the same context. Preserve filters while selecting objects and switching views.
-2. **Select, don't navigate away.** Choosing a row fills the inspector while rail, explorer and list stay. Reuse the existing `data-href` navigation and pane keys in `workbench()`; preserve list scroll. `j`/`k` move and Enter opens. Native links remain usable without JavaScript. Do not implement a separate routing framework.
+2. **Select, don't navigate away.** Choosing a row fills the inspector while rail, explorer and list stay. Reuse the existing `data-href` navigation and pane keys in `workbench()`; preserve list scroll. `j`/`k` select and load; Enter also opens. Esc and Close return to the inspector's native back link. Native links remain usable without JavaScript. Do not implement a separate routing framework.
 3. **Inline editing.** Inspector forms use the existing verbs, permissions and expected revision/update checks. Do not auto-replay uncertain POSTs. Destructive actions keep their existing web-only typed confirmation and fresh-proof requirements.
 4. **Density is less padding, not smaller text.** Body 14px, secondary text 13px, 4/8px spacing grid, approximately 28px desktop rows, 1px separators and small radii. Phone targets and rows are 44px without shrinking text. Use aligned tables/lists, not cards.
 5. **Visible first.** Core categories and frequent actions are labeled and visible. Search and shortcuts supplement navigation. Progressive disclosure is for settings and detail, not for hiding capabilities.
@@ -68,7 +68,9 @@ Import helpers from `src/html.ts`. Their styles are scoped under `wb-*` so a pag
 | `emptyState(heading, description, action)` | Plain-language explanation of what belongs here and how to add it or clear filters, plus a labeled `{label, href}` action. Not just “Empty”. |
 | `breadcrumb(links)` | Labeled ordered navigation; mark the final `{label, href, current: true}` entry current. |
 
-The Docket is the first example: breadcrumb, action/filter toolbar, URL tabs, selectable table, kind/state chips, contextual empty state and overview inspector sections. Existing bulk checkboxes, GET filters, native item links and inspector pane behavior remain intact.
+`workbench()` collapses the inspector unless it has an object key or an explicit inspector focus (for creation forms). The list then occupies all available width. Selected inspectors default to 390px; their pointer/keyboard separator remembers width per host/identity. Pages supply a native `.back` link to their unselected view, used by Close and Esc. Query parameters, not just paths, distinguish selections. List keys retain the DOM during selection; scroll and bulk checks are tab-local and restored on reload. Mutation responses refresh list content without losing that state, so an inline edit updates the row too.
+
+The Docket puts kind tabs and filters in one toolbar; bulk actions appear only when rows are checked. Each editable work field has its own existing-verb form and expected-update token. The shared quick text filter uses the `filter` query parameter, survives selections and saves, restores on reload, and follows project resource links between views. Filters specific to a page remain that page's responsibility. Body text remains 14px with 13px secondary text and approximately 28px rows.
 
 ## Evidence and verification
 

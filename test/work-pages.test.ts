@@ -56,7 +56,9 @@ describe("work item editing", () => {
     const quest = await w.create({ kind: "quest", title: "Launch" });
     const item = await w.create({ kind: "snag", title: "Old title", body: "Old details", owner: "sam@example.com", parent: quest.number });
     const html = await (await w.get(`/site/w/${item.number}`)).text();
-    expect(html).toContain('<details class="edit">');
+    expect(html).toContain('<details class="wb-inline-edit"><summary>Edit Title</summary>');
+    expect(html).toContain('<summary>Edit Priority</summary>');
+    expect(html.match(/name="expected_updated_at"/g)!.length).toBeGreaterThanOrEqual(7);
     expect(html).toContain('<option value="sam@example.com" selected>');
     expect(html).toContain(`<option value="${quest.number}" selected>`);
     expect(html).toContain(">Old details</textarea>");
@@ -294,7 +296,9 @@ describe("Docket filters", () => {
 
     const mine = await (await w.get("/site/docket?owner=me")).text();
     expect(mine).toContain('href="/site/docket?kind=snag&amp;owner=me"');
-    expect(mine).toContain('<a href="/site/docket?owner=me" aria-current="page">Mine</a>');
+    expect(mine).toContain('<option value="me" selected>Me</option>');
+    expect(mine).toContain('<main class="panes one">');
+    expect(mine).not.toContain('Coming to this view');
     expect(await (await w.get("/site/docket?owner=me&kind=wish")).text()).toContain("Nothing matches these filters.");
     expect(await (await w.get("/docket?owner=me", w.rae.token)).text()).toContain("Nothing is yours right now.");
   });

@@ -12,7 +12,7 @@ export const COMPONENTS_CSS = `
 .wb-filters{min-width:0}.wb-filters .filters{margin:0}
 .wb-count{margin-left:var(--space-2);color:var(--muted);font-variant-numeric:tabular-nums}
 .wb-table-wrap{max-width:100%;overflow-x:auto}.wb-table{width:100%;border-collapse:collapse}
-.wb-table th,.wb-table td{height:var(--row-h);padding:var(--space-1) var(--space-2);border-bottom:var(--separator) solid var(--line)}
+.wb-table th,.wb-table td{height:var(--row-h);padding:3px var(--space-2);border-bottom:var(--separator) solid var(--line)}
 .wb-table tr[aria-selected=true]{background:var(--accent-soft)}
 .wb-table tr[data-href]:hover{background:var(--sunk)}
 .wb-tree ul{list-style:none;padding:0;margin:0}
@@ -164,7 +164,10 @@ body.wb{height:100vh;height:100dvh;display:grid;grid-template-columns:var(--rail
 .explorer h2{font-size:var(--fs-sm);margin:12px 0 4px}.explorer label{font-weight:650}.explorer input{width:100%;margin:4px 0}.explorer .wb-tree a,.explorer .wb-tree summary{min-height:var(--row-h);padding:4px}.explorer .wb-tree ul{padding-left:12px}.explorer .wb-tree>ul{padding-left:0}
 .project-switcher ul{list-style:none;margin:4px 0;padding:0;max-height:220px;overflow:auto}.project-switcher li a{display:block;padding:4px;color:var(--ink);text-decoration:none}.project-switcher li a[aria-current],.project-switcher li a:hover{background:var(--accent-soft)}.project-switcher small{display:block;color:var(--muted)}.project-switcher summary{padding:4px;font-weight:650}.project-overview{display:block;padding:8px 4px}.project-endpoints{border-top:1px solid var(--line);margin-top:8px;padding:0 4px}.project-endpoints a,.project-endpoints code{display:block;overflow-wrap:anywhere;font-size:var(--fs-sm)}.project-endpoints button{margin-top:4px}
 .bar>.wb-breadcrumb{min-width:0;flex:0 1 auto;max-width:45%;overflow:auto;white-space:nowrap}.bar .wb-breadcrumb ol{flex-wrap:nowrap;margin:0}.bar .wb-breadcrumb li{flex-shrink:0}.bar .wb-breadcrumb a{white-space:nowrap}.explorer-toggle{display:none}
-.panes{grid-area:main;display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,44%);min-height:0}
+.panes{grid-area:main;display:grid;grid-template-columns:minmax(0,1fr) 6px minmax(0,var(--inspector-width,390px));min-height:0}
+.wb-resizer{cursor:col-resize;background:var(--line);touch-action:none}.wb-resizer:hover,.wb-resizer:focus{background:var(--accent)}.panes.one .wb-resizer{display:none}.wb-close{float:right;margin:0 0 6px 8px}
+#bulk{display:none}#list:has(input[form=bulk]:checked) #bulk{display:flex}
+.docket-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.docket-toolbar .wb-tabs{margin:0;gap:0}.docket-toolbar .filters{margin:0;gap:6px}.docket-toolbar .wb-tabs a{padding:4px 6px}.docket-toolbar select{max-width:105px}.docket-toolbar input[data-filter]{width:140px;min-width:0}
 .panes.one{grid-template-columns:minmax(0,1fr)}.panes.one #inspector{display:none}
 .pane{overflow:auto;min-height:0;padding:10px 14px 24px}.panes:not(.one) #list{border-right:1px solid var(--line)}#inspector{background:var(--panel)}
 .pane .back{display:none}
@@ -195,7 +198,7 @@ button,.button{min-height:var(--tap);padding:6px 16px;font-size:var(--fs-md)}but
 input,select,textarea{font-size:16px;min-height:var(--tap);padding:8px 10px}
 .rail{font-size:18px}.rail li a{padding:0 12px;min-height:50px;display:flex;align-items:center}.rail .n{font-size:15px;font-weight:600;padding-right:12px}
 .rail h4{font-size:14px;margin:16px 12px 4px}
-.panes{grid-template-columns:minmax(0,1fr)}body[data-focus=inspector] #list{display:none}body[data-focus=list] #inspector{display:none}
+.panes{grid-template-columns:minmax(0,1fr)}.wb-resizer{display:none}body[data-focus=inspector] #list{display:none}body[data-focus=list] #inspector{display:none}
 .panes:not(.one) #list{border-right:0}.pane{padding:12px 14px 28px}
 .pane .back{display:inline-flex;align-items:center;min-height:var(--tap);font-size:var(--fs);font-weight:600;margin-bottom:6px;text-decoration:none}
 th,td{padding:12px 10px}th{font-size:14px}td.ref,td.when{font-size:15px}

@@ -19,8 +19,11 @@ export const WORKBENCH_JS = String.raw`
   } catch (e) {}
 
   function markSelected() {
-    var here = location.pathname;
-    $$("#list [data-href]").forEach(function (r) { r.setAttribute("aria-selected", new URL(r.getAttribute("data-href"), location.href).pathname === here ? "true" : "false"); });
+    var here = new URL(location.href); here.searchParams.sort();
+    $$("#list [data-href]").forEach(function (r) {
+      var target = new URL(r.getAttribute("data-href"), location.href); target.searchParams.sort();
+      r.setAttribute("aria-selected", target.pathname === here.pathname && target.search === here.search ? "true" : "false");
+    });
     var label = {"#feature-knowledge": "Knowledge base", "#project-research": "Research", "#deploys": "Deploys"}[location.hash];
     var crumb = $(".bar .wb-breadcrumb ol");
     if (crumb && label && !$("[data-fragment]", crumb)) {
@@ -44,6 +47,32 @@ export const WORKBENCH_JS = String.raw`
     } catch (e) {}
     if (el.getAttribute("data-in-project") === "1") document.cookie = "pmw_project=" + encodeURIComponent(el.getAttribute("data-preference") + ":" + el.getAttribute("data-project")) + "; Path=/; SameSite=Lax; Secure";
   }
+  var WIDTH_KEY = "wb:inspector-width:" + location.host + ":" + ($(".bar .me") || {}).textContent;
+  function inspectorWidth(width) {
+    width = Math.max(360, Math.min(620, width));
+    document.documentElement.style.setProperty("--inspector-width", width + "px");
+    try { localStorage.setItem(WIDTH_KEY, String(width)); } catch (e) {}
+  }
+  try { inspectorWidth(Number(localStorage.getItem(WIDTH_KEY)) || 390); } catch (e) {}
+  document.addEventListener("pointerdown", function (e) {
+    if (!e.target.matches(".wb-resizer")) return;
+    var handle = e.target, start = e.clientX, width = $("#inspector").getBoundingClientRect().width;
+    handle.setPointerCapture(e.pointerId);
+    function drag(ev) { inspectorWidth(width + start - ev.clientX); }
+    function stop() { handle.removeEventListener("pointermove", drag); handle.removeEventListener("pointerup", stop); handle.removeEventListener("pointercancel", stop); }
+    handle.addEventListener("pointermove", drag); handle.addEventListener("pointerup", stop); handle.addEventListener("pointercancel", stop);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (!e.target.matches(".wb-resizer") || !/^Arrow(Left|Right)$/.test(e.key)) return;
+    e.preventDefault(); inspectorWidth($("#inspector").getBoundingClientRect().width + (e.key === "ArrowLeft" ? 20 : -20));
+  });
+  function closeInspector() {
+    var back = $("#inspector .back"); if (!back) return;
+    var url = new URL(back.href), filter = new URL(location.href).searchParams.get("filter");
+    if (filter) url.searchParams.set("filter", filter);
+    go(url.href);
+  }
+  document.addEventListener("click", function (e) { if (e.target.closest("[data-close-inspector]")) closeInspector(); });
   restoreExplorer($("#explorer"));
   addEventListener("pagehide", function () { saveExplorer($("#explorer")); });
   document.addEventListener("input", function (e) {
@@ -65,19 +94,30 @@ export const WORKBENCH_JS = String.raw`
     });
   }
 
-  function swap(doc, url, push) {
+  function listStateKey(el) { return "wb:list:" + WIDTH_KEY + ":" + el.getAttribute("data-key"); }
+  function saveList() {
+    var el = $("#list"); if (!el) return;
+    try { sessionStorage.setItem(listStateKey(el), JSON.stringify({top: el.scrollTop, checked: $$("input[form=bulk]:checked", el).map(function (i) { return i.value; })})); } catch (e) {}
+  }
+  function restoreList() {
+    var el = $("#list"); if (!el) return;
+    try { var state = JSON.parse(sessionStorage.getItem(listStateKey(el)) || "null"); if (state) { el.scrollTop = state.top; $$("input[form=bulk]", el).forEach(function (i) { i.checked = state.checked.indexOf(i.value) >= 0; }); } } catch (e) {}
+  }
+  addEventListener("pagehide", saveList);
+  function swap(doc, url, push, refreshList) {
     var cur = $("main.panes"), next = doc.querySelector("main.panes");
     if (!cur || !next) { location.href = url; return; }
     var me = $(".bar .me"), nme = doc.querySelector(".bar .me");
     // Another tab can switch the shared cookie. Don't retain the old account's panes or header.
     if (!me || !nme || me.textContent !== nme.textContent) { location.href = url; return; }
+    saveList();
     ["list", "inspector"].forEach(function (id) {
       var a = document.getElementById(id), b = doc.getElementById(id);
       // Generic one-pane pages have a title key, not a content revision. Search,
       // refresh, same-channel posts and stale drafts must replace them even when
       // the title is unchanged. Only explicitly keyed two-pane lists keep state.
       var key = b && b.getAttribute("data-key") || "";
-      if (a && b && (key.indexOf("page:") === 0 || a.getAttribute("data-key") !== key || id === "inspector")) {
+      if (a && b && (key.indexOf("page:") === 0 || a.getAttribute("data-key") !== key || id === "inspector" || refreshList)) {
         // Enhanced pane clients must stop timers/listeners before their DOM is detached.
         document.dispatchEvent(new CustomEvent("wb:before-replace", { detail: a }));
         a.replaceWith(b); revive(b); voiceUp(b);
@@ -98,7 +138,7 @@ export const WORKBENCH_JS = String.raw`
     document.body.setAttribute("data-focus", doc.body.getAttribute("data-focus") || "list");
     document.title = doc.title;
     if (push) history.pushState({ wb: 1 }, "", url); else history.replaceState({ wb: 1 }, "", url);
-    closeRail(); markSelected();
+    closeRail(); applyFilter(); markSelected(); restoreList();
     var fragment = new URL(url, location.href).hash.slice(1), target = fragment && document.getElementById(fragment); if (target && target.closest("main.panes")) target.scrollIntoView({block: "start"});
     var ins = $("#inspector"); if (ins && document.body.getAttribute("data-focus") === "inspector") ins.scrollTop = 0;
   }
@@ -200,7 +240,7 @@ export const WORKBENCH_JS = String.raw`
           ins.innerHTML = main ? main.innerHTML : html; document.body.setAttribute("data-focus", "inspector"); return;
         }
         var destination = new URL(res.url || url, location.href); destination.hash = new URL(url, location.href).hash;
-        swap(doc, destination.href, opts.push !== false);
+        swap(doc, destination.href, opts.push !== false, init.method !== "GET");
       });
     }).then(function () { if (mine === busy) { var note = $("#wb-navigation"); if (note) note.remove(); } })
       .catch(function () { if (init.method !== "GET") ambiguous(); else if (mine === busy) navigationNotice(url, true); })
@@ -281,6 +321,8 @@ export const WORKBENCH_JS = String.raw`
     e.preventDefault();
     // Include the button that was pressed: forms like Approve / Ask for changes carry their choice on it.
     var data = new URLSearchParams(e.submitter ? new FormData(f, e.submitter) : new FormData(f));
+    var filter = new URL(location.href).searchParams.get("filter");
+    if (filter && data.has("_back")) { var back = new URL(data.get("_back"), location.href); if (back.origin === location.origin) { back.searchParams.set("filter", filter); data.set("_back", back.pathname + back.search + back.hash); } }
     // A failed response does not mean the mutation failed. Never automatically replay a POST.
     if ((f.getAttribute("method") || "get").toLowerCase() === "post") go(u.href, { method: "POST", body: data });
     else { u.search = data.toString(); go(u.href); }
@@ -484,6 +526,7 @@ export const WORKBENCH_JS = String.raw`
     i = Math.min(rs.length - 1, Math.max(0, i + d));
     rs.forEach(function (r, k) { r.setAttribute("aria-selected", k === i ? "true" : "false"); });
     rs[i].scrollIntoView({ block: "nearest" });
+    go(rs[i].getAttribute("data-href"));
   }
   document.addEventListener("keydown", function (e) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { if (jump) { e.preventDefault(); jump.focus(); jump.select(); } return; }
@@ -492,10 +535,10 @@ export const WORKBENCH_JS = String.raw`
     if (e.key === "j") move(1);
     else if (e.key === "k") move(-1);
     else if (e.key === "Enter" || e.key === "o") { var s = rows().find(function (r) { return r.getAttribute("aria-selected") === "true"; }); if (s) go(s.getAttribute("data-href")); }
-    else if (e.key === "e") { var d = $("#inspector details.edit"); if (d) { e.preventDefault(); d.open = true; var f = $("input,textarea,select", d); if (f) f.focus(); } }
+    else if (e.key === "e") { var d = $("#inspector details.wb-inline-edit, #inspector details.edit"); if (d) { e.preventDefault(); d.open = true; var f = $("input,textarea,select", d); if (f) f.focus(); } }
     else if (e.key === "c") { var b = $(".bar .file"); if (b) { e.preventDefault(); go(b.href); } }
     else if (e.key === "/") { var q = $("#list input[data-filter]") || jump; if (q) { e.preventDefault(); q.focus(); } }
-    else if (e.key === "Escape") { closeRail(); var back = $("#inspector .back"); if (back && document.body.getAttribute("data-focus") === "inspector" && innerWidth <= 760) go(back.href); }
+    else if (e.key === "Escape") { closeRail(); closeInspector(); }
   });
 
   function grow(t) { t.style.height = "auto"; t.style.height = t.scrollHeight + 2 + "px"; }
@@ -521,9 +564,31 @@ export const WORKBENCH_JS = String.raw`
   // Quick filter over the visible list.
   document.addEventListener("input", function (e) {
     var f = e.target; if (!f.matches || !f.matches("input[data-filter]")) return;
-    var q = f.value.trim().toLowerCase();
-    $$("#list [data-href]").forEach(function (r) { r.style.display = !q || r.textContent.toLowerCase().indexOf(q) >= 0 ? "" : "none"; });
+    var q = f.value.trim().toLowerCase(), url = new URL(location.href);
+    if (q) url.searchParams.set("filter", q); else url.searchParams.delete("filter");
+    history.replaceState(history.state, "", url);
+    applyFilter();
   });
-  markSelected();
+  function applyFilter() {
+    var q = new URL(location.href).searchParams.get("filter") || "", input = $("#list input[data-filter]");
+    if (input) input.value = q;
+    var explorer = $("#explorer"), project = explorer && explorer.getAttribute("data-project");
+    if (project && location.pathname.indexOf("/" + project + "/") === 0) {
+      $$("a", explorer).forEach(function (a) {
+        var url = new URL(a.href);
+        if (url.origin !== location.origin || url.pathname.indexOf("/" + project + "/") !== 0 || url.pathname.indexOf("/mcp") >= 0) return;
+        if (q) url.searchParams.set("filter", q); else url.searchParams.delete("filter");
+        a.href = url.href;
+      });
+    }
+    $$("#list [data-href]").forEach(function (r) {
+      r.style.display = !q || r.textContent.toLowerCase().indexOf(q.toLowerCase()) >= 0 ? "" : "none";
+      var old = new URL(r.getAttribute("data-href"), location.href), url = new URL(old);
+      if (q) url.searchParams.set("filter", q); else url.searchParams.delete("filter");
+      r.setAttribute("data-href", url.pathname + url.search + url.hash);
+      $$("a", r).forEach(function (a) { if (a.href === old.href) a.href = url.href; });
+    });
+  }
+  applyFilter(); markSelected(); restoreList();
 })();
 `;

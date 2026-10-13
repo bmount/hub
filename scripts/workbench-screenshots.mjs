@@ -98,18 +98,31 @@ try {
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
     const ctx = await browser.newContext({viewport, serviceWorkers:'block'});
     await ctx.addCookies([{name:'pmw_session',value:member,domain:'.pimwell.test',path:'/',secure:true,httpOnly:true,sameSite:'Lax'}]);
+    // Routing follows Worker redirects in-process (Chromium bypasses route
+    // interception after a redirect). Expose the final URL to the real client.
+    await ctx.addInitScript(() => {
+      const fetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await fetch(...args);
+        const finalURL = response.headers.get('x-local-final-url');
+        if (finalURL) Object.defineProperty(response, 'url', {value:finalURL});
+        return response;
+      };
+    });
     await ctx.routeWebSocket('**/*', ws => ws.close());
     await ctx.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url());
       if (url.hostname !== host) return route.abort();
       let res = await mf.dispatchFetch(req.url(), {method:req.method(), headers:{...await req.allHeaders(),'x-local-browser-host':host}, body:req.postDataBuffer() || undefined, redirect:'manual'});
+      let finalURL = req.url();
       for (let n=0; res.status >= 300 && res.status < 400 && res.headers.has('location'); n++) {
         if (n > 5) throw new Error('Redirect loop');
         const target = new URL(res.headers.get('location'),req.url());
         if (target.hostname !== host) throw new Error('External redirect refused');
+        finalURL = target.href;
         res = await mf.dispatchFetch(target.href,{headers:{'x-local-browser-host':host,cookie:`pmw_session=${member}`},redirect:'manual'});
       }
-      await route.fulfill({status:res.status,headers:Object.fromEntries(res.headers),body:Buffer.from(await res.arrayBuffer())});
+      await route.fulfill({status:res.status,headers:{...Object.fromEntries(res.headers),'x-local-final-url':finalURL},body:Buffer.from(await res.arrayBuffer())});
     });
     const page = await ctx.newPage();
     for (const [name, route] of Object.entries(pages)) {
@@ -218,7 +231,73 @@ try {
         }
         await page.locator('#explorer .close').click();
       }
-      console.log(`Shell browser acceptance passed at ${viewport.width}px (plus tablet collapse).`);
+      await page.setViewportSize(viewport);
+      // Two real page types exercise the shared selection and mutation client.
+      await page.goto(base+'/sample/docket?kind=wish');
+      await expect(page.locator('main.panes')).toHaveClass('panes one');
+      await page.locator('#list input[data-filter]').fill('navigation');
+      await expect(page).toHaveURL(/filter=navigation/);
+      if (viewport.width >= 1280) {
+        await page.locator('#explorer a').filter({hasText:/^Board/}).click();
+        await expect(page).toHaveURL(/\/sample\/board\?filter=navigation$/);
+        await page.locator('#explorer details').filter({has:page.locator('summary', {hasText:'Repository and code'})}).evaluate(el => { el.open = true; });
+        await page.locator('#explorer a').filter({hasText:/^Code files/}).click();
+        await expect(page).toHaveURL(/\/sample\/files\?filter=navigation$/);
+        await page.goBack();
+        await expect(page).toHaveURL(/\/sample\/board\?filter=navigation$/);
+        await page.goBack();
+        await expect(page).toHaveURL(/\/sample\/docket\?kind=wish&filter=navigation$/);
+        await expect(page.locator('#list input[data-filter]')).toHaveValue('navigation');
+      }
+      await page.evaluate(() => { window.retainedList = document.getElementById('list'); });
+      await page.locator('#list tbody a').click();
+      await expect(page.locator('#inspector h1')).toHaveText('Keep project navigation visible');
+      expect(await page.evaluate(() => window.retainedList === document.getElementById('list'))).toBe(true);
+      await expect(page.locator('#list input[data-filter]')).toHaveValue('navigation');
+      const titleEdit = page.locator('#inspector details').filter({has:page.locator('summary', {hasText:'Edit Title'})});
+      await titleEdit.locator('summary').click();
+      await titleEdit.locator('input[name=title]').fill('Keep navigation in place');
+      await titleEdit.getByRole('button', {name:'Save title', exact:true}).click();
+      await expect(page.locator('#inspector h1')).toHaveText('Keep navigation in place');
+      if (viewport.width >= 1280) {
+        expect(await page.locator('#inspector').evaluate(el => el.getBoundingClientRect().width)).toBe(390);
+        await page.locator('.wb-resizer').focus();
+        await page.keyboard.press('ArrowLeft');
+        expect(await page.locator('#inspector').evaluate(el => el.getBoundingClientRect().width)).toBe(410);
+      }
+      await page.reload();
+      await expect(page.locator('#inspector h1')).toHaveText('Keep navigation in place');
+      await expect(page.locator('#list input[data-filter]')).toHaveValue('navigation');
+      await page.locator('[data-close-inspector]').click();
+      await expect(page.locator('main.panes')).toHaveClass('panes one');
+      await page.goBack();
+      await expect(page.locator('#inspector h1')).toHaveText('Keep navigation in place');
+      await page.goForward();
+      await expect(page.locator('main.panes')).toHaveClass('panes one');
+      await page.goto(base+'/sample/docket');
+      await page.keyboard.press('j');
+      await expect(page.locator('#inspector h1')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('main.panes')).toHaveClass('panes one');
+      await verb(member, 'work.update', {id:'sample#2', title:'Keep project navigation visible'});
+      await page.goto(base+'/people');
+      await page.evaluate(() => { window.retainedList = document.getElementById('list'); });
+      await page.locator('#list a').filter({hasText:/^peer$/}).click();
+      await expect(page.locator('#inspector h1')).toHaveText('peer');
+      expect(await page.evaluate(() => window.retainedList === document.getElementById('list'))).toBe(true);
+      await page.locator('#inspector select[name=role]').selectOption('reader');
+      await page.getByRole('button', {name:'Change role', exact:true}).click();
+      await expect(page.locator('#inspector select[name=role]')).toHaveValue('reader');
+      await page.reload();
+      await expect(page.locator('#inspector select[name=role]')).toHaveValue('reader');
+      await page.locator('[data-close-inspector]').click();
+      await expect(page.locator('main.panes')).toHaveClass('panes one');
+      await page.goBack();
+      await expect(page.locator('#inspector h1')).toHaveText('peer');
+      await page.goForward();
+      await expect(page.locator('main.panes')).toHaveClass('panes one');
+      await verb(member, 'member.set_role', {email:'peer@example.test', role:'member'});
+      console.log(`Shell and master–detail browser acceptance passed at ${viewport.width}px (plus tablet collapse).`);
     }
     await ctx.close();
   }

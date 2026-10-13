@@ -102,13 +102,11 @@ function docketList(ctx: Ctx, project: Project | null, items: WorkItem[], member
   const names = new Map(members.map((m) => [m.id, m.display_name]));
   const kinds = kitTabs("Work kinds", [{label: "All kinds", href: to({kind: null}), current: f.kind === null},
     ...Object.entries(KINDS).map(([k, v]) => ({label: v.plural, href: to({kind: k as WorkKind}), current: f.kind === k}))]);
-  const quick = kitTabs("Work scope", [
-    {label: "Anyone's", href: to({owner: null}), current: f.owner === null}, {label: "Mine", href: to({owner: "me"}), current: f.owner === "me"},
-    {label: "Open", href: to({closed: false}), current: !f.closed}, {label: "Finished", href: to({closed: true}), current: f.closed}]);
   const ownerKnown = f.owner === null || f.owner === "me" || members.some((m) => m.email === f.owner);
-  const filterForm = `<form class="filters" method="get" action="${base}">${f.kind ? `<input type="hidden" name="kind" value="${f.kind}">` : ""}${f.closed ? `<input type="hidden" name="closed" value="1">` : ""}
-<label>Owner <select name="owner">${option("", "Anyone", f.owner === null)}${option("me", "Me", f.owner === "me")}${ownerKnown ? "" : option(f.owner!, f.owner!, true)}${members.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (agent)" : ""}`, f.owner === m.email)).join("")}</select></label>
-${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.quest === null)}${quests.map((q) => option(String(q.number), `#${q.number} ${q.title}`, f.quest === q.number)).join("")}</select></label>` : ""}
+  const filterForm = `<form class="filters" method="get" action="${base}">${f.kind ? `<input type="hidden" name="kind" value="${f.kind}">` : ""}
+<select name="closed" aria-label="State">${option("", "Open", !f.closed)}${option("1", "Finished", f.closed)}</select>
+<select name="owner" aria-label="Owner">${option("", "Anyone", f.owner === null)}${option("me", "Me", f.owner === "me")}${ownerKnown ? "" : option(f.owner!, f.owner!, true)}${members.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (agent)" : ""}`, f.owner === m.email)).join("")}</select>
+${project && !f.org ? `<select name="quest" aria-label="Quest">${option("", "Any quest", f.quest === null)}${quests.map((q) => option(String(q.number), `#${q.number} ${q.title}`, f.quest === q.number)).join("")}</select>` : ""}
 <button type="submit" class="quiet">Show</button><input data-filter placeholder="Filter these (/)" aria-label="Filter the list" size="16"></form>`;
   const itemQs = qs(f, {}, true);
   const canBulk = rank(ctx.role) >= rank("member") && items.length > 0;
@@ -133,14 +131,13 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
     : project ? "Nothing open. File something, or forward a thread to the project's address."
     : "Nothing open. File work with + File, or forward a thread to a project's address.";
   const where = f.org || !project ? esc(ctx.tenant!.display_name) : esc(project.display_name);
-  const scope = project && !f.org ? `<a href="/docket">All projects</a> · <a href="/${esc(project.slug)}/board">Board</a> · <a href="/${esc(project.slug)}/status">Status</a> · <a href="/${esc(project.slug)}/code">Code</a>` : `<a href="/board">Board</a>`;
   const bulk = canBulk ? `<form id="bulk" class="bulk hide-s" method="post" action="/api/work.bulk_update"><input type="hidden" name="_back" value="${esc(base)}${qs(f) ? `?${esc(qs(f))}` : ""}"><span>With the checked:</span>
 <select name="state"><option value="">state…</option><option value="open">Open</option><option value="doing">Under way</option><option value="done">Done</option><option value="dropped">Let go</option></select>
 <select name="owner"><option value="">owner…</option><option value="me">Me</option><option value="none">Nobody</option>${members.map((m) => option(m.email, m.display_name, false)).join("")}</select>
 <button type="submit" class="quiet">Apply</button></form>` : "";
   return `<div class="head"><h1>${esc(DOCKET.name)}</h1><span>${items.length} ${f.closed ? "finished" : "open"} in ${where}</span></div>
-${toolbar("Docket actions and filters", `${scope}${rank(ctx.role) >= rank("member") ? ` <a class="button" href="/new${project ? `?project=${esc(project.slug)}` : ""}">+ File</a>` : ""}`, filterForm)}
-${kinds}${quick}${bulk}
+<div class="docket-toolbar" role="group" aria-label="Docket actions and filters">${kinds}${filterForm}</div>
+${bulk}
 ${items.length ? kitTable("Docket", [...(canBulk ? [{label: "Select", className: "hide-s"}] : []), {label: "Reference"}, {label: "Kind"}, {label: "Title"}, {label: "Owner", className: "hide-s"}, {label: "State", className: "hide-s"}, {label: "Updated", className: "hide-s"}], rows) : emptyState("No work here", empty.replace(/<[^>]*>/g, ""), {label: filtered ? "Show everything open" : "File work", href: filtered ? base : "/new"})}`;
 }
 
@@ -199,14 +196,16 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
 <label style="display:block"><textarea data-voice name="body" rows="3" required maxlength="10000" style="display:block;width:100%" placeholder="Comment. @handle mentions someone."></textarea></label><button type="submit">Comment</button></form>` : ""}`;
   const ownerChoices = d.owner && !d.members.some((m) => m.id === d.owner!.id) ? [d.owner, ...d.members] : d.members;
   const questChoices = d.parent && !d.quests.some((q) => q.id === d.parent!.id) ? [d.parent, ...d.quests] : d.quests;
-  const edit = canWrite ? `<details class="edit"><summary>Edit</summary>
-<form method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}">
-<label>Title <input name="title" required maxlength="200" value="${esc(w.title)}"></label>
-<div class="row"><label>Kind <select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, `${v.name} (${v.plain})`, w.kind === k)).join("")}</select></label>
-<label>Owner <select name="owner">${option("none", "Nobody", !d.owner)}${ownerChoices.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (agent)" : ""}`, d.owner?.id === m.id)).join("")}</select></label>
-<label>Quest <select name="parent">${option("0", "None", !d.parent)}${questChoices.map((q) => option(String(q.number), `#${q.number} ${q.title}`, d.parent?.id === q.id)).join("")}</select></label></div>
-<label>Details <textarea name="body" rows="8" maxlength="20000">${esc(w.body)}</textarea></label>
-<button type="submit">Save changes</button></form></details>` : "";
+  const field = (label: string, value: string, control: string) => ({label, html: value, editHtml: canWrite ? `<form method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><label>${esc(label)} ${control}</label><button type="submit">Save ${esc(label.toLowerCase())}</button></form>` : ""});
+  const edit = inspectorSection("Fields", [
+    field("Title", esc(w.title), `<input name="title" required maxlength="200" value="${esc(w.title)}">`),
+    field("State", esc(STATES[w.state]), `<select name="state">${Object.entries(STATES).map(([s, label]) => option(s, label, s === w.state)).join("")}</select>`),
+    field("Owner", esc(d.owner?.display_name ?? "Nobody"), `<select name="owner">${option("none", "Nobody", !d.owner)}${ownerChoices.map(m => option(m.email, m.display_name, d.owner?.id === m.id)).join("")}</select>`),
+    field("Priority", `P${w.priority}`, `<select name="priority">${[0, 1, 2, 3].map(p => option(String(p), `P${p}`, p === w.priority)).join("")}</select>`),
+    field("Kind", esc(KINDS[w.kind].name), `<select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, v.name, w.kind === k)).join("")}</select>`),
+    field("Quest", d.parent ? esc(d.parent.title) : "None", `<select name="parent">${option("0", "None", !d.parent)}${questChoices.map(q => option(String(q.number), `#${q.number} ${q.title}`, d.parent?.id === q.id)).join("")}</select>`),
+    field("Details", w.body.trim() ? "Recorded below" : "None", `<textarea name="body" rows="4" maxlength="20000">${esc(w.body)}</textarea>`),
+  ]);
   const under = d.children.length
     ? `<h2>Under it</h2><table><tbody>${d.children.map((c) => `<tr data-href="/${esc(project.slug)}/w/${c.number}"><td class="ref">#${c.number}</td><td class="k-${c.kind}"><span class="kd"></span>${esc(KINDS[c.kind].name)}</td><td><a href="/${esc(project.slug)}/w/${c.number}">${esc(c.title)}</a></td><td>${esc(STATES[c.state])}</td></tr>`).join("")}</tbody></table>`
     : w.kind === "quest" ? `<h2>Under it</h2><p class="lede">Nothing yet. To put an item under this quest, choose it as the item's quest when you edit it.</p>` : "";
@@ -227,31 +226,18 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
 <dl class="meta"><dt>Owner</dt><dd>${d.owner ? esc(d.owner.display_name) : "Nobody yet"}</dd><dt>Quest</dt><dd>${d.parent ? `<a href="/${esc(project.slug)}/w/${d.parent.number}">#${d.parent.number} ${esc(d.parent.title)}</a>` : "None"}</dd>
 <dt>Project</dt><dd><a href="/${esc(project.slug)}/docket">${esc(project.display_name)}</a></dd><dt>Filed</dt><dd>${when(w.created_at)}${w.closed_at ? `, closed ${when(w.closed_at)}` : ""}</dd></dl>
 <p><a href="/usage?work=${esc(encodeURIComponent(`${project.slug}#${w.number}`))}">Recorded AI usage for this work</a></p>
-${controls}
+${toolbar("Item actions", controls)}
+${edit}
 ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
 ${sourceMail ? `<p>Source: <a href="${sourceMail}">Recorded mail</a>. Access is checked when opened.</p>` : ""}
 ${sourceMessage ? `<p>Source: <a href="${sourceMessage}">Recorded message</a>. Access is checked when opened.</p>` : ""}
 ${sourceUrl ? `<p>Source: <a href="${esc(sourceUrl)}">Recorded URL</a>. Recorded evidence, not verified access or existence.</p>` : ""}
 ${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Add them under Edit (e): what, why, and how you will know it is done." : ""}</p>`}
-${edit}
 ${under}
 ${comments}
 ${plannedBlock("review.request", "Review")}
 ${links}
 ${activity}`;
-}
-
-function overviewInspector(ctx: Ctx, env: Env, project: Project | null, items: WorkItem[]): string {
-  const byKind = Object.entries(KINDS).map(([k, v]) => ({ k, v, n: items.filter((w) => w.kind === k).length })).filter((x) => x.n > 0);
-  const address = project ? `${ctx.tenant!.slug}.${project.slug}@${env.HUB_DOMAIN}` : `${ctx.tenant!.slug}@${env.HUB_DOMAIN}`;
-  return `<div class="head"><span>${project ? "Project" : "Organization"}</span></div>
-<h1>${esc(project ? project.display_name : ctx.tenant!.display_name)}</h1>
-<p class="lede">Choose an item to open it here; the list stays put. <kbd>j</kbd> and <kbd>k</kbd> move, <kbd>Enter</kbd> opens.</p>
-${inspectorSection("In this list", byKind.map(x => ({label: x.v.plural, html: `${statusChip(String(x.n), x.k as WorkKind)} ${esc(x.v.plain)}s`})), byKind.length ? "" : "<p>Nothing in this list yet.</p>")}
-${inspectorSection("Send work here", [{label: "Mail address", html: `<code>${esc(address)}</code>`}], `<p>Forward a thread to this address, file it with <a href="/new${project ? `?project=${esc(project.slug)}` : ""}">+ File</a>, or ask an assistant over MCP.</p>`)}
-${project ? `<p><a href="/${esc(project.slug)}">Project page</a>: address, clone URL and history.</p>` : ""}
-<h2>Coming to this view</h2>
-${plannedBlock("work.board", "Board")}${plannedBlock("work.search", "Search")}${plannedBlock("work.bulk_update", "Change many")}`;
 }
 
 // ---------- Pages ----------
@@ -294,7 +280,7 @@ async function listAndInspect(request: Request, env: Env, slug: string | null, n
   const listBase = f.org || !project ? "/docket" : `/${project.slug}/docket`;
   const q = qs(f);
   const back = `${listBase}${q ? `?${q}` : ""}`;
-  let inspector: string; let key: string;
+  let inspector: string | null; let key: string;
   if (w && project) {
     const o = questFor ? 4 : 3;
     inspector = itemInspector(ctx, env, project, w, {
@@ -305,7 +291,7 @@ async function listAndInspect(request: Request, env: Env, slug: string | null, n
     }, `${back}`);
     key = `w:${w.id}:${w.updated_at}:${(r[(questFor ? 4 : 3) + 5]!.results as Comment[]).length}`;
   } else {
-    inspector = overviewInspector(ctx, env, f.org ? null : project, items);
+    inspector = null;
     key = "";
   }
   const section = f.owner === "me" && !w ? "mine" : "docket";
