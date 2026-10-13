@@ -170,7 +170,7 @@ export const mailSend = defineVerb({
       from = ctx.identity!.email;
     } else {
       if (!p.from_project) throw badRequest("people send from a project's address: give from_project");
-      const pr = await ctx.db.prepare("SELECT slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active'").bind(ctx.tenant!.id, p.from_project.toLowerCase()).first<{ slug: string }>();
+      const pr = await ctx.db.prepare("SELECT slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active' AND (? IS NULL OR id = ?)").bind(ctx.tenant!.id, p.from_project.toLowerCase(), ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first<{ slug: string }>();
       if (!pr) throw notFound("no such project");
       from = `${ctx.tenant!.slug}.${pr.slug}@${ctx.env.HUB_DOMAIN}`;
     }
@@ -185,8 +185,8 @@ export const mailSend = defineVerb({
     if (p.to.length > 1 || p.cc.length) throw badRequest("people send to one address at a time");
     const one = p.to[0]!;
     const r = await deliver(ctx, { from, to: one, inbound_id: null, message_id: null }, p.subject, p.body, [], async () => {
-      const wrote = await ctx.db.prepare("SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND from_email = ? AND to_address = ? AND verdict = 'admitted' AND received_at > ? LIMIT 1")
-        .bind(ctx.tenant!.id, one, from, ctx.now - REPLY_WINDOW_MS).first();
+      const wrote = await ctx.db.prepare("SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND from_email = ? AND to_address = ? AND verdict = 'admitted' AND received_at > ? AND (? IS NULL OR project_id = ?) LIMIT 1")
+        .bind(ctx.tenant!.id, one, from, ctx.now - REPLY_WINDOW_MS, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first();
       if (!wrote) throw new HubError(403, "forbidden", `Pimwell writes only to people who wrote to ${from} in the last 30 days`, { mail_block: "reply_window" });
       await capsAndSwitch(ctx);
     });

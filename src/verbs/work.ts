@@ -19,7 +19,8 @@ const kindWords = Object.entries(KINDS).map(([k, v]) => `${k} (${v.plain})`).joi
 const STATE_LIST = ["open", "doing", "done", "dropped"] as const;
 
 export async function projectBySlug(ctx: Ctx, slug: string, missingIsBadRequest = false) {
-  const p = await ctx.db.prepare("SELECT id, slug, kind, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, slug.trim().toLowerCase())
+  if (ctx.mcpProject && slug.trim().toLowerCase() !== ctx.mcpProject.slug) throw notFound("no such project");
+  const p = await ctx.db.prepare("SELECT id, slug, kind, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND (? IS NULL OR id = ?)").bind(ctx.tenant!.id, slug.trim().toLowerCase(), ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null)
     .first<{ id: string; slug: string; kind: string; display_name: string; state: string }>();
   if (!p) throw missingIsBadRequest ? badRequest("no such project") : notFound("no such project");
   requireProjectFeature(p, "docket");
@@ -39,6 +40,7 @@ export async function itemRef(ctx: Ctx, i: Record<string, unknown>): Promise<Wor
     }
     const w = await getWork(ctx.db, ctx.tenant!.id, id);
     if (w) {
+      if (ctx.mcpProject && w.project_id !== ctx.mcpProject.id) throw notFound("no such item");
       const project = await ctx.db.prepare("SELECT slug, kind FROM project WHERE id = ? AND tenant_id = ? AND kind NOT IN ('channel', 'agent-src')").bind(w.project_id, ctx.tenant!.id).first<{ slug: string; kind: string }>();
       if (!project) throw notFound("no such project");
       requireProjectFeature(project, "docket");
@@ -217,14 +219,14 @@ export const workRead = defineVerb({
     const item = await itemRef(ctx, i);
     const project = await slugOf(ctx, item.project_id);
     const parent = item.parent_id ? await getWork(ctx.db, ctx.tenant!.id, item.parent_id) : null;
-    const children = await listWork(ctx.db, ctx.tenant!.id, { parent_id: item.id, limit: 200, states: [] });
+    const children = await listWork(ctx.db, ctx.tenant!.id, { parent_id: item.id, project_id: ctx.mcpProject?.id ?? null, limit: 200, states: [] });
     const comments = (await ctx.db.prepare(`SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author FROM work_comment c JOIN identity i ON i.id = c.author_id
       WHERE c.item_id = ? ORDER BY c.created_at LIMIT 200`).bind(item.id).all<{ id: string; body: string; created_at: number; reply_to: string | null; author: string }>()).results;
     const g = await graphContext(ctx);
     const prerequisites = g.g.edges.filter((e) => e.dependent_id === item.id).map((e) => g.refOf(e.prereq_id)).sort();
     const dependents = g.g.edges.filter((e) => e.prereq_id === item.id).map((e) => g.refOf(e.dependent_id)).sort();
     const resources = g.g.resources.filter((r) => r.item_id === item.id).map((r) => ({ name: r.name, mode: r.mode }));
-    return { item, ref: ref(project, item), project, parent: parent ? ref(project, parent) : null, links: await listLinks(ctx.db, item.id), children, comments,
+    return { item, ref: ref(project, item), project, parent: parent && (!ctx.mcpProject || parent.project_id === ctx.mcpProject.id) ? ref(project, parent) : null, links: await listLinks(ctx.db, item.id), children, comments,
       readiness: g.readinessOf(item.id), prerequisites, dependents, resources };
   },
 });

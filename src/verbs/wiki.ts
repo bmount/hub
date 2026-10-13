@@ -15,7 +15,7 @@ export function wikiLinks(body: string): string[] {
   return [...new Set([...body.matchAll(/\[\[([a-z0-9]+(?:-[a-z0-9]+)*)\]\]/g)].map(m => m[1]!).filter(s => s.length <= 100))];
 }
 export async function wikiProject(ctx: Ctx, slug: string, writing = false) {
-  const p = await ctx.db.prepare("SELECT id, slug, kind, state FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = ?").bind(ctx.tenant!.id, slug).first<{id: string; slug: string; kind: string; state: string}>();
+  const p = await ctx.db.prepare("SELECT id, slug, kind, state FROM project WHERE tenant_id = ? AND slug = ? AND ((? IS NULL AND namespace_id IS NULL) OR id = ?)").bind(ctx.tenant!.id, slug, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first<{id: string; slug: string; kind: string; state: string}>();
   if (!p) throw notFound("no such project");
   requireProjectFeature(p, "wiki");
   if (writing && p.state !== "active") throw conflict("project is archived");

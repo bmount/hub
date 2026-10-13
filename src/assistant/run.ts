@@ -53,7 +53,7 @@ async function runBoundTurn(ctx: Ctx, threadId: string, scopes: "read" | "write"
   const history = (await budget.wait(() => db.prepare("SELECT role, text FROM assistant_message WHERE thread_id = ? ORDER BY created_at DESC LIMIT ?").bind(threadId, HISTORY).all<{ role: "user" | "assistant"; text: string }>())).results.reverse();
   const items: TurnItem[] = [...history.map((m) => ({ role: m.role, content: m.text })), { role: "user", content: text }];
   const toolCtx: Ctx = { ...ctx, playground: { scopes: scopes === "write" ? ["read", "write"] : ["read"] } };
-  const tools: FunctionTool[] = toolsFor(toolCtx).map(toolDefinition).map((t) => ({ name: t.name, description: (t.description ?? "").slice(0, 1000), parameters: t.inputSchema as Record<string, unknown> }));
+  const tools: FunctionTool[] = toolsFor(toolCtx).map(v => toolDefinition(v)).map((t) => ({ name: t.name, description: (t.description ?? "").slice(0, 1000), parameters: t.inputSchema as Record<string, unknown> }));
   const steps: Step[] = [];
   let reply = "";
   for (let round = 0; round < ROUNDS; round++) {

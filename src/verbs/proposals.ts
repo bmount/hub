@@ -2,7 +2,7 @@
 import { projectFeatures } from "../projectFeatures";
 import { defineVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
-import { badRequest } from "../errors";
+import { badRequest, notFound } from "../errors";
 import { kindOf } from "../work/names";
 import { itemRef } from "./work";
 import { decideProposal, fileProposal, getProposal, type Endpoint, type NewItem, type Proposal, type ProposalChange } from "../work/proposals";
@@ -17,7 +17,7 @@ const EDGE = { type: "object", properties: { prerequisite: END, dependent: END }
 
 async function slugs(ctx: Ctx): Promise<Map<string, string>> {
   const rows = (await ctx.db.prepare("SELECT id, slug, kind FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id).all<{ id: string; slug: string; kind: string }>()).results;
-  return new Map(rows.filter((r) => projectFeatures(r.kind).includes("docket")).map((r) => [r.id, r.slug]));
+  return new Map(rows.filter((r) => projectFeatures(r.kind).includes("docket") && (!ctx.mcpProject || r.id === ctx.mcpProject.id)).map((r) => [r.id, r.slug]));
 }
 
 async function endpoint(ctx: Ctx, raw: unknown, keys: Set<string>): Promise<Endpoint> {
@@ -25,6 +25,20 @@ async function endpoint(ctx: Ctx, raw: unknown, keys: Set<string>): Promise<Endp
   const s = raw.trim();
   if (s.startsWith("new:")) { if (!keys.has(s.slice(4))) throw badRequest(`${s} is not one of the proposal's new items`); return { new: s.slice(4) }; }
   return { id: (await itemRef(ctx, { id: s })).id };
+}
+
+async function proposalInProject(ctx: Ctx, p: Proposal): Promise<boolean> {
+  if (!ctx.mcpProject) return true;
+  const change = JSON.parse(p.change_json) as ProposalChange;
+  if (change.new_items.some(n => n.project_id !== ctx.mcpProject!.id)) return false;
+  const ids = [p.item_id, ...[...change.add, ...change.remove].flatMap(e => [e.prerequisite, e.dependent].flatMap(end => "id" in end ? [end.id] : [])),
+    ...(p.result_json ? (JSON.parse(p.result_json) as { items: Array<{ id: string }> }).items.map(i => i.id) : [])].filter((id): id is string => !!id);
+  if (!ids.length) return change.new_items.length > 0;
+  for (const id of ids) {
+    const item = await ctx.db.prepare("SELECT project_id FROM work_item WHERE tenant_id = ? AND id = ?").bind(ctx.tenant!.id, id).first<{ project_id: string }>();
+    if (!item || item.project_id !== ctx.mcpProject.id) return false;
+  }
+  return true;
 }
 
 type Shown = { id: string; state: "pending" | "approved" | "rejected"; for: string | null; reason: string; by: string; at: number; decided_by: string | null; note: string | null; changes: string[]; created: string[] };
@@ -93,7 +107,7 @@ export const workPropose = defineVerb({
       const kind = kindOf(reqString(n, "kind", { max: 20 }));
       if (!kind) throw badRequest(`new:${key} has an unknown kind`);
       const slug = optString(n, "project", { max: 63 })?.toLowerCase();
-      const project_id = slug ? bySlug.get(slug) : forItem?.project_id;
+      const project_id = slug ? bySlug.get(slug) : forItem?.project_id ?? ctx.mcpProject?.id;
       if (!project_id) throw badRequest(`new:${key} needs a project (or give \`for\`)`);
       return { key, project_id, kind, title: reqString(n, "title", { max: 200 }), body: optString(n, "body", { max: 20_000 }) ?? "",
         priority: optInt(n, "priority", { min: 0, max: 3 }) ?? 2, estimate: optInt(n, "estimate", { min: 1, max: 10_000 }) };
@@ -127,7 +141,9 @@ export const workProposals = defineVerb({
     const rows = (await ctx.db.prepare(`SELECT p.*, d.decision, d.note, d.result_json, d.decided_by, d.decided_at FROM work_proposal p
       LEFT JOIN work_proposal_decision d ON d.proposal_id = p.id WHERE p.tenant_id = ? ${where} ORDER BY p.created_at DESC, p.id DESC LIMIT ?`)
       .bind(...[ctx.tenant!.id, ...(p.state === "approved" || p.state === "rejected" ? [p.state] : []), p.limit]).all<Proposal>()).results;
-    return { proposals: await show(ctx, rows) };
+    const visible: Proposal[] = [];
+    for (const row of rows) if (await proposalInProject(ctx, row)) visible.push(row);
+    return { proposals: await show(ctx, visible) };
   },
 });
 
@@ -143,6 +159,7 @@ export const workReview = defineVerb({
   run: async (ctx, p) => {
     if (p.decision !== "approve" && p.decision !== "reject") throw badRequest("decision is approve or reject");
     const proposal = await getProposal(ctx.db, ctx.tenant!.id, p.id);
+    if (!await proposalInProject(ctx, proposal)) throw notFound("no such proposal");
     const proposer = (await ctx.db.prepare("SELECT email FROM identity WHERE id = ?").bind(proposal.created_by).first<{ email: string }>())?.email ?? "someone";
     await decideProposal(ctx.db, actor(ctx), proposal, p.decision === "approve" ? "approved" : "rejected", p.note, await slugs(ctx), proposer, ctx.now);
     return (await show(ctx, [await getProposal(ctx.db, ctx.tenant!.id, p.id)]))[0]!;

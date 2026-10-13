@@ -14,14 +14,14 @@ export function commitWorkStatement(ctx: Ctx, projectId: string, oid: string) {
     FROM project cp JOIN work_item w ON w.tenant_id = cp.tenant_id
     JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
     WHERE cp.id = ? AND cp.tenant_id = ? AND cp.kind = 'repo' AND ? IS NOT NULL
-      AND typeof(w.number) = 'integer' AND w.number BETWEEN 1 AND 99999999 AND
+      AND (? IS NULL OR w.project_id = ?) AND typeof(w.number) = 'integer' AND w.number BETWEEN 1 AND 99999999 AND
       ((w.source_kind = 'url' AND w.source_ref = ? || cp.slug || '/code?c=' || ?) OR EXISTS
         (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND
           ((l.target_kind = 'url' AND l.target_ref = ? || cp.slug || '/code?c=' || ?)
            OR (l.target_kind = 'commit' AND lower(l.target_ref) = cp.slug || '@' || ?
              AND substr(l.target_ref, 1, length(cp.slug) + 1) = cp.slug || '@'))))
     ORDER BY w.created_at DESC, w.id DESC LIMIT ${LIMIT + 1}`)
-    .bind(origin, normalized, origin, normalized, projectId, ctx.tenant!.id, normalized,
+    .bind(origin, normalized, origin, normalized, projectId, ctx.tenant!.id, normalized, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null,
       origin, normalized, origin, normalized, normalized);
 }
 

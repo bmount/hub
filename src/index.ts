@@ -44,7 +44,7 @@ import { asMetadataPage, protectedResourcePage } from "./http/oauthMeta";
 import { authorizePage, consentPage, consentPost } from "./http/oauthAuthorize";
 import { tokenEndpoint } from "./oauth/token";
 import { registerEndpoint } from "./http/oauthRegister";
-import { handleAgentMcp, handleMcp } from "./mcp/handler";
+import { handleAgentMcp, handleMcp, handleProjectMcp } from "./mcp/handler";
 import { voiceCorrect, voiceTranscribe } from "./http/voice";
 import { doPage } from "./intent/page";
 import { intentEvalRoute } from "./intent/evalRoute";
@@ -188,6 +188,8 @@ app.get("/oauth/consent/:id", (c) => consentPage(c.req.raw, c.env));
 app.post("/oauth/consent/:id", (c) => consentPost(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.all("/mcp", (c) => handleMcp(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 // Headless agents: their own MCP endpoint, and the one-time connect link that gives them a token for it.
+app.all("/p/:namespace/:project/mcp", (c) => handleProjectMcp(c.req.raw, c.env, c.req.param("project"), (p) => c.executionCtx.waitUntil(p), c.req.param("namespace")));
+app.all("/p/:project/mcp", (c) => handleProjectMcp(c.req.raw, c.env, c.req.param("project"), (p) => c.executionCtx.waitUntil(p)));
 app.all("/agent/mcp", (c) => handleAgentMcp(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.get("/git-credential-helper", (c) => { const h = classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN); return h.kind === "tenant" ? gitHelperResponse(c.env, h.slug) : notFoundPage(); });
 app.get("/connect/:token", (c) => classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN).kind === "tenant" ? connectInstructions(c.req.raw) : notFoundPage());

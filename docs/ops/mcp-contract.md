@@ -1,5 +1,15 @@
 # MCP: current exposure and security contract
 
+## Project connections
+
+An active project exposes `https://<org>.pimwell.com/p/<project>/mcp` (or `/p/<namespace>/<project>/mcp` for a namespaced project); its project page has a copy button and connection instructions. The path endpoint avoids introducing paid certificate provisioning and per-organization DNS configuration for nested subdomains. Existing organization endpoints remain unchanged.
+
+The endpoint accepts the same agent `pmw_` tokens as `/agent/mcp`, or the organization's existing OAuth grants as `/mcp`. OAuth discovery and token audiences remain the organization resource: project transport is an additional restriction on that grant, not a new authorization authority. Cookies are not accepted. Roles, operator membership, token/grant revocation and scopes are rechecked on every request, then the project must still be active and reachable.
+
+`serverInfo.name` is `pimwell-<org>-<project>` and its title is `Pimwell · <Org> / <Project>`. The shared project feature table selects repository, Docket, wiki, knowledge/research, file and workspace contact/graph tool families. Docket projects also expose project mail list/read/reply (and send for humans under the existing sender policy). Organization-wide search, chat, account/credential tools and cross-project backlinks are not advertised. Repository lists contain only the connected repository. Tools retain their existing role/scope policy.
+
+Tool schemas omit `project`; the server supplies it internally and refuses overrides. Work references (including raw IDs, dependency endpoints and nested proposals), mail reads/replies, related work evidence and repository listings enforce the same project boundary. New proposal items default to this project, and proposals touching other projects are hidden and cannot be reviewed here. If a work graph has cross-project dependencies or shared resource names, project work calls refuse with instructions to use the organization endpoint rather than expose other projects or silently misrepresent readiness.
+
 Pimwell is **not read-only over MCP**. Human OAuth connections use the tenant's `/mcp`; operator-configured agent connections use `/agent/mcp`. OAuth binds the consenting human, grant and tenant; it does not authenticate an agent or authorize another tenant. Agent credentials bind the agent, not the operator's identity. Neither transport interprets message text as administrative authority.
 
 `initialize` identifies the authenticated organization: serverInfo `name` is `pimwell-<org-slug>`, `title` is `Pimwell · <org display name>`, and the first line of `instructions` repeats that title. Both transports use the current organization record on each request. Project endpoints are separate work; these organization endpoints do not infer a project from tool arguments.

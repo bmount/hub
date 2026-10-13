@@ -1,5 +1,6 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/server";
 import { connectionScopes, type Ctx } from "../auth/context";
+import { projectFeatures, type ProjectFeature } from "../projectFeatures";
 import { HubError } from "../errors";
 import { recordEvent } from "../db/events";
 import { runVerb } from "../verbs/dispatch";
@@ -14,20 +15,39 @@ const SCOPE_LINE: Record<string, string> = {
 const DESTRUCTIVE_LINE = "Destructive. Only call after the user has explicitly confirmed this exact action in the conversation; pass confirm: true.";
 
 /** MCP spec 8.5: one tool per exposed verb. */
-export function toolDefinition(v: VerbDef<unknown, unknown>): Tool {
+export function toolDefinition(v: VerbDef<unknown, unknown>, ctx?: Ctx): Tool {
   const mcp = v.mcp!;
+  const input = structuredClone(mcp.input) as Tool["inputSchema"];
+  if (ctx?.mcpProject) {
+    delete input.properties?.project;
+    if (v.name === "mail.send") delete input.properties?.from_project;
+    input.required = input.required?.filter(k => k !== "project");
+    if (v.name === "work.propose") {
+      const items = (input.properties?.new_items as { items?: { properties?: Record<string, unknown> } } | undefined)?.items;
+      if (items?.properties) delete items.properties.project;
+    }
+  }
   return {
     name: toolName(v.name),
     title: mcp.title,
     description: [v.summary, SCOPE_LINE[mcp.scope], ...(mcp.destructive ? [DESTRUCTIVE_LINE] : []), DATA_NOTE].join("\n"),
-    inputSchema: mcp.input as Tool["inputSchema"],
+    inputSchema: input,
     annotations: { title: mcp.title, readOnlyHint: v.kind === "query", destructiveHint: mcp.destructive, idempotentHint: v.kind === "query", openWorldHint: false },
   };
 }
 
 /** The tools this request may see: recomputed from the token's scopes and the human's current role (MCP spec 8.5, 10.4). */
 export function toolsFor(ctx: Ctx): VerbDef<unknown, unknown>[] {
-  return exposedVerbs(ctx.role, mcpScopes(ctx));
+  const verbs = exposedVerbs(ctx.role, mcpScopes(ctx));
+  if (!ctx.mcpProject) return verbs;
+  const features = projectFeatures(ctx.mcpProject.kind);
+  const families: Record<string, ProjectFeature> = { work: "docket", repo: "repo", wiki: "wiki", kb: "knowledge", research: "knowledge", file: "files", person: "people", company: "people", connection: "people", graph: "people" };
+  // Opt in only families whose resource references obey the endpoint's boundary.
+  return verbs.filter(v => {
+    const feature = families[v.name.split(".")[0]!];
+    if (feature) return features.includes(feature);
+    return features.includes("docket") && (["mail.list", "mail.read", "mail.reply"].includes(v.name) || (ctx.identity?.kind === "human" && v.name === "mail.send"));
+  });
 }
 
 /** The scopes an MCP-style call runs with: the assistant grant's, the Playground's choice, or an agent token's; nothing otherwise. */
@@ -124,6 +144,24 @@ export async function callTool(ctx: Ctx, name: string, args: Record<string, unkn
     return errorResult("not_found", `no tool named ${quotedName(name, 64)} is available to this connection`);
   }
   try {
+    if (ctx.mcpProject) {
+      if (args.project !== undefined && args.project !== ctx.mcpProject.slug) throw new HubError(403, "forbidden", "this endpoint is scoped to one project");
+      if (verb.name === "mail.send" && args.from_project !== undefined && args.from_project !== ctx.mcpProject.slug) throw new HubError(403, "forbidden", "this endpoint is scoped to one project");
+      args = { ...args, project: ctx.mcpProject.slug, ...(verb.name === "mail.send" ? { from_project: ctx.mcpProject.slug } : {}) };
+      if (verb.name.startsWith("work.")) {
+        // A cross-project dependency/resource must not reveal another project's work
+        // or silently change readiness. Use the organization endpoint for such graphs.
+        const outside = await ctx.db.prepare(`SELECT 1 FROM work_dep d
+          JOIN work_item a ON a.id = d.prereq_id JOIN work_item b ON b.id = d.dependent_id
+          WHERE d.tenant_id = ? AND ((a.project_id = ? AND b.project_id != ?) OR (b.project_id = ? AND a.project_id != ?))
+          UNION ALL SELECT 1 FROM work_resource a JOIN work_resource b ON a.name = b.name
+          JOIN work_item wa ON wa.id = a.item_id JOIN work_item wb ON wb.id = b.item_id
+          WHERE wa.tenant_id = ? AND wb.tenant_id = ? AND wa.project_id = ? AND wb.project_id != ? LIMIT 1`)
+          .bind(ctx.tenant!.id, ctx.mcpProject.id, ctx.mcpProject.id, ctx.mcpProject.id, ctx.mcpProject.id,
+            ctx.tenant!.id, ctx.tenant!.id, ctx.mcpProject.id, ctx.mcpProject.id).first();
+        if (outside) throw new HubError(403, "forbidden", "this work graph crosses project boundaries; use the organization MCP endpoint");
+      }
+    }
     const result = await runVerb(ctx, verb, args);
     // Render before classifying success: a rendering failure must still receive its failure audit.
     const rendered = toolResult(verb, result);

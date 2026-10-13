@@ -1,6 +1,6 @@
 # Project kinds
 
-`src/projectFeatures.ts` is the capability table for project creation, project-page tabs and feature checks in verbs. Future project-scoped MCP discovery should use this table rather than its own kind list.
+`src/projectFeatures.ts` is the capability table for project creation, project-page tabs and feature checks in verbs. Project-scoped MCP discovery uses this table to select tool families; it never changes role or grant scopes.
 
 | Kind | Features |
 | --- | --- |

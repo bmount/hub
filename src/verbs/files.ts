@@ -51,7 +51,7 @@ export function validateFile(path: string, type: string, bytes: Uint8Array): {ty
   return {type, text};
 }
 export async function fileProject(ctx: Ctx, slug: string, writing = false) {
-  const p = await ctx.db.prepare("SELECT id, slug, kind, state FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = ?").bind(ctx.tenant!.id, slug).first<{id: string; slug: string; kind: string; state: string}>();
+  const p = await ctx.db.prepare("SELECT id, slug, kind, state FROM project WHERE tenant_id = ? AND slug = ? AND ((? IS NULL AND namespace_id IS NULL) OR id = ?)").bind(ctx.tenant!.id, slug, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first<{id: string; slug: string; kind: string; state: string}>();
   if (!p) throw notFound("no such project");
   requireProjectFeature(p, "files");
   if (writing && p.state !== "active") throw conflict("project is archived");
@@ -141,7 +141,7 @@ export const fileGet = defineVerb({...base, name: "file.get", kind: "query", min
     if (!object) throw notFound("file storage unavailable");
     base64 = Buffer.from(await object.arrayBuffer()).toString("base64");
   }
-  return {file: fileMetadata(r), download_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${v.project}/documents/download?path=${encodeURIComponent(v.path)}&revision=${r.revision}`, ...(base64 === undefined ? {} : {base64})};
+  return {file: fileMetadata(r), download_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${ctx.mcpProject?.path ?? v.project}/documents/download?path=${encodeURIComponent(v.path)}&revision=${r.revision}`, ...(base64 === undefined ? {} : {base64})};
 }});
 export const fileHistory = defineVerb({...base, name: "file.history", kind: "query", minRole: "reader", summary: "List file versions newest first (200/page); before revision selects older history.", mcp: {scope: "read", destructive: false, title: "File history", input: input({before: {type: "integer", minimum: 1}})}, parse: i => ({...ref(i), before: optInt(i, "before", {min: 1, max: 2147483647}) ?? 2147483648}), run: async (ctx, v) => {
   const p = await fileProject(ctx, v.project);
@@ -160,6 +160,6 @@ export const fileUploadUrl = defineVerb({...base, name: "file.upload_url", kind:
   const expires_at = ctx.now + 600000;
   await ctx.db.prepare("DELETE FROM file_upload WHERE expires_at <= ?").bind(ctx.now).run();
   await ctx.db.prepare("INSERT INTO file_upload (token_hash, tenant_id, project_id, identity_id, params, expires_at) VALUES (?, ?, ?, ?, ?, ?)").bind(await sha256Hex(token), ctx.tenant!.id, p.id, ctx.identity!.id, JSON.stringify(v), expires_at).run();
-  return {upload_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${v.project}/documents/upload?token=${token}`, method: "PUT", expires_at, max_bytes: FILE_BYTES};
+  return {upload_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${ctx.mcpProject?.path ?? v.project}/documents/upload?token=${token}`, method: "PUT", expires_at, max_bytes: FILE_BYTES};
 }});
 export const fileVerbs = [filePut, fileGet, fileList, fileHistory, fileDelete, fileUploadUrl];

@@ -28,11 +28,11 @@ export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false)
     if (!source) throw notFound("no such repository");
     return { ...source, slug };
   }
-  const p = await ctx.db.prepare("SELECT id, slug, kind, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, slug.trim().toLowerCase())
+  const p = await ctx.db.prepare("SELECT id, slug, kind, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND (? IS NULL OR id = ?)").bind(ctx.tenant!.id, slug.trim().toLowerCase(), ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null)
     .first<{ id: string; slug: string; kind: string; display_name: string }>();
   if (!p) throw notFound("no such repository project");
   requireProjectFeature(p, "repo");
-  return p;
+  return ctx.mcpProject ? { ...p, slug: ctx.mcpProject.path } : p;
 }
 
 function rev(v: string | null, fallback = "HEAD"): string {
@@ -321,11 +321,11 @@ export const repoList = defineVerb({
   parse: () => ({}),
   run: async (ctx) => {
     const host = `${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN.toLowerCase()}`;
-    const rows = (await ctx.db.prepare("SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND kind = 'repo' AND state = 'active' ORDER BY slug").bind(ctx.tenant!.id).all<{ slug: string; name: string }>()).results;
+    const rows = (await ctx.db.prepare("SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND kind = 'repo' AND state = 'active' AND (? IS NULL OR id = ?) ORDER BY slug").bind(ctx.tenant!.id, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).all<{ slug: string; name: string }>()).results;
     const push = rank(ctx.role) >= rank("member");
     return {
       access: push ? "read and push (never force: history is kept)" : "read",
-      repos: rows.map((p) => ({ slug: p.slug, name: p.name, clone_url: `https://${host}/${p.slug}.git`, push })),
+      repos: rows.map((p) => ({ slug: ctx.mcpProject?.path ?? p.slug, name: p.name, clone_url: `https://${host}/${ctx.mcpProject?.path ?? p.slug}.git`, push })),
       connect: ctx.identity?.kind === "agent" ? "To clone or push, call repo_connect once for the git setup." : `To clone or push, make a git credential at https://${ctx.env.HUB_DOMAIN.toLowerCase()}/me.`,
     };
   },

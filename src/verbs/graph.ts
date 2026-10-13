@@ -147,7 +147,7 @@ export const workFrontier = defineVerb({
     const stuck = c.g.nodes.filter((n) => inScope(n.id)).filter((n) => { const r = c.ready.get(n.id); return r?.status === "blocked" && r.waiting_on.some((w) => c.byId.get(w)?.state === "dropped"); });
     const pending = await ctx.db.prepare("SELECT COUNT(*) AS n FROM work_proposal p LEFT JOIN work_proposal_decision d ON d.proposal_id = p.id WHERE p.tenant_id = ? AND d.proposal_id IS NULL")
       .bind(ctx.tenant!.id).first<{ n: number }>();
-    return { ready: ranked.slice(0, p.limit).map((r) => ({ ...c.view(c.byId.get(r.id)!), critical: r.critical, downstream: r.downstream })), counts, stuck: stuck.map(c.view), proposals_pending: pending?.n ?? 0 };
+    return { ready: ranked.slice(0, p.limit).map((r) => ({ ...c.view(c.byId.get(r.id)!), critical: r.critical, downstream: r.downstream })), counts, stuck: stuck.map(c.view), proposals_pending: ctx.mcpProject ? 0 : pending?.n ?? 0 };
   },
 });
 type FrontierResult = { ready: Array<View & { critical: number; downstream: number }>; counts: { ready: number; blocked: number; claimed: number; conflict: number }; stuck: View[]; proposals_pending: number };

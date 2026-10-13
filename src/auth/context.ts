@@ -28,6 +28,8 @@ export type Ctx = {
   staleCookie: boolean;
   /** Set only on /mcp requests: the assistant connection this request runs under. */
   oauth?: OAuthCtx;
+  /** Resolved by the project MCP route, never supplied by a client. */
+  mcpProject?: { id: string; slug: string; kind: string; display_name: string; path: string };
   /**
    * Set only by the in-context Playground: the scopes the person chose. The request then obeys the same MCP exposure
    * rules as an assistant connection holding exactly these scopes; it can only narrow the person's own authority.

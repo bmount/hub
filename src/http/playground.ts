@@ -44,7 +44,7 @@ export async function playgroundPage(request: Request, env: Env): Promise<Respon
   const threadQuery = thread ? `?t=${esc(encodeURIComponent(thread))}` : "";
   const scopeQuery = thread ? `&t=${esc(encodeURIComponent(thread))}` : "";
   const set = url.searchParams.get("scopes") === "write" ? "write" : "read";
-  const tools = toolsFor({ ...ctx, playground: { scopes: SCOPE_SETS[set]! } }).map(toolDefinition);
+  const tools = toolsFor({ ...ctx, playground: { scopes: SCOPE_SETS[set]! } }).map(v => toolDefinition(v));
   const example = (schema: { properties?: Record<string, unknown>; required?: string[] }) =>
     JSON.stringify(Object.fromEntries((schema.required ?? []).map((k) => [k, ""])), null, 2);
   const cards = tools.map((t) => `<details class="card"><summary><strong>${esc(t.name)}</strong> <small>${esc((t.description ?? "").split("\n")[0]!)}</small></summary>

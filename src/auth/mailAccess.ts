@@ -16,6 +16,10 @@ export function canInspectMail(ctx: Ctx): boolean {
 export function readableMail(ctx: Ctx, alias = "m"): SqlFilter {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias)) throw new Error("invalid mail SQL alias");
   if (!ctx.tenant || !ctx.identity || rank(ctx.role) < rank("reader")) return { sql: "0 = 1", bindings: [] };
+  if (ctx.mcpProject) {
+    const unscoped = readableMail({ ...ctx, mcpProject: undefined }, alias);
+    return { sql: `(${unscoped.sql} AND ${alias}.project_id = ?)`, bindings: [...unscoped.bindings, ctx.mcpProject.id] };
+  }
   const admin = canInspectMail(ctx) ? 1 : 0;
   return {
     sql: `(${alias}.tenant_id = ? AND (${alias}.verdict = 'admitted' OR ? = 1) AND

@@ -3,7 +3,7 @@
 import { projectControls } from "./projectControls";
 import { PROJECT_KINDS, projectFeatures, FEATURE_LABELS } from "../projectFeatures";
 import type { Env } from "../env";
-import { esc, htmlResponse, onramp, page } from "../html";
+import { COPY_SCRIPT, esc, htmlResponse, onramp, page } from "../html";
 import { intentBox } from "../intent/page";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { readableMail, readableMailEvents } from "../auth/mailAccess";
@@ -122,12 +122,13 @@ export async function projectPage(request: Request, env: Env, slug: string): Pro
 <h1>${esc(p.display_name)}${p.state === "archived" ? " <small>(archived)</small>" : ""}</h1>
 <p class="lede">Send or forward anything to <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code>. It is filed here as evidence, never as instructions.</p>
 ${clone}
+${p.state === "active" ? `<section><h2>Connect an assistant</h2><p>Copy this MCP URL into your assistant’s “Add MCP server” or connector settings:</p><p><code id="project-mcp-url">https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/p/${esc(p.usage_ref ?? p.slug)}/mcp</code> <button type="button" data-copy="#project-mcp-url">Copy URL</button></p><p>Sign in with Pimwell OAuth, or configure your agent’s existing Pimwell token as a Bearer token. Tools and calls are limited to this project; the project argument is supplied automatically.</p></section>` : ""}
 <nav class="chips" aria-label="Project features">${tabs}</nav>${knowledge}${contacts}
 ${features.includes("docket") ? `<div class="chips">${(Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/${esc(p.slug)}/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("")}<a class="chip" href="/${esc(p.slug)}/docket">Docket</a></div>
 ${p.usage_ref ? `<p><a href="/usage?project=${esc(encodeURIComponent(p.usage_ref))}">Recorded AI usage for this project</a></p>` : ""}
 <h2>Open now</h2>${openRows.length ? `<ul>${openRows.map((w) => `<li><a href="/${esc(p.slug)}/w/${w.number}">#${w.number}</a> <span class="k-${w.kind}">${esc(KINDS[w.kind].name)}</span>: ${esc(w.title)} <small>${esc(STATES[w.state])}</small></li>`).join("")}</ul>` : `<p class="lede">Nothing open. File a wish, a snag, or an errand from the Docket.</p>`}
 ` : ""}
 <h2>What happened</h2>${timeline(ctx.now, events!.results as Ev[])}`;
-  return htmlResponse(page(p.display_name, body, shellFor(ctx, env, "project", `${t.slug}/${p.slug}`)), 200, extra);
+  return htmlResponse(page(p.display_name, body + COPY_SCRIPT, shellFor(ctx, env, "project", `${t.slug}/${p.slug}`)), 200, extra);
 }
 
