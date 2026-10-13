@@ -51,7 +51,7 @@ export const COMPONENTS_CSS = `
 #rail .project-endpoints button{flex-shrink:0;padding:0 4px;margin:0;border:0;background:none;color:var(--muted)}
 .wb-table .work-title{max-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%}.work-title a{white-space:nowrap}@media(max-width:760px){.wb-table .work-title{max-width:none;white-space:normal;width:auto}.work-title a{white-space:normal}}
 #inspector .wb-actions{flex-wrap:nowrap;gap:4px;width:100%}#inspector .wb-actions button{font-size:var(--fs-xs);padding:3px 5px;white-space:nowrap}#inspector .wb-actions p{margin:0}
-@media(min-width:1280px){#rail>.railhead{display:flex;padding:4px 8px 8px;font-size:var(--fs-md)}body.wb.sidebar-collapsed{grid-template-columns:36px minmax(0,1fr)}body.sidebar-collapsed #rail{padding:0}body.sidebar-collapsed #rail>*{display:none}.sidebar-toggle{display:inline-block}}
+.bar .sidebar-toggle{display:none}@media(min-width:1280px){#rail>.railhead{display:flex;padding:4px 8px 8px;font-size:var(--fs-md)}body.wb.sidebar-collapsed{grid-template-columns:36px minmax(0,1fr)}body.sidebar-collapsed #rail{padding:0}body.sidebar-collapsed #rail>*{display:none}.bar .sidebar-toggle{display:inline-block}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:var(--fs)/1.45 var(--font);font-variant-numeric:tabular-nums}
 a{color:var(--accent);text-underline-offset:2px}

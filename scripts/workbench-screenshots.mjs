@@ -196,6 +196,8 @@ try {
       await page.screenshot({path:path.join(artifacts,`${phase}-${name}-${label}.png`),fullPage:false});
       manifest.push({phase,name,route,viewport,file:`${phase}-${name}-${label}.png`});
       if (phase === 'after') {
+        // One menu control per width: the Menu link below 1280 px, the sidebar toggle at and above it.
+        expect(await page.locator('.bar .menu:visible, .bar [data-toggle-sidebar]:visible').count(), name+' menu controls').toBe(1);
         await expect(page.locator('#rail')).not.toContainText('Your account');
         await expect(page.locator('form[action="/api/session.end"]')).toHaveCount(1);
         const darkButtons = await page.evaluate(()=>{
