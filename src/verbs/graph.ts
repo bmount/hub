@@ -94,7 +94,7 @@ export const workGraph = defineVerb({
       return [DATA_NOTE, NOTE, "", `**${x.items.length} items in dependency order**, ${x.edges.length} dependencies:`, ...x.items.map(line)].join("\n");
     },
   },
-  parse: (i) => ({ id: optString(i, "id", { max: 80 }), project: optString(i, "project", { max: 63 }) }),
+  parse: (i) => ({ id: optString(i, "id", { max: 80 }), project: optString(i, "project", { max: 127 }) }),
   run: async (ctx, p): Promise<GraphResult> => {
     const c = await graphContext(ctx);
     if (p.id) {
@@ -135,7 +135,7 @@ export const workFrontier = defineVerb({
         ...(x.proposals_pending ? ["", `${x.proposals_pending} proposed graph change${x.proposals_pending === 1 ? "" : "s"} waiting for review (work_proposals).`] : [])].join("\n");
     },
   },
-  parse: (i) => ({ project: optString(i, "project", { max: 63 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 20 }),
+  parse: (i) => ({ project: optString(i, "project", { max: 127 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 20 }),
   run: async (ctx, p): Promise<FrontierResult> => {
     const c = await graphContext(ctx);
     const projectId = p.project ? (await projectBySlug(ctx, p.project, true)).id : null;

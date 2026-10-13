@@ -128,6 +128,17 @@ describe("CLI arguments", () => {
 });
 
 describe("work graph acceptance", () => {
+  it("keeps canonical namespaced references in readiness, graph and frontier", async () => {
+    const w = await world();
+    const ns = "research-" + "n".repeat(26), slug = "project-" + "p".repeat(26), path = `${ns}/${slug}`;
+    await env.HUB_DB.prepare("INSERT INTO namespace (id,tenant_id,slug,display_name,state,created_at) VALUES ('N',?,?,'Research','active',0)").bind(w.t.id, ns).run();
+    await createProject(env.HUB_DB, {tenant_id:w.t.id,namespace_id:"N",slug,kind:"tracker",display_name:"Research work"}, Date.now());
+    const a = await w.ok<{ref:string}>(await w.call.pat("work.create", {project:path,kind:"errand",title:"Prepare"}));
+    const b = await w.ok<{ref:string}>(await w.call.pat("work.create", {project:path,kind:"wish",title:"Ship",after:a.ref}));
+    expect(await w.readiness(b.ref)).toMatchObject({status:"blocked",waiting_on:[a.ref]});
+    expect(await w.ok(await w.call.pat("work.graph", {project:path}))).toMatchObject({items:[{ref:a.ref},{ref:b.ref}],edges:[{prerequisite:a.ref,dependent:b.ref}]});
+    expect(await w.ok(await w.call.pat("work.frontier", {project:path}))).toMatchObject({ready:[{ref:a.ref}],counts:{ready:1,blocked:1}});
+  });
   it("runs file, depend, frontier, claim, done, frontier equally through REST, MCP and CLI", async () => {
     const w = await world();
     const agent = await seedAgent(w.t, w.pat.identity);
