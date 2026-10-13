@@ -175,7 +175,7 @@ ${project && !f.org ? `<select name="quest" aria-label="Quest">${option("", "Any
       {html: readinessHtml(readiness.get(w.id) ?? {status: "closed"}, true)},
       {className: "hide-s", html: esc(who)},
       {className: "hide-s", html: statusChip(STATES[w.state], w.state)},
-      {className: "when hide-s", html: `<time title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</time>`}]};
+      {className: "when hide-s", html: `${ago(w.updated_at, ctx.now)}`}]};
   });
   const filtered = f.kind !== null || f.owner !== null || f.quest !== null;
   const empty = f.owner === "me" && !f.closed && f.kind === null && f.quest === null
@@ -246,7 +246,7 @@ async function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, 
   const follow = `<form class="inline" method="post" action="/api/work.subscribe"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="follow" value="${d.following ? "0" : "1"}"><input type="hidden" name="_back" value="${keep}"><button type="submit" class="quiet" title="${d.following ? "Stop hearing about changes" : "Hear about every change in What needs me"}">${d.following ? "Following ✓" : "Follow"}</button></form>`;
   const controls = canWrite ? `<p>${w.state !== "doing" ? `<form class="inline" method="post" action="/api/work.claim"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><button type="submit">I'm on it</button></form> ` : ""}${w.state !== "done" ? action("done", "Done") : ""} ${w.state !== "dropped" ? action("dropped", "Let it go") : ""} ${(w.state === "done" || w.state === "dropped") ? action("open", "Reopen") : ""} ${follow}</p>` : `<p>${follow}</p>`;
   const comments = `<h2>Comments${d.comments.length ? ` <span class="pill">${d.comments.length}</span>` : ""}</h2>
-${d.comments.length ? kitList("comments", d.comments.map((c)=>({html:`<time title="${when(c.created_at)}">${ago(c.created_at, ctx.now)}</time> · <span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ""}<div class="prose" style="margin-top:2px">${esc(c.body)}</div></span>`}))) : `<p class="lede">No comments yet.</p>`}
+${d.comments.length ? kitList("comments", d.comments.map((c)=>({html:`${ago(c.created_at, ctx.now)} · <span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ""}<div class="prose" style="margin-top:2px">${esc(c.body)}</div></span>`}))) : `<p class="lede">No comments yet.</p>`}
 ${canWrite ? `<form class="wb-comment" method="post" action="/api/work.comment"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
 <textarea aria-label="Comment" data-voice data-enter-submits name="body" rows="1" required maxlength="10000" placeholder="Comment…"></textarea><button type="submit" class="quiet" aria-label="Send comment">↑</button></form>` : ""}`;
   const ownerChoices = d.owner && !d.members.some((m) => m.id === d.owner!.id) ? [d.owner, ...d.members] : d.members;
@@ -276,7 +276,7 @@ ${canWrite ? `<form class="wb-comment" method="post" action="/api/work.comment">
 <button type="submit">Add link</button></form></details>` : "";
   const links = `<h2>Links</h2>${d.links.length ? kitList("Links", d.links.map(l=>({html:workLinkHtml(l).replace(/^<li>|<\/li>$/g, "")}))) : '<p class="lede">No links yet.</p>'}
 <p class="lede">Recorded references, not verified access or existence. Each destination checks your access.</p>${linkForm}`;
-  const activity = d.activity.length ? `<h2>Activity</h2>${kitList("Activity", d.activity.map(a=>({html:`<time title="${when(a.created_at)}">${ago(a.created_at, ctx.now)}</time> · ${esc(a.who ?? "Pimwell")}: ${esc(a.summary)}`})))}` : "";
+  const activity = d.activity.length ? `<h2>Activity</h2>${kitList("Activity", d.activity.map(a=>({html:`${ago(a.created_at, ctx.now)} · ${esc(a.who ?? "Pimwell")}: ${esc(a.summary)}`})))}` : "";
   return `<a class="back" href="${esc(back)}">‹ ${esc(DOCKET.name)}</a>
 <div class="head">${kindField}<strong>${esc(project.slug)}#${w.number}</strong>${stateField}</div>
 <h1>${titleField}</h1>
