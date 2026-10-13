@@ -1,6 +1,11 @@
 // Outbound mail (B3): the golden rule in code. Only to someone who wrote to that address in the last 30 days, only
 // when the organization has sending on, within daily caps, and kept in full.
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
+import PostalMime from "postal-mime";
+import { Buffer } from "node:buffer";
+import { DOC_ATTACHMENT_BYTES } from "../src/verbs/doc";
+import { putFile } from "../src/verbs/files";
+import { buildContext } from "../src/auth/context";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleProjectMail } from "../src/mail/projectMail";
 import fixtures from "./fixtures/mail-ingress.json";
@@ -253,5 +258,153 @@ describe("outbound mail", () => {
     await env.HUB_DB.prepare("DELETE FROM consent WHERE id = 'c-kim'").run();
     await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = (SELECT id FROM identity WHERE email = 'kim@example.com')").run();
     expect((await w.call(w.bot, "mail.send", { to: "kim@example.com", subject: "x", body: "x" })).status).toBe(403);
+  });
+});
+
+async function documentWorld() {
+  const w = await world();
+  await createProject(env.HUB_DB, {tenant_id: w.t.id, namespace_id: null, slug: "docs", kind: "workspace", display_name: "Documents"}, Date.now());
+  expect((await w.call(w.pat, "file.put", {project: "docs", path: "memo.md", content_type: "text/markdown", expected_revision: 0, base64: Buffer.from("Résumé — memo").toString("base64")})).status).toBe(200);
+  expect((await w.call(w.pat, "wiki.write", {project: "docs", slug: "findings", title: "Research findings", body: "Project knowledge", expected_revision: 0, note: "New"})).status).toBe(200);
+  const file = {project: "docs", path: "memo.md", recipients: ["ada@example.com"], note: "Please review — thanks"};
+  const page = {project: "docs", slug: "findings", recipients: ["pat@example.com"], note: "Findings ready"};
+  w.sent.length = 0;
+  return {...w, file, page};
+}
+
+describe("document mail", () => {
+  it("lets a human share an attachment with a member who never wrote, and records revision, sender, recipients and time", async () => {
+    const w = await documentWorld();
+    await w.call(w.ada, "mail.sending", {on: true});
+    const r = await w.call(w.pat, "doc.share", {...w.file, recipients: ["ADA@example.com", "pat@example.com", "ada@example.com"]});
+    expect(r.status, r.detail).toBe(200);
+    expect(r.result).toMatchObject({attached: true, revision: 1, from: "acme.docs@pimwell.test", not_attempted: []});
+    expect(w.sent.map(m => m.to)).toEqual(["ada@example.com", "pat@example.com"]);
+    expect(w.sent[0]!.raw).toBe(w.sent[1]!.raw);
+    const mime = await PostalMime.parse(w.sent[0]!.raw);
+    expect(mime.text).toContain("Please review — thanks");
+    expect(mime.attachments).toHaveLength(1);
+    expect(mime.attachments[0]!.filename).toBe("memo.md");
+    expect(Buffer.from(mime.attachments[0]!.content as ArrayBuffer).toString()).toBe("Résumé — memo");
+    const rows = (await env.HUB_DB.prepare("SELECT recipient, revision, mode, status, created_at, outbound_id FROM document_delivery ORDER BY recipient").all<any>()).results;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({recipient: "ada@example.com", revision: 1, mode: "share", status: "sent"});
+    expect(rows[0].created_at).toBeGreaterThan(0);
+    expect(rows[0].outbound_id).toBe(rows[1].outbound_id);
+    const html = await (await SELF.fetch(`https://${HOST}/docs/documents?path=memo.md`, {headers: w.pat})).text();
+    expect(html).toContain("Mail sharing"); expect(html).toContain("ada@example.com");
+    expect(html).toContain('action="/api/doc.share"'); expect(html).toContain('formaction="/api/doc.dispatch"');
+    const meta = await w.call(w.pat, "file.get", {project: "docs", path: "memo.md"});
+    expect(meta.result.deliveries).toHaveLength(2);
+    const url = r.result.url as string;
+    expect((await SELF.fetch(url)).status).toBe(404);
+    expect((await SELF.fetch(url, {headers: w.ada})).status).toBe(200);
+    const other = await seedTenant("other");
+    const outsider = await seedHuman("outside@example.org", {memberships: [{tenant_id: other.id, role: "member"}]});
+    expect((await SELF.fetch(url, {headers: cookieHeaders(outsider.token, HOST)})).status).not.toBe(200);
+  });
+
+  it("dispatches pages from the agent in separate messages to eligible members, including copied members", async () => {
+    const w = await documentWorld();
+    await seedHuman("kim@example.com", {memberships: [{tenant_id: w.t.id, role: "reader"}]});
+    await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    w.sent.length = 0;
+    await w.call(w.ada, "mail.sending", {on: true});
+    const r = await w.call(w.bot, "doc.dispatch", {...w.page, recipients: ["pat@example.com", "kim@example.com"]});
+    expect(r.status, r.detail).toBe(200);
+    expect(r.result).toMatchObject({attached: false, from: "acme.scout@pimwell.test", not_attempted: []});
+    expect(r.result.deliveries).toHaveLength(2);
+    expect(w.sent.map(m => m.to)).toEqual(["pat@example.com", "kim@example.com"]);
+    expect(w.sent[0]!.raw).not.toContain("kim@example.com");
+    expect(w.sent[1]!.raw).not.toContain("pat@example.com");
+    expect(w.sent[0]!.text).toContain("/docs/wiki/findings?revision=1");
+    expect(w.sent.every(m => !m.raw.includes("multipart/mixed"))).toBe(true);
+    const html = await (await SELF.fetch(`https://${HOST}/docs/wiki/findings`, {headers: w.pat})).text();
+    expect(html).toContain("Mail sharing"); expect(html).toContain("kim@example.com");
+    const read = await w.call(w.bot, "wiki.read", {project: "docs", slug: "findings"});
+    expect(read.result.deliveries).toHaveLength(2);
+    expect((await SELF.fetch(r.result.url as string)).status).toBe(404);
+  });
+
+  it.each(["share", "dispatch"])("refuses non-member contacts and unfamiliar agent recipients before any %s transport", async mode => {
+    const w = await documentWorld();
+    await w.call(w.ada, "mail.sending", {on: true});
+    expect((await w.call(w.pat, "person.upsert", {project: "docs", name: "Contact", emails: ["contact@example.org"]})).status).toBe(200);
+    for (const h of [w.pat, w.bot]) {
+      const r = await w.call(h, `doc.${mode}`, {...w.page, recipients: ["pat@example.com", "contact@example.org"]});
+      expect(r.status).toBe(403); expect(r.detail).toContain("member");
+    }
+    const unfamiliar = await w.call(w.bot, `doc.${mode}`, {...w.page, recipients: ["pat@example.com", "ada@example.com"]});
+    expect(unfamiliar.status).toBe(403); expect(unfamiliar.detail).toContain("hasn't written to you");
+    expect(w.sent).toHaveLength(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM document_delivery").first("n")).toBe(0);
+  });
+
+  it.each(["archived membership", "disabled identity", "agent identity", "other tenant"])("refuses %s as a human recipient", async state => {
+    const w = await documentWorld();
+    await w.call(w.ada, "mail.sending", {on: true});
+    if (state === "archived membership") await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = (SELECT id FROM identity WHERE email = 'ada@example.com')").run();
+    if (state === "disabled identity") await env.HUB_DB.prepare("UPDATE identity SET state = 'disabled' WHERE email = 'ada@example.com'").run();
+    if (state === "agent identity") await env.HUB_DB.prepare("UPDATE identity SET kind = 'agent' WHERE email = 'ada@example.com'").run();
+    if (state === "other tenant") {
+      const other = await seedTenant("other");
+      await env.HUB_DB.prepare("UPDATE membership SET tenant_id = ? WHERE identity_id = (SELECT id FROM identity WHERE email = 'ada@example.com')").bind(other.id).run();
+    }
+    expect((await w.call(w.pat, "doc.share", w.file)).status).toBe(403);
+    expect(w.sent).toHaveLength(0);
+  });
+
+  it("honors sending off, withdrawal and sender/organization caps", async () => {
+    const w = await documentWorld();
+    expect((await w.call(w.pat, "doc.share", w.file)).status).toBe(403);
+    await w.call(w.ada, "mail.sending", {on: true});
+    await env.HUB_DB.prepare("INSERT INTO consent (id, email, kind, granted_at, revoked_at) VALUES ('withdrawn', 'pat@example.com', 'inbound_email', ?, ?)").bind(Date.now() + 1, Date.now() + 2).run();
+    expect((await w.call(w.bot, "doc.dispatch", w.page)).status).toBe(403);
+    expect((await w.call(w.pat, "doc.share", {...w.file, recipients: ["pat@example.com"]})).status).toBe(403);
+    const botId = (await env.HUB_DB.prepare("SELECT id FROM identity WHERE email = 'acme.scout@pimwell.test'").first<any>())!.id;
+    await env.HUB_DB.batch(Array.from({length: 500}, (_, n) => env.HUB_DB.prepare("INSERT INTO outbound_mail (id, tenant_id, from_address, to_address, subject, text, sent_by, status, created_at) VALUES (?, ?, 'a', 'b', 's', 't', ?, 'sent', ?)").bind(`cap-${n}`, w.t.id, botId, Date.now())));
+    expect((await w.call(w.pat, "doc.share", w.file)).status).toBe(429);
+    await env.HUB_DB.prepare("DELETE FROM consent WHERE id = 'withdrawn'").run();
+    expect((await w.call(w.bot, "doc.dispatch", w.page)).status).toBe(429);
+    expect(w.sent).toHaveLength(0);
+  });
+
+  it("uses an authenticated link for large files and pins the version", async () => {
+    const w = await documentWorld();
+    await w.call(w.ada, "mail.sending", {on: true});
+    const ctx = await buildContext(new Request(`https://${HOST}/docs`, {headers: w.pat}), env);
+    await putFile(ctx, {project: "docs", path: "large.txt", content_type: "text/plain", expected_revision: 0, item_id: null, person_id: null}, new TextEncoder().encode("a".repeat(DOC_ATTACHMENT_BYTES + 1)));
+    const r = await w.call(w.pat, "doc.share", {...w.file, path: "large.txt"});
+    expect(r.status).toBe(200); expect(r.result.attached).toBe(false);
+    expect(w.sent[0]!.raw).not.toContain("multipart/mixed");
+    expect((await SELF.fetch(r.result.url as string)).status).toBe(404);
+    await putFile(ctx, {project: "docs", path: "large.txt", content_type: "text/plain", expected_revision: 1, item_id: null, person_id: null}, new TextEncoder().encode("new"));
+    const download = await SELF.fetch(r.result.url as string, {headers: w.ada});
+    expect(download.status).toBe(200); expect((await download.text()).length).toBe(DOC_ATTACHMENT_BYTES + 1);
+  });
+
+  it("stops a dispatch on uncertain transport and reports attempted and unattempted recipients without retrying", async () => {
+    const w = await documentWorld();
+    await w.call(w.ada, "mail.sending", {on: true});
+    let calls = 0;
+    setTestTransport(async () => {calls++; throw new Error("transport uncertain");});
+    const r = await w.call(w.pat, "doc.dispatch", {...w.file, recipients: ["pat@example.com", "ada@example.com"]});
+    expect(r.status).toBe(200);
+    expect(r.result).toMatchObject({deliveries: [{recipients: ["pat@example.com"], status: "uncertain"}], not_attempted: ["ada@example.com"]});
+    expect(calls).toBe(1);
+    expect(await env.HUB_DB.prepare("SELECT recipient, status FROM document_delivery").first()).toEqual({recipient: "pat@example.com", status: "uncertain"});
+  });
+
+  it("refuses readers, missing or ambiguous references, archived and unsupported projects", async () => {
+    const w = await documentWorld();
+    await w.call(w.ada, "mail.sending", {on: true});
+    const reader = await seedHuman("reader@example.com", {memberships: [{tenant_id: w.t.id, role: "reader"}]});
+    expect((await w.call(cookieHeaders(reader.token, HOST), "doc.share", w.file)).status).toBe(403);
+    expect((await w.call(w.pat, "doc.share", {...w.file, slug: "findings"})).status).toBe(400);
+    expect((await w.call(w.pat, "doc.share", {...w.file, path: "missing.md"})).status).toBe(404);
+    expect((await w.call(w.pat, "doc.share", {...w.file, project: "site"})).status).toBe(400);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE tenant_id = ? AND slug = 'docs'").bind(w.t.id).run();
+    expect((await w.call(w.pat, "doc.share", w.file)).status).toBe(409);
+    expect(w.sent).toHaveLength(0);
   });
 });

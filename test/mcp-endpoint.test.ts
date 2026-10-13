@@ -89,6 +89,11 @@ describe("project MCP", () => {
     const seeded = await seedAgent(acme, op.identity);
     const agent = { token: seeded.longLived };
     for (const slug of ["desk", "other"]) await apiPost("acme.pimwell.test", "project.create", { slug, kind: "workspace", display_name: slug }, bearer(op.token));
+    const tools = (await rpcBody(await projectRpc("desk", agent.token, "tools/list"))).result.tools.map((t: any) => t.name);
+    expect(tools).toEqual(expect.arrayContaining(["doc_share", "doc_dispatch"]));
+    const crossDocument = await rpcBody(await projectRpc("desk", agent.token, "tools/call", {name: "doc_share", arguments: {project: "other", slug: "hello", recipients: ["op@example.com"], note: "No"}}));
+    expect(crossDocument.result.isError).toBe(true);
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM document_delivery").first()).toBeNull();
     const init = await rpcBody(await projectRpc("desk", agent.token, "initialize", INIT));
     expect(init.result.serverInfo.name).toBe("pimwell-acme-desk");
     const write = await rpcBody(await projectRpc("desk", agent.token, "tools/call", { name: "wiki_write", arguments: { slug: "hello", title: "Hello", body: "Own project", expected_revision: 0, note: "test" } }));

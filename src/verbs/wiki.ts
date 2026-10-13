@@ -1,3 +1,4 @@
+import { documentDeliveries } from "../db/documentDelivery";
 import { defineVerb, type McpInputSchema } from "./table";
 import { reqString, optString, optInt } from "./params";
 import { badRequest, conflict, notFound } from "../errors";
@@ -30,7 +31,7 @@ export async function readWiki(ctx: Ctx, project: string, slug: string, revision
   const r = await ctx.db.prepare(`SELECT r.*, i.display_name AS author FROM wiki_revision r JOIN identity i ON i.id = r.author_id WHERE r.tenant_id = ? AND r.project_id = ? AND r.slug = ? AND ${revision === null ? currentWiki : "r.revision = ?"}`).bind(ctx.tenant!.id, p.id, slug, ...(revision === null ? [] : [revision])).first<WikiRevision>();
   if (!r || (revision === null && r.deleted)) throw notFound("no such wiki page");
   const backlinks = (await ctx.db.prepare(`SELECT r.slug, r.title FROM wiki_revision r WHERE r.tenant_id = ? AND r.project_id = ? AND ${currentWiki} AND r.deleted = 0 AND EXISTS (SELECT 1 FROM json_each(r.links) WHERE value = ?) ORDER BY r.slug LIMIT 200`).bind(ctx.tenant!.id, p.id, slug).all<{slug: string; title: string}>()).results;
-  return {page: {...r, page_type: r.research ? "research" : "kb"}, links: JSON.parse(r.links) as string[], backlinks};
+  return {page: {...r, page_type: r.research ? "research" : "kb"}, links: JSON.parse(r.links) as string[], backlinks, deliveries: await documentDeliveries(ctx, p.id, "page", slug)};
 }
 export const wikiRead = defineVerb({ ...base, name: "wiki.read", kind: "query", minRole: "reader", summary: "Read a wiki page, its links and backlinks, optionally at a historical revision.", mcp: {scope: "read", destructive: false, title: "Read wiki page", input: input({revision: {type: "integer", minimum: 1}})}, parse: i => ({...ref(i), revision: optInt(i, "revision", {min: 1, max: 2147483647})}), run: (ctx, p) => readWiki(ctx, p.project, p.slug, p.revision) });
 export const wikiList = defineVerb({ ...base, name: "wiki.list", kind: "query", minRole: "reader", summary: "List current wiki pages alphabetically, 200 at a time; pass after for the next page.", mcp: {scope: "read", destructive: false, title: "List wiki pages", input: input({after: {type: "string"}}, ["project"])}, parse: i => ({project: reqString(i, "project", {max: 63}), after: optString(i, "after", {max: 100}) ?? ""}), run: async (ctx, v) => {

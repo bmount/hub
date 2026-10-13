@@ -3,13 +3,13 @@ import type { Env } from "../env";
 import { ulid } from "../ids";
 import { normalizeEmail } from "../db/identities";
 import { hasActiveConsent, consentWithdrawn } from "../db/consent";
-import { buildMime, safeMessageId } from "./mime";
+import { buildMime, safeMessageId, type MailAttachment } from "./mime";
 
 /**
  * `cc` adds Cc recipients; `basis: "member"` sends to members of the sender's organization without a consent record,
  * but never to anyone who has withdrawn consent.
  */
-export type Outbound = { to: string; cc?: string[]; subject: string; text: string; from?: string; inReplyTo?: string | null; references?: string[]; utf8?: boolean; basis?: "consent" | "member" };
+export type Outbound = { attachments?: MailAttachment[]; to: string; cc?: string[]; subject: string; text: string; from?: string; inReplyTo?: string | null; references?: string[]; utf8?: boolean; basis?: "consent" | "member" };
 export type SendResult = "sent" | "no_consent" | "failed" | "unknown";
 export type SentMail = { from: string; to: string; subject: string; text: string; raw: string };
 
@@ -38,7 +38,7 @@ export async function sendMail(env: Env, mail: Outbound, now: number, opts: { re
     }
     const from = reply ? reply.to.trim().toLowerCase() : mail.from ?? senderAddress(env);
     const raw = buildMime({
-      from, to, cc, subject: mail.subject, text: mail.text,
+      from, to, cc, subject: mail.subject, text: mail.text, attachments: mail.attachments,
       messageId: `<${ulid(now)}@${env.HUB_DOMAIN}>`, date: new Date(now),
       inReplyTo: reply ? safeMessageId(reply.headers.get("message-id")) : mail.inReplyTo ?? null, references: mail.references, utf8: mail.utf8,
     });

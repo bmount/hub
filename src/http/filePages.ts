@@ -11,6 +11,8 @@ import { HubError, badRequest, notFound } from "../errors";
 import { sha256Hex } from "../ids";
 import { FILE_BYTES, inferredFileType, fileList, fileHistory, fileProject, filePath, parseFileParams, putFile, readFile } from "../verbs/files";
 
+import { documentSharing } from "./documentSharing";
+
 export async function filePage(request: Request, env: Env, project: string, action = ""): Promise<Response> {
   const ctx = await buildContext(request, env, Date.now(), undefined, {longLivedToken: true});
   const url = new URL(request.url);
@@ -62,6 +64,7 @@ export async function filePage(request: Request, env: Env, project: string, acti
     if (path) {
       const h = await fileHistory.run(ctx, fileHistory.parse({project, path, before: url.searchParams.get("before")}));
       body += `<h2>History: ${esc(path)}</h2><ul>${h.history.map(r => `<li>${r.deleted ? 'Removed' : `<a href="${esc(link(path,r.revision))}">Version ${r.revision}</a>`} · ${esc(new Date(r.created_at).toISOString())} · ${esc(r.sha256)}</li>`).join("")}</ul>${h.next_cursor ? `<a href="/${esc(project)}/documents?path=${encodeURIComponent(path)}&before=${h.next_cursor}">Older versions</a>` : ""}`;
+      body += await documentSharing(ctx, p.id, project, "file", path, p.state === "active");
       if (rank(ctx.role) >= rank("admin")) body += `<form method="post" action="/api/file.delete"><input type="hidden" name="project" value="${esc(project)}"><input type="hidden" name="path" value="${esc(path)}"><input type="hidden" name="_back" value="/${esc(project)}/documents"><button>Remove file and all downloads</button></form>`;
     }
     if (rank(ctx.role) >= rank("member") && p.state === "active") body += `<h2>Upload a file or version</h2><form method="post" enctype="multipart/form-data" action="/${esc(project)}/documents/upload"><label>File <input type="file" name="file" required></label><label>Folder/name (blank uses filename) <input name="path" maxlength="240"></label><label>Current revision (0 for new) <input name="expected_revision" type="number" min="0" value="0" required></label><label>Item ID (optional) <input name="item_id"></label><label>Person ID (optional) <input name="person_id"></label><button>Upload</button></form>`;

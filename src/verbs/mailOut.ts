@@ -14,6 +14,7 @@ import { ulid } from "../ids";
 import { rank, type Ctx } from "../auth/context";
 import { readableMail } from "../auth/mailAccess";
 import { sendMail } from "../mail/send";
+import type { MailAttachment } from "../mail/mime";
 import { DATA_NOTE } from "../mcp/render";
 
 export const REPLY_WINDOW_MS = 30 * 86_400_000;
@@ -26,7 +27,7 @@ const EMAIL = /^[^\s@<>",]+@[^\s@<>",]+\.[a-z]{2,}$/i;
 export const MAX_RECIPIENTS = 10;
 
 /** One address, a comma-separated list, or an array: lowercased, unique, checked. */
-function addresses(v: unknown, name: string): string[] {
+export function addresses(v: unknown, name: string): string[] {
   const raw = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : v === undefined || v === null ? [] : null;
   if (!raw) throw badRequest(`${name} is an address or a list of addresses`);
   const list = [...new Set(raw.map((x) => String(x).trim().toLowerCase()).filter(Boolean))];
@@ -55,7 +56,7 @@ export async function agentRecipientRefusals(ctx: Ctx, recipients: string[]): Pr
   return out;
 }
 
-async function capsAndSwitch(ctx: Ctx): Promise<void> {
+export async function capsAndSwitch(ctx: Ctx): Promise<void> {
   const r = await ctx.db.prepare(`SELECT t.mail_out,
       (SELECT COUNT(*) FROM outbound_mail WHERE sent_by = ? AND status = 'sent' AND created_at > ?) AS mine,
       (SELECT COUNT(*) FROM outbound_mail WHERE tenant_id = t.id AND status = 'sent' AND created_at > ?) AS ours
@@ -75,7 +76,7 @@ async function recordOutgoing(ctx: Ctx, g: Gate, subject: string, body: string, 
   return id;
 }
 
-async function deliver(ctx: Ctx, g: Gate, subject: string, body: string, references: string[], policy: () => Promise<void>): Promise<{ id: string; status: string }> {
+export async function deliver(ctx: Ctx, g: Gate, subject: string, body: string, references: string[], policy: () => Promise<void>, attachments?: MailAttachment[]): Promise<{ id: string; status: string }> {
   // Authorization and mailbox ownership are checked before this point. Only valid attempts are recorded.
   try { await policy(); } catch (e) {
     if (!(e instanceof HubError) || !e.data?.mail_block) throw e;
@@ -83,7 +84,7 @@ async function deliver(ctx: Ctx, g: Gate, subject: string, body: string, referen
     e.data = { ...e.data, mail_delivery: { id, to_address: [g.to, ...(g.cc ?? [])].join(", "), in_reply_to: g.inbound_id, status: "refused", error: e.data.mail_block } };
     throw e;
   }
-  const result = await sendMail(ctx.env, { to: g.to, cc: g.cc, from: g.from, subject, text: body, inReplyTo: g.message_id, references, utf8: true, basis: g.basis }, ctx.now);
+  const result = await sendMail(ctx.env, { to: g.to, cc: g.cc, from: g.from, subject, text: body, inReplyTo: g.message_id, references, utf8: true, basis: g.basis, attachments }, ctx.now);
   const status = result === "sent" ? "sent" : result === "no_consent" ? "refused" : "failed";
   const error = result === "sent" ? null : result === "failed" ? "pre_transport_failure" : result;
   const id = await recordOutgoing(ctx, g, subject, body, status, error);

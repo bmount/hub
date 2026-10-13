@@ -1,3 +1,4 @@
+import { documentDeliveries } from "../db/documentDelivery";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { defineVerb, type McpInputSchema } from "./table";
@@ -141,7 +142,7 @@ export const fileGet = defineVerb({...base, name: "file.get", kind: "query", min
     if (!object) throw notFound("file storage unavailable");
     base64 = Buffer.from(await object.arrayBuffer()).toString("base64");
   }
-  return {file: fileMetadata(r), download_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${ctx.mcpProject?.path ?? v.project}/documents/download?path=${encodeURIComponent(v.path)}&revision=${r.revision}`, ...(base64 === undefined ? {} : {base64})};
+  return {file: fileMetadata(r), deliveries: await documentDeliveries(ctx, (await fileProject(ctx, v.project)).id, "file", v.path), download_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${ctx.mcpProject?.path ?? v.project}/documents/download?path=${encodeURIComponent(v.path)}&revision=${r.revision}`, ...(base64 === undefined ? {} : {base64})};
 }});
 export const fileHistory = defineVerb({...base, name: "file.history", kind: "query", minRole: "reader", summary: "List file versions newest first (200/page); before revision selects older history.", mcp: {scope: "read", destructive: false, title: "File history", input: input({before: {type: "integer", minimum: 1}})}, parse: i => ({...ref(i), before: optInt(i, "before", {min: 1, max: 2147483647}) ?? 2147483648}), run: async (ctx, v) => {
   const p = await fileProject(ctx, v.project);

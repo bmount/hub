@@ -9,6 +9,8 @@ import { HubError } from "../errors";
 import type { Research } from "../verbs/research";
 import { diffText, unified } from "../code/diff";
 
+import { documentSharing } from "./documentSharing";
+
 /** Render text first; only canonical wiki slugs become same-project links. No user HTML is accepted. */
 export function wikiMarkdown(body: string, project: string): string {
   return miniMarkdown(body).replace(/\[\[([a-z0-9]+(?:-[a-z0-9]+)*)\]\]/g, (text, slug: string) => slug.length > 100 ? text : `<a href="/${esc(project)}/wiki/${slug}">${slug}</a>`);
@@ -44,6 +46,7 @@ export async function wikiPage(request: Request, env: Env, project: string, slug
       const head = await wikiHistory.run(ctx, wikiHistory.parse({project, slug}));
       const expected = revision === null ? r.revision : head.history[0]!.revision;
       body += `<h1>${esc(r.title)}</h1><p>Revision ${r.revision} · ${esc(r.author)} · ${esc(new Date(r.created_at).toISOString())} · ${esc(r.note)}${r.deleted ? " · deleted" : ""}</p>${r.research ? researchHtml(r.research, project, people) : `<div class="prose">${wikiMarkdown(r.body, project)}</div>`}<h2>Links</h2><ul>${v.links.map(s => `<li><a href="${base}/${s}">${s}</a></li>`).join("")}</ul><h2>Backlinks</h2><ul>${v.backlinks.map(p => `<li><a href="${base}/${esc(p.slug)}">${esc(p.title)}</a></li>`).join("")}</ul><p>Up to 200 backlinks shown.</p>`;
+      body += await documentSharing(ctx, pr.id, project, "page", slug, writable && !r.deleted);
       if (url.searchParams.has("diff") && r.revision > 1) {
         const previous = await readWiki(ctx, project, slug, r.revision - 1);
         body += `<h2>Diff from revision ${r.revision - 1}</h2><pre>${esc(unified(slug, diffText(previous.page.title + "\n\n" + previous.page.body, r.title + "\n\n" + r.body)))}</pre>`;

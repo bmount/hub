@@ -102,7 +102,7 @@ export async function deleteProject(ctx: Ctx, project: Project) {
     ["app_event", `tenant_id = ?1 AND group_id IN (${groups})`],
     ["app_stat", `tenant_id = ?1 AND script_name IN (SELECT script_name FROM app_source WHERE tenant_id = ?1 AND project_id IN (${projects}))`],
     ["outbound_mail", `tenant_id = ?1 AND (in_reply_to IN (${mail}) OR from_address = ?3)`],
-    ...["file_revision", "file_upload", "wiki_revision", "review", "app_error_group", "app_deploy", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"].map(table => [table, `tenant_id = ?1 AND project_id IN (${projects})`] as [string, string]),
+    ...["document_delivery", "file_revision", "file_upload", "wiki_revision", "review", "app_error_group", "app_deploy", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"].map(table => [table, `tenant_id = ?1 AND project_id IN (${projects})`] as [string, string]),
     ...["msg_ref", "msg_index", "conversation_member"].map(table => [table, `tenant_id = ?1 AND conversation_id IN (${projects})`] as [string, string]),
     ["channel", `tenant_id = ?1 AND project_id IN (${projects})`],
     ["work_item", `tenant_id = ?1 AND project_id IN (${projects})`],

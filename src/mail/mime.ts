@@ -1,4 +1,5 @@
-export type MimeInput = { cc?: string[];
+export type MailAttachment = { name: string; contentType: string; base64: string };
+export type MimeInput = { cc?: string[]; attachments?: MailAttachment[];
   from: string;
   to: string;
   subject: string;
@@ -58,5 +59,15 @@ export function buildMime(m: MimeInput): string {
   );
   const crlf = m.text.replace(/\r?\n/g, "\r\n");
   const body = ascii ? crlf : (b64(crlf).match(/.{1,76}/g) ?? []).join("\r\n");
-  return `${lines.join("\r\n")}\r\n\r\n${body}\r\n`;
+  if (!m.attachments?.length) return `${lines.join("\r\n")}\r\n\r\n${body}\r\n`;
+  const boundary = `pimwell-${crypto.randomUUID()}`;
+  const parts = [`--${boundary}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: ${ascii ? "7bit" : "base64"}\r\n\r\n${body}\r\n`];
+  for (const a of m.attachments) {
+    if (!/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(a.contentType) || !/^[A-Za-z0-9+/]*={0,2}$/.test(a.base64)) throw new Error("unsafe attachment");
+    const name = encodeURIComponent(a.name).replace(/['()*]/g, c => "%" + c.charCodeAt(0).toString(16));
+    parts.push(`--${boundary}\r\nContent-Type: ${a.contentType}\r\nContent-Disposition: attachment; filename*=UTF-8''${name}\r\nContent-Transfer-Encoding: base64\r\n\r\n${(a.base64.match(/.{1,76}/g) ?? []).join("\r\n")}\r\n`);
+  }
+  const headers = lines.filter(l => !l.startsWith("Content-Type:") && !l.startsWith("Content-Transfer-Encoding:"));
+  headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  return `${headers.join("\r\n")}\r\n\r\n${parts.join("")}--${boundary}--\r\n`;
 }

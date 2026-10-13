@@ -38,6 +38,8 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `deploy_list` | read | reader | no | Implemented | `project` |
 | `deploy_read` | read | reader | no | Implemented | **`id`** |
 | `deploy_record` | write | member | no | Implemented | **`commit`**, `deployed_at`, `deployment`, `environment`, `message`, **`project`**, `triggered_by`, `version`, `worker` |
+| `doc_dispatch` | write | member | no | Implemented | **`note`**, `path`, **`project`**, **`recipients`**, `slug` |
+| `doc_share` | write | member | no | Implemented | **`note`**, `path`, **`project`**, **`recipients`**, `slug` |
 | `event_list` | read | member | no | Implemented | `cursor`, `limit`, `session_id` |
 | `file_get` | read | reader | no | Implemented | `include_base64`, **`path`**, **`project`**, `revision` |
 | `file_history` | read | reader | no | Implemented | `before`, **`path`**, **`project`** |
