@@ -9,14 +9,14 @@ export const PROJECT_CHANNELS = [
 ] as const;
 
 export async function ensureProjectChannels(
-  db: D1Database, project: { id?: string; tenant_id: string; slug: string; display_name: string }, created_by: string, now: number,
+  db: D1Database, project: { id?: string; tenant_id: string; slug: string; display_name: string }, created_by: string, now: number, grant_creator = false,
 ): Promise<string[]> {
   const made: string[] = [];
   for (const c of PROJECT_CHANNELS) {
     const slug = `${project.slug}-${c.suffix}`;
     if (slug.length > 63) continue;
     try {
-      await createChannel(db, { tenant_id: project.tenant_id, slug, display_name: `${project.display_name} ${c.suffix}`, topic: c.topic(project.display_name), created_by, owner_project_id: project.id }, now);
+      await createChannel(db, { tenant_id: project.tenant_id, slug, display_name: `${project.display_name} ${c.suffix}`, topic: c.topic(project.display_name), created_by, owner_project_id: project.id, grant_creator }, now);
       made.push(slug);
     } catch (e) {
       if (!(e instanceof HubError) || e.status !== 409) throw e;

@@ -13,7 +13,8 @@ import { liveGrant } from "../src/db/oauthGrants";
 import { callTool } from "../src/mcp/tools";
 import { registerAllVerbs } from "../src/verbs/index";
 import { createChannel } from "../src/db/chat";
-import { apiPost, cookieHeaders, seedGrant, seedHuman, seedTenant } from "./helpers";
+import { call, chatWorld, ok } from "./chat-helpers";
+import { apiPost, bearer, cookieHeaders, seedGrant, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
 
@@ -351,6 +352,48 @@ describe("workspace contacts", () => {
 });
 
 describe("default project channels", () => {
+  it("grants only the workspace creator newly generated channels, never existing channels or self-joins", async () => {
+    const w = await chatWorld();
+    registerAllVerbs();
+    await ok(w.lead.token, "channel.create", { slug: "lab-ops" });
+    const created = await ok(w.scout.token, "project.create", { slug: "lab", kind: "workspace", display_name: "Lab", identity_id: w.tidy.agent.identity.id });
+    expect(created.channels).toEqual(["lab-team"]);
+    expect(JSON.stringify(await ok(w.scout.token, "chat.conversations"))).toContain("lab-team");
+    expect(JSON.stringify(await ok(w.scout.token, "chat.conversations"))).not.toContain("lab-ops");
+    expect(JSON.stringify(await ok(w.tidy.token, "chat.conversations"))).not.toContain("lab-team");
+    for (const [token, c] of [[w.scout.token, "lab-ops"], [w.tidy.token, "lab-team"]]) {
+      expect((await call(token!, "chat.read", { c })).status).toBe(404);
+      expect((await call(token!, "chat.post", { c, body: "denied", after: 0 })).status).toBe(404);
+    }
+    const post = await ok(w.scout.token, "chat.post", { c: "lab-team", body: "Creator hello", after: 0 });
+    expect((await ok(w.scout.token, "chat.read", { c: "lab-team" })).messages).toHaveLength(1);
+    const members = await env.HUB_DB.prepare("SELECT identity_id, added_by FROM conversation_member WHERE tenant_id = ?").bind(w.acme.id).all();
+    expect(members.results).toEqual([{ identity_id: w.scout.agent.identity.id, added_by: w.scout.agent.identity.id }]);
+    await ok(w.lead.token, "channel.set_agent_policy", { c: "lab-team", policy: "muted" });
+    expect((await call(w.scout.token, "chat.post", { c: "lab-team", body: "muted", after: post.head })).status).toBe(403);
+    await ok(w.lead.token, "channel.remove_agent", { c: "lab-team", agent: "scout" });
+    expect((await call(w.scout.token, "project.create", { slug: "lab", kind: "workspace", display_name: "Lab" })).status).toBe(409);
+    expect((await call(w.scout.token, "channel.add_agent", { c: "lab-team", agent: "scout" })).status).toBe(403);
+    expect((await call(w.scout.token, "chat.read", { c: "lab-team" })).status).toBe(404);
+    const base = await buildContext(new Request(`https://${HOST}/api/whoami`, { headers: bearer(w.scout.token) }), env);
+    const ctx = { ...base, agentMcp: { token_id: "test", scopes: ["read", "write"], sealed: { ciphertext: "", iv: "" } } };
+    const freshResult = await callTool(ctx, "project_create", { slug: "fresh", kind: "workspace", display_name: "Fresh" });
+    expect(freshResult.isError, JSON.stringify(freshResult)).toBeUndefined();
+    const fresh = freshResult.structuredContent as { channels: string[] };
+    expect(fresh.channels).toEqual(["fresh-team", "fresh-ops"]);
+    for (const c of fresh.channels) {
+      expect((await callTool(ctx, "chat_post", { c, body: "Usable", after: 0, idempotency_key: c })).isError).toBeUndefined();
+      expect((await callTool(ctx, "chat_read", { c })).isError).toBeUndefined();
+    }
+    const foreign = await seedTenant("foreign");
+    const foreignChannel = await createChannel(env.HUB_DB, { tenant_id: foreign.id, slug: "fresh-team", display_name: "Foreign", topic: "", created_by: w.lead.identity.id }, Date.now());
+    expect((await call(w.scout.token, "chat.read", { c: foreignChannel.project_id })).status).toBe(404);
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM conversation_member WHERE tenant_id = ?").bind(foreign.id).first()).toBeNull();
+    await ok(w.scout.token, "project.create", { slug: "tracker", kind: "tracker", display_name: "Tracker" });
+    expect((await call(w.scout.token, "chat.read", { c: "tracker-team" })).status).toBe(404);
+    await ok(w.lead.token, "project.create", { slug: "human", kind: "workspace", display_name: "Human" });
+    expect((await call(w.scout.token, "chat.read", { c: "human-team" })).status).toBe(404);
+  });
   it("creates the team and ops channels with the project, skipping a taken name", async () => {
     const t = await seedTenant("acme");
     const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });

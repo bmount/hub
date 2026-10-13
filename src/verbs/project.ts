@@ -72,7 +72,7 @@ export const projectCreate = defineVerb({
     await ctx.db.prepare("DELETE FROM meta WHERE key = ?").bind(pendingKey(project.id)).run();
     const path = ns ? `${ns.slug}/${project.slug}` : project.slug;
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "project.create", target_kind: "project", target_id: project.id, summary: `Created project ${path}` }, ctx.now);
-    const channels = project.namespace_id === null ? await ensureProjectChannels(ctx.db, project, ctx.identity!.id, ctx.now) : [];
+    const channels = project.namespace_id === null ? await ensureProjectChannels(ctx.db, project, ctx.identity!.id, ctx.now, project.kind === "workspace" && ctx.identity!.kind === "agent") : [];
     return { project: { ...project, path }, channels };
   },
 });

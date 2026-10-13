@@ -20,7 +20,7 @@ const SELECT = `SELECT p.id AS project_id, p.tenant_id, p.slug, p.display_name, 
   FROM channel c JOIN project p ON p.id = c.project_id`;
 
 export async function createChannel(
-  db: D1Database, input: { tenant_id: string; slug: string; display_name: string; topic: string; created_by: string; owner_project_id?: string }, now: number,
+  db: D1Database, input: { tenant_id: string; slug: string; display_name: string; topic: string; created_by: string; owner_project_id?: string; grant_creator?: boolean }, now: number,
 ): Promise<ChannelRow> {
   const slug = input.slug.trim().toLowerCase();
   if (/^(dm|group)-/.test(slug)) throw badRequest("name is reserved for private chats");
@@ -36,6 +36,11 @@ export async function createChannel(
         .bind(id, input.tenant_id, slug, display_name, now),
       db.prepare("INSERT INTO channel (project_id, tenant_id, topic, agent_policy, created_by, created_at) VALUES (?, ?, ?, 'open', ?, ?)")
         .bind(id, input.tenant_id, input.topic, input.created_by, now),
+      // Creation-only grant: the channel and its creator membership commit together, never on a name clash.
+      ...(input.grant_creator ? [db.prepare(`INSERT INTO conversation_member (conversation_id, tenant_id, identity_id, role, added_by, added_at, removed_at)
+        SELECT ?, ?, i.id, 'agent', i.id, ?, NULL FROM identity i JOIN membership m ON m.identity_id = i.id
+        WHERE i.id = ? AND i.kind = 'agent' AND i.state = 'active' AND m.tenant_id = ? AND m.state = 'active'`)
+        .bind(id, input.tenant_id, now, input.created_by, input.tenant_id)] : []),
       ...(input.owner_project_id ? [db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)")
         .bind(`project_channel:v1:${input.tenant_id}:${id}`, input.owner_project_id)] : []),
     ]);

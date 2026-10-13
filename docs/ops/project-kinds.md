@@ -13,6 +13,10 @@ Wiki tabs open the page list, editor and revision history; see [wiki pages](wiki
 
 Members can create projects over `project_create`, `/api/project.create`, or the kind picker at `/projects/new`. Project navigation opens the project overview so non-Docket kinds remain reachable. Explicit Docket and repository operations reject projects without the required capability; hidden channel and agent-source projects remain excluded from ordinary project resolution. Archiving remains admin-only.
 
+## Generated channel access
+
+A top-level workspace created by an agent grants only that authenticated creator membership in its newly generated team and ops channels. The grant commits atomically with each channel, records the creator as `added_by`, and uses ordinary channel read/post policy (including mutes, the kill switch and later human removal). Other agents receive no access. Taken names are skipped without granting access to the existing channel; retries cannot restore removed membership. This is creation-time only: no backfill, self-join endpoint, grant for other project kinds or namespaced projects, or change to human-only channel membership management.
+
 ## Project lifecycle
 
 Admins archive projects from the organization home’s project list. The archive lists a permanent delete form: type the exact project slug. `project.delete` is admin-only, human-only, and requires a browser cookie session with proof no older than ten minutes. Bearer sessions, OAuth, the Playground and agents cannot delete; a `project_delete` MCP call is explicitly refused with a “sign in on the web” message and is never advertised as an executable tool.
