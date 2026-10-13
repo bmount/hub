@@ -1,3 +1,5 @@
+import { updateAudience } from "../chat/updates";
+import { ulid } from "../ids";
 import { defineVerb, type McpInputSchema } from "./table";
 import { optInt, reqEnum, reqString } from "./params";
 import { badRequest, HubError, notFound } from "../errors";
@@ -280,7 +282,9 @@ export const chatMarkRead = defineVerb({
     // Refuse rather than clamp; a guessed future cursor must not acknowledge unseen current activity either.
     const head = await conversationStub(ctx.env, ch.tenant_id, ch.project_id).head(ch.tenant_id, ch.project_id);
     if (p.seq > head) throw new HubError(409, "conflict", "seq exceeds the current channel head; read and process activity before marking it read", { head });
-    return { channel: ch.slug, read_seq: await inboxStub(ctx.env, v.tenant.id, v.identity.id).markRead(v.tenant.id, v.identity.id, ch.project_id, p.seq) };
+    const read_seq = await inboxStub(ctx.env, v.tenant.id, v.identity.id).markRead(v.tenant.id, v.identity.id, ch.project_id, p.seq);
+    await conversationStub(ctx.env, ch.tenant_id, ch.project_id).signal(ch.tenant_id, ch.project_id, v.identity.id, "read", ulid(), { seq: read_seq }, await updateAudience(ctx.db, ch.tenant_id, ch.project_id, ch));
+    return { channel: ch.slug, read_seq };
   },
 });
 

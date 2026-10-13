@@ -289,6 +289,55 @@ describe("Inbox object", () => {
     expect(await box().noteRefusal(T, "I1", now + 22)).toEqual({ count: 1, tripped: false });
   });
 
+  it("retains a separate inclusive update stream, deduplicates delivery and wakes polls", async () => {
+    const update = { key: 'U1', type: 'message', chat: { id: 'C1', kind: 'channel' as const }, data: { text: 'hello' }, created_at: Date.now() };
+    await box().deliverUpdates(T, 'I1', [update, update]);
+    type Page = { updates: { update_id: number }[]; next_offset: number; has_more: boolean; error?: string; min_offset?: number };
+    const first = await box().getUpdates(T, 'I1', 0, 100, 0) as Page;
+    expect(first.updates.map(r => r.update_id)).toEqual([1]);
+    expect(first.next_offset).toBe(2);
+    expect((await box().getUpdates(T, 'I1', 2, 100, 0) as Page).updates).toEqual([]);
+    expect((await box().getUpdates(T, 'I1', 3, 100, 0) as Page).error).toBe('invalid_offset');
+    const waiting = box().getUpdates(T, 'I1', 2, 100, 1) as Promise<Page>;
+    await box().deliverUpdates(T, 'I1', [{ ...update, key: 'U2', type: 'edit' }]);
+    expect((await waiting).updates.map(r => r.update_id)).toEqual([2]);
+    expect(await box().head(T, 'I1')).toBe(0);
+    await inDO(box(), async (obj: Inbox, state) => {
+      state.storage.sql.exec('UPDATE chat_update SET created_at = ?', Date.now() - 8 * 86400000);
+    });
+    const expired = await box().getUpdates(T, 'I1', 1, 100, 0) as Page;
+    expect(expired.error).toBe('offset_expired');
+    expect(expired.min_offset).toBe(3);
+    await box().deliverUpdates(T, 'I1', [{ ...update, key: 'U3' }]);
+    expect((await box().getUpdates(T, 'I1', 3, 100, 0) as Page).updates[0]!.update_id).toBe(3);
+  });
+
+  it('bounds updates to 10,000 without resetting IDs or replaying pruned delivery keys', async () => {
+    const update = { key: 'first', type: 'message', chat: { id: 'C1', kind: 'channel' as const }, data: {}, created_at: Date.now() };
+    await box().deliverUpdates(T, 'I1', [update]);
+    await inDO(box(), async (_obj, state) => {
+      state.storage.sql.exec(`WITH RECURSIVE n(x) AS (VALUES(2) UNION ALL SELECT x+1 FROM n WHERE x<10001)
+        INSERT INTO chat_update (key, payload, created_at) SELECT 'u'||x, ?, ? FROM n`, JSON.stringify({ type: 'message', chat: update.chat, data: {} }), Date.now());
+    });
+    type Page = { updates: { update_id: number }[]; next_offset: number; has_more: boolean; error?: string; min_offset?: number };
+    const expired = await box().getUpdates(T, 'I1', 1, 1, 0) as Page;
+    expect(expired).toMatchObject({ error: 'offset_expired', min_offset: 2 });
+    const page = await box().getUpdates(T, 'I1', 0, 1, 0) as Page;
+    expect(page).toMatchObject({ updates: [{ update_id: 2 }], next_offset: 3, has_more: true });
+    await box().deliverUpdates(T, 'I1', [update]);
+    expect((await box().getUpdates(T, 'I1', 10002, 100, 0) as Page).updates).toEqual([]);
+    expect(await inDO(box(), async (_obj, state) => state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM chat_update').one().n)).toBe(10000);
+  });
+
+  it('bounds simultaneous update long-polls and returns an empty timeout page', async () => {
+    type Page = { updates: unknown[]; error?: string; next_offset: number };
+    const polls = Array.from({ length: 8 }, () => box().getUpdates(T, 'I1', 0, 100, 1) as Promise<Page>);
+    expect((await box().getUpdates(T, 'I1', 0, 100, 1) as Page).error).toBe('rate_limited');
+    await box().deliverUpdates(T, 'I1', [{ key: 'wake', type: 'typing', chat: { id: 'C1', kind: 'channel' }, data: {}, created_at: Date.now() }]);
+    expect((await Promise.all(polls)).every(p => p.updates.length === 1)).toBe(true);
+    expect(await box().getUpdates(T, 'I1', 2, 100, 0.01)).toMatchObject({ updates: [], next_offset: 2 });
+  });
+
   it("refuses a request for another binding", async () => {
     await box().head(T, "I1");
     // Checked inside the object: a rejection across RPC breaks vitest-pool-workers' isolated storage (see chat-objects.test.ts).

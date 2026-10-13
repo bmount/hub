@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
 import { getChannelBySlug } from "../src/db/chat";
@@ -11,6 +11,130 @@ async function conv(w: World, slug = "general") {
   return { ch, stub: conversationStub(env, w.acme.id, ch.project_id) };
 }
 const inboxOf = async (w: World, id: string) => (await inboxStub(env, w.acme.id, id).list(w.acme.id, id, { after: 0, limit: 100, include_acked: true })).items;
+
+async function chatHttp(token: string, method: string, input: Record<string, unknown> = {}) {
+  const read = method.startsWith('get');
+  const query = new URLSearchParams(Object.entries(input).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : String(v)]));
+  const response = await SELF.fetch(`https://acme.pimwell.test/chat/v1/${method}${read ? '?' + query : ''}`, {
+    method: read ? 'GET' : 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, ...(read ? {} : { body: JSON.stringify(input) }),
+  });
+  return { status: response.status, body: await response.json() as { ok: boolean; result: any; error: { code: string } } };
+}
+
+describe("chat HTTP update stream", () => {
+  it("sends, replies, edits and retracts without duplicates after offset; enforces audience and replay intent", async () => {
+    const w = await chatWorld();
+    await channelWith(w, 'general', ['scout']);
+    const { ch } = await conv(w);
+    const chat = { id: ch.project_id, kind: 'channel' };
+    const http = async (token: string, method: string, input: Record<string, unknown> = {}) => {
+      const read = method === 'getUpdates';
+      const query = new URLSearchParams(Object.entries(input).map(([k, v]) => [k, String(v)]));
+      const response = await SELF.fetch(`https://acme.pimwell.test/chat/v1/${method}${read ? '?' + query : ''}`, {
+        method: read ? 'GET' : 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, ...(read ? {} : { body: JSON.stringify(input) }),
+      });
+      return { status: response.status, body: await response.json() as { ok: boolean; result: any; error: { code: string } } };
+    };
+    const intent = { chat, text: 'HTTP greeting', client_id: 'hello' };
+    const sent = await http(w.lead.token, 'sendMessage', intent);
+    expect(sent.status).toBe(200);
+    expect((await http(w.lead.token, 'sendMessage', intent)).body.result.replayed).toBe(true);
+    expect((await http(w.lead.token, 'sendMessage', { ...intent, text: 'different' })).body.error.code).toBe('conflict');
+    const reply = await http(w.dev.token, 'sendMessage', { chat, text: 'HTTP reply', reply_to: sent.body.result.msg_id, client_id: 'reply' });
+    expect(reply.status).toBe(200);
+    const edit = { chat, text: 'HTTP changed', msg_id: sent.body.result.msg_id, client_id: 'edit' };
+    expect((await http(w.lead.token, 'editMessage', edit)).status).toBe(200);
+    expect((await http(w.lead.token, 'editMessage', edit)).body.result.replayed).toBe(true);
+    expect((await http(w.lead.token, 'editMessage', { ...edit, text: 'changed intent' })).status).toBe(409);
+    const retract = { chat, msg_id: sent.body.result.msg_id, client_id: 'retract' };
+    expect((await http(w.lead.token, 'retractMessage', retract)).status).toBe(200);
+    expect((await http(w.lead.token, 'retractMessage', retract)).body.result.replayed).toBe(true);
+    expect((await http(w.lead.token, 'retractMessage', { ...retract, msg_id: reply.body.result.msg_id })).status).toBe(409);
+    const page = await http(w.scout.token, 'getUpdates');
+    expect(page.status).toBe(200);
+    expect(page.body.result.updates.map((u: any) => u.type)).toEqual(['membership', 'message', 'message', 'edit', 'retract']);
+    expect(page.body.result.updates[4].data).not.toHaveProperty('body');
+    expect((await http(w.scout.token, 'getUpdates', { offset: page.body.result.next_offset })).body.result.updates).toEqual([]);
+    expect((await http(w.tidy.token, 'getUpdates')).body.result.updates).toEqual([]);
+    expect((await http(w.tidy.token, 'sendMessage', { ...intent, client_id: 'denied' })).status).toBe(404);
+    await ok(w.lead.token, 'channel.remove_agent', { c: 'general', agent: 'scout' });
+    expect((await http(w.scout.token, 'getUpdates')).body.result.updates).toEqual([]);
+    const typing = { chat, active: true, client_id: 'typing' };
+    const typed = await http(w.lead.token, 'sendTyping', typing);
+    const replay = await http(w.lead.token, 'sendTyping', typing);
+    expect(replay.body.result.expires_at).toBe(typed.body.result.expires_at);
+    expect(replay.body.result.replayed).toBe(true);
+    expect((await http(w.lead.token, 'sendTyping', { ...typing, active: false })).status).toBe(409);
+  });
+
+  it('keeps private message, membership, read, typing and presence updates participant-only, including human administrators', async () => {
+    const w = await chatWorld();
+    const outsider = await seedHuman('outsider@example.com', { memberships: [{ tenant_id: w.acme.id, role: 'admin' }] });
+    for (const kind of ['direct', 'group']) {
+      const opening = { kind, members: [w.dev.identity.id], client_id: `open-${kind}` };
+      const opened = await chatHttp(w.lead.token, 'openChat', opening);
+      expect(opened.status).toBe(200);
+      const chat = { id: opened.body.result.id, kind };
+      expect((await chatHttp(w.lead.token, 'openChat', opening)).body.result.replayed).toBe(true);
+      expect((await chatHttp(w.lead.token, 'openChat', { ...opening, members: [outsider.identity.id] })).status).toBe(409);
+      const message = await chatHttp(w.lead.token, 'sendMessage', { chat, text: `private ${kind}`, client_id: `send-${kind}` });
+      expect(message.status).toBe(200);
+      expect((await chatHttp(outsider.token, 'sendMessage', { chat, text: 'denied', client_id: 'denied' })).status).toBe(404);
+      expect((await chatHttp(w.dev.token, 'getMessages', { chat })).status).toBe(200);
+      for (const [method, data] of [['markRead', { seq: message.body.result.head }], ['sendTyping', { active: true }], ['setPresence', { status: 'online' }]] as const) {
+        const intent = { chat, ...data, client_id: `${method}-${kind}` };
+        const first = await chatHttp(w.dev.token, method, intent);
+        expect(first.status).toBe(200);
+        const replay = await chatHttp(w.dev.token, method, intent);
+        expect(replay.body.result).toEqual({ ...first.body.result, replayed: true });
+        const changed = method === 'markRead' ? { seq: 0 } : method === 'sendTyping' ? { active: false } : { status: 'away' };
+        expect((await chatHttp(w.dev.token, method, { ...intent, ...changed })).status).toBe(409);
+      }
+      expect((await chatHttp(w.lead.token, 'getPresence', { chat })).body.result.entries[0].state).toBe('online');
+      const page = await chatHttp(w.dev.token, 'getUpdates');
+      const updates = page.body.result.updates.filter((u: any) => u.chat.id === chat.id);
+      expect(updates.map((u: any) => u.type)).toEqual(['membership', 'membership', 'message', 'read', 'typing', 'presence']);
+      expect(updates.every((u: any) => u.chat.kind === kind)).toBe(true);
+      expect((await chatHttp(outsider.token, 'getUpdates')).body.result.updates).toEqual([]);
+      expect((await chatHttp(w.tidy.token, 'getUpdates')).body.result.updates).toEqual([]);
+      const inbox = await inboxStub(env, w.acme.id, outsider.identity.id).getUpdates(w.acme.id, outsider.identity.id, 0, 100, 0);
+      expect((inbox as { updates: unknown[] }).updates).toEqual([]);
+      expect((await chatHttp(w.dev.token, 'getUpdates', { offset: page.body.result.next_offset })).body.result.updates).toEqual([]);
+    }
+  });
+
+  it('authenticates long-lived agent tokens and rechecks access after a held poll', async () => {
+    const w = await chatWorld();
+    await channelWith(w, 'general', ['scout']);
+    const { ch } = await conv(w);
+    const chat = { id: ch.project_id, kind: 'channel' };
+    const page = await chatHttp(w.scout.longLived, 'getUpdates');
+    expect(page.status).toBe(200);
+    const pending = chatHttp(w.scout.longLived, 'getUpdates', { offset: page.body.result.next_offset, timeout: 1 });
+    await ok(w.lead.token, 'channel.remove_agent', { c: 'general', agent: 'scout' });
+    const send = await chatHttp(w.lead.token, 'sendMessage', { chat, text: 'not for scout', client_id: 'removed' });
+    expect(send.status).toBe(200);
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(result.body.result.updates).toEqual([]);
+    expect((await chatHttp(w.scout.longLived, 'sendMessage', { chat, text: 'denied', client_id: 'no', after: send.body.result.head })).status).toBe(404);
+    await env.HUB_DB.prepare('UPDATE api_token SET revoked_at = ? WHERE id = ?').bind(Date.now(), w.scout.apiToken.id).run();
+    expect((await chatHttp(w.scout.longLived, 'getUpdates')).status).toBe(401);
+  });
+
+  it('rejects unauthenticated, cross-tenant, malformed and future-offset requests', async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const { ch } = await conv(w);
+    expect((await chatHttp('', 'getUpdates')).status).toBe(401);
+    const foreign = await seedHuman('foreign@example.com');
+    expect((await chatHttp(foreign.token, 'getUpdates')).status).not.toBe(200);
+    expect((await chatHttp(w.lead.token, 'getUpdates', { offset: -1 })).status).toBe(400);
+    expect((await chatHttp(w.lead.token, 'getUpdates', { timeout: 51 })).status).toBe(400);
+    expect((await chatHttp(w.lead.token, 'getUpdates', { offset: 999 })).body.error.code).toBe('invalid_offset');
+    expect((await chatHttp(w.lead.token, 'sendMessage', { chat: { id: ch.project_id, kind: 'group' }, text: 'x', client_id: 'x' })).status).toBe(404);
+  });
+});
 
 describe("chat.post", () => {
   it("attributes every message to the caller's identity and session, whatever the input says", async () => {

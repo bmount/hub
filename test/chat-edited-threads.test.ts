@@ -110,7 +110,7 @@ describe("followed-thread checkpoint activity", () => {
     expect(tail.threads.map((t: any) => t.latest_seq)).toEqual(replies.slice(0, 2).reverse().map((m) => m.seq));
     expect(tail.omitted).toBe(0);
     expect(decodeCursors(tail.next)[ch.project_id]).toBe(66);
-  }, 20_000);
+  }, 45_000); // Many serial revisions now also commit durable per-identity updates.
 
   it("counts current changed messages once, preserves new-post meaning after edits and excludes unfollowed threads", async () => {
     const w = await chatWorld();

@@ -119,7 +119,7 @@ describe("followed thread retraction checkpoints", () => {
     const tail = await ok(w.dev.token, "chat.catchup", { budget: 8000 });
     expect(tail.threads.map((t: any) => t.latest_seq)).toEqual(roots.slice(0, 2).reverse().map((m) => m.seq));
     expect(decodeCursors(tail.next)[ch.project_id]).toBe(66);
-  }, 20_000);
+  }, 45_000); // Many serial revisions now also commit durable per-identity updates.
 
   it("excludes self/unfollowed activity and preserves removed membership and tenant privacy", async () => {
     const w = await chatWorld();

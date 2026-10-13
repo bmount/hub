@@ -3,6 +3,7 @@ import type { Env } from "../env";
 import { bindOnce } from "./bound";
 import { LIMITS, postVerdict } from "./rules";
 import type { InboxItem, InboxPage, WakeItem } from "./types";
+import type { ChatUpdate, UpdateDelivery } from "./updates";
 
 const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -17,6 +18,9 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS stamp (scope TEXT NOT NULL, at INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS stamp_scope ON stamp (scope, at)",
   "CREATE TABLE IF NOT EXISTS refusal (at INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS chat_update (update_id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, created_at INTEGER NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS chat_update_age ON chat_update (created_at)",
+  "CREATE TABLE IF NOT EXISTS update_delivered (key TEXT PRIMARY KEY, created_at INTEGER NOT NULL)",
 ];
 
 type ItemRow = {
@@ -36,6 +40,61 @@ export type ReserveResult =
  */
 export class Inbox extends DurableObject<Env> {
   #waiters = new Set<() => void>();
+  #updateWaiters = new Set<() => void>();
+
+  #pruneUpdates(): void {
+    this.ctx.storage.sql.exec("DELETE FROM chat_update WHERE created_at < ? OR update_id <= (SELECT COALESCE(MAX(update_id), 0) - 10000 FROM chat_update)", Date.now() - 7 * 86_400_000);
+    this.ctx.storage.sql.exec("DELETE FROM update_delivered WHERE created_at < ?", Date.now() - 7 * 86_400_000);
+  }
+
+  async #scheduleRetention(): Promise<void> {
+    const oldest = this.#q<{ at: number | null }>("SELECT MIN(at) AS at FROM (SELECT MIN(created_at) AS at FROM chat_update UNION ALL SELECT MIN(created_at) FROM update_delivered)")[0]?.at;
+    if (oldest !== null && oldest !== undefined) {
+      const due = Math.max(Date.now() + 1000, oldest + 7 * 86_400_000 + 1);
+      const alarm = await this.ctx.storage.getAlarm();
+      if (alarm === null || alarm > due) await this.ctx.storage.setAlarm(due);
+    }
+  }
+
+  async alarm(): Promise<void> {
+    this.#pruneUpdates();
+    await this.#scheduleRetention();
+  }
+
+  async deliverUpdates(tenant: string, identity: string, updates: UpdateDelivery[]): Promise<void> {
+    bindOnce(this.ctx.storage.sql, tenant, identity);
+    if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) return;
+    this.ctx.storage.transactionSync(() => {
+      for (const update of updates) {
+        if (update.created_at < Date.now() - 7 * 86_400_000) continue;
+        const fresh = this.#q("INSERT INTO update_delivered (key, created_at) VALUES (?, ?) ON CONFLICT(key) DO NOTHING RETURNING key", update.key, update.created_at);
+        if (fresh.length) this.ctx.storage.sql.exec("INSERT INTO chat_update (key, payload, created_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING", update.key, JSON.stringify({ type: update.type, chat: update.chat, data: update.data }), update.created_at);
+      }
+      this.#pruneUpdates();
+    });
+    for (const wake of [...this.#updateWaiters]) wake();
+    await this.#scheduleRetention();
+  }
+
+  async getUpdates(tenant: string, identity: string, offset: number, limit: number, timeout: number): Promise<{ updates: ChatUpdate[]; next_offset: number; has_more: boolean; error?: string; min_offset?: number }> {
+    bindOnce(this.ctx.storage.sql, tenant, identity);
+    const deadline = Date.now() + Math.min(50, Math.max(0, timeout)) * 1000;
+    for (;;) {
+      this.#pruneUpdates();
+      const head = this.#q<{ seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'chat_update'")[0]?.seq ?? 0;
+      const min = this.#q<{ n: number | null }>("SELECT MIN(update_id) AS n FROM chat_update")[0]?.n ?? head + 1;
+      if (offset > head + 1 || (offset !== 0 && offset < min)) return { updates: [], next_offset: min, has_more: false, error: offset > head + 1 ? 'invalid_offset' : 'offset_expired', min_offset: min };
+      const rows = this.#q<{ update_id: number; payload: string }>("SELECT update_id, payload FROM chat_update WHERE update_id >= ? ORDER BY update_id LIMIT ?", offset, Math.min(100, Math.max(1, limit)) + 1);
+      const page = rows.slice(0, limit);
+      if (!page.length && Date.now() < deadline && this.#updateWaiters.size >= 8) return { updates: [], next_offset: offset, has_more: false, error: 'rate_limited' };
+      if (page.length || Date.now() >= deadline) return { updates: page.map(r => ({ ...JSON.parse(r.payload), update_id: r.update_id })), next_offset: page.at(-1)?.update_id ? page.at(-1)!.update_id + 1 : Math.max(offset, head + 1), has_more: rows.length > limit };
+      await new Promise<void>(resolve => {
+        const done = () => { clearTimeout(timer); this.#updateWaiters.delete(done); resolve(); };
+        const timer = setTimeout(done, Math.max(0, deadline - Date.now()));
+        this.#updateWaiters.add(done);
+      });
+    }
+  }
   /** The waiters currently parked in `wait`, for tests and tooling. */
   async waiting(tenant_id: string, identity_id: string): Promise<number> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
@@ -73,7 +132,7 @@ export class Inbox extends DurableObject<Env> {
   async purgeTenant(tenant_id: string, identity_id: string): Promise<void> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
     this.ctx.storage.transactionSync(() => {
-      for (const table of ["item", "cursor", "mail_delivered"]) this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
+      for (const table of ["item", "cursor", "mail_delivered", "chat_update", "update_delivered"]) this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
       this.ctx.storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('deleted', '1')");
     });
   }
@@ -85,6 +144,7 @@ export class Inbox extends DurableObject<Env> {
       const channels = JSON.stringify(conversations), messages = JSON.stringify(mail);
       const rows = this.#q<{ item_seq: number }>("DELETE FROM item WHERE conversation_id IN (SELECT value FROM json_each(?)) OR (kind = 'mail' AND msg_id IN (SELECT value FROM json_each(?))) RETURNING item_seq", channels, messages);
       this.ctx.storage.sql.exec("DELETE FROM cursor WHERE conversation_id IN (SELECT value FROM json_each(?))", channels);
+      this.ctx.storage.sql.exec("DELETE FROM chat_update WHERE json_extract(payload, '$.chat.id') IN (SELECT value FROM json_each(?))", channels);
       this.ctx.storage.sql.exec("DELETE FROM mail_delivered WHERE key IN (SELECT 'mail:' || value FROM json_each(?))", messages);
       return rows.length;
     });

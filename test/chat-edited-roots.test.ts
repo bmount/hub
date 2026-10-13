@@ -130,7 +130,7 @@ describe("followed root revision checkpoints", () => {
     expect(tail.threads.map((t: any) => t.latest_seq)).toEqual(roots.slice(0, 2).reverse().map((m) => m.seq));
     expect(tail.omitted).toBe(0);
     expect(decodeCursors(tail.next)[ch.project_id]).toBe(66);
-  }, 20_000);
+  }, 45_000); // Many serial revisions now also commit durable per-identity updates.
 
   it("excludes self/retracted/unfollowed roots and preserves current channel/tenant boundaries", async () => {
     const w = await chatWorld();

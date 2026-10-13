@@ -1,3 +1,6 @@
+import { updateAudience } from "../chat/updates";
+import { conversationStub } from "../chat/stubs";
+import { ulid } from "../ids";
 import { defineVerb } from "./table";
 import { optString, reqEnum, reqString } from "./params";
 import { rank, type Ctx } from "../auth/context";
@@ -64,6 +67,7 @@ async function agentMembership(ctx: Ctx, c: string, name: string, add: boolean) 
   const changed = add
     ? await addAgentMember(ctx.db, { conversation_id: ch.project_id, tenant_id: ch.tenant_id, identity_id: agent.identity.id, added_by: identity.id }, ctx.now)
     : await removeAgentMember(ctx.db, ch.tenant_id, ch.project_id, agent.identity.id, ctx.now);
+  if (changed) await conversationStub(ctx.env, ch.tenant_id, ch.project_id).signal(ch.tenant_id, ch.project_id, agent.identity.id, "membership", ulid(), { state: add ? "joined" : "left" }, await updateAudience(ctx.db, ch.tenant_id, ch.project_id, ch));
   if (changed) await channelEvent(ctx, add ? "channel.add_agent" : "channel.remove_agent", ch, `${add ? "Added" : "Removed"} agent ${agent.slug} ${add ? "to" : "from"} #${ch.slug}`);
   return { channel: ch.slug, agent: agent.slug, ...(add ? { added: changed } : { removed: changed }) };
 }

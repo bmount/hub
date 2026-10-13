@@ -16,6 +16,7 @@ import { resolveRefs, type Unresolved } from "./refs";
 import { LIMITS } from "./rules";
 import { conversationStub, inboxStub } from "./stubs";
 import type { ReserveResult } from "./inboxDO";
+import { updateAudience } from "./updates";
 import type { AgentPolicy, Audience, Author, ChatSessionKind, Mention, PostOk, PostOutcome, Refusal, ResponseIntent, ResponseTarget, StoredRef } from "./types";
 
 export type PostParams = { c: string; body: string; after: number | null; reply_to: string | null; refs: Array<{ kind: string; key: string }>; idempotency_key: string | null; response_to?: ResponseTarget };
@@ -217,6 +218,7 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
   const o = (await conv.post({
     tenant_id: ch.tenant_id, conversation_id: ch.project_id, now: ctx.now, author, policy, body: p.body, body_sha256: await sha256Hex(p.body),
     after: p.after, reply_to: p.reply_to, refs: x.resolved, mentions: x.mentions, wake_hop: reserve.wake_hop, thread_wake_hops: reserve.thread_wake_hops, idempotency_key: p.idempotency_key, audience, response, intent_fingerprint,
+    update_recipients: await updateAudience(ctx.db, ch.tenant_id, ch.project_id, ch),
   })) as PostOutcome;
   if (o.refused !== null) throw await refusalError(ctx, author, ch, o);
   if (!o.replayed) await safeEvents(ctx, ch, author, o, "chat.post");
@@ -260,6 +262,7 @@ export async function versionMessage(ctx: Ctx, p: VersionParams): Promise<PostRe
     tenant_id: ch.tenant_id, conversation_id: ch.project_id, now: ctx.now, actor: author, msg: p.msg, body: p.body,
     body_sha256: retract ? "" : await sha256Hex(p.body!), after: retract ? null : p.after, refs: x.resolved, mentions: x.mentions,
     operator_of: operatorOf, is_admin: rank(ctx.role) >= rank("admin"), idempotency_key: p.idempotency_key, intent_fingerprint,
+    update_recipients: await updateAudience(ctx.db, ch.tenant_id, ch.project_id, ch),
   })) as PostOutcome;
   if (o.refused !== null) throw await refusalError(ctx, author, ch, o);
   if (!o.replayed) await safeEvents(ctx, ch, author, o, retract ? "chat.retract" : "chat.edit");

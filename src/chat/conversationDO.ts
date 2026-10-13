@@ -7,7 +7,8 @@ import { versionIntentFingerprint } from "./versionIntent";
 import { bindOnce, storedBinding } from "./bound";
 import { PRESENCE_TTL_MS, retainedPresence, type PresenceRow, type PresenceStatus } from "./presence";
 import { inboxStub } from "./stubs";
-import { getControls } from "../db/chat";
+import { updateAudience, type UpdateDelivery } from "./updates";
+import { getControls, getChannelById } from "../db/chat";
 import { LIMITS, computeHop, gateRefuses, nextAgentRun, pairTrip, wakesAllowed } from "./rules";
 import type {
   AuthorKind, ChatSessionKind, Digest, DigestQuery, MsgView, PostInput, PostOk, PostOutcome, ReadPage, ReadQuery, StoredRef, Suppressed,
@@ -32,6 +33,7 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS pair_block (a TEXT NOT NULL, b TEXT NOT NULL, until INTEGER NOT NULL, PRIMARY KEY (a, b))",
   "CREATE TABLE IF NOT EXISTS idem (identity_id TEXT NOT NULL, key TEXT NOT NULL, result_json TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (identity_id, key))",
   "CREATE TABLE IF NOT EXISTS inbox_outbox (key TEXT PRIMARY KEY, identity_id TEXT NOT NULL, item_json TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0)",
+  "CREATE TABLE IF NOT EXISTS update_outbox (key TEXT PRIMARY KEY, identity_id TEXT NOT NULL, payload TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS index_outbox (seq INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0)",
 ];
 // Objects created before the backoff column existed get it added; a pragma table_info check says whether they need it.
@@ -360,6 +362,60 @@ export class Conversation extends DurableObject<Env> {
     this.#run("INSERT OR IGNORE INTO inbox_outbox (key, identity_id, item_json) VALUES (?, ?, ?)", full.key, identity_id, JSON.stringify(full));
   }
 
+  /** A fixed private chat's membership is announced once, including after an ambiguous opening retry. */
+  async announceMembership(tenant: string, conversation: string, members: string[], created_at: number, recipients: string[]): Promise<void> {
+    this.#bind(tenant, conversation);
+    this.ctx.storage.transactionSync(() => {
+      if (this.#q("SELECT key FROM meta WHERE key = 'membership:announced'").length) return;
+      for (const identity of members) for (const recipient of recipients) {
+        const update: UpdateDelivery = { key: `open:${conversation}:${identity}:${recipient}`, type: 'membership', chat: { id: conversation, kind: 'channel' }, data: { identity_id: identity, state: 'joined' }, created_at };
+        this.#run("INSERT OR IGNORE INTO update_outbox (key, identity_id, payload) VALUES (?, ?, ?)", update.key, recipient, JSON.stringify(update));
+      }
+      this.#run("INSERT INTO meta (key, value) VALUES ('membership:announced', '1')");
+    });
+    await this.#drain();
+  }
+
+  async signal(tenant: string, conversation: string, identity: string, method: string, client_id: string, data: Record<string, unknown>, recipients: string[]): Promise<Record<string, unknown>> {
+    this.#bind(tenant, conversation);
+    const key = `signal:${identity}:${method}:${client_id}`;
+    const fingerprint = JSON.stringify(data);
+    const readCursor = method === 'read' ? await inboxStub(this.env, tenant, identity).readCursor(tenant, identity, conversation) as number | null : null;
+    const result = this.ctx.storage.transactionSync(() => {
+      const prior = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = ?", key)[0];
+      if (prior) {
+        const saved = JSON.parse(prior.value);
+        if (saved.at > Date.now() - LIMITS.IDEM_TTL_MS) {
+          if (saved.fingerprint !== fingerprint) return { conflict: true };
+          return { ...saved.result, replayed: true };
+        }
+      }
+      const now = Date.now();
+      const result = { ...data, ...(method === 'read' ? { read_seq: Math.max(Number(data.seq), readCursor ?? 0) } : {}), ...(method === 'typing' ? { expires_at: now + 5000 } : {}), ...(method === 'presence' ? { last_seen: now, expires_at: data.status === 'offline' ? now : now + PRESENCE_TTL_MS } : {}), replayed: false };
+      if (method === 'presence') this.#run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", `presence:${identity}`, JSON.stringify({ ...result, identity_id: identity }));
+      this.#run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", key, JSON.stringify({ at: now, fingerprint, result }));
+      this.#run("DELETE FROM meta WHERE key LIKE 'signal:%' AND CAST(json_extract(value, '$.at') AS INTEGER) < ?", now - LIMITS.IDEM_TTL_MS);
+      for (const recipient of recipients) {
+        const update: UpdateDelivery = { key: `${key}:${now}:${recipient}`, type: method, chat: { id: conversation, kind: 'channel' }, data: { ...result, identity_id: identity }, created_at: now };
+        this.#run("INSERT OR IGNORE INTO update_outbox (key, identity_id, payload) VALUES (?, ?, ?)", update.key, recipient, JSON.stringify(update));
+      }
+      return result;
+    });
+    if (this.#q("SELECT key FROM update_outbox LIMIT 1").length && await this.ctx.storage.getAlarm() === null) await this.ctx.storage.setAlarm(Date.now() + 1000);
+    if (method === 'read' && !('conflict' in result)) await inboxStub(this.env, tenant, identity).markRead(tenant, identity, conversation, Number(data.seq));
+    await this.#drain();
+    return result;
+  }
+
+  #enqueueUpdate(recipients: string[], type: string, msg: string, seq: number, now: number): void {
+    const view = this.#view(this.#msg(msg)!);
+    const data = type === "retract" ? { msg_id: msg, rev: view.rev } : { ...view, seq };
+    for (const identity of recipients) {
+      const update: UpdateDelivery = { key: `${this.#id}:${seq}:${identity}`, type, chat: { id: this.#id, kind: view.thread_root ? "thread" : "channel", ...(view.thread_root ? { root: view.thread_root } : {}) }, data, created_at: now };
+      this.#run("INSERT OR IGNORE INTO update_outbox (key, identity_id, payload) VALUES (?, ?, ?)", update.key, identity, JSON.stringify(update));
+    }
+  }
+
   /** Messages whose current text contains every term (case-insensitive), newest first; retracted ones never match. */
   async search(tenant_id: string, conversation_id: string, terms: string[], limit: number): Promise<Array<{ msg_id: string; seq: number; author_id: string; thread_root: string | null; body: string; created_at: number }>> {
     this.#bind(tenant_id, conversation_id);
@@ -374,25 +430,30 @@ export class Conversation extends DurableObject<Env> {
   /** Pimwell's own notice (app telemetry on #<project>-ops): a system message; nobody is woken. */
   async notice(tenant_id: string, conversation_id: string, body: string, now: number): Promise<{ seq: number; msg_id: string }> {
     this.#bind(tenant_id, conversation_id);
-    return this.ctx.storage.transactionSync(() => this.#system(body, null, {}, now));
+    const audience = await updateAudience(this.env.HUB_DB, tenant_id, conversation_id);
+    const result = this.ctx.storage.transactionSync(() => {
+      const message = this.#system(body, null, {}, now);
+      this.#enqueueUpdate(audience, 'message', message.msg_id, message.seq, now);
+      return message;
+    });
+    await this.#drain();
+    return result;
   }
 
-  /** Ephemeral, bounded KV state; no message, wake, cursor or activity-ledger side effects. */
+  /** Explicit presence creates an update, never a message, wake or read cursor. */
   async heartbeat(tenant_id: string, conversation_id: string, identity_id: string, status: PresenceStatus, via_assistant = false): Promise<PresenceRow> {
     this.#bind(tenant_id, conversation_id);
-    const now = Date.now();
-    const row: PresenceRow = { identity_id, status, via_assistant, last_seen: now, expires_at: status === "offline" ? now : now + PRESENCE_TTL_MS };
-    await this.ctx.storage.transaction(async (tx) => {
-      if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) throw new Error("conversation deleted");
-      const rows = (await tx.get<PresenceRow[]>("presence:v1")) ?? [];
-      await tx.put("presence:v1", retainedPresence([row, ...rows.filter((r) => r.identity_id !== identity_id)], now));
-    });
-    return row;
+    const result = await this.signal(tenant_id, conversation_id, identity_id, 'presence', ulid(), { status, via_assistant }, await updateAudience(this.env.HUB_DB, tenant_id, conversation_id));
+    return { identity_id, status, via_assistant, last_seen: result.last_seen as number, expires_at: result.expires_at as number };
   }
 
   async presence(tenant_id: string, conversation_id: string): Promise<PresenceRow[]> {
     this.#bind(tenant_id, conversation_id);
-    return retainedPresence((await this.ctx.storage.get<PresenceRow[]>("presence:v1")) ?? [], Date.now());
+    const legacy = (await this.ctx.storage.get<PresenceRow[]>("presence:v1")) ?? [];
+    const current = this.#q<{ value: string }>("SELECT value FROM meta WHERE key LIKE 'presence:%'").map(r => JSON.parse(r.value) as PresenceRow);
+    const newest = new Map<string, PresenceRow>();
+    for (const row of [...legacy, ...current]) if (!newest.has(row.identity_id) || newest.get(row.identity_id)!.last_seen <= row.last_seen) newest.set(row.identity_id, row);
+    return retainedPresence([...newest.values()], Date.now());
   }
 
   async head(tenant_id: string, conversation_id: string): Promise<number> {
@@ -485,7 +546,8 @@ export class Conversation extends DurableObject<Env> {
     const state = this.#q<{ agent_run: number; gate_noted: number }>("SELECT agent_run, gate_noted FROM scope_state WHERE scope = ?", scope)[0] ?? { agent_run: 0, gate_noted: 0 };
     if (gateRefuses(me.kind, state.agent_run)) {
       if (state.gate_noted === 0) {
-        this.#system(SYSTEM_GATE, root, { gate: true }, p.now);
+        const sys = this.#system(SYSTEM_GATE, root, { gate: true }, p.now);
+        this.#enqueueUpdate(p.update_recipients ?? [], 'message', sys.msg_id, sys.seq, p.now);
         this.#run("INSERT INTO scope_state (scope, agent_run, gate_noted) VALUES (?, ?, 1) ON CONFLICT (scope) DO UPDATE SET gate_noted = 1", scope, state.agent_run);
       }
       return { refused: "needs_human" };
@@ -507,6 +569,7 @@ export class Conversation extends DurableObject<Env> {
       hop, cause_seq: target ? target.last_seq : null, now: p.now,
     });
     this.#storeRefs(seq, msg_id, 1, p.refs);
+    this.#enqueueUpdate(p.update_recipients ?? [], "message", msg_id, seq, p.now);
     const run = nextAgentRun(me.kind, state.agent_run);
     this.#run(
       `INSERT INTO scope_state (scope, agent_run, gate_noted) VALUES (?, ?, 0)
@@ -526,6 +589,7 @@ export class Conversation extends DurableObject<Env> {
       if (trip && !this.#blocked(trip.a, trip.b, p.now)) {
         this.#run("INSERT INTO pair_block (a, b, until) VALUES (?, ?, ?) ON CONFLICT (a, b) DO UPDATE SET until = excluded.until", trip.a, trip.b, p.now + LIMITS.PAIR_BLOCK_MS);
         const sys = this.#system(SYSTEM_LOOP, null, { loop: [trip.a, trip.b] }, p.now);
+        this.#enqueueUpdate(p.update_recipients ?? [], 'message', sys.msg_id, sys.seq, p.now);
         for (const agentId of [trip.a, trip.b]) {
           const op = p.audience.operators[agentId];
           if (op) {
@@ -627,6 +691,7 @@ export class Conversation extends DurableObject<Env> {
     });
     if (!retract) this.#storeRefs(seq, m.msg_id, rev, v.refs);
     this.#run("UPDATE msg SET last_seq = ?, rev = ?, retracted = ?, updated_at = ? WHERE msg_id = ?", seq, rev, retract ? 1 : 0, v.now, m.msg_id);
+    this.#enqueueUpdate(v.update_recipients ?? [], retract ? "retract" : "edit", m.msg_id, seq, v.now);
     const result: PostOk = { refused: null, seq, msg_id: m.msg_id, rev, hop: m.hop, head: this.#head(), woke: [], suppressed: [], loop_tripped: null, replayed: false };
     this.#remember(me.id, op, v.idempotency_key, result, v.now, v.intent_fingerprint);
     return result;
@@ -754,7 +819,7 @@ export class Conversation extends DurableObject<Env> {
       if (prior) return Number(prior.value);
       const n = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM artifact")[0]!.n;
       this.ctx.storage.transactionSync(() => {
-        for (const table of ["artifact", "msg", "ref", "thread_sub", "scope_state", "pair_block", "idem", "inbox_outbox", "index_outbox"]) this.#run(`DELETE FROM ${table}`);
+        for (const table of ["artifact", "msg", "ref", "thread_sub", "scope_state", "pair_block", "idem", "inbox_outbox", "update_outbox", "index_outbox"]) this.#run(`DELETE FROM ${table}`);
         this.#run("DELETE FROM meta WHERE key NOT IN ('tenant_id', 'owner_id')");
         this.#run("INSERT INTO meta (key, value) VALUES ('deleted', ?)", String(n));
       });
@@ -868,9 +933,37 @@ export class Conversation extends DurableObject<Env> {
         }
       }
     }
+    const updates = this.#q<{ key: string; identity_id: string; payload: string }>("SELECT * FROM update_outbox ORDER BY rowid LIMIT 200");
+    if (updates.length) {
+      try {
+        const chat = await getChannelById(this.env.HUB_DB, this.#tenant, this.#id);
+        const audience = new Set(await updateAudience(this.env.HUB_DB, this.#tenant, this.#id, chat));
+        const deliveries = new Map<string, typeof updates>();
+        for (const row of updates) {
+          if (!audience.has(row.identity_id)) { this.#run("DELETE FROM update_outbox WHERE key = ?", row.key); continue; }
+          const batch = deliveries.get(row.identity_id) ?? [];
+          batch.push(row);
+          deliveries.set(row.identity_id, batch);
+        }
+        await Promise.all([...deliveries].map(async ([identity, batch]) => {
+          try {
+            for (const row of batch) {
+              const update = JSON.parse(row.payload) as UpdateDelivery;
+              if (update.type === 'read' && update.data.identity_id === identity) await inboxStub(this.env, this.#tenant, identity).markRead(this.#tenant, identity, this.#id, Number(update.data.seq));
+            }
+            await inboxStub(this.env, this.#tenant, identity).deliverUpdates(this.#tenant, identity, batch.map(row => {
+              const update = JSON.parse(row.payload) as UpdateDelivery;
+              if (chat?.members) update.chat.kind = chat.kind!;
+              return update;
+            }));
+            for (const row of batch) this.#run("DELETE FROM update_outbox WHERE key = ?", row.key);
+          } catch { console.log("update delivery failed"); }
+        }));
+      } catch { console.log("update audience unavailable"); }
+    }
     await this.#flushIndex(now);
     const next = this.#q<{ n: number | null }>(
-      "SELECT MIN(n) AS n FROM (SELECT MIN(next_at) AS n FROM inbox_outbox UNION ALL SELECT MIN(next_at) FROM index_outbox)",
+      "SELECT MIN(n) AS n FROM (SELECT MIN(next_at) AS n FROM inbox_outbox UNION ALL SELECT MIN(next_at) FROM index_outbox UNION ALL SELECT 0 FROM update_outbox)",
     )[0]?.n ?? null;
     if (next !== null) {
       // Pull the alarm earlier when a sooner retry is due; never push one that is already set earlier.

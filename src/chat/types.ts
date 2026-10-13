@@ -61,6 +61,7 @@ export type PostInput = {
   /** Hop of the author's newest open top-level wake here, and of the newest open wake per thread (ruling C-4), from the author's Inbox. */
   wake_hop: number | null; thread_wake_hops: Record<string, number>;
   idempotency_key: string | null; audience: Audience;
+  update_recipients?: string[];
 };
 
 export type VersionInput = {
@@ -71,6 +72,7 @@ export type VersionInput = {
   intent_fingerprint?: string;
   /** Agents this actor operates (may retract their messages). */
   operator_of: string[]; is_admin: boolean; idempotency_key: string | null;
+  update_recipients?: string[];
 };
 
 export type MsgView = {

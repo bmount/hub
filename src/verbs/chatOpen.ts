@@ -1,3 +1,5 @@
+import { updateAudience } from "../chat/updates";
+import { conversationStub } from "../chat/stubs";
 import { defineVerb } from "./table";
 import { reqEnum, reqString } from "./params";
 import { badRequest, forbidden, notFound } from "../errors";
@@ -38,6 +40,8 @@ export const chatOpen = defineVerb({
       await requireContact(ctx, members.find(m => m !== me.id)!);
     }
     const { chat, replayed } = await openPrivateChat(ctx.db, tenant, me.id, p.kind, members, p.client_id, ctx.now);
+    const audience = await updateAudience(ctx.db, tenant, chat.project_id);
+    await conversationStub(ctx.env, tenant, chat.project_id).announceMembership(tenant, chat.project_id, chat.members, chat.created_at, audience);
     return { id: chat.project_id, kind: chat.kind, channel: chat.slug, members: chat.members, replayed };
   },
 });
