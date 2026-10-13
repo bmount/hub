@@ -6,6 +6,7 @@ export const MAX_ATTACHMENT_TEXT_CHARS = 20_000;
 export const MAX_ATTACHMENT_TOTAL_CHARS = 60_000;
 export type AttachmentEvidence = {
   filename: string | null; mime_type: string; size: number;
+  file_path?: string; file_revision?: number; file_status?: "stored" | "not_stored"; file_reason?: string;
   text?: string; text_encoding?: "utf-8";
   text_status?: "complete" | "truncated" | "unsupported_type" | "invalid_utf8";
 };
@@ -20,7 +21,7 @@ export function retainAttachmentEvidence(parts: Attachment[]): AttachmentEvidenc
     const bytes = typeof a.content === "string" ? new TextEncoder().encode(a.content)
       : a.content instanceof Uint8Array ? a.content : new Uint8Array(a.content);
     const result: AttachmentEvidence = { filename: a.filename ?? null, mime_type: a.mimeType, size: bytes.byteLength };
-    if (a.mimeType !== "text/plain" && a.mimeType !== "text/markdown") return { ...result, text_status: "unsupported_type" };
+    if (a.mimeType !== "text/plain" && a.mimeType !== "text/markdown" && a.mimeType !== "text/csv") return { ...result, text_status: "unsupported_type" };
     let text: string;
     try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes); }
     catch { return { ...result, text_status: "invalid_utf8" }; }

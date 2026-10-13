@@ -1,3 +1,4 @@
+import { retainProjectMailFiles } from "./files";
 import { createHash } from "node:crypto";
 import type { DNSResolver } from "mailauth";
 import type { Env } from "../env";
@@ -96,6 +97,7 @@ export async function storeIndependentMailCandidate(env: Env,
         now, key, stored),
   ]);
   if (results[1]!.meta.changes === 1 && results[2]!.meta.changes === 1) {
+    await retainProjectMailFiles(env, state.mail_id, parsed.fileParts, now);
     return { status: "stored", mail_id: state.mail_id, identity_id: identity.id, target, proof };
   }
   // Recheck current authority before even returning a scoped existing row id.
@@ -115,5 +117,6 @@ export async function storeIndependentMailCandidate(env: Env,
     AND project_id IS ? AND recipient_id IS ? AND verdict = 'admitted' AND reason IS NULL AND released_by IS NULL`)
     .bind(existing.mail_id, ...[target.tenant_id, identity.id, from, to, proof.messageId], target.project_id,
       target.recipient_id ?? null).first<{ id: string }>();
+  if (row) await retainProjectMailFiles(env, row.id, parsed.fileParts, now);
   return row ? { status: "duplicate", mail_id: row.id, identity_id: identity.id, target, proof } : { status: "blocked" };
 }

@@ -25,7 +25,7 @@ describe("search coverage", () => {
     }
     expect(r.coverage.scope).toBe("caller_readable_records");
     expect(r.coverage.freshness).toBe("unknown");
-    expect(r.coverage.not_searched).toEqual(["repository file contents (use repo_search)", "binary or unextracted mail attachments", "raw telemetry logs"]);
+    expect(r.coverage.not_searched).toEqual(["repository file contents (use repo_search)", "binary or unextracted mail attachments", "raw telemetry logs", "binary project file contents and text beyond the first 128 KiB"]);
     expect(r.coverage.conversations).toEqual({ readable_active_channels: 0, readable_archived_channels: 0, searched_channels: 0, channel_limit: 40, per_channel_limit: 10, channels_at_hit_limit: 0 });
   });
 

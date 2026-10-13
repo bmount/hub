@@ -8,12 +8,16 @@ const fixtures = { now, raw };
 for (const algorithm of ['rsa', 'ed25519']) {
   const { privateKey, publicKey } = generateKeyPairSync(algorithm, algorithm === 'rsa' ? { modulusLength: 2048 } : {});
   const publicBytes = publicKey.export({ type: 'spki', format: 'der' });
-  const signed = await dkimSign(raw, { signTime: now,
+  const sign = async (message) => dkimSign(message, { signTime: now,
     headerList: ['from', 'to', 'subject', 'date', 'message-id', 'mime-version', 'content-type'],
     signatureData: [{ signingDomain: 'example.com', selector: 'test', algorithm: algorithm + '-sha256',
       privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }) }] });
+  const signed = await sign(raw);
+  const secondRaw = raw.replace('<attachment-audit@example.com>', '<attachment-audit-2@example.com>');
+  const second = await sign(secondRaw);
+  if (second.errors.length || !second.signatures) throw new Error('Fixture signing failed');
   if (signed.errors.length || !signed.signatures) throw new Error('Fixture signing failed');
-  fixtures[algorithm] = { raw: signed.signatures + raw,
+  fixtures[algorithm] = { raw: signed.signatures + raw, second: second.signatures + secondRaw,
     record: `v=DKIM1; k=${algorithm}; p=${(algorithm === 'ed25519' ? publicBytes.subarray(-32) : publicBytes).toString('base64')}` };
 }
 writeFileSync(new URL('../test/fixtures/mail-attachments.json', import.meta.url), JSON.stringify(fixtures, null, 2) + '\n');

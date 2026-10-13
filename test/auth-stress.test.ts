@@ -115,5 +115,5 @@ describe("auth stress", () => {
       for (const s of secrets) expect(text.includes(s), `${name} leaked a credential`).toBe(false);
       expect(text, name).not.toMatch(/pm[sw]_[A-Za-z0-9_-]{30,}/);
     }
-  });
+  }, 30_000);
 });

@@ -2,8 +2,8 @@ import { rank } from "../auth/context";
 import { listVerbs, type VerbDef } from "../verbs/table";
 import type { Role } from "../db/types";
 
-// Narrow content-management exception: wiki deletion still requires the current admin role.
-const adminContentVerb = (v: VerbDef<unknown, unknown>) => v.name === "wiki.delete" && v.scope === "tenant" && v.kind === "command" && v.minRole === "admin";
+// Narrow content-management exception: wiki/file deletion still requires the current admin role.
+const adminContentVerb = (v: VerbDef<unknown, unknown>) => (v.name === "wiki.delete" || v.name === "file.delete") && v.scope === "tenant" && v.kind === "command" && v.minRole === "admin";
 
 /** MCP spec 8.3: credential and access management never reaches an assistant. */
 export const MCP_BANNED_PREFIXES = ["token.", "agent.", "session.", "invite.", "consent.", "membership.", "oauth.", "login.", "bootstrap"];
@@ -32,7 +32,7 @@ export function mcpViolations(v: VerbDef<unknown, unknown>): string[] {
   return out;
 }
 
-/** Exposed, scope granted, within the current role; only wiki.delete may require admin. */
+/** Exposed, scope granted, within the current role; only wiki.delete and file.delete may require admin. */
 export function verbAllowed(v: VerbDef<unknown, unknown>, role: Role | null, scopes: readonly string[]): boolean {
   if (!v.mcp || mcpViolations(v).length > 0 || !scopes.includes(v.mcp.scope)) return false;
   if (v.minRole === "public") return true;

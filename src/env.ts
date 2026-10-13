@@ -25,7 +25,7 @@ export type Env = {
   GIT_PROXY?: Fetcher;
   ARTIFACTS_ACCOUNT_ID?: string;
   ARTIFACTS_API_TOKEN?: string;
-  /** Private replay storage for append-only push validation. */
+  /** Private R2 storage: git replay keys and disjoint project-files/<tenant>/<project>/ keys. */
   GIT_PUSH_STAGING?: R2Bucket;
   /** One SQLite object per channel, named `<tenant_id>:<conversation_id>` (messaging spec 9.1). */
   CONVERSATION: DurableObjectNamespace<Conversation>;

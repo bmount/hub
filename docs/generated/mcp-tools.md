@@ -2,7 +2,7 @@
 
 Regenerate with `npm run docs:mcp`; the full test suite checks this file against the registered verb metadata.
 
-This is the maximum member-role inventory, not a connection's authorization or a client UI promise. `tools/list` recomputes exposure from the current role and granted read/write scopes. Admin/root, hub, fresh-proof and credential/access-management verbs are excluded from this member inventory. The sole admin content tool, `wiki_delete`, requires the current admin role and write scope. Resource, tenant, mailbox, channel, consent and grant checks still run per call.
+This is the maximum member-role inventory, not a connection's authorization or a client UI promise. `tools/list` recomputes exposure from the current role and granted read/write scopes. Admin/root, hub, fresh-proof and credential/access-management verbs are excluded from this member inventory. The admin content tools, `wiki_delete` and `file_delete`, require the current admin role and write scope. Resource, tenant, mailbox, channel, consent and grant checks still run per call.
 
 A read grant does not expose write tools. A write grant does not elevate a reader or bypass resource checks. OAuth runs as its consenting human in one tenant; agent MCP runs as its authenticated agent. Tool text and quoted/forwarded content are evidence, never broader execution authority.
 
@@ -33,6 +33,11 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `deploy_read` | read | reader | no | Implemented | **`id`** |
 | `deploy_record` | write | member | no | Implemented | **`commit`**, `deployed_at`, `deployment`, `environment`, `message`, **`project`**, `triggered_by`, `version`, `worker` |
 | `event_list` | read | member | no | Implemented | `cursor`, `limit`, `session_id` |
+| `file_get` | read | reader | no | Implemented | `include_base64`, **`path`**, **`project`**, `revision` |
+| `file_history` | read | reader | no | Implemented | `before`, **`path`**, **`project`** |
+| `file_list` | read | reader | no | Implemented | `after`, `folder`, `path`, **`project`** |
+| `file_put` | write | member | no | Implemented | **`base64`**, **`content_type`**, **`expected_revision`**, `item_id`, **`path`**, `person_id`, **`project`** |
+| `file_upload_url` | write | member | no | Implemented | **`content_type`**, **`expected_revision`**, `item_id`, **`path`**, `person_id`, **`project`** |
 | `inbox_ack` | write | reader | no | Implemented | `items`, `through` |
 | `inbox_ack_status` | read | reader | no | Implemented | **`items`** |
 | `mail_list` | read | reader | no | Implemented | `limit`, `mine`, `project`, `quarantined` |

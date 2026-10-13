@@ -58,7 +58,7 @@ export async function resolveMailAddress(db: D1Database, hubDomain: string, to: 
   return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: null, project_slug: null, project_name: null, recipient_id: a.id, recipient_name: a.display_name };
 }
 
-type Parsed = { headers: Header[]; subject: string; text: string; attachments: AttachmentEvidence[]; forwarded: boolean; date: string | null; addressed: string[] };
+type Parsed = { fileParts: import("postal-mime").Attachment[]; headers: Header[]; subject: string; text: string; attachments: AttachmentEvidence[]; forwarded: boolean; date: string | null; addressed: string[] };
 
 function htmlToText(html: string): string {
   return html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|tr|h\d)>/gi, "\n")
@@ -85,7 +85,7 @@ export async function parseMail(raw: ReadableStream<Uint8Array> | ArrayBuffer | 
   type Addr = { address?: string; group?: Addr[] };
   const flat = (xs: Addr[] | undefined): string[] => (xs ?? []).flatMap((a) => (a.group ? flat(a.group) : a.address ? [a.address.trim().toLowerCase()] : []));
   const addressed = [...new Set([...flat(m.to as Addr[] | undefined), ...flat(m.cc as Addr[] | undefined)])].filter((a) => a.length <= 254).slice(0, 50);
-  return { headers: m.headers, subject: (m.subject ?? "").slice(0, 300), text, attachments, forwarded: inlineFwd || rfc822.length > 0, date: m.date ?? null, addressed };
+  return { fileParts: m.attachments ?? [], headers: m.headers, subject: (m.subject ?? "").slice(0, 300), text, attachments, forwarded: inlineFwd || rfc822.length > 0, date: m.date ?? null, addressed };
 }
 
 export async function handleProjectMail(message: ForwardableEmailMessage, env: Env, now: number,
