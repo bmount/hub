@@ -1,7 +1,7 @@
 // AI usage in the workbench: totals and breakdowns as the list, one person's or agent's calls in the inspector.
 // Members see their own usage; admins see the whole organization. One D1 batch after optional filter lookups.
 import type { Env } from "../env";
-import { esc, htmlResponse, workbench } from "../html";
+import { esc, htmlResponse, kitTable, toolbar, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -48,10 +48,7 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
         AND (? IS NULL OR (m.work_item_id = ? AND m.project_id = ?)) AND (? IS NULL OR m.project_id = ?)
       ORDER BY m.created_at DESC LIMIT 100`).bind(ctx.tenant.id, since, who ?? "", selectedWork?.id ?? null, selectedWork?.id ?? null, selectedWork?.project_id ?? null, selectedProject?.id ?? null, selectedProject?.id ?? null)]);
   const total = t!.results[0] as Group;
-  const table = (title: string, rows: Group[], hrefFor?: (g: Group) => string | null) => rows.length ? `<h2>${esc(title)}</h2><table><thead><tr><th></th><th>Calls</th><th class="hide-s">Tokens in / out</th><th>Amounts (USD)</th></tr></thead><tbody>${rows.map((g) => {
-    const href = hrefFor?.(g);
-    return `<tr${href ? ` data-href="${esc(href)}"${who === g.key ? ' aria-selected="true"' : ""}` : ""}><td>${href ? `<a href="${esc(href)}">${esc(g.label)}</a>` : esc(g.label)}</td><td class="when">${g.calls}</td><td class="when hide-s">${n(g.input_tokens)} / ${n(g.output_tokens)}<br><small>${g.input_known}/${g.calls} in, ${g.output_known}/${g.calls} out counts known</small></td><td>${cost(g)}</td></tr>`;
-  }).join("")}</tbody></table>` : "";
+  const table = (title: string, rows: Group[], hrefFor?: (g: Group) => string | null) => rows.length ? `<h2>${esc(title)}</h2>${kitTable(title,[{label:"Group"},{label:"Calls"},{label:"Tokens in / out",className:"hide-s"},{label:"Amounts (USD)"}],rows.map(g=>{const href=hrefFor?.(g) ?? undefined; return {href,selected:who === g.key,cells:[{html:href ? `<a href="${esc(href)}">${esc(g.label)}</a>` : esc(g.label)},{html:String(g.calls)},{html:`${n(g.input_tokens)} / ${n(g.output_tokens)}<br><small>${g.input_known}/${g.calls} input and ${g.output_known}/${g.calls} output counts known</small>`,className:"hide-s"},{html:cost(g)}]};}))}` : "";
   const { byWork, byWorkCoverage } = usageWorkGroups(work!.results as WorkGroup[]);
   const workHref = (g: Group) => {
     const ref = (g as WorkGroup).ref;
@@ -60,8 +57,7 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
   };
   const workHtml = table("By work item", byWork, workHref) + (total.calls ? `<p class="lede">${byWorkCoverage.shown} work groups shown${byWorkCoverage.truncated ? `; capped at ${byWorkCoverage.limit}, more groups omitted` : "; complete for recorded calls in this scope"}. Recorded calls only, not the full cost of the work. Unpriced calls are not zero-cost calls.</p>` : "");
   const dayRows = d!.results as Group[];
-  const peak = Math.max(1, ...dayRows.map((g) => g.calls));
-  const daysHtml = dayRows.length ? `<h2>By day</h2><div class="bars">${dayRows.map((g) => `<div title="${esc(g.key)}: ${g.calls} calls, ${esc(usageMoney(g))}"><span style="height:${Math.max(2, Math.round((g.calls / peak) * 48))}px"></span><small>${esc(g.label.slice(3))}</small></div>`).join("")}</div>` : "";
+  const daysHtml = table("By day", dayRows);
   const range = [7, 30, 90].map((x) => `<a class="chip" href="${esc(`/usage?days=${x}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}${filterQs}`)}"${x === days ? ' aria-current="true"' : ""}>${x} days</a>`).join("");
   const filter = `<form class="filters" method="get" action="/usage"><input type="hidden" name="days" value="${days}">${whoParam ? `<input type="hidden" name="who" value="${esc(whoParam)}">` : ""}
 <label>Project <input name="project" maxlength="127" value="${esc(selectedProject?.ref ?? "")}" placeholder="project or namespace/project"></label>
@@ -69,16 +65,15 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
 ${selectedWork ? `<a href="${esc(`/usage?days=${days}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}${projectQs}`)}">Clear work filter</a>` : ""}
 ${selectedProject ? `<a href="${esc(`/usage?days=${days}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}${workQs}`)}">Clear project filter</a>` : ""}</form>`;
   const list = `<div class="head"><h1>AI usage</h1><span>${admin ? `everyone in ${esc(ctx.tenant.display_name)}` : "yours"}</span></div>
-<div class="chips">${range}</div>${filter}
-<div class="grid"><div class="card"><div class="stat">${total.calls}<small>calls</small></div></div><div class="card"><div class="stat">${n(total.input_tokens + total.output_tokens)}<small>recorded tokens</small></div><p>${total.input_known}/${total.calls} input and ${total.output_known}/${total.calls} output counts known; ${n(total.cached_tokens)} cached input tokens (included in input).</p></div></div>
-<h2>Recorded amounts (USD)</h2><p>${cost(total)}</p>
-<p class="lede">Reported amounts are not audited invoices. API-rate estimates are not charges. Rate-tier coverage (batch, long context, cache writes) is unknown.</p>
-<p class="lede">Billing mode: unknown. The ledger does not record API/subscription evidence; OAuth alone does not establish billing mode or zero usage cost. Subscription fees are not configured here and are not allocated to calls.</p>
+${toolbar("Usage range and filters",range,filter)}
+${table("Totals",[{...total,key:"total",label:"Recorded calls"}])}
+<p class="lede">${n(total.cached_tokens)} cached input tokens, included in input.</p>
+<details><summary>Cost provenance and billing limits</summary><p class="lede">Reported amounts are not audited invoices. API-rate estimates are not charges. Rate-tier coverage (batch, long context, cache writes) is unknown.</p>
+<p class="lede">Billing mode: unknown. The ledger does not record API/subscription evidence; OAuth alone does not establish billing mode or zero usage cost. Subscription fees are not configured here and are not allocated to calls.</p></details>
 ${total.calls ? "" : `<p class="empty">No AI usage recorded${filterLabel ? ` for ${esc(filterLabel)} in this period and scope` : " yet"}.${filterLabel ? ` This does not mean the ${selectedWork ? "work" : "project"} cost nothing.` : ""} Pimwell records its own calls; agents and people report theirs with usage_report, and apps log theirs (see the onboard skill).</p>`}
 ${admin ? table("By person or agent", w!.results as Group[], (g) => `/usage?days=${days}&who=${encodeURIComponent(g.key)}${filterQs}`) : ""}${table("By model", m!.results as Group[])}${table("By tool", s!.results as Group[])}${workHtml}${daysHtml}`;
   const callRows = calls!.results as Call[];
   const inspector = who ? `<a class="back" href="${esc(`/usage?days=${days}${filterQs}`)}">‹ AI usage</a><h1>${esc(who === "pimwell" ? "Pimwell" : who)}</h1>
-${callRows.length ? `<table><thead><tr><th>When</th><th>Model</th><th class="hide-s">Tool</th><th>Tokens in / out</th><th>Amounts (USD)</th></tr></thead><tbody>${callRows.map((c) =>
-    `<tr><td class="when">${new Date(c.created_at).toISOString().slice(5, 16).replace("T", " ")}</td><td><code>${esc(c.provider)}/${esc(c.model)}</code>${c.ok ? "" : ' <span class="pill">failed</span>'}${c.ref ? ` <small>${esc(c.ref)}</small>` : ""}</td><td class="hide-s">${esc(c.client ?? c.source)}</td><td class="when">${c.input_tokens === null ? "unknown" : n(c.input_tokens)} / ${c.output_tokens === null ? "unknown" : n(c.output_tokens)}</td><td>${esc(callCost(c))}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">No calls in this period.</p>`}` : null;
-  return htmlResponse(workbench("AI usage", { list, listKey: `usage:${days}:${total.calls}:${selectedWork?.id ?? "all"}:${selectedProject?.id ?? "all"}`, inspector, inspectorKey: who ? `usage:${who}:${days}:${selectedWork?.id ?? "all"}:${selectedProject?.id ?? "all"}` : "" }, shellFor(ctx, env, "usage", "usage")!), 200, extra);
+${callRows.length ? kitTable("Recorded calls",[{label:"Call"},{label:"Usage"}],callRows.map(c=>({cells:[{html:`<time>${new Date(c.created_at).toISOString().slice(5,16).replace("T"," ")}</time><br><code>${esc(c.provider)}/${esc(c.model)}</code><br><small>${esc(c.client ?? c.source)}${c.ok ? "" : " · failed"}${c.ref ? ` · ${esc(c.ref)}` : ""}</small>`},{html:`${c.input_tokens === null ? "unknown" : n(c.input_tokens)} / ${c.output_tokens === null ? "unknown" : n(c.output_tokens)} tokens<br>${esc(callCost(c))}`}]}))) : '<p class="lede">No calls in this period.</p>'}` : null;
+  return htmlResponse(workbench("AI usage", { list, stackOnPhone:true, listKey: `usage:${days}:${total.calls}:${selectedWork?.id ?? "all"}:${selectedProject?.id ?? "all"}`, inspector, inspectorKey: who ? `usage:${who}:${days}:${selectedWork?.id ?? "all"}:${selectedProject?.id ?? "all"}` : "" }, shellFor(ctx, env, "usage", "usage")!), 200, extra);
 }

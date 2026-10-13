@@ -179,8 +179,11 @@ it("searches body and comment text across projects from the upper box, while ret
       await page.waitForURL(`${BASE}/search?q=nebula%20orchard`);
       await browserExpect(page.locator("#list")).toContainText("Ordinary FRONT card");
       await browserExpect(page.locator("#list")).toContainText("Ordinary BACK card");
-      await browserExpect(page.locator("#list")).toContainText("only in this comment");
+      await page.locator("#list").getByRole("link", { name: "Ordinary BACK card", exact: true }).click();
+      await browserExpect(page.locator("#inspector")).toContainText("only in this comment");
       await page.locator("#list").getByRole("link", { name: "Ordinary FRONT card", exact: true }).click();
+      await browserExpect(page.locator("#inspector h1")).toContainText("Ordinary FRONT card");
+      await page.locator("#inspector").getByRole("link", { name: "Open Errand", exact: true }).click();
       await page.waitForURL(`${BASE}/search-front/w/1`);
       await browserExpect(page.locator("#inspector")).toContainText("only in these details");
     }

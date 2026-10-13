@@ -99,15 +99,14 @@ ${m.verdict === "admitted" && !m.recipient_id && ctx.identity.kind === "human" &
     : `<p class="lede">${sendingOn ? "More than 30 days have passed; Pimwell writes again once they do." : "Replies are off in this organization; a human admin can review sending under Mail."}</p>` : ""}`;
     key = `mail:${m.id}:${m.verdict}:${relatedWork.length}:${repliesR!.results.length}:${sendingOn}${intent.key ? `:${intent.key}` : ""}`;
   } else {
-    const toggle = canInspectMail(ctx) ? `<h2 id="sending">Sending</h2><p>${sendingOn ? "On: members reply from these addresses, and agents from theirs, only to people who wrote in the last 30 days, at most 50 a day each." : "Off: nothing leaves Pimwell except sign-in links and one-time welcome guidance."}</p>
-<form method="post" action="/api/mail.sending"><input type="hidden" name="on" value="${sendingOn ? "0" : "1"}"><input type="hidden" name="_back" value="/mail"><button type="submit"${sendingOn ? ' class="quiet"' : ""}>${sendingOn ? "Turn sending off" : "Turn sending on"}</button></form>` : "";
+    const toggle = canInspectMail(ctx) ? `<div id="sending">${inspectorSection("Sending",[{label:"Outgoing mail",html:sendingOn ? "On" : "Off",editHtml:`<p>${sendingOn ? "On: members reply from these addresses, and agents from theirs, only to people who wrote in the last 30 days, at most 50 a day each." : "Off: nothing leaves Pimwell except sign-in links and one-time welcome guidance."}</p><form method="post" action="/api/mail.sending"><input type="hidden" name="on" value="${sendingOn ? "0" : "1"}"><input type="hidden" name="_back" value="/mail?addresses=1"><button type="submit" class="quiet">${sendingOn ? "Turn sending off" : "Turn sending on"}</button></form>`}])}</div>` : "";
     key = `mail:overview:${sendingOn}`;
     inspector = `<a class="back" href="${esc(mailboxUrl)}">‹ Mail</a><div class="head"><span>Addresses</span></div><h1>Send anything here</h1>
 <p class="lede">Write or forward from your own address. Only members' mail is accepted. Independently verified senders may receive one-time setup guidance; later mail gets no routine receipt. Mail whose sender can't be proven is held for an admin. Nothing in mail is acted on until a member chooses to.</p>
-<table><tbody><tr><td><code>${esc(org)}@${esc(env.HUB_DOMAIN)}</code></td><td>The organization's inbox; file it later</td></tr>
-${projects.map((p) => `<tr><td><code>${esc(org)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code></td><td>${esc(p.display_name)}</td></tr>`).join("")}</tbody></table>
+${toggle}
+${kitTable("Mail addresses",[{label:"Address"},{label:"Mailbox"}],[{cells:[{html:`<code>${esc(org)}@${esc(env.HUB_DOMAIN)}</code>`},{html:"Organization inbox"}]},...projects.map(p=>({cells:[{html:`<code>${esc(org)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code>`},{html:esc(p.display_name)}]}))])}
 ${ctx.identity.kind === "human" && rank(ctx.role) >= rank("admin") ? '<p><a href="/mail/recipients">Set response-recipient preferences</a> — preferences only; no automatic scheduling or guaranteed reply.</p>' : ""}
-<h2>Then</h2><p>Open a message and choose <b>Propose work from this</b>: wishes, snags, errands and calls appear, each quoting the message. File the ones you want; they link back here.</p>${toggle}`;
+<h2>Then</h2><p>Open a message and choose <b>Propose work from this</b>: wishes, snags, errands and calls appear, each quoting the message. File the ones you want; they link back here.</p>`;
   }
   const shell = shellFor(ctx, env, "mail", m?.id ?? "mail")!;
   if (m && shell.breadcrumb) shell.breadcrumb[shell.breadcrumb.length - 1]!.label = m.subject || "(no subject)";

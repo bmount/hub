@@ -38,7 +38,9 @@ describe("session verbs", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain(h.session.id);
-    expect(html).toContain('action="/api/session.revoke"');
+    expect(html).toContain(`href="/me/sessions?session=${h.session.id}"`);
+    const selected = await (await SELF.fetch(`https://pimwell.test/me/sessions?session=${h.session.id}`,{headers:{cookie:`pmw_session=${h.token}`}})).text();
+    expect(selected).toContain('action="/api/session.revoke"');
     expect(html).toContain('action="/api/session.end"');
     expect((await SELF.fetch("https://pimwell.test/me/sessions")).status).toBe(401);
   });

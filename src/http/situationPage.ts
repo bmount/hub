@@ -1,7 +1,7 @@
 // /situations: describe a problem, get a diagnosis built from the record; record what turned out to be true.
 import { errorOriginColumns } from "../apps/origin";
 import type { Env } from "../env";
-import { esc, htmlResponse, workbench } from "../html";
+import { emptyState, esc, htmlResponse, formRow, kitTable, toolbar, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -18,19 +18,20 @@ export async function situationsPage(request: Request, env: Env): Promise<Respon
     JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
     WHERE g.tenant_id = ? AND g.first_seen BETWEEN ? AND ? ORDER BY g.first_seen DESC, g.id DESC LIMIT 20`)
     .bind(ctx.tenant.id, ctx.now - 7 * 86_400_000, ctx.now).all<{ id: string; title: string; script_name: string; first_deploy: string | null; first_commit: string | null }>()).results;
-  const newErrors = `<h2>New error groups (last 7 days, up to 20)</h2><p class="lede">First observed on the recorded version; correlation does not prove a deploy caused the error.</p>${groups.length ? `<ul>${groups.map(g => `<li><a href="/apps?g=${esc(g.id)}">${esc(g.script_name)}: ${esc(g.title)}</a> · ${g.first_deploy ? `<a href="/apps?d=${esc(g.first_deploy)}">First deploy</a>` : "deploy unknown"} · commit ${esc(g.first_commit ?? "unknown")}</li>`).join("")}</ul>` : `<p class="empty">No new groups recorded.</p>`}`;
+  const newErrors = `<h2>New error groups · last 7 days</h2>${groups.length ? kitTable("New errors",[{label:"App"},{label:"Error"},{label:"First deploy",className:"hide-s"},{label:"First commit",className:"hide-s"}],groups.map(g=>({cells:[{html:esc(g.script_name)},{html:`<a href="/apps?g=${esc(g.id)}">${esc(g.title)}</a>`},{html:g.first_deploy ? `<a href="/apps?d=${esc(g.first_deploy)}">${esc(g.first_deploy)}</a>` : "unknown",className:"hide-s"},{html:esc(g.first_commit ?? "unknown"),className:"hide-s"}]}))) : '<p class="lede">No new groups recorded.</p>'}`;
   const sel = new URL(request.url).searchParams.get("s") ?? "";
   const rows = (await ctx.db.prepare(`SELECT s.id, s.title, s.question, s.report, s.outcome, s.created_at, s.thread_id, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id
     WHERE s.tenant_id = ? ORDER BY s.created_at DESC LIMIT 100`).bind(ctx.tenant.id).all<Row>()).results;
   const one = rows.find((r) => r.id === sel) ?? (sel ? await ctx.db.prepare(`SELECT s.id, s.title, s.question, s.report, s.outcome, s.created_at, s.thread_id, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id
     WHERE s.tenant_id = ? AND s.id = ?`).bind(ctx.tenant.id, sel).first<Row>() : null);
   const list = `<div class="head"><h1>Situations</h1><span>${rows.length}</span></div>
-<p class="lede">Describe what's wrong in plain words. Pimwell looks through the record (work, commits, deploys, errors, reviews, mail) and answers with a cause, the evidence, who should act, and an honest estimate. Nothing changes; it only reads.</p>
-${ctx.identity.kind === "human" ? `<form method="post" action="/api/situation.open" data-reload><input type="hidden" name="_back" value="@result"><label style="display:block"><textarea data-voice name="text" rows="3" required minlength="10" maxlength="4000" style="display:block;width:100%" placeholder="Signups dropped last week. Why?"></textarea></label><button type="submit">Investigate</button> <small class="lede">Takes up to a minute.</small></form>` : ""}
+<p class="lede">Investigate a problem using the record; nothing is changed.</p>
+${ctx.identity.kind === "human" ? `<form method="post" action="/api/situation.open" data-reload><input type="hidden" name="_back" value="@result">${formRow("situation-question","Problem",'<textarea id="situation-question" data-voice name="text" rows="3" required minlength="10" maxlength="4000" style="width:100%" placeholder="Signups dropped last week. Why?"></textarea>')}${toolbar("Situation actions",'<button type="submit">Investigate</button>')} <small class="lede">Takes up to a minute.</small></form>` : ""}
 ${newErrors}
-${rows.length ? `<table><tbody>${rows.map((r) => `<tr data-href="/situations?s=${esc(r.id)}"${r.id === sel ? ' aria-selected="true"' : ""}><td><a href="/situations?s=${esc(r.id)}">${esc(r.title)}</a><div class="lede" style="margin:0">${esc(r.who)}${r.outcome ? " · outcome recorded" : ""}</div></td><td class="when">${new Date(r.created_at).toISOString().slice(0, 10)}</td></tr>`).join("")}</tbody></table>` : `<p class="empty">No situations yet.</p>`}`;
+<h2>Recorded situations</h2>
+${rows.length ? kitTable("Situations",[{label:"Situation"},{label:"By"},{label:"Outcome"},{label:"Recorded"}],rows.map(r=>({href:`/situations?s=${encodeURIComponent(r.id)}`,selected:r.id === sel,cells:[{html:`<a href="/situations?s=${esc(r.id)}">${esc(r.title)}</a>`},{html:esc(r.who)},{html:r.outcome ? "recorded" : "not recorded"},{html:new Date(r.created_at).toISOString().slice(0,10)}]}))) : emptyState("No situations yet","Describe a problem to investigate the record.",{label:"Assistant",href:"/assistant"})}`;
   const inspector = one ? `<a class="back" href="/situations">‹ Situations</a><div class="head"><span>${esc(one.who)}</span><span>${new Date(one.created_at).toISOString().slice(0, 16).replace("T", " ")}</span><a href="/assistant?t=${esc(one.thread_id)}">Continue in the Assistant</a></div>
 <h1>${esc(one.title)}</h1><blockquote>${esc(one.question)}</blockquote><div>${format(one.report)}</div>
 <h2>What turned out to be true</h2>${one.outcome ? `<div class="prose">${esc(one.outcome)}</div>` : rank(ctx.role) >= rank("member") ? `<form method="post" action="/api/situation.resolve"><input type="hidden" name="id" value="${esc(one.id)}"><input type="hidden" name="_back" value="/situations?s=${esc(one.id)}"><label style="display:block"><textarea data-voice name="outcome" rows="3" required style="display:block;width:100%" placeholder="Once you know: what the cause really was."></textarea></label><button type="submit" class="quiet">Record it</button></form>` : `<p class="lede">Not recorded yet.</p>`}` : null;
-  return htmlResponse(workbench(one ? one.title : "Situations", { list, listKey: `situations:${rows.length}:${groups.map(g => g.id + (g.first_deploy ?? "")).join(",")}`, inspector, inspectorKey: one ? `sit:${one.id}:${one.outcome ? 1 : 0}` : "" }, shellFor(ctx, env, "situations", "situations")!), 200, extra);
+  return htmlResponse(workbench(one ? one.title : "Situations", { list, stackOnPhone:true, listKey: `situations:${rows.length}:${groups.map(g => g.id + (g.first_deploy ?? "")).join(",")}`, inspector, inspectorKey: one ? `sit:${one.id}:${one.outcome ? 1 : 0}` : "" }, shellFor(ctx, env, "situations", "situations")!), 200, extra);
 }

@@ -314,6 +314,10 @@ describe("the workbench", () => {
     const w = await world();
     const page = await (await w.get("/new?project=site&kind=errand&title=Build%20it")).text();
     expect(page).toContain('value="@result"');
+    expect(page).toContain('class="wb-form-row"');
+    expect(page).toContain('id="new-title"');
+    expect(page).toContain('data-focus="list"');
+    expect(page.slice(page.indexOf('<section id="list"'),page.indexOf('<section id="inspector"'))).toContain('action="/api/work.create"');
     expect(page).toContain('<option value="errand" selected>');
     const res = await SELF.fetch(`https://${HOST}/api/work.create`, {
       method: "POST", redirect: "manual",

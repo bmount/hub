@@ -27,6 +27,13 @@ describe("/me", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain(op.session.id);
+    expect(html).toContain('class="wb-table"');
+    expect(html).toContain("<details><summary>Git credentials</summary>");
+    const sessions = await (await SELF.fetch(`https://pimwell.test/me/sessions?session=${op.session.id}`,{headers:{cookie:`pmw_session=${op.token}`}})).text();
+    expect(sessions).toContain('aria-selected="true"');
+    expect(sessions).toContain('class="back" href="/me/sessions"');
+    expect(sessions.slice(sessions.indexOf('<section id="inspector"'))).toContain('action="/api/session.revoke"');
+    expect((await SELF.fetch(`https://pimwell.test/me/sessions?session=${s.session.id}`,{headers:{cookie:`pmw_session=${op.token}`}})).status).toBe(404);
     expect(html).toContain('action="/api/session.end"');
     expect(html).toContain("acme.bot@pimwell.test");
     expect(html).toContain('action="/api/token.create"');

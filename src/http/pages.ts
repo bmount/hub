@@ -2,7 +2,7 @@ import { sameOrigin } from "./login";
 import type { Env } from "../env";
 import { shellFor } from "./shell";
 import { orgHomePage } from "./orgPages";
-import { esc, htmlResponse, page } from "../html";
+import { esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
 import { classifyHost } from "../tenant";
 import { findInviteByToken, inviteIsOpen } from "../db/invites";
 import { getTenantById, listTenants } from "../db/tenants";
@@ -65,18 +65,16 @@ export async function sessionsPage(request: Request, env: Env): Promise<Response
   if (ctx.host.kind !== "apex") return notFoundPage(extra);
   if (!ctx.identity || !ctx.session) return htmlResponse(page("Sign in", `<h1>Sign in required</h1>`), 401, extra);
   const rows = await listSessions(env.HUB_DB, ctx.identity.id, ctx.now);
-  const tr = rows.map((s) => `<tr>
-<td>${esc(s.id)}${s.id === ctx.session!.id ? " (this one)" : ""}</td>
-<td>${esc(s.kind)}</td>
-<td>${new Date(s.created_at).toISOString()}</td>
-<td>${new Date(s.last_seen_at).toISOString()}</td>
-<td><form class="inline" method="post" action="/api/session.revoke"><input type="hidden" name="session_id" value="${esc(s.id)}"><button type="submit">Revoke</button></form></td>
-</tr>`).join("");
-  const body = `<h1>Your sessions</h1>
-<p>${esc(ctx.identity.display_name)} &lt;${esc(ctx.identity.email)}&gt;</p>
-<table><thead><tr><th>Id</th><th>Kind</th><th>Started</th><th>Last seen</th><th></th></tr></thead><tbody>${tr}</tbody></table>
-<form method="post" action="/api/session.end"><button type="submit">Sign out</button></form>`;
-  return htmlResponse(page("Sessions", body, shellFor(ctx, env, "hub", "sessions")), 200, extra);
+  const selectedId = new URL(request.url).searchParams.get("session");
+  const selected = rows.find(s=>s.id === selectedId);
+  if (selectedId && !selected) return notFoundPage(extra);
+  const list = `<h1>Your sessions</h1>
+${toolbar("Session actions",'<a href="/me">Account</a><form class="inline" method="post" action="/api/session.end"><button type="submit">Sign out</button></form>')}
+${kitTable("Sessions",[{label:"Session"},{label:"Kind"},{label:"Started"},{label:"Last seen"}],rows.map(s=>({href:`/me/sessions?session=${encodeURIComponent(s.id)}`,selected:s.id === selectedId,cells:[{html:`<a href="/me/sessions?session=${esc(encodeURIComponent(s.id))}">${esc(s.label ?? s.kind)}${s.id === ctx.session!.id ? " (this one)" : ""}</a>`},{html:esc(s.kind)},{html:new Date(s.created_at).toISOString().slice(0,16).replace("T"," ")},{html:new Date(s.last_seen_at).toISOString().slice(0,16).replace("T"," ")}]}))) }`;
+  const inspector = selected ? `<a class="back" href="/me/sessions">‹ Sessions</a><h1>${esc(selected.label ?? selected.kind)}</h1>
+${inspectorSection("Session",[{label:"Id",html:esc(selected.id)},{label:"Kind",html:esc(selected.kind)},{label:"Started",html:new Date(selected.created_at).toISOString()},{label:"Last seen",html:new Date(selected.last_seen_at).toISOString()}])}
+<form method="post" action="/api/session.revoke"><input type="hidden" name="session_id" value="${esc(selected.id)}"><input type="hidden" name="_back" value="/me/sessions"><button type="submit" class="quiet">Revoke</button></form>` : null;
+  return htmlResponse(workbench("Sessions",{list,listKey:"sessions",inspector,inspectorKey:selected ? `session:${selected.id}:${selected.last_seen_at}` : "",stackOnPhone:true},shellFor(ctx,env,"hub","sessions")!),200,extra);
 }
 
 function listSection(title: string, items: string[]): string {

@@ -17,7 +17,7 @@ async function world() {
   await apiPost(HOST, "work.comment", { id: "site#2", body: "Metformin would be the first test case" }, h);
   await env.HUB_DB.prepare(`INSERT INTO inbound_mail (id, tenant_id, project_id, identity_id, from_email, to_address, subject, received_at, size, verdict, text, attachments, forwarded)
     VALUES ('M1', ?, ?, ?, 'pat@example.com', 'acme.site@pimwell.test', 'Pricing question', ?, 10, 'admitted', 'Is metformin cheaper elsewhere?', '[]', 0)`).bind(t.id, p.id, pat.identity.id, Date.now()).run();
-  const call = async (verb: string, body: unknown) => ((await (await apiPost(HOST, verb, body, h)).json()) as { result: Record<string, Array<{ ref: string; title: string; snippet: string }>> }).result;
+  const call = async (verb: string, body: unknown) => ((await (await apiPost(HOST, verb, body, h)).json()) as { result: Record<string, Array<{ ref: string; title: string; snippet: string; href: string }>> }).result;
   return { t, p, pat, h, call };
 }
 
@@ -40,6 +40,14 @@ describe("search", () => {
     const page = await (await SELF.fetch(`https://${HOST}/search?q=metformin`, { headers: w.h })).text();
     expect(page).toContain("Metformin price wrong");
     expect(page).toContain("Pricing question");
+    expect(page).toContain('class="wb-table"');
+    const hit = r.work![0]!;
+    const selected = await (await SELF.fetch(`https://${HOST}/search?q=metformin&result=${encodeURIComponent(hit.href)}`,{headers:w.h})).text();
+    const inspector = selected.slice(selected.indexOf('<section id="inspector"'));
+    expect(inspector).toContain(hit.title);
+    expect(inspector).toContain('class="back" href="/search?q=metformin"');
+    expect(selected).toContain('aria-selected="true"');
+    expect((await SELF.fetch(`https://${HOST}/search?q=metformin&result=%2Fmail%2Fnot-authorized`,{headers:w.h})).status).toBe(404);
     const jump = await (await SELF.fetch(`https://${HOST}/jump?q=metformin`, { headers: { ...w.h, accept: "application/json" } })).json() as { results: Array<{ href: string }> };
     expect(jump.results.map((x) => x.href)).toContain("/search?q=metformin");
   });

@@ -2,7 +2,7 @@
 // root's organization controls. Own-org admins have controls on the hub home too.
 import type { Env } from "../env";
 import { shellFor } from "./shell";
-import { esc, htmlResponse, page } from "../html";
+import { esc, htmlResponse, inspectorSection, kitTable, page, toolbar } from "../html";
 import { buildContext } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -32,17 +32,12 @@ export async function adminOrgsPage(request: Request, env: Env): Promise<Respons
       : `<form data-reload class="inline" method="post" action="/api/tenant.unarchive"><input type="hidden" name="slug" value="${esc(o.slug)}">${BACK}<button type="submit">Unarchive</button></form>
 <form data-reload class="inline" method="post" action="/api/tenant.delete"><input type="hidden" name="slug" value="${esc(o.slug)}">
 <input name="confirm" placeholder="type ${esc(o.slug)} to delete" size="22" autocomplete="off" required>${BACK}<button type="submit">Delete permanently</button></form>`;
-    return `<tr><td>${link}</td><td>${esc(o.state)}</td><td>${o.people}</td><td>${o.agents}</td><td>${o.projects}</td><td>${when(o.created_at)}</td><td>${action}</td></tr>`;
+    return inspectorSection(o.display_name,[{label:"Organization",html:link},{label:"State",html:esc(o.state)},{label:"People",html:String(o.people)},{label:"Agents",html:String(o.agents)},{label:"Projects",html:String(o.projects)},{label:"Created",html:when(o.created_at)},{label:"Controls",html:"Manage organization",editHtml:action}]);
   };
-  const deletedRows = deleted.map((d) => {
-    const counts = Object.entries(JSON.parse(d.counts) as Record<string, number>).map(([k, v]) => `${v} ${k}`).join(", ") || "no rows";
-    return `<tr><td>${esc(d.display_name)} <code>${esc(d.slug)}</code></td><td>${when(d.deleted_at)}</td><td><small>${esc(counts)}</small></td><td>${d.git_purged_at ? `purged ${when(d.git_purged_at)}` : "name reserved; see deletion event"}</td></tr>`;
-  }).join("");
-
-  const body = `<h1>Organizations</h1><p><a href="/">back</a></p>
-<table><thead><tr><th>Organization</th><th>State</th><th>People</th><th>Agents</th><th>Projects</th><th>Created</th><th></th></tr></thead><tbody>${orgs.map(row).join("")}</tbody></table>
-<p><small>Deleting removes everything the hub holds for an archived organization: members, projects, conversations, events, keys, and its agent accounts. It cannot be undone. Owned repositories and external storage are purged first; failures leave the organization archived for a retry. The name stays reserved.</small></p>
-<h2>Deleted</h2>
-${deleted.length ? `<table><thead><tr><th>Organization</th><th>Deleted</th><th>Removed</th><th>Git data</th></tr></thead><tbody>${deletedRows}</tbody></table>` : "<p>None.</p>"}`;
+  const body = `<h1>Organizations</h1>${toolbar("Hub admin",'<a href="/admin/models">Models and keys</a><a href="/admin/apps">Apps</a>')}
+<h2>Organizations</h2>${orgs.map(row).join("")}
+<p class="lede">Permanent deletion removes all organization data and reserves its name; it cannot be undone.</p>
+<details><summary>Deleted organizations · ${deleted.length}</summary>
+${deleted.length ? kitTable("Deleted organizations",[{label:"Organization"},{label:"Deleted"},{label:"Removed"},{label:"Git data"}],deleted.map(d=>({cells:[{html:esc(d.display_name) + " · " + esc(d.slug)},{html:when(d.deleted_at)},{html:esc(Object.entries(JSON.parse(d.counts) as Record<string,number>).map(([k,v])=>`${v} ${k}`).join(", ") || "no rows")},{html:d.git_purged_at ? `purged ${when(d.git_purged_at)}` : "name reserved; see deletion event"}]}))) : "<p>None.</p>"}</details>`;
   return htmlResponse(page("Organizations", body, shellFor(ctx, env, "admin", "orgs")), 200, extra);
 }

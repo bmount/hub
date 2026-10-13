@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { shellFor } from "./shell";
-import { esc, htmlResponse, page, logout } from "../html";
+import { esc, htmlResponse, kitTable, page, logout, toolbar } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { listAgentRunsForOperator, listSessions } from "../db/sessions";
@@ -22,9 +22,7 @@ function button(verb: string, fields: Record<string, string>, label: string): st
 
 function table(headers: string[], rows: string[][]): string {
   if (rows.length === 0) return "<p>None.</p>";
-  const head = headers.map((h) => `<th>${esc(h)}</th>`).join("");
-  const body = rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("");
-  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  return kitTable(headers[0] ?? "Account", headers.map(label=>({label})),rows.map(cells=>({cells:cells.map(html=>({html}))})));
 }
 
 export async function mePage(request: Request, env: Env): Promise<Response> {
@@ -48,7 +46,7 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
     ? (await listTenants(ctx.db, "active")).map((t) => t.slug)
     : memberships.filter((m) => rank(m.membership.role) >= rank("member")).map((m) => m.tenant.slug);
 
-  let body = `<h1>Your account</h1><p>${esc(me.display_name)} &lt;${esc(me.email)}&gt; · <a href="/">hub</a> · ${logout("/")}</p>`;
+  let body = `<h1>Your account</h1><p>${esc(me.display_name)} &lt;${esc(me.email)}&gt;</p>${toolbar("Account actions",`<a href="/me/sessions">Sessions</a><a href="/">Your organizations</a>${logout("/")}`)}`;
 
   body += `<h2>Sessions</h2>` + table(["Id", "Kind", "Started", "Last seen", ""], sessions.map((s) => [
     `${esc(s.id)}${s.id === ctx.session!.id ? " (this one)" : ""}`, esc(s.kind) + (s.kind === "git" && s.label ? ` (${esc(s.label)})` : ""), when(s.created_at), when(s.last_seen_at),
@@ -56,11 +54,11 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
   ])) + `<form method="post" action="/api/session.end"><button type="submit">Sign out</button></form>`;
 
   const gitTenants = me.is_root === 1 ? (await listTenants(ctx.db, "active")).map((t) => t.slug) : memberships.map((m) => m.tenant.slug);
-  body += `<h2>Git credentials</h2><p>A password for <code>git clone https://&lt;tenant&gt;.${esc(env.HUB_DOMAIN)}/&lt;repo&gt;.git</code>, with your email as the username. It works only for git on that tenant, lasts 90 days, and is listed under Sessions as <code>git</code>.</p>`
+  body += `<details><summary>Git credentials</summary><p>A password for <code>git clone https://&lt;tenant&gt;.${esc(env.HUB_DOMAIN)}/&lt;repo&gt;.git</code>, with your email as the username. It works only for git on that tenant, lasts 90 days, and is listed under Sessions as <code>git</code>.</p>`
     + (gitTenants.length === 0 ? "<p>You are not a member of any tenant.</p>" : gitTenants.map((slug) =>
       `<form method="post" action="/api/session.git"><input type="hidden" name="tenant" value="${esc(slug)}">`
       + `<label>Label <input name="label" required maxlength="80" placeholder="laptop"></label> `
-      + `<button type="submit">New git credential for ${esc(slug)}</button></form>`).join(""));
+      + `<button type="submit">New git credential for ${esc(slug)}</button></form>`).join("")) + "</details>";
 
   body += `<h2>Assistants</h2><p>Assistants you connected. Each acts as you in one tenant; its activity is listed by <code>event.list</code> with its session id.</p>`
     + table(["Assistant", "Sends codes to", "Tenant", "Scopes", "Connected", "Last used", "Session", ""], grants.map(({ grant, tenant_slug, last_seen_at }) => [
@@ -74,12 +72,12 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
       + button("agent.archive", { agent_id: a.identity.id }, "Archive"),
   ]));
 
-  body += `<h2>New agent</h2>` + (creatable.length === 0 ? "<p>You cannot create agents in any tenant.</p>" : creatable.map((slug) =>
+  body += `<details><summary>New agent</summary>` + (creatable.length === 0 ? "<p>You cannot create agents in any tenant.</p>" : creatable.map((slug) =>
     `<form method="post" action="/api/agent.create"><input type="hidden" name="tenant" value="${esc(slug)}">${BACK}`
     + `<p>Address: <code>${esc(slug)}.&lt;slug&gt;@${esc(env.HUB_DOMAIN)}</code>. Agents and projects share names in this organization.</p>`
     + `<label>Slug <input name="slug" required maxlength="63" pattern="[a-z0-9-]+"></label> `
     + `<label>Name <input name="display_name" required maxlength="80"></label> `
-    + `<button type="submit">Create agent in ${esc(slug)}</button></form>`).join(""));
+    + `<button type="submit">Create agent in ${esc(slug)}</button></form>`).join("")) + "</details>";
 
   body += `<h2>Tokens</h2>` + table(["Name", "Agent", "Tenant", "Created", "Last used", "Expires", ""], tokens.map((t) => [
     esc(t.token.name), `<code>${esc(t.agent_email)}</code>`, esc(t.tenant_slug), when(t.token.created_at), when(t.token.last_used_at),

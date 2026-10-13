@@ -126,7 +126,7 @@ try {
   for (const [role,text] of [['user','What needs my attention today?'],['assistant','Review **sample#2** and the communication views.']]) {
     await db.prepare("INSERT INTO assistant_message (id,thread_id,tenant_id,role,text,created_at) VALUES (?,?,?,?,?,?)").bind(id(),assistantId,tenant,role,text,now + counter).run();
   }
-  if (process.env.WORKBENCH_PAGES) {
+  {
     for (let n=1;n<=10;n++) await verb(member, 'project.create', {slug:'team-'+n,kind:n%2 ? 'tracker' : 'wiki',display_name:'Team '+n});
     const viewer = await db.prepare("SELECT id FROM identity WHERE email = 'dev@example.test'").first('id');
     const work = await db.prepare("SELECT id FROM work_item WHERE project_id = ? AND number = 2").bind(sampleId).first('id');
@@ -136,8 +136,15 @@ try {
     await verb(member, 'file.put', {project:'knowledge',path:'handbook/notes.txt',content_type:'text/plain',expected_revision:0,base64:Buffer.from('Folder fixture.').toString('base64')});
     await verb(member,'person.upsert',{project:'knowledge',id:contact.entity.id,expected_revision:1,name:'Alex Example',title:'Designer',emails:['alex@example.test'],links:[{kind:'research',ref:'findings'},{kind:'file',ref:'notes.txt'}]});
   }
+  const rootToken = await human('root',tenant,'admin');
+  await db.prepare("UPDATE identity SET is_root = 1 WHERE email = 'root@example.test'").run();
+  await verb(member,'agent.create',{tenant:'acme',slug:'build',display_name:'Build agent'});
+  await verb(member,'usage.report',{provider:'openai',model:'synthetic-model',input_tokens:1200,output_tokens:400,cost_usd:0.02,work:'sample#2'});
+  await db.prepare("INSERT INTO app_source (id,tenant_id,project_id,script_name,state,created_by,created_at,last_event_at) VALUES (?,?,?,'sample-worker','active',?,?,?)").bind(id(),tenant,sampleId,viewerId,now,now).run();
+  await db.prepare("INSERT INTO app_error_group (id,tenant_id,project_id,script_name,fingerprint,kind,title,last_message,count,first_seen,last_seen) VALUES (?,?,?,'sample-worker','synthetic-error','exception','Workbench request failed','Synthetic exception for design evidence',3,?,?)").bind('synthetic-error',tenant,sampleId,now,now).run();
+  await db.prepare("INSERT INTO situation (id,tenant_id,identity_id,thread_id,title,question,report,created_at) VALUES (?,?,?,?,'Investigate the workbench','Why did the workbench request fail?','Synthetic report: inspect the recorded error group.',?)").bind('synthetic-situation',tenant,viewerId,assistantId,now).run();
   browser = await chromium.launch({headless: true});
-  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
+  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', person:'/people/dev%40example.test', agent:'/people/acme.build%40pimwell.test', connect:'/people?connect=1', invite:'/people?invite=1', appGroup:'/apps?g=synthetic-error', situations:'/situations', situation:'/situations?s=synthetic-situation', usagePerson:'/usage?days=30&who=dev%40example.test', mailSettings:'/mail?addresses=1', mailRecipients:'/mail/recipients', account:'https://pimwell.test/me', sessions:'https://pimwell.test/me/sessions', models:'https://pimwell.test/admin/models', orgs:'https://pimwell.test/admin/orgs', adminApps:'https://pimwell.test/admin/apps', newWork:'/new?project=sample', search:'/search?q=workbench'};
   const phase = process.env.WORKBENCH_PHASE || 'before';
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
@@ -158,27 +165,30 @@ try {
     await ctx.routeWebSocket('**/*', ws => ws.close());
     await ctx.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url());
-      if (url.hostname !== host) return route.abort();
-      let res = await mf.dispatchFetch(req.url(), {method:req.method(), headers:{...await req.allHeaders(),'x-local-browser-host':host}, body:req.postDataBuffer() || undefined, redirect:'manual'});
+      if (![host,'pimwell.test'].includes(url.hostname)) return route.abort();
+      const requestHeaders = {...await req.allHeaders(),'x-local-browser-host':url.hostname,...(url.hostname === 'pimwell.test' ? {cookie:`pmw_session=${rootToken}`} : {})};
+      let res = await mf.dispatchFetch(req.url(), {method:req.method(), headers:requestHeaders, body:req.postDataBuffer() || undefined, redirect:'manual'});
       let finalURL = req.url();
       for (let n=0; res.status >= 300 && res.status < 400 && res.headers.has('location'); n++) {
         if (n > 5) throw new Error('Redirect loop');
         const target = new URL(res.headers.get('location'),req.url());
-        if (target.hostname !== host) throw new Error('External redirect refused');
+        if (![host,'pimwell.test'].includes(target.hostname)) throw new Error('External redirect refused');
         finalURL = target.href;
-        res = await mf.dispatchFetch(target.href,{headers:{'x-local-browser-host':host,cookie:`pmw_session=${member}`},redirect:'manual'});
+        res = await mf.dispatchFetch(target.href,{headers:{'x-local-browser-host':target.hostname,cookie:`pmw_session=${target.hostname === 'pimwell.test' ? rootToken : member}`},redirect:'manual'});
       }
       await route.fulfill({status:res.status,headers:{...Object.fromEntries(res.headers),'x-local-final-url':finalURL},body:Buffer.from(await res.arrayBuffer())});
     });
     const page = await ctx.newPage();
     for (const [name, route] of Object.entries(pages).filter(([name]) => !process.env.WORKBENCH_PAGES || process.env.WORKBENCH_PAGES.split(',').includes(name))) {
-      const response = await page.goto(base+route);
+      if (name === 'attention') await db.prepare('UPDATE attention SET done_at = NULL WHERE tenant_id = ?').bind(tenant).run();
+      const response = await page.goto(route.startsWith('https:') ? route : base+route);
       expect(response.status(), name).toBe(200);
       await page.locator('main').waitFor();
       await page.screenshot({path:path.join(artifacts,`${phase}-${name}-${label}.png`),fullPage:false});
       manifest.push({phase,name,route,viewport,file:`${phase}-${name}-${label}.png`});
       if (phase === 'after') {
         await expect(page.locator('.bar .wb-breadcrumb')).toBeVisible();
+        if (!route.startsWith('https:')) {
         await expect(page.locator('#explorer')).toHaveCount(1);
         await expect(page.locator('#explorer > .wb-tree')).toHaveCount(1);
         await expect(page.locator('#rail #explorer')).toHaveCount(1);
@@ -186,6 +196,61 @@ try {
         const visibleNavigation = await page.evaluate(() => ['rail','explorer'].map(id => {const r=document.getElementById(id).getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth;}));
         expect(visibleNavigation).toEqual(viewport.width >= 1280 ? [true,true] : [false,false]);
         if (viewport.width < 760) await expect(page.locator('.tabs')).toBeVisible();
+        } else expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
+      }
+      if (phase === 'after' && ['people','apps','situations','usage','search','sessions'].includes(name)) {
+        await expect(page.locator('#list .card, #list .grid, #list .bars')).toHaveCount(0);
+        const link = name === 'people' ? page.locator('#list a').filter({hasText:/^Build agent$/}) :
+          name === 'apps' ? page.locator('#list a').filter({hasText:/^Workbench request failed$/}) :
+          name === 'situations' ? page.locator('#list a').filter({hasText:/^Investigate the workbench$/}) :
+          name === 'usage' ? page.locator('#list a').filter({hasText:/^dev$/}) :
+          name === 'sessions' ? page.locator('#list tr[data-href] a').first() :
+          page.locator('#list a').filter({hasText:/^Launch the workbench$/});
+        const initialURL = page.url();
+        await page.evaluate(()=>{window.orgList=document.getElementById('list'); window.orgRail=document.getElementById('rail');});
+        await link.first().click();
+        await expect(page.locator('#inspector')).toBeVisible();
+        const selectedURL = page.url();
+        expect(selectedURL).not.toBe(initialURL);
+        expect(await page.evaluate(()=>window.orgList === document.getElementById('list') && window.orgRail === document.getElementById('rail'))).toBe(true);
+        if (name === 'search') {
+          await expect(page.locator('#inspector h1')).toContainText('Launch the workbench');
+          expect(new URL(selectedURL).searchParams.get('q')).toBe('workbench');
+          await expect(page.locator('#inspector a.button')).toHaveAttribute('href','/sample/w/1');
+        }
+        if (name === 'people') await expect(page.locator('#inspector')).toContainText('Active tokens');
+        if (name === 'apps') await expect(page.locator('#inspector a.button')).toContainText('File a snag');
+        if (name === 'situations') await expect(page.locator('#inspector form[action="/api/situation.resolve"]')).toBeVisible();
+        if (name === 'usage') await expect(page.getByRole('table',{name:'Recorded calls',exact:true})).toBeVisible();
+        if (name === 'sessions') await expect(page.locator('#inspector form[action="/api/session.revoke"]')).toBeVisible();
+        const closeURL = new URL(await page.locator('#inspector a.back').getAttribute('href'),selectedURL).href;
+        await page.reload();
+        await expect(page.locator('#inspector')).toBeVisible();
+        await page.screenshot({path:path.join(artifacts,`${phase}-${name}-selected-${label}.png`),fullPage:false});
+        manifest.push({phase,name:name+'-selected',route:selectedURL,viewport,file:`${phase}-${name}-selected-${label}.png`});
+        await page.locator('#inspector [data-close-inspector]').click();
+        await expect(page).toHaveURL(closeURL);
+        await page.goBack();
+        await expect(page).toHaveURL(selectedURL);
+        await expect(page.locator('#inspector')).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(page).toHaveURL(closeURL);
+      }
+      if (phase === 'after' && ['admin','models','orgs','adminApps','mailSettings','mailRecipients'].includes(name)) {
+        const summary = page.locator('.wb-inline-edit > summary').first();
+        await summary.click();
+        await expect(page.locator('.wb-inline-edit[open] form').first()).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.wb-inline-edit[open]')).toHaveCount(0);
+      }
+      if (phase === 'after' && name === 'newWork') {
+        await expect(page.locator('#list form[action="/api/work.create"]')).toBeVisible();
+        await expect(page.locator('#inspector')).not.toBeVisible();
+        await page.locator('#new-project').selectOption('team-1');
+        await page.locator('#new-kind').selectOption('errand');
+        await page.locator('#new-title').fill('Browser filed work '+label);
+        await page.locator('#list button[type=submit]').click();
+        await expect(page.locator('#inspector h1')).toContainText('Browser filed work '+label);
       }
       if (phase === 'after' && ['attention','attentionItem','mail','mailMessage','chat','chatThread','assistant'].includes(name)) {
         if (name.startsWith('attention')) {

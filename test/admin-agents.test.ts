@@ -20,7 +20,9 @@ describe("/admin/agents", () => {
     const html = await res.text();
     expect(html).toContain("acme.bot@pimwell.test");
     expect(html).toContain("op@example.com");
-    expect(html).toMatch(/<td>1<\/td><td>1<\/td>/);
+    expect(html).toContain("<dt>Sessions</dt><dd>1 tokens · 1 runs</dd>");
+    expect(html).toContain('<summary aria-label="Change Access">');
+    expect(html).toContain('href="/mail?addresses=1"');
     expect(html).toContain('action="/api/agent.archive"');
     expect(html).toContain(`name="agent_id" value="${s.agent.identity.id}"`);
     expect(html).toContain('name="_back" value="/admin/agents"');
@@ -47,9 +49,10 @@ describe("/admin/agents", () => {
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/admin/agents");
     const html = await (await page("acme.pimwell.test", admin.token)).text();
-    const archived = html.slice(html.indexOf("<h2>Archived</h2>"));
-    expect(archived).toContain("acme.bot@pimwell.test");
-    expect(html.slice(0, html.indexOf("<h2>Archived</h2>"))).not.toContain("acme.bot@pimwell.test");
+    const split = html.indexOf("<details><summary>Archived agents");
+    expect(html.slice(split)).toContain("acme.bot@pimwell.test");
+    expect(html.slice(0,split)).not.toContain("acme.bot@pimwell.test");
+    expect(html.slice(split)).not.toContain('action="/api/agent.archive"');
   });
 
   it("links from the tenant home for admins only", async () => {

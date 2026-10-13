@@ -68,7 +68,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
     { href: "/me/sessions", label: "Sessions", section: "hub" },
     ...(ctx.identity.is_root === 1 ? [{ href: "/admin/orgs", label: "Hub admin", section: "admin" }, { href: "/admin/apps", label: "Apps to approve", section: "apps" }] : []),
   ];
-  return { brandHref: hub, org: null, me, tip: tipFor(key), breadcrumb: [{label: "Pimwell", href: "/"}, {label: key === "sessions" ? "Sessions" : nav.find(n => n.section === active)?.label ?? active, href: new URL(ctx.pageUrl ?? hub).pathname, current: true}], nav: nav.map((n) => ({ href: n.href, label: n.label, active: n.section === active })) };
+  return { brandHref: hub, org: null, me, tip: tipFor(key), breadcrumb: [{label: "Pimwell", href: "/"}, {label: ({sessions:"Sessions",models:"Models and keys",orgs:"Organizations",apps:"Apps"} as Record<string,string>)[key] ?? nav.find(n => n.section === active)?.label ?? active, href: new URL(ctx.pageUrl ?? hub).pathname, current: true}], nav: nav.map((n) => ({ href: n.href, label: n.label, active: n.section === active })) };
 }
 
 const VIEW_LABELS: Record<string, string> = { docket: "Docket", graph: "Dependency graph", frontier: "Execution frontier", w: "Docket", board: "Board", status: "Status", code: "Repository and code", files: "Code files", reviews: "Reviews", wiki: "Wiki", documents: "Files", contacts: "Contacts and graph", c: "Chat", mail: "Mail", attention: "Needs me", people: "People and agents", assistant: "Assistant", apps: "Apps", usage: "AI usage", admin: "Admin", search: "Search", new: "File work", archive: "Archive", planned: "Coming" };
@@ -91,14 +91,14 @@ function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
   } else {
     view = segments[0];
     const label = view ? VIEW_LABELS[view] ?? nav.find(n => n.active)?.label ?? view : "Home";
-    if (p && ["attention", "mail", "c", "assistant"].includes(view ?? "")) links.push({label:p.display_name,href:`/${encodeURIComponent(p.path)}`});
+    if (p && ["attention", "mail", "c", "assistant", "people", "apps", "situations", "usage", "admin", "search", "new"].includes(view ?? "")) links.push({label:p.display_name,href:`/${encodeURIComponent(p.path)}`});
     links.push({label, href: view ? `/${view}` : "/"});
     if (view === "c" && segments[1]) {
       links.push({label:`#${decodeURIComponent(segments[1])}`,href:`/c/${segments[1]}`});
       if (segments[2] === "t" && segments[3]) links.push({label:`Thread #${segments[3]}`,href:url.pathname + url.search});
     } else if (segments.length > 1) links.push({label: decodeURIComponent(segments.slice(1).join("/")), href: url.pathname + url.search});
   }
-  const selected = ["work", "f", "c", "path", "g", "d", "thread", "t"].map(k => url.searchParams.get(k)).find(Boolean);
+  const selected = ["work", "f", "c", "path", "g", "d", "thread", "t", "s", "who", "result"].map(k => url.searchParams.get(k)).find(Boolean);
   if (selected) links.push({label: selected, href: url.pathname + url.search});
   links[links.length - 1]!.current = true;
   return links;

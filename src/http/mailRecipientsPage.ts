@@ -2,7 +2,7 @@
 import type { Env } from "../env";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
-import { esc, htmlResponse, workbench } from "../html";
+import { esc, htmlResponse, inspectorSection, kitTable, workbench } from "../html";
 import { HubError } from "../errors";
 import { responseRecipients } from "../mail/responseRecipients";
 import { extraCheck, proofFresh } from "./extraCheck";
@@ -37,7 +37,7 @@ export async function mailRecipientsPage(request: Request, env: Env): Promise<Re
   const path = `/mail/recipients?address=${encodeURIComponent(address)}`;
   const list = `<a class="back" href="/mail">‹ Mail</a><h1>Response-recipient preferences</h1>
 <p class="lede">Shared mailboxes only. Direct-agent mail keeps its private recipient.</p>
-<ul>${mailboxes.map(m => `<li><a href="/mail/recipients?address=${esc(encodeURIComponent(m.address))}"${m.address === address ? ' aria-current="page"' : ""}>${esc(m.name)} — ${esc(m.address)}</a></li>`).join("")}</ul>`;
+${kitTable("Mailbox preferences",[{label:"Mailbox"},{label:"Address"}],mailboxes.map(m=>({href:`/mail/recipients?address=${encodeURIComponent(m.address)}`,selected:m.address === address,cells:[{html:`<a href="/mail/recipients?address=${esc(encodeURIComponent(m.address))}">${esc(m.name)}</a>`},{html:`<code>${esc(m.address)}</code>`}]})))}`;
   const fresh = proofFresh(ctx);
   const selected = new Set(config.recipients);
   const omittedSelection = config.recipients.some(id => !choices.some(c => c.id === id));
@@ -67,10 +67,10 @@ ${choices.length ? choices.map(c => `<label style="display:block"><input type="c
     configured: "Configured preferences — not a scheduled response.", stale: "Stale preferences — some recipients are no longer eligible.",
     invalid: "Invalid stored preferences — reconciliation required.",
   };
-  const inspector = `<h1>${esc(address)}</h1>
+  const inspector = `<a class="back" href="/mail">‹ Mail</a><h1>${esc(address)}</h1>
 <p><b>${states[config.state]}</b> Revision: ${config.revision ?? "unavailable"}.</p>
 <p class="lede">Preferences only: automatic response scheduling is not implemented. Saving does not send notifications, wake responders, grant mailbox access, or guarantee a reply. One-time guidance is unchanged; later mail gets no routine Received receipt.</p>
-${edit}
+${inspectorSection("Response recipients",[{label:"Preferences",html:states[config.state] ?? config.state,editHtml:edit}])}
 <p>Edits are revision checked. If another admin saves or eligibility changes, read the current state before editing again. If a save's outcome is unknown, reload this page to reconcile it; do not blindly resubmit.</p>`;
   // Full selection/proof observation in the pane key prevents retaining an obsolete form during navigation.
   const key = JSON.stringify([address, config, choices, fresh]);
