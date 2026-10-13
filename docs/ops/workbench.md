@@ -1,0 +1,69 @@
+# Workbench
+
+Pimwell's signed-in application is a compact, desktop-first project console, not a landing page or a dashboard. Keep the product's existing nouns, features and permission checks. Do not invent content to fill a pane.
+
+## Anatomy
+
+- **Top bar:** org › project › view › object breadcrumb, Search (⌘K), + File, account.
+- **Rail:** persistent, labeled organization places and counts: Needs me, Docket, Mine, Mail, Chat, People and agents, Assistant, Reviews, Situations, Apps, AI usage, Admin.
+- **Explorer:** project switcher and resource tree, from `projectFeatures(kind)`, with counts. Include the project's channels, mail address and MCP endpoint; show only capabilities belonging to that project kind.
+- **Working pane:** the widest pane; table, list, document or graph, with actions and filters beside the content they affect.
+- **Inspector:** the selected object's details, inline edits and actions, without removing the list.
+- **Status bar:** request timing, sync state, keyboard hints.
+
+This is the target anatomy. The foundation supplies the tokens and kit and demonstrates them on the Docket list and its overview inspector. The persistent explorer, new shell and cross-view URL behavior are separate passes; other pages retain their existing markup until their pass.
+
+## Rules
+
+1. **URL is state.** Project, view, shared filters, sort and selection belong in paths or query parameters. Back, forward, reload and copied links must restore the same context. Preserve filters while selecting objects and switching views.
+2. **Select, don't navigate away.** Choosing a row fills the inspector while rail, explorer and list stay. Reuse the existing `data-href` navigation and pane keys in `workbench()`; preserve list scroll. `j`/`k` move and Enter opens. Native links remain usable without JavaScript. Do not implement a separate routing framework.
+3. **Inline editing.** Inspector forms use the existing verbs, permissions and expected revision/update checks. Do not auto-replay uncertain POSTs. Destructive actions keep their existing web-only typed confirmation and fresh-proof requirements.
+4. **Density is less padding, not smaller text.** Body 14px, secondary text 13px, 4/8px spacing grid, approximately 28px desktop rows, 1px separators and small radii. Phone targets and rows are 44px without shrinking text. Use aligned tables/lists, not cards.
+5. **Visible first.** Core categories and frequent actions are labeled and visible. Search and shortcuts supplement navigation. Progressive disclosure is for settings and detail, not for hiding capabilities.
+6. **Calm and consistent.** One accent; colors communicate state and kind, always accompanied by text. Use theme variables in both light and system dark mode. No one-off component colors or decorative card grids.
+7. **Desktop-first, not desktop-only.** At ≥1280px the eventual shell exposes rail, explorer, working pane and inspector. Narrow layouts collapse navigation; phone panes stack and retain bottom tabs. Preserve the existing responsive shell until its dedicated pass.
+8. **Data boundaries stay unchanged.** Helpers only render already-authorized data; they do not fetch or decide access. Counts, tree entries, links and inspector content must come from the same tenant/project/mailbox checks as the existing pages.
+
+## Tokens
+
+`src/theme.ts` is the single source of visual values; `src/styles.ts` uses them. See [styling.md](styling.md) for assets, CSP and navigation budgets.
+
+| Purpose | Variables |
+| --- | --- |
+| Spacing | `--space-1/2/3/4/6/8`: 4, 8, 12, 16, 24, 32px |
+| Type | `--fs`, `--fs-md`: 14px; `--fs-sm`: 13px; `--fs-xs`: 12px; `--fs-h1`: 20px; `--fs-chat`: 14px |
+| Density | `--row-h`: 28px desktop / 44px phone; `--tap`: 28px / 44px; `--separator`: 1px |
+| Shape | `--r`, `--r-sm`: 4px; `--r-xs`: 2px |
+| Surfaces/text | `--bg`, `--panel`, `--sunk`, `--line`, `--ink`, `--muted`, `--faint` |
+| Accent | `--accent`, `--accent-soft`, `--focus` |
+| State | `--state-open/doing/done/dropped/blocked` |
+| Kind | `--wish`, `--snag`, `--errand`, `--quest`, `--call`, `--spark` |
+
+## Render kit
+
+Import helpers from `src/html.ts`. Their styles are scoped under `wb-*` so a page can migrate without breaking legacy markup. All labels, headings, hints, class attributes and link attributes are escaped by the helper. Link helpers accept root-relative paths, fragments, HTTP(S) and mailto; unsupported schemes fall back to `#`.
+
+**HTML slots are trusted server markup**, not a sanitizer. Escape user values with `esc()` before inserting them into any `html`, `actionsHtml`, `filtersHtml`, `editHtml` or `controlHtml` slot. Validate external links separately. Never pass raw user HTML, inline event handlers or executable script into a slot.
+
+| Helper | Contract |
+| --- | --- |
+| `kitTable(label, headings, rows)` | Headings `{label, className?}`; rows `{cells: [{html, className?}], href?, selected?}`. Native table and scoped column headings, horizontal overflow container, `data-href` and `aria-selected` on selectable rows. Keep a real anchor in one cell. Reuse `hide-s` for optional phone columns. |
+| `kitList(label, rows)` | Rows `{html, href?, selected?}`; one-column table so selection has the same semantics and script behavior as tables. |
+| `kitTree(label, nodes)` | Nodes `{label, href, count?, current?, children?, expanded?}`. Native `details`/`summary` branches for keyboard expand/collapse, counts including zero, current leaf link. Branches have a separate Open link; no nested link inside summary. `expanded` is server initial state; persistent expansion across swaps belongs to the shell pass. |
+| `kitTabs(label, links)` | Labeled navigation with `{label, href, current?, count?}`. These are URL links, **not** ARIA tab widgets: native history/reload works. Preserve other query filters when building each href. |
+| `toolbar(label, actionsHtml, filtersHtml?)` | Labeled group, action and filter slots, wrapping on narrow screens. Supply real labeled links/buttons and GET filter forms; hide actions the reader cannot perform. |
+| `statusChip(label, tone)` | Text plus colored indicator. Tone is open/doing/done/dropped/blocked or one of the six kinds. Do not rely on color alone. |
+| `inspectorSection(heading, rows, actionsHtml?)` | Rows `{label, html, editHtml?}` rendered as key–value pairs. Optional native Edit disclosure holds an existing verb form, including stale-edit fields, labels and save controls. |
+| `formRow(id, label, controlHtml, hint?)` | Label/control alignment. Control must have matching `id`; when a hint is present, add `aria-describedby="<id>-hint"` to the control. |
+| `emptyState(heading, description, action)` | Plain-language explanation of what belongs here and how to add it or clear filters, plus a labeled `{label, href}` action. Not just “Empty”. |
+| `breadcrumb(links)` | Labeled ordered navigation; mark the final `{label, href, current: true}` entry current. |
+
+The Docket is the first example: breadcrumb, action/filter toolbar, URL tabs, selectable table, kind/state chips, contextual empty state and overview inspector sections. Existing bulk checkboxes, GET filters, native item links and inspector pane behavior remain intact.
+
+## Evidence and verification
+
+Run `WORKBENCH_PHASE=before WORKBENCH_ARTIFACTS=/tmp/workbench-evidence node scripts/workbench-screenshots.mjs` before editing, then repeat with `WORKBENCH_PHASE=after`. The harness bundles the actual Worker and assets, applies all migrations to disposable local D1, and seeds synthetic human sessions, projects, work, wiki, contacts and chat. Network access is denied; no production cookies or credentials are used. It checks every captured route returns 200.
+
+Capture Home, Docket, item, Board, Status, Code, Reviews, Wiki, Files, Contacts and graph, Mail, Chat, Assistant, People, Apps, Usage, Admin and Search at 1440×900, 1920×1080 and 390×844. Later passes can reuse the baseline and harness. Empty views are real empty product states, not fabricated chart data. Upload images and manifests to the `design` wiki project's files, grouped by child item, and link the evidence in that item's closing comment. The foundation's evidence is under `workbench/198/`.
+
+Markup coverage lives in `test/html.test.ts`; real Docket filters and pane navigation remain covered in `test/work-pages.test.ts` and `test/workbench.test.ts`. Before shipping run the full suite, typecheck, release, and check the Docket live.

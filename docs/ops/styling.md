@@ -30,14 +30,14 @@ The workbench sends slow (>3 seconds) navigations/requests, failures/timeouts, a
 ## The variables
 
 - **Type:** `--font`, and the sizes `--fs`, `--fs-md`, `--fs-sm`, `--fs-xs` and `--fs-h1`.
-- **Readability (owner, 2026-10-08):** many readers are in their 50s and 60s, so type and contrast stay generous.
-  - Phones (760px and narrower) redefine the sizes larger: 17px body, `--tap` 44px touch targets, `--bar-h` 56px.
-    Components size buttons, inputs and rows from `--tap`, never from fixed numbers.
+- **Workbench readability:** body text is 14px, secondary text 13px; density comes from a 4/8px spacing grid and approximately 28px rows, not smaller type. See [workbench.md](workbench.md) for the shared kit and migration rules.
+  - Phones (760px and narrower) keep readable type with `--tap` and `--row-h` 44px touch targets and `--bar-h` 56px.
+    Components size buttons, inputs and rows from these tokens, never from fixed numbers.
   - `--muted` and `--faint` keep at least 4.5:1 contrast on `--bg`.
   - `--fs-chat` sets the Assistant's reading size.
   - The bar and the tabs pad for the phone's safe areas (`env(safe-area-inset-*)`).
 - **Shape:** `--r`, `--r-sm` and `--r-xs` (radii), and `--shadow`.
-- **Layout:** `--rail-w`, `--bar-h` and `--status-h`.
+- **Layout:** `--rail-w`, `--bar-h` and `--status-h`; `--space-1/2/3/4/6/8`, `--row-h` and `--separator` define shared kit density.
 - **Surfaces:** `--bg` (page), `--panel` (panes and cards), `--sunk` (rail, chips, table heads) and `--line`.
 - **Text:** `--ink`, `--muted` and `--faint`.
 - **Action:** `--accent` (links, selection edge, primary hover), `--accent-soft` (selected row) and `--focus`.

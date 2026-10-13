@@ -1,7 +1,58 @@
 import { describe, expect, it } from "vitest";
 import { SELF } from "cloudflare:test";
 import { ASSETS } from "../src/assets";
-import { esc, HTML_CSP, htmlResponse, page } from "../src/html";
+import { breadcrumb, emptyState, esc, formRow, HTML_CSP, htmlResponse, inspectorSection, kitList, kitTable, kitTabs, kitTree, page, statusChip, toolbar } from "../src/html";
+
+describe("workbench kit", () => {
+  it("renders selectable table/list rows with native links and scoped headings", () => {
+    const table = kitTable('Work <items>', [{label: 'Title', className: 'hide-s'}], [
+      {href: '/sample/w/1?owner=me&kind=wish', selected: true, cells: [{html: '<a href="/sample/w/1">One</a>'}]},
+      {href: '/sample/w/2', cells: [{html: 'Two', className: 'ref'}]},
+    ]);
+    expect(table).toContain('aria-label="Work &lt;items&gt;"');
+    expect(table).toContain('<th scope="col" class="hide-s">Title</th>');
+    expect(table).toContain('data-href="/sample/w/1?owner=me&amp;kind=wish" aria-selected="true"');
+    expect(table).toContain('data-href="/sample/w/2" aria-selected="false"');
+    expect(table).toContain('<td class="ref">Two</td>');
+    expect(kitList('Work', [{html: '<a href="/w/1">One</a>', href: '/w/1', selected: true}])).toContain('aria-selected="true"');
+  });
+
+  it("renders native collapsible trees with zero counts and current links", () => {
+    const tree = kitTree('Project <resources>', [{label: 'Wiki', href: '/wiki', count: 0, expanded: true, children: [
+      {label: '<Handbook>', href: '/wiki/handbook', current: true},
+      {label: 'Archive', href: '/wiki/archive', children: []},
+    ]}]);
+    expect(tree).toContain('aria-label="Project &lt;resources&gt;"');
+    expect(tree).toContain('<details open><summary>Wiki<span class="wb-count">0</span></summary>');
+    expect(tree).toContain('<a href="/wiki/handbook" aria-current="page">&lt;Handbook&gt;</a>');
+    expect(tree).toContain('<details><summary>Archive</summary>');
+  });
+
+  it("renders URL tabs, breadcrumb and labeled action/filter groups", () => {
+    const links = [{label: 'Docket & work', href: '/docket', current: true}];
+    expect(kitTabs('Views', links)).toContain('<nav class="wb-tabs" aria-label="Views"><a href="/docket" aria-current="page">Docket &amp; work</a>');
+    expect(breadcrumb(links)).toContain('aria-label="Breadcrumb"><ol><li>');
+    expect(toolbar('Work <actions>', '<button>File</button>', '<form>Filters</form>')).toContain('aria-label="Work &lt;actions&gt;"><div class="wb-actions"><button>File</button></div><div class="wb-filters"><form>Filters</form>');
+    expect(toolbar('Actions', '')).not.toContain('wb-filters');
+  });
+
+  it("renders text-labeled state/kind chips, inline edit sections and form labels", () => {
+    expect(statusChip('Under way', 'doing')).toBe('<span class="wb-chip wb-tone-doing">Under way</span>');
+    expect(statusChip('<Snag>', 'snag')).toContain('&lt;Snag&gt;');
+    const section = inspectorSection('Details <1>', [{label: 'Title', html: 'Item', editHtml: '<form><input name="title"></form>'}]);
+    expect(section).toContain('<h2>Details &lt;1&gt;</h2><dl><dt>Title</dt><dd>Item<details class="wb-inline-edit"><summary>Edit Title</summary><form>');
+    expect(formRow('title', 'Title <required>', '<input id="title" aria-describedby="title-hint">', 'Be clear & brief')).toContain('<label for="title">Title &lt;required&gt;</label><div><input id="title" aria-describedby="title-hint"><p class="wb-hint" id="title-hint">Be clear &amp; brief</p>');
+  });
+
+  it("explains empty content and an add action, escapes text and rejects executable links", () => {
+    const empty = emptyState('<No work>', 'Open items belong here & can be filed.', {label: '+ File', href: '/new'});
+    expect(empty).toContain('<h2>&lt;No work&gt;</h2><p>Open items belong here &amp; can be filed.</p><a href="/new">+ File</a>');
+    for (const href of ['javascript:alert(1)', 'data:text/html,x', '//evil.test', 'relative']) {
+      expect(kitTabs('Views', [{label: '<script>', href}])).toContain('href="#">&lt;script&gt;</a>');
+    }
+    expect(breadcrumb([{label: 'Quote', href: '/x?name="&'}])).toContain('href="/x?name=&quot;&amp;"');
+  });
+});
 
 describe("html", () => {
   it.each(["/", "/login", "/signed-out", "/privacy", "/terms", "/invite/invalid", "/auth/invalid", "/unknown"])('protects the HTML route %s without inline scripts', async path => {

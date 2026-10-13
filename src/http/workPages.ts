@@ -5,7 +5,7 @@ import { projectFeatures } from "../projectFeatures";
 import { attentionQuery } from "../verbs/collab";
 import type { Env } from "../env";
 import { safeExternalUrl } from "../security/urls";
-import { esc, htmlResponse, workbench } from "../html";
+import { breadcrumb, emptyState, esc, htmlResponse, inspectorSection, kitTable, kitTabs, statusChip, toolbar, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -98,13 +98,13 @@ const option = (value: string, label: string, selected: boolean) => `<option val
 
 function docketList(ctx: Ctx, project: Project | null, items: WorkItem[], members: Member[], quests: Quest[], slugs: Map<string, string>, f: Filters, selected: string | null = null): string {
   const base = f.org || !project ? "/docket" : `/${project.slug}/docket`;
-  const to = (change: Partial<Filters>) => { const q = qs(f, change); return `${base}${q ? `?${esc(q)}` : ""}`; };
+  const to = (change: Partial<Filters>) => { const q = qs(f, change); return `${base}${q ? `?${q}` : ""}`; };
   const names = new Map(members.map((m) => [m.id, m.display_name]));
-  const chip = (label: string, href: string, on: boolean, cls = "") => `<a class="chip${cls}" href="${href}"${on ? ' aria-current="true"' : ""}>${esc(label)}</a>`;
-  const kinds = [chip("All kinds", to({ kind: null }), f.kind === null),
-    ...Object.entries(KINDS).map(([k, v]) => chip(v.plural, to({ kind: k as WorkKind }), f.kind === k, ` k-${k}`))].join("");
-  const quick = [chip("Anyone's", to({ owner: null }), f.owner === null), chip("Mine", to({ owner: "me" }), f.owner === "me"),
-    `<span class="gap" aria-hidden="true"></span>`, chip("Open", to({ closed: false }), !f.closed), chip("Finished", to({ closed: true }), f.closed)].join("");
+  const kinds = kitTabs("Work kinds", [{label: "All kinds", href: to({kind: null}), current: f.kind === null},
+    ...Object.entries(KINDS).map(([k, v]) => ({label: v.plural, href: to({kind: k as WorkKind}), current: f.kind === k}))]);
+  const quick = kitTabs("Work scope", [
+    {label: "Anyone's", href: to({owner: null}), current: f.owner === null}, {label: "Mine", href: to({owner: "me"}), current: f.owner === "me"},
+    {label: "Open", href: to({closed: false}), current: !f.closed}, {label: "Finished", href: to({closed: true}), current: f.closed}]);
   const ownerKnown = f.owner === null || f.owner === "me" || members.some((m) => m.email === f.owner);
   const filterForm = `<form class="filters" method="get" action="${base}">${f.kind ? `<input type="hidden" name="kind" value="${f.kind}">` : ""}${f.closed ? `<input type="hidden" name="closed" value="1">` : ""}
 <label>Owner <select name="owner">${option("", "Anyone", f.owner === null)}${option("me", "Me", f.owner === "me")}${ownerKnown ? "" : option(f.owner!, f.owner!, true)}${members.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (agent)" : ""}`, f.owner === m.email)).join("")}</select></label>
@@ -116,9 +116,15 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
     const sl = slugs.get(w.project_id) ?? project?.slug ?? "?";
     const href = `/${sl}/w/${w.number}${itemQs ? `?${itemQs}` : ""}`;
     const who = w.owner_id ? (w.owner_id === ctx.identity!.id ? "You" : names.get(w.owner_id) ?? "Former member") : "";
-    const box = canBulk ? `<td class="hide-s"><input type="checkbox" name="ids" value="${esc(`${sl}#${w.number}`)}" form="bulk" aria-label="Select ${esc(`${sl}#${w.number}`)}"></td>` : "";
-    return `<tr data-href="${esc(href)}"${w.id === selected ? ' aria-selected="true"' : ""}>${box}<td class="ref">${esc(f.org || !project ? `${sl}#${w.number}` : `#${w.number}`)}</td><td class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)}</td><td><a href="${esc(href)}">${esc(w.title)}</a></td><td class="hide-s">${esc(who)}</td><td class="hide-s">${esc(STATES[w.state])}</td><td class="when hide-s" title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</td></tr>`;
-  }).join("");
+    const box = canBulk ? [{className: "hide-s", html: `<input type="checkbox" name="ids" value="${esc(`${sl}#${w.number}`)}" form="bulk" aria-label="Select ${esc(`${sl}#${w.number}`)}">`}] : [];
+    return {href, selected: w.id === selected, cells: [...box,
+      {className: "ref", html: esc(f.org || !project ? `${sl}#${w.number}` : `#${w.number}`)},
+      {html: statusChip(KINDS[w.kind].name, w.kind)},
+      {html: `<a href="${esc(href)}">${esc(w.title)}</a>`},
+      {className: "hide-s", html: esc(who)},
+      {className: "hide-s", html: statusChip(STATES[w.state], w.state)},
+      {className: "when hide-s", html: `<time title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</time>`}]};
+  });
   const filtered = f.kind !== null || f.owner !== null || f.quest !== null;
   const empty = f.owner === "me" && !f.closed && f.kind === null && f.quest === null
     ? `Nothing is yours right now. Take something from <a href="${to({ owner: null })}">the open list</a>, or file what you are about to start.`
@@ -132,12 +138,11 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
 <select name="state"><option value="">state…</option><option value="open">Open</option><option value="doing">Under way</option><option value="done">Done</option><option value="dropped">Let go</option></select>
 <select name="owner"><option value="">owner…</option><option value="me">Me</option><option value="none">Nobody</option>${members.map((m) => option(m.email, m.display_name, false)).join("")}</select>
 <button type="submit" class="quiet">Apply</button></form>` : "";
-  return `<p class="crumbs"><a href="/">${esc(ctx.tenant!.display_name)}</a>${project && !f.org ? ` / <a href="/${esc(project.slug)}">${esc(project.display_name)}</a>` : ""}</p>
-<div class="head"><h1>${esc(DOCKET.name)}</h1><span>${items.length} ${f.closed ? "finished" : "open"} in ${where}</span>${scope}</div>
-<div class="chips">${kinds}</div><div class="chips">${quick}</div>
-${filterForm}
-${bulk}
-${items.length ? `<table><thead><tr>${canBulk ? '<th class="hide-s"></th>' : ""}<th></th><th>Kind</th><th>Title</th><th class="hide-s">Owner</th><th class="hide-s">State</th><th class="hide-s">Updated</th></tr></thead><tbody>${rows}</tbody></table>` : `<p class="empty">${empty}</p>`}`;
+  return `${breadcrumb([{label: ctx.tenant!.display_name, href: "/"}, ...(project && !f.org ? [{label: project.display_name, href: `/${project.slug}`}] : []), {label: DOCKET.name, href: base, current: true}])}
+<div class="head"><h1>${esc(DOCKET.name)}</h1><span>${items.length} ${f.closed ? "finished" : "open"} in ${where}</span></div>
+${toolbar("Docket actions and filters", `${scope}${rank(ctx.role) >= rank("member") ? ` <a class="button" href="/new${project ? `?project=${esc(project.slug)}` : ""}">+ File</a>` : ""}`, filterForm)}
+${kinds}${quick}${bulk}
+${items.length ? kitTable("Docket", [...(canBulk ? [{label: "Select", className: "hide-s"}] : []), {label: "Reference"}, {label: "Kind"}, {label: "Title"}, {label: "Owner", className: "hide-s"}, {label: "State", className: "hide-s"}, {label: "Updated", className: "hide-s"}], rows) : emptyState("No work here", empty.replace(/<[^>]*>/g, ""), {label: filtered ? "Show everything open" : "File work", href: filtered ? base : "/new"})}`;
 }
 
 // ---------- Inspector panes ----------
@@ -243,8 +248,8 @@ function overviewInspector(ctx: Ctx, env: Env, project: Project | null, items: W
   return `<div class="head"><span>${project ? "Project" : "Organization"}</span></div>
 <h1>${esc(project ? project.display_name : ctx.tenant!.display_name)}</h1>
 <p class="lede">Choose an item to open it here; the list stays put. <kbd>j</kbd> and <kbd>k</kbd> move, <kbd>Enter</kbd> opens.</p>
-<div class="grid">${byKind.length ? byKind.map((x) => `<div class="card"><div class="stat k-${x.k}">${x.n}<small>${esc(x.v.plural)}</small></div><p>${esc(x.v.plain)}s</p></div>`).join("") : `<div class="card"><p>Nothing in this list yet.</p></div>`}</div>
-<h2>Send work here</h2><p>Forward a thread to <code>${esc(address)}</code>, file it with <a href="/new${project ? `?project=${esc(project.slug)}` : ""}">+ File</a>, or ask an assistant over MCP.</p>
+${inspectorSection("In this list", byKind.map(x => ({label: x.v.plural, html: `${statusChip(String(x.n), x.k as WorkKind)} ${esc(x.v.plain)}s`})), byKind.length ? "" : "<p>Nothing in this list yet.</p>")}
+${inspectorSection("Send work here", [{label: "Mail address", html: `<code>${esc(address)}</code>`}], `<p>Forward a thread to this address, file it with <a href="/new${project ? `?project=${esc(project.slug)}` : ""}">+ File</a>, or ask an assistant over MCP.</p>`)}
 ${project ? `<p><a href="/${esc(project.slug)}">Project page</a>: address, clone URL and history.</p>` : ""}
 <h2>Coming to this view</h2>
 ${plannedBlock("work.board", "Board")}${plannedBlock("work.search", "Search")}${plannedBlock("work.bulk_update", "Change many")}`;

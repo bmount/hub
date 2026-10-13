@@ -1,5 +1,35 @@
 // Components for every page, written only in the theme's variables (src/theme.ts).
 export const COMPONENTS_CSS = `
+/* Shared workbench kit. Scoped classes let later passes migrate one view at a time. */
+.wb-breadcrumb ol{display:flex;flex-wrap:wrap;list-style:none;padding:0;margin:0 0 var(--space-2);gap:var(--space-1);font-size:var(--fs-sm)}
+.wb-breadcrumb li+li:before{content:"›";margin-right:var(--space-1);color:var(--faint)}
+.wb-breadcrumb a{color:var(--muted);text-decoration:none}
+.wb-tabs,.wb-toolbar,.wb-actions{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2)}
+.wb-tabs{border-bottom:var(--separator) solid var(--line);margin-bottom:var(--space-2)}
+.wb-tabs a{padding:var(--space-1) var(--space-2);min-height:var(--row-h);display:inline-flex;align-items:center;text-decoration:none;color:var(--muted);border-bottom:2px solid transparent}
+.wb-tabs a[aria-current]{color:var(--accent);border-bottom-color:var(--accent)}
+.wb-toolbar{padding:var(--space-1) 0;border-bottom:var(--separator) solid var(--line);margin-bottom:var(--space-2);justify-content:space-between}
+.wb-filters{min-width:0}.wb-filters .filters{margin:0}
+.wb-count{margin-left:var(--space-2);color:var(--muted);font-variant-numeric:tabular-nums}
+.wb-table-wrap{max-width:100%;overflow-x:auto}.wb-table{width:100%;border-collapse:collapse}
+.wb-table th,.wb-table td{height:var(--row-h);padding:var(--space-1) var(--space-2);border-bottom:var(--separator) solid var(--line)}
+.wb-table tr[aria-selected=true]{background:var(--accent-soft)}
+.wb-table tr[data-href]:hover{background:var(--sunk)}
+.wb-tree ul{list-style:none;padding:0;margin:0}
+.wb-tree ul ul{padding-left:var(--space-4);border-left:var(--separator) solid var(--line)}
+.wb-tree a,.wb-tree summary{min-height:var(--row-h);padding:var(--space-1) var(--space-2);color:var(--ink);text-decoration:none;overflow-wrap:anywhere}
+.wb-tree a{display:block}.wb-tree summary{cursor:pointer}.wb-tree a[aria-current]{background:var(--accent-soft);color:var(--accent)}
+.wb-chip{display:inline-flex;align-items:center;gap:var(--space-1);font-size:var(--fs-sm);white-space:nowrap;border:var(--separator) solid var(--line);border-radius:var(--r-xs);padding:0 var(--space-1)}
+.wb-chip:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.wb-tone-open{color:var(--state-open)}.wb-tone-doing{color:var(--state-doing)}.wb-tone-done{color:var(--state-done)}.wb-tone-dropped{color:var(--state-dropped)}.wb-tone-blocked{color:var(--state-blocked)}
+.wb-tone-wish{color:var(--wish)}.wb-tone-snag{color:var(--snag)}.wb-tone-errand{color:var(--errand)}.wb-tone-quest{color:var(--quest)}.wb-tone-call{color:var(--call)}.wb-tone-spark{color:var(--spark)}
+.wb-section{border-bottom:var(--separator) solid var(--line);padding:var(--space-2) 0}.wb-section h2{margin:0 0 var(--space-2);font-size:var(--fs-md)}
+.wb-section dl{display:grid;grid-template-columns:minmax(80px,1fr) minmax(0,2fr);gap:var(--space-1) var(--space-2);margin:0}.wb-section dt{color:var(--muted)}.wb-section dd{margin:0;overflow-wrap:anywhere}
+.wb-inline-edit{margin-top:var(--space-1)}.wb-inline-edit summary{color:var(--accent);cursor:pointer}
+.wb-form-row{display:grid;grid-template-columns:minmax(80px,1fr) minmax(0,2fr);gap:var(--space-2);align-items:start;margin-bottom:var(--space-2)}
+.wb-form-row>label{padding-top:var(--space-1)}.wb-hint{font-size:var(--fs-sm);color:var(--muted);margin:var(--space-1) 0}
+.wb-empty{padding:var(--space-4) var(--space-2);border-bottom:var(--separator) solid var(--line)}.wb-empty h2{font-size:var(--fs-md);margin:0}.wb-empty p{color:var(--muted);margin:var(--space-2) 0}
+@media(max-width:760px){.wb-form-row{grid-template-columns:1fr}.wb-tabs a,.wb-tree a,.wb-tree summary{min-height:var(--tap)}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:var(--fs)/1.45 var(--font);font-variant-numeric:tabular-nums}
 a{color:var(--accent);text-underline-offset:2px}
