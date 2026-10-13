@@ -72,6 +72,8 @@ describe("auth stress", () => {
 
   it("deleting the organization ends the connection and leaves nothing to reuse", async () => {
     const w = await world();
+    // This suite exercises grant revocation, not the external repository purge.
+    await env.HUB_DB.prepare("UPDATE project SET kind = 'tracker' WHERE tenant_id = ?").bind(w.acme.id).run();
     await setTenantState(env.HUB_DB, w.acme.id, "archived", Date.now());
     const del = await apiPost("pimwell.test", "tenant.delete", { slug: "acme", confirm: "acme" }, cookieHeaders(w.root.token, "pimwell.test"));
     expect(del.status).toBe(200);

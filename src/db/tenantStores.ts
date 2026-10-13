@@ -1,0 +1,42 @@
+import type { Ctx } from "../auth/context";
+import type { Tenant } from "./types";
+import { conflict, HubError } from "../errors";
+import { ArtifactsRest, artifactNamespace } from "../code/artifactsRest";
+import { repoOwnership } from "../code/artifactPush";
+import { conversationStub, inboxStub } from "../chat/stubs";
+
+/** Purge external stores before D1. Failures leave an archived organization retryable. */
+export async function purgeTenantStores(ctx: Ctx, tenant: Tenant): Promise<void> {
+  const db = ctx.db, tid = tenant.id, bucket = ctx.env.GIT_PUSH_STAGING;
+  const repos = (await db.prepare("SELECT p.id, p.slug, g.project_id AS mapped FROM project p LEFT JOIN git_repository g ON g.tenant_id = p.tenant_id AND g.project_id = p.id WHERE p.tenant_id = ? AND p.kind = 'repo'")
+    .bind(tid).all<{ id: string; slug: string; mapped: string | null }>()).results;
+  if (ctx.env.ARDI_REPO_CREATE === "on" && repos.some(r => !r.mapped)) throw conflict("repository is not mapped to Artifacts; migrate it before deleting the organization");
+  const ns = artifactNamespace(tenant.slug);
+  const api = () => new ArtifactsRest(ctx.env);
+  const pushes = (await db.prepare("SELECT id, project_id, namespace, shadow, replay_key FROM git_push WHERE tenant_id = ?")
+    .bind(tid).all<{ id: string; project_id: string; namespace: string; shadow: string; replay_key: string }>()).results;
+  for (const push of pushes) {
+    if (push.namespace !== ns || (push.replay_key && !push.replay_key.startsWith(`git-push/${tid}/${push.project_id}/`))) throw conflict("repository staging ownership mismatch");
+    if (push.replay_key) {
+      if (!bucket) throw new HubError(503, "unavailable", "git staging storage unavailable");
+      try { await api().deleteTemporary(ns, push.shadow, push.id); }
+      catch (e) { if (!(e instanceof HubError) || e.status !== 404) throw e; }
+      await bucket.delete(push.replay_key);
+    }
+  }
+  for (const repo of repos) if (repo.mapped) await api().deleteProject(ns, repo.slug, repoOwnership(tid, repo.id));
+  const channels = (await db.prepare("SELECT project_id AS id FROM channel WHERE tenant_id = ?").bind(tid).all<{ id: string }>()).results.map(r => r.id);
+  for (const id of channels) await conversationStub(ctx.env, tid, id).purge(tid, id);
+  const identities = (await db.prepare("SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?")
+    .bind(tid, tid).all<{ identity_id: string }>()).results;
+  for (const { identity_id } of identities) await inboxStub(ctx.env, tid, identity_id).purgeTenant(tid, identity_id);
+  if (!bucket && await db.prepare("SELECT 1 FROM file_revision WHERE tenant_id = ? LIMIT 1").bind(tid).first()) throw new HubError(503, "unavailable", "file storage unavailable");
+  if (bucket) for (const prefix of [`project-files/${tid}/`, `git-push/${tid}/`]) {
+    let cursor: string | undefined;
+    do {
+      const page = await bucket.list({ prefix, cursor });
+      if (page.objects.length) await bucket.delete(page.objects.map(o => o.key));
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
+  }
+}

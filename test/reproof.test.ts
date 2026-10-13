@@ -71,7 +71,8 @@ describe("reproof", () => {
   it("a hub verb form post redirects without next", async () => {
     const root = await seedHuman("r@example.com", { is_root: true });
     await stale(root.session.id);
-    const res = await formPost("pimwell.test", "tenant.create", { slug: "blue", display_name: "Blue" }, root.token);
+    await seedTenant("blue");
+    const res = await formPost("pimwell.test", "tenant.archive", { slug: "blue" }, root.token);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("https://pimwell.test/login?reproof=1");
   });

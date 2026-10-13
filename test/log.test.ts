@@ -68,7 +68,7 @@ describe("request lines", () => {
 
   it("log a refusal's reason, show the form a readable page, and audit refused sensitive actions", async () => {
     const t = await seedTenant("acme");
-    const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "admin" }] });
+    const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
     const out = lines();
     const res = await SELF.fetch("https://pimwell.test/api/tenant.delete", {
       method: "POST", redirect: "manual",

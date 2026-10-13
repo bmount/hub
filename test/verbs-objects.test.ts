@@ -34,7 +34,7 @@ describe("tenant verbs", () => {
   it("non-root cannot create tenants; tenant verbs are not served on a tenant host", async () => {
     const t = await seedTenant("acme");
     const admin = await seedHuman("a@example.com", { memberships: [{ tenant_id: t.id, role: "admin" }] });
-    expect((await apiPost("pimwell.test", "tenant.create", { slug: "blue", display_name: "Blue" }, bearer(admin.token))).status).toBe(403);
+    expect((await apiPost("pimwell.test", "tenant.create", { slug: "blue", display_name: "Blue" }, bearer(admin.token))).status).toBe(200);
     const root = await seedHuman("r@example.com", { is_root: true });
     expect((await apiPost("acme.pimwell.test", "tenant.create", { slug: "blue", display_name: "Blue" }, bearer(root.token))).status).toBe(404);
   });

@@ -115,15 +115,24 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind === "apex") {
-    if (!ctx.identity) return htmlResponse(LANDING_HTML, 200, extra);
-    const memberships = (await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id)).filter((m) => m.tenant.state === "active" && m.membership.state === "active");
+    const createForm = `<section><h2>New organization</h2><form data-reload method="post" action="/api/tenant.create"><label>Organization slug <input name="slug" pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="63" required></label><label>Display name <input name="display_name" maxlength="80" required></label><button type="submit">Create organization</button></form></section>`;
+    if (!ctx.identity) return htmlResponse(LANDING_HTML.replace("</body>", `${createForm}</body>`), 200, extra);
+    const allMemberships = await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id, true);
+    const memberships = allMemberships.filter((m) => m.tenant.state === "active" && m.membership.state === "active");
     const card = (slug: string, name: string, note: string) => `<a class="card big" href="https://${esc(slug)}.${esc(env.HUB_DOMAIN)}/" data-reload><h3>${esc(name)}</h3><p>${esc(note)}</p><p><code>${esc(slug)}.${esc(env.HUB_DOMAIN)}</code></p></a>`;
     let body = `<h1>Hello, ${esc(ctx.identity.display_name)}</h1>
 ${intentBox({ placeholder: "What do you want to do? Say it or type it" })}
 <p class="lede">AI can do a lot. Ask here, pick an organization below, or ask from Claude or ChatGPT over MCP.</p>
 ${setupCard(env, memberships.filter((m) => m.membership.role !== "reader" || ctx.identity!.is_root === 1).map((m) => ({ slug: m.tenant.slug, name: m.tenant.display_name })))}`;
     if (memberships.length) body += `<section aria-label="Organization chat"><h2>Chat with your team</h2><p class="chips">${memberships.map((m) => `<a class="chip" href="https://${esc(m.tenant.slug)}.${esc(env.HUB_DOMAIN)}/c" data-reload>${esc(m.tenant.display_name)} chat</a>`).join(" ")}</p></section>`;
-    body += `<h2>Your organizations</h2>` + (memberships.length ? `<div class="grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, `You are ${m.membership.role}`)).join("")}</div>` : `<p class="lede">None yet. Ask whoever invited you to add you to an organization.</p>`);
+    body += `<h2>Your organizations</h2>` + (memberships.length ? `<div class="grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, `You are ${m.membership.role}`)).join("")}</div>` : `<p class="lede">None yet. Create an organization below, or accept an invitation.</p>`);
+    if (ctx.identity.kind === "human") {
+      body += createForm;
+      body += `<h2>Manage your organizations</h2>` + allMemberships.filter(m => m.membership.role === "admin" || ctx.identity!.is_root === 1).map(m => {
+        const slug = esc(m.tenant.slug), archived = m.tenant.state === "archived";
+        return `<section><h3>${esc(m.tenant.display_name)} (${slug})</h3><form data-reload method="post" action="/api/tenant.${archived ? "unarchive" : "archive"}"><input type="hidden" name="slug" value="${slug}"><button>${archived ? "Unarchive" : "Archive"} organization</button></form>${archived ? `<form data-reload method="post" action="/api/tenant.delete"><input type="hidden" name="slug" value="${slug}"><label>Type ${slug} to delete permanently <input name="confirm" required autocomplete="off"></label><button>Delete permanently</button><p>This cannot be undone. All organization data and repositories will be removed.</p></form>` : ""}</section>`;
+      }).join("");
+    }
     if (ctx.identity.is_root === 1) {
       const mine = new Set(memberships.map((m) => m.tenant.id));
       const others = (await listTenants(env.HUB_DB, "active")).filter((t) => !mine.has(t.id));

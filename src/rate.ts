@@ -5,6 +5,7 @@ const MINUTE_MS = 60 * 1000;
 const DAY_MS = 24 * RATE_WINDOW_MS;
 
 export const RATE_RULES = {
+  tenant_create_identity: { limit: 3, windowMs: DAY_MS },
   addr: { limit: 3, windowMs: RATE_WINDOW_MS },
   ip: { limit: 20, windowMs: RATE_WINDOW_MS },
   // MCP spec 10.6
@@ -125,6 +126,7 @@ export async function takeRateAtomic(db: D1Database, bucket: RateBucket, subject
     return { ok: count <= limit, first: count === limit + 1, retryAfterS };
   } catch (e) {
     console.log("rate counter failed", e instanceof Error ? e.name : "error");
+    if (bucket === "tenant_create_identity") throw e;
     return { ok: true, first: false, retryAfterS };
   }
 }

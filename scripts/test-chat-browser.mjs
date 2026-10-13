@@ -92,6 +92,7 @@ try {
   browser = await chromium.launch({ headless: true });
   let requests = 0;
   const presenceCalls = [];
+  let anonymousOrgRedirect = null;
   const disconnected = new WeakSet();
   const dropHeartbeatResponse = new WeakSet();
   const overdueHeartbeatResponse = new WeakSet();
@@ -107,7 +108,7 @@ try {
       const req = route.request();
       const url = new URL(req.url());
       // Never allow requests to the network, even if a rendered link/script changes.
-      if (!['pimwell.test', host, 'other.pimwell.test'].includes(url.hostname)) return route.abort('blockedbyclient');
+      if (!['pimwell.test', host, 'other.pimwell.test', 'browser-org.pimwell.test'].includes(url.hostname)) return route.abort('blockedbyclient');
       requests++;
       if (/\/api\/chat\.(heartbeat|presence)$/.test(url.pathname)) {
         presenceCalls.push({ name: url.pathname, ...JSON.parse(req.postData() || '{}') });
@@ -115,7 +116,18 @@ try {
       const lateDenied = url.pathname === '/api/chat.heartbeat' && overdueDeniedHeartbeatResponse.has(ctx);
       const headers = { ...await req.allHeaders(), 'x-local-browser-host': url.host };
       if (lateDenied) delete headers.cookie; // Real local Worker denial; no session/grant mutations.
-      const res = await mf.dispatchFetch(req.url(), { method: req.method(), headers, body: req.postDataBuffer() || undefined });
+      let res = await mf.dispatchFetch(req.url(), { method: req.method(), headers, body: req.postDataBuffer() || undefined, redirect: 'manual' });
+      // Chromium bypasses Playwright routing for redirected requests. Follow
+      // local Worker redirects here, never through DNS or Miniflare's network.
+      // Carry the browser's cookie jar, not an unpinned cross-host credential.
+      for (let redirects = 0; res.status >= 300 && res.status < 400 && res.headers.has('location'); redirects++) {
+        if (redirects >= 5) throw new Error('Too many local redirects');
+        const target = new URL(res.headers.get('location'), req.url());
+        if (!['pimwell.test', host, 'other.pimwell.test', 'browser-org.pimwell.test'].includes(target.hostname)) throw new Error('Refused external redirect');
+        if (url.pathname === '/api/tenant.create' && target.pathname === '/login') anonymousOrgRedirect = target.href;
+        const nextHeaders = { 'x-local-browser-host': target.host, cookie: (await ctx.cookies(target.href)).map(c => `${c.name}=${c.value}`).join('; ') };
+        res = await mf.dispatchFetch(target.href, { method: 'GET', headers: nextHeaders, redirect: 'manual' });
+      }
       if (lateDenied) {
         overdueDeniedHeartbeatResponse.delete(ctx);
         expect(res.status).toBe(404);
@@ -181,6 +193,54 @@ try {
     }
     throw new Error(`Keyboard could not reach ${selector}`);
   }
+  // Non-root self-service lifecycle through real web forms on both hosts.
+  const orgCtx = await context(member, { width: 1440, height: 1000 });
+  const orgPage = await orgCtx.newPage();
+  await orgPage.goto('https://pimwell.test/');
+  const createOrg = orgPage.locator('form[action="/api/tenant.create"]');
+  await createOrg.locator('[name="slug"]').fill('browser-org');
+  await createOrg.locator('[name="display_name"]').fill('Browser organization');
+  await createOrg.getByRole('button', { name: 'Create organization' }).click();
+  await expect(orgPage.getByRole('heading', { name: 'Browser organization', exact: true }).first()).toBeVisible();
+  await orgPage.goto('https://browser-org.pimwell.test/people?invite=1');
+  const inviteForm = orgPage.locator('form[action="/api/invite.create"]');
+  await inviteForm.locator('[name="email"]').fill('browser-invitee@example.test');
+  await inviteForm.getByRole('button', { name: 'Create invite link' }).click();
+  await expect(orgPage.getByRole('heading', { name: 'Invite ready' })).toBeVisible();
+  await orgPage.goto('https://pimwell.test/');
+  const archiveOrg = orgPage.locator('form[action="/api/tenant.archive"]').filter({ has: orgPage.locator('input[value="browser-org"]') });
+  await archiveOrg.getByRole('button').click();
+  const deleteOrg = orgPage.locator('form[action="/api/tenant.delete"]').filter({ has: orgPage.locator('input[value="browser-org"]') });
+  await expect(deleteOrg).toBeVisible();
+  await deleteOrg.locator('[name="confirm"]').fill('browser-org');
+  await deleteOrg.getByRole('button', { name: 'Delete permanently' }).click();
+  await expect(orgPage.locator('input[value="browser-org"]')).toHaveCount(0);
+  expect(await db.prepare("SELECT id FROM tenant WHERE slug = 'browser-org'").first()).toBeNull();
+  expect((await db.prepare('SELECT COUNT(*) AS n FROM tenant WHERE id IN (?, ?)').bind(tenant, otherTenant).first()).n).toBe(2);
+  expect((await db.prepare("SELECT COUNT(*) AS n FROM invite WHERE email = 'browser-invitee@example.test'").first()).n).toBe(0);
+  await orgCtx.close();
+  const anonymousOrgCtx = await context(null, { width: 390, height: 844 });
+  const anonymousOrgPage = await anonymousOrgCtx.newPage();
+  await anonymousOrgPage.goto('https://pimwell.test/');
+  await expect(anonymousOrgPage.locator('form[action="/api/tenant.create"]')).toBeVisible();
+  await anonymousOrgPage.locator('[name="slug"]').fill('anonymous-org');
+  await anonymousOrgPage.locator('[name="display_name"]').fill('Anonymous');
+  await anonymousOrgPage.getByRole('button', { name: 'Create organization' }).click();
+  await expect.poll(() => anonymousOrgRedirect).toBe('https://pimwell.test/login');
+  await expect(anonymousOrgPage.getByRole('heading', { name: 'Sign in to Pimwell', exact: true })).toBeVisible();
+  await anonymousOrgCtx.close();
+  const operator = (await db.prepare("SELECT id FROM identity WHERE email = 'dev@example.test'").first()).id;
+  const agentId = id(), parentId = id(), agentRun = randomBytes(32).toString('hex');
+  await db.prepare("INSERT INTO identity (id, kind, display_name, email, operator_id, created_at) VALUES (?, 'agent', 'Org refusal bot', 'acme.orgbot@pimwell.test', ?, ?)").bind(agentId, operator, now).run();
+  await db.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, created_at) VALUES (?, ?, ?, 'member', ?)").bind(id(), agentId, tenant, now).run();
+  await db.prepare("INSERT INTO api_token (id, identity_id, tenant_id, name, token_hash, created_by, created_at) VALUES (?, ?, ?, 'local-only', ?, ?, ?)").bind(parentId, agentId, tenant, createHash('sha256').update(randomBytes(32)).digest('hex'), operator, now).run();
+  await db.prepare("INSERT INTO session (id, identity_id, tenant_id, kind, token_hash, parent_token_id, created_at, last_seen_at, expires_at, last_proof_at) VALUES (?, ?, ?, 'agent_run', ?, ?, ?, ?, ?, ?)").bind(id(), agentId, tenant, createHash('sha256').update(agentRun).digest('hex'), parentId, now, now, now + 3600000, now).run();
+  for (const name of ['tenant.create', 'tenant.delete']) {
+    const refused = await mf.dispatchFetch(`${base}/api/${name}`, { method: 'POST', headers: { 'x-local-browser-host': host, authorization: `Bearer ${agentRun}`, 'content-type': 'application/json' }, body: JSON.stringify({ slug: 'acme', display_name: 'Acme', confirm: 'acme' }), redirect: 'manual' });
+    expect(refused.status).toBe(404);
+  }
+  console.log('PASS non-root browser organization creation, member invite, archive, typed deletion, cross-tenant preservation, agents refused and signed-out sign-in redirect');
+
   // Real Chromium + shipped assets + authentic synthetic browser sessions; no
   // production credentials. Network-disconnect tests use Chromium's offline mode.
   for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }], ['narrow', { width: 320, height: 740 }]]) {

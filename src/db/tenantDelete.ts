@@ -4,6 +4,9 @@ import { badRequest, conflict, notFound } from "../errors";
 
 /** Tables holding rows that belong to one tenant, children before parents. */
 const TENANT_TABLES = [
+  "contact_link", "contact_connection", "contact_entity",
+  "work_proposal", "work_dep", "work_resource", "work_graph_rev",
+  "git_commit", "git_push", "git_legacy_forward", "git_repository",
   "file_revision", "file_upload", "wiki_revision", "review_comment", "review",
   "situation", "assistant_message", "assistant_thread", "ardi_cred", "agent_mcp_session", "agent_connect_link", "code_event", "code_sync",
   "attention", "follow", "work_comment",
@@ -51,6 +54,7 @@ export async function deleteTenant(db: D1Database, slug: string, deleted_by: str
   // Records elsewhere that point at this organization's sessions keep their meaning without the link.
   stmts.push(db.prepare(`UPDATE event SET session_id = NULL WHERE session_id IN (${sessions}) AND IFNULL(tenant_id, '') != ?`).bind(t.id, t.id));
   stmts.push(db.prepare(`UPDATE oauth_grant SET approved_by_session_id = NULL WHERE approved_by_session_id IN (${sessions}) AND tenant_id != ?`).bind(t.id, t.id));
+  stmts.push(db.prepare("DELETE FROM work_proposal_decision WHERE proposal_id IN (SELECT id FROM work_proposal WHERE tenant_id = ?)").bind(t.id));
   // Review verdicts carry no tenant column; they go with their reviews, before the reviews.
   stmts.push(db.prepare("DELETE FROM review_reviewer WHERE review_id IN (SELECT id FROM review WHERE tenant_id = ?)").bind(t.id));
   // Work links carry no tenant column; they go with their items, before the items.
@@ -64,6 +68,7 @@ export async function deleteTenant(db: D1Database, slug: string, deleted_by: str
     stmts.push(db.prepare("DELETE FROM auth_link WHERE identity_id = ?").bind(id));
     stmts.push(db.prepare("DELETE FROM identity WHERE id = ?").bind(id));
   }
+  stmts.push(db.prepare("DELETE FROM meta WHERE key = ?").bind(`tenant_delete:v1:${t.id}`));
   stmts.push(db.prepare("DELETE FROM tenant WHERE id = ?").bind(t.id));
   stmts.push(db.prepare("INSERT INTO deleted_tenant (id, slug, display_name, deleted_by, deleted_at, counts) VALUES (?, ?, ?, ?, ?, ?)")
     .bind(t.id, t.slug, t.display_name, deleted_by, now, JSON.stringify(counts)));

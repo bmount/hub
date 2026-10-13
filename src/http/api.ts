@@ -156,6 +156,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     if (e instanceof HubError) {
       note(request, { error: { reason: e.reason, detail: e.detail ?? null } });
       await auditRefusal(ctx, name, e);
+      if (isForm && name === "tenant.create" && e.reason === "unauthorized") return finish(ctx, env, new Response(null, { status: 303, headers: { location: `https://${env.HUB_DOMAIN}/login`, "cache-control": "no-store" } }));
       if (isForm && e.reason === "reproof_required") {
         // Back to the page the form was on, once they have confirmed.
         let path = "";

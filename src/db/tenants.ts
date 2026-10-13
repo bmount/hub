@@ -5,16 +5,23 @@ import { reservedBecause } from "../reserved";
 import type { State, Tenant } from "./types";
 import { slugReserved } from "./tenantDelete";
 
-export async function createTenant(db: D1Database, input: { slug: string; display_name: string }, now: number): Promise<Tenant> {
+export function validateTenantInput(input: { slug: string; display_name: string }): void {
   const why = reservedBecause(input.slug);
   if (why) throw badRequest(`"${input.slug}" is reserved (${why}), so it can never be used to impersonate or collide; choose another name`);
   if (!isValidTenantSlug(input.slug)) throw badRequest("invalid tenant slug");
   if (!input.display_name.trim()) throw badRequest("display_name required");
+}
+
+export async function createTenant(db: D1Database, input: { slug: string; display_name: string }, now: number, creatorId?: string): Promise<Tenant> {
+  validateTenantInput(input);
   if (await slugReserved(db, input.slug)) throw conflict("that name belonged to a deleted organization and stays reserved until its git data is purged");
   const row: Tenant = { id: ulid(now), slug: input.slug, display_name: input.display_name.trim(), state: "active", created_at: now };
   try {
-    await db.prepare("INSERT INTO tenant (id, slug, display_name, state, created_at) VALUES (?, ?, ?, ?, ?)")
-      .bind(row.id, row.slug, row.display_name, row.state, row.created_at).run();
+    const stmts = [db.prepare("INSERT INTO tenant (id, slug, display_name, state, created_at) VALUES (?, ?, ?, ?, ?)")
+      .bind(row.id, row.slug, row.display_name, row.state, row.created_at)];
+    // Self-service creation must never leave a new organization without its admin.
+    if (creatorId) stmts.push(db.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, 'admin', 'active', ?)").bind(ulid(now), creatorId, row.id, now));
+    await db.batch(stmts);
   } catch (e) {
     if (String(e).includes("UNIQUE")) throw conflict("tenant slug exists");
     throw e;
@@ -36,6 +43,6 @@ export async function listTenants(db: D1Database, state: State): Promise<Tenant[
 }
 
 export async function setTenantState(db: D1Database, id: string, state: State, _now: number): Promise<boolean> {
-  const r = await db.prepare("UPDATE tenant SET state = ? WHERE id = ? AND state <> ?").bind(state, id, state).run();
+  const r = await db.prepare("UPDATE tenant SET state = ? WHERE id = ? AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'tenant_delete:v1:' || tenant.id)").bind(state, id, state).run();
   return r.meta.changes === 1;
 }

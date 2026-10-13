@@ -69,6 +69,15 @@ export class Inbox extends DurableObject<Env> {
     return { head: this.#head(), items, next_after: items.at(-1)?.item_seq ?? after, has_more: rows.length > limit };
   }
 
+  /** Internal organization deletion: retain only the binding and a delivery tombstone. */
+  async purgeTenant(tenant_id: string, identity_id: string): Promise<void> {
+    bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
+    this.ctx.storage.transactionSync(() => {
+      for (const table of ["item", "cursor", "mail_delivered"]) this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
+      this.ctx.storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('deleted', '1')");
+    });
+  }
+
   /** Internal cleanup of only the deleted project's conversations and mail. */
   async purgeProject(tenant_id: string, identity_id: string, conversations: string[], mail: string[]): Promise<number> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
@@ -94,6 +103,7 @@ export class Inbox extends DurableObject<Env> {
 
   async deliver(tenant_id: string, identity_id: string, items: WakeItem[]): Promise<number> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
+    if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) return 0;
     // Acked items are kept 30 days (they show with include_acked), then pruned.
     this.ctx.storage.sql.exec("DELETE FROM item WHERE acked_at IS NOT NULL AND acked_at < ?", Date.now() - LIMITS.INBOX_ACKED_KEEP_MS);
     let added = 0;
