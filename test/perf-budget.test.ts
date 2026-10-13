@@ -165,11 +165,22 @@ describe("request tracing guardrails", () => {
     expect(trace.spans.filter(s => s.name === "d1.statement")).toHaveLength(2);
   });
 
-  it("snapshots stalled spans without delaying telemetry and ignores public trace-envelope spoofing", async () => {
+  it("drains spans that outlive response headers and cancels its drain timer", async () => {
+    const trace = newTrace(), c = collector();
+    await withTrace(trace, async () => { void span("mcp.tools.call", () => scheduler.wait(20)); });
+    trace.ended = performance.now();
+    await deferredTrace(c.measured, trace, "pimwell-hub", 100);
+    expect(trace.pending.size).toBe(0);
+    const point = c.points.find(p => p.blobs?.[13] === "mcp.tools.call")!;
+    expect(point.doubles?.[13]).toBe(1);
+    expect(point.doubles?.[0]).toBeGreaterThan(0);
+  });
+
+  it("bounds stalled-span draining and ignores public trace-envelope spoofing", async () => {
     const trace = newTrace(), c = collector();
     await withTrace(trace, async () => { void span("stalled", () => new Promise(() => {})); });
     trace.ended = performance.now();
-    await deferredTrace(c.measured, trace);
+    await deferredTrace(c.measured, trace, "pimwell-hub", 10);
     const point = c.points.find(p => p.blobs?.[14 - 1] === "stalled")!;
     expect(point.doubles?.[13]).toBe(0);
     expect(point.doubles?.[0]).toBeGreaterThanOrEqual(0);

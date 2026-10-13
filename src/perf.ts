@@ -9,13 +9,13 @@ export type TimingSpan = {
 };
 export type Trace = {
   id: string; parent: number; kind: "request" | "rpc"; started: number; cold: boolean; spans: TimingSpan[]; next: number; other: number; otherMs: number; otherOpen: number; otherStarted: number;
-  route: string; method: string; auth: string; verb: string; tool: string; tenant: string; colo: string; status: number; ended?: number;
+  route: string; method: string; auth: string; verb: string; tool: string; tenant: string; colo: string; status: number; ended?: number; pending: Set<Promise<unknown>>;
 };
 const context = new AsyncLocalStorage<{ trace: Trace; parent: number; entry?: TimingSpan }>();
 let cold = true;
 export function newTrace(method = "", colo = ""): Trace {
   const trace: Trace = { id: crypto.randomUUID(), parent: 0, kind: "request", started: performance.now(), cold, spans: [], next: crypto.getRandomValues(new Uint32Array(1))[0]! * 1_000_000, other: 0, otherMs: 0, otherOpen: 0, otherStarted: 0,
-    route: "", method, auth: "anonymous", verb: "", tool: "", tenant: "", colo, status: 200 };
+    route: "", method, auth: "anonymous", verb: "", tool: "", tenant: "", colo, status: 200, pending: new Set() };
   cold = false;
   return trace;
 }
@@ -53,7 +53,11 @@ export function span<T>(name: string, fn: () => T): T {
   try {
     const result = context.run({ trace, parent: id, entry }, fn);
     if (result && typeof (result as unknown as PromiseLike<unknown>).then === "function") {
-      return Promise.resolve(result).then(value => { finish(false); return value; }, error => { finish(true); throw error; }) as T;
+      const promise = Promise.resolve(result).then(
+        value => { finish(false); trace.pending.delete(promise); return value; },
+        error => { finish(true); trace.pending.delete(promise); throw error; });
+      trace.pending.add(promise);
+      return promise as T;
     }
     finish(false); return result;
   } catch (error) { finish(true); throw error; }
@@ -263,27 +267,40 @@ export async function writeTrace(env: Pick<Env, "PERF" | "WORKER_VERSION" | "PER
   if (!env.PERF) return;
   try {
     const tenant = await tenantHash(trace.tenant, env.PERF_TENANT_KEY ?? env.HUB_INTERNAL_SECRET ?? env.HUB_SECRETS_KEY ?? "");
-    const version = env.WORKER_VERSION?.id ?? "unknown";
+    const version = env.WORKER_VERSION?.id ?? "unknown", snapshot = performance.now();
     const write = (kind: string, s: TimingSpan) => env.PERF!.writeDataPoint({
       indexes: [version],
       blobs: [site, worker, version, trace.colo, tenant, trace.id, kind, trace.route, trace.method, `${Math.floor(trace.status/100)}xx`, trace.auth,
         trace.verb, trace.tool, s.name, s.fingerprint ?? "", s.region ?? "", s.provider ?? "", s.model ?? ""],
-      doubles: [s.finished === false ? (trace.ended ?? performance.now()) - s.started! : s.ms, +trace.cold, s.id, s.parent, +s.failed, s.execution ?? -1, s.read ?? -1, s.written ?? -1, s.primary === undefined ? -1 : +s.primary, s.firstToken ?? -1, kind === "other" ? trace.other : 1, 0, 0, s.finished === false ? 0 : 1],
+      doubles: [s.finished === false ? snapshot - s.started! : s.ms, +trace.cold, s.id, s.parent, +s.failed, s.execution ?? -1, s.read ?? -1, s.written ?? -1, s.primary === undefined ? -1 : +s.primary, s.firstToken ?? -1, kind === "other" ? trace.other : 1, 0, 0, s.finished === false ? 0 : 1],
     });
     write(trace.kind, { name: "request", id: 0, parent: trace.parent, ms: (trace.ended ?? performance.now())-trace.started, failed: trace.status >= 500 });
     for (const s of trace.spans) write("span", s);
     if (trace.other) {
-      const ended = trace.ended ?? performance.now();
+      const ended = snapshot;
       const ms = trace.otherMs + trace.otherOpen * ended - trace.otherStarted;
       write("other", { name: "other", id: trace.next+1, parent: 0, ms, started: ended-ms, finished: trace.otherOpen === 0, failed: false });
     }
     console.log(JSON.stringify({ msg: "perf", request: trace.id, parent: trace.parent, tenant, colo: trace.colo, cold: trace.cold, route: trace.route, method: trace.method, auth: trace.auth, status: trace.status, verb: trace.verb, tool: trace.tool }));
   } catch { /* best-effort telemetry */ }
 }
-export async function deferredTrace(env: Parameters<typeof writeTrace>[0], trace: Trace, worker = "pimwell-hub"): Promise<void> {
+export async function deferredTrace(env: Parameters<typeof writeTrace>[0], trace: Trace, worker = "pimwell-hub", settleMs = 25_000): Promise<void> {
   if (!env.PERF) return;
-  // Native scheduler: telemetry is independent of application/body-deadline timers.
+  // MCP bodies/background turns can outlive dispatch. Drain off-response, within
+  // waitUntil\u0027s lifetime; never delay/cancel product work or leave a timer behind.
   await scheduler.wait(0);
+  if (trace.pending.size) {
+    const abort = new AbortController();
+    let expired = false;
+    const deadline = scheduler.wait(Math.min(25_000, Math.max(0, settleMs)), { signal: abort.signal })
+      .then(() => { expired = true; }, () => {});
+    try {
+      while (trace.pending.size && !expired) {
+        await Promise.race([Promise.allSettled([...trace.pending]), deadline]);
+        await scheduler.wait(0);
+      }
+    } finally { abort.abort(); }
+  }
   await writeTrace(env, trace, worker);
 }
 export async function tracedInvocation<T>(env: Env, waitUntil: (p: Promise<unknown>) => void, name: string, fn: (env: Env) => Promise<T>, worker = "pimwell-hub"): Promise<T> {

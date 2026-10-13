@@ -72,15 +72,15 @@ Every point uses **index1 = Worker version UUID**. Identity is repeated in blobs
 | 11 | Represented span count (1 normally; excess count for `other`) |
 | 12 | Cloudflare native CPU time (`invocation` points only) |
 | 13 | Cloudflare native wall time (`invocation` points only) |
-| 14 | Complete span (1) or still pending at response snapshot (0) |
+| 14 | Complete span (1) or still pending at telemetry snapshot (0) |
 
 One external request/root point and up to 199 retained spans are emitted, plus one `other` summary if the cap is exceeded (at most 201 points). Excess spans fold their count and elapsed durations into `other`; nesting means wall durations overlap and must not be naively summed. Span IDs stay within exact JavaScript/Analytics Engine numeric range and are allocated in separate ranges for internal invocations. Native CPU/wall points come from `pimwell-tail`, which consumes only the measured hub/Git Workers for this dataset and joins their content-free completion marker. It never reads request headers, bodies or URL values into points. The tail processor has its own root/operation spans but is not its own tail consumer (avoids recursive telemetry).
 
-Responses carry **X-Request-ID** and **Server-Timing** (application/D1 totals and eight longest spans). Response/upgrade headers are preserved. Writes use `waitUntil` and the native scheduler after dispatch; no body-deadline/application timer is introduced. Root wall time is frozen at dispatch completion. Still-pending work is explicitly marked incomplete and measured to that boundary, rather than holding a response or telemetry open for an uncancellable operation. Delivery is best-effort and cannot fail a product response.
+Responses carry **X-Request-ID** and **Server-Timing** (application/D1 totals and eight longest spans). Response/upgrade headers are preserved. Writes use `waitUntil` and the native scheduler after dispatch; no body-deadline/application timer is introduced. Root wall time is frozen at dispatch completion. MCP body work and background turns drain after dispatch for at most 25 seconds, within the platform waitUntil lifetime; the native drain timer is cancelled when work completes. This never holds or cancels a product response. Still-pending work at that bound is explicitly marked incomplete and measured to the telemetry snapshot rather than awaited indefinitely. Delivery is best-effort and cannot fail a product response.
 
 ## Sampling and SQL
 
-All requests are submitted; Analytics Engine can downsample on ingestion/query. **Always weight counts, means and distributions with `_sample_interval`**. Do not use raw `COUNT(*)` as a traffic total. Filter kind `request` for external/event requests, `rpc` for internal roots, and `invocation` for native CPU. Filter by site/authorized tenant hash before exposing aggregates through the product; account-level SQL access alone is not product authorization.
+All requests are submitted; Analytics Engine can downsample on ingestion/query. **Always weight counts, means and distributions with `_sample_interval`**. Do not use raw `COUNT(*)` as a traffic total. An individual trace can lose its root or parent points to sampling; missing points are not zero time or proof of failed emission. Filter kind `request` for external/event requests, `rpc` for internal roots, and `invocation` for native CPU. Filter by site/authorized tenant hash before exposing aggregates through the product; account-level SQL access alone is not product authorization.
 
 Example version query (replace the UUID; Cloudflare Analytics Engine SQL API):
 
