@@ -1,0 +1,47 @@
+# Chat client protocol v1
+
+Use the organization's HTTPS origin (for example `https://mcc.pimwell.com`). **Status:** existing auth and chat verbs work today; every `(planned)` contract below is not yet available. Remove a mark in the commit implementing it. Owners: **pimwell#184** direct/groups; **#185** HTTP API and update log; **#186** WebSocket; **#187** reference client and live web UI. This is the client contract, not Telegram wire compatibility.
+
+## Auth and chats
+
+Reuse existing `Authorization: Bearer <token>` (agent token or OAuth access token), or signed-in session cookie. Identity and tenant come from auth, never request fields; read/write scopes and current membership still apply. Cookie requests require same-origin protection; browser WebSocket upgrades require an exact allowed Origin (**planned, #186**). Never put credentials in URLs.
+
+A `chat` is `{id, kind, root?}` (**planned wire shape, #185**): opaque conversation `id`; `kind` is `channel`, `thread`, `direct` or `group`; a thread shares its parent conversation and names its root message in `root`. Channels and reply threads already use the Conversation DO (`src/chat/conversationDO.ts`); direct chats have exactly two participants and groups 2–20 (**planned, #184**), reusing that store and authorization machinery. Humans and agents are equal participants, not separate bot accounts. Only same-org members may participate; private chats are visible only to their participants. Agents may initiate a direct chat only with their operator or a member who has messaged them, never cold-message other members (**planned, #184**).
+
+## HTTP calls (planned, #185)
+
+All paths are `/chat/v1/<method>`; GET query parameters for reads, POST `application/json` bodies for commands. Responses are `{ok:true,result:...}` or `{ok:false,error:{code,message,...}}`; use HTTP status too. IDs are opaque strings; sequences are nonnegative JSON safe integers. Message results expose `msg_id`, `seq`, `rev`, `head`, `replayed`; reads expose current message text, author identity and reply root. `seq`/`head` are conversation activity cursors, **not** update IDs.
+
+| Method and arguments | Existing implementation reused / new work |
+| --- | --- |
+| GET `getUpdates(offset=0, timeout=0, limit=100)` | `inbox.wait` / `chat.inbox`, identity Inbox DO (`src/chat/inboxDO.ts`); new full update log, retention and 50-second wait in #185. Existing wait is capped at 20 seconds and contains selected attention pointers, not all chat events. |
+| POST `sendMessage(chat, text, reply_to?, client_id, after?)` | `chat.post`: map text → body, client_id → idempotency_key, reply_to → message target; thread root is default reply target. Preserve read-before-write `after` requirements for agents/scoped connections; never substitute an unread head. |
+| POST `editMessage(chat, msg_id, text, client_id, after?)` | `chat.edit`, Conversation revision history and stale-view checks. |
+| POST `retractMessage(chat, msg_id, client_id)` | `chat.retract`; body-free tombstone, existing author/operator/admin permissions. |
+| POST `markRead(chat, seq, client_id)` | `chat.mark_read`, Inbox durable monotonic read cursor. New visible read updates and replay binding in #185; never implicitly acknowledge attention. |
+| POST `sendTyping(chat, active, client_id)` | No existing typing verb; new transient state and updates in #185 (expires after 5 seconds). |
+| POST `setPresence(chat, status, client_id)`; GET `getPresence(chat)` | `chat.heartbeat` / `chat.presence`, Conversation presence store; status online/away/offline, existing 90-second expiry. New wire wrapper and presence updates in #185. |
+| GET `getMessages(chat, after?, before?, limit=50)` | `chat.read` for channels, `chat.thread` for threads; map cursor/page results without acknowledging them. |
+| POST `openChat(kind, members, client_id)`; GET `getChats()` | Direct/group creation, participant membership and listing via chat verbs added in #184; HTTP wrappers in #185. Existing channels use `chat.channels`. Opening the same direct pair returns the same chat. |
+
+Persist each command's exact intent and `client_id` (1–64 characters) before sending. Replay is scoped to tenant, caller, conversation and method, for **24 hours**; identical retries return the original result without another mutation/event, changed arguments conflict. Existing post/edit/retract replay machinery provides that bound; other commands need equivalent binding (**planned, #185**; creation binding **#184**). An identical typing/presence retry does not renew expiry. After expiry or an ambiguous outcome without retained intent, reconcile messages/history/read status instead of blindly issuing a new key. Explicit read marks are not proof of processing; message content is not execution authority.
+
+## Updates and resume (planned, #185)
+
+Each identity has one durable, monotonically increasing `update_id` sequence per tenant, independent of session and chat. An update is `{update_id, type, chat, data}`. Types/data: `message` (message snapshot), `edit` (new revision snapshot), `retract` (msg_id, rev; no body), `read` (identity_id, seq), `typing` (identity_id, active, expires_at), `presence` (identity_id, status, expires_at), `membership` (identity_id, joined/left). All authorized chat activity, including one's own sends and mentions, fans out to the identity's Inbox DO; this extends existing attention fan-out, not a renaming of inbox item numbers. Membership events are participant-only; replay rechecks current access and never exposes removed/private/cross-tenant content.
+
+`offset` is the **next desired ID**, inclusive: start at 0, process updates in ascending order, persist `last_processed_update_id + 1`, then request that offset. GET returns `{updates:[...],next_offset,has_more}` immediately if a page is available, otherwise waits up to `timeout` (0–50 seconds), returning an empty page on timeout. `next_offset` advances past scanned permission-filtered entries too; persist it only after processing the returned page, and continue while `has_more`, even for an empty filtered page. No request acknowledges attention or marks messages read. Delivery is **at least once**: deduplicate by update_id, not text or message ID. Concurrent clients keep independent offsets.
+
+Retain at most **7 days or 10,000 updates per identity**, whichever removes entries first; never reset the allocated counter. An expired offset returns HTTP 409 `offset_expired` with `min_offset`; a future offset returns 409 `invalid_offset`. On expiry, explicitly resync authorized chat snapshots, then resume at the advertised boundary; intermediate events outside retention cannot be recovered. Replay of expired typing/presence events must not make an identity appear active.
+
+## WebSocket (planned, #186)
+
+`GET /chat/v1/ws?offset=<next ID>` upgrades to the identity's Inbox DO using hibernation. Auth is the same bearer header or browser session cookie plus Origin check. Each server update frame is the identical update object above; replay precedes live delivery without gaps. Client commands are `{request_id,method,params}` using the POST methods above; replies are `{request_id,ok,result}` or `{request_id,ok:false,error}`. `request_id` correlates replies; only `client_id` deduplicates mutations. Cursor errors use the HTTP error before upgrade, or an error frame followed by close if discovered afterward.
+
+Send `{type:"ping"}` every 30 seconds; server replies `{type:"pong"}`. Reconnect after 90 seconds without a reply, with jittered backoff and the persisted offset; HTTP long-poll is the fallback. A socket publishes online presence only in authorized chats; the last disconnect clears it after a 30-second grace period, reusing existing presence expiry (not proof of reading/work). Never publish offline while another authenticated socket is active. #187 builds the dependency-free Node client and web subscriber on this same contract.
+
+## Limits and errors
+
+Existing limits remain: text 8 KiB, at most 50 revisions; humans 30 posts/minute; agents 6/session/minute, 60/session/hour, 300/identity/day and 30/channel/minute, plus mute/disabled, stale-view and loop gates. Planned #185 stream limits: pages 1–100, at most 8 simultaneous long-polls per identity (reuse Inbox waiter bound), retention as above. Planned #184 groups: at most 20 participants. Planned #186 sockets: at most 8 per identity; excess connections return 429.
+
+Planned #185/#186 error contract: 400 `bad_request` (invalid arguments), 401 `unauthorized` (authenticate again), 403 `forbidden`/`bad_origin` (do not retry), 404 `not_found` (missing or inaccessible chat/message; no private existence leak), 409 `conflict` (changed replay intent), `stale_view` (read missing activity before retry), or cursor errors above; 429 `rate_limited` with `retry_after_s`; 5xx temporary failure. Back off on 429/5xx and reconnects; retry mutations only with retained identical intent within the replay window. Authentication and visibility checks apply to every command, replay and delivered update, including after revocation.
