@@ -42,7 +42,10 @@ export async function handleChatApi(request: Request, env: Env, waitUntil: (p: P
     const mapping: Record<string, string> = { sendMessage: 'chat.post', editMessage: 'chat.edit', retractMessage: 'chat.retract', markRead: 'chat.mark_read', sendTyping: 'chat.mark_read', getUpdates: 'chat.inbox', getMessages: 'chat.read', getChats: 'chat.conversations', openChat: 'chat.open', setPresence: 'chat.heartbeat', getPresence: 'chat.presence' };
     const verb = getVerb(mapping[method] ?? '');
     if (!verb || ctx.host.kind !== 'tenant') throw notFound();
-    checkScope(ctx, verb); checkAccess(ctx, verb);
+    // HTTP edit/retract have write scope without adding MCP tools. The existing
+    // role, identity, operator and message-ownership checks still apply.
+    const accessVerb = ['chat.edit', 'chat.retract'].includes(verb.name) ? { ...verb, mcp: getVerb('chat.post')!.mcp } : verb;
+    checkScope(ctx, accessVerb); checkAccess(ctx, accessVerb);
     const reading = ['getUpdates', 'getMessages', 'getChats', 'getPresence'].includes(method);
     if (request.method !== (reading ? 'GET' : 'POST')) throw new HubError(405, 'bad_request', 'wrong HTTP method');
     let input: Record<string, unknown>;

@@ -4,6 +4,7 @@ import { conversationStub, inboxStub } from "../src/chat/stubs";
 import { getChannelBySlug } from "../src/db/chat";
 import { DATA_NOTE } from "../src/mcp/render";
 import { seedHuman } from "./helpers";
+import { connectWithTokens } from "./oauth-helpers";
 import { call, channelWith, chatWorld, ok, type World } from "./chat-helpers";
 
 async function conv(w: World, slug = "general") {
@@ -110,7 +111,19 @@ describe("chat HTTP update stream", () => {
     const chat = { id: ch.project_id, kind: 'channel' };
     const page = await chatHttp(w.scout.longLived, 'getUpdates');
     expect(page.status).toBe(200);
-    const pending = chatHttp(w.scout.longLived, 'getUpdates', { offset: page.body.result.next_offset, timeout: 1 });
+    const sendIntent = { chat, text: 'agent HTTP message', client_id: 'agent-send', after: 0 };
+    const posted = await chatHttp(w.scout.longLived, 'sendMessage', sendIntent);
+    expect(posted.status).toBe(200);
+    const editIntent = { chat, text: 'agent HTTP edit', msg_id: posted.body.result.msg_id, client_id: 'agent-edit', after: posted.body.result.head };
+    const edited = await chatHttp(w.scout.longLived, 'editMessage', editIntent);
+    expect(edited.status).toBe(200);
+    expect((await chatHttp(w.scout.longLived, 'editMessage', editIntent)).body.result.replayed).toBe(true);
+    expect((await chatHttp(w.tidy.longLived, 'editMessage', editIntent)).status).toBe(404);
+    const retractIntent = { chat, msg_id: posted.body.result.msg_id, client_id: 'agent-retract' };
+    expect((await chatHttp(w.scout.longLived, 'retractMessage', retractIntent)).status).toBe(200);
+    expect((await chatHttp(w.scout.longLived, 'retractMessage', retractIntent)).body.result.replayed).toBe(true);
+    const caughtUp = await chatHttp(w.scout.longLived, 'getUpdates', { offset: page.body.result.next_offset });
+    const pending = chatHttp(w.scout.longLived, 'getUpdates', { offset: caughtUp.body.result.next_offset, timeout: 1 });
     await ok(w.lead.token, 'channel.remove_agent', { c: 'general', agent: 'scout' });
     const send = await chatHttp(w.lead.token, 'sendMessage', { chat, text: 'not for scout', client_id: 'removed' });
     expect(send.status).toBe(200);
@@ -120,6 +133,24 @@ describe("chat HTTP update stream", () => {
     expect((await chatHttp(w.scout.longLived, 'sendMessage', { chat, text: 'denied', client_id: 'no', after: send.body.result.head })).status).toBe(404);
     await env.HUB_DB.prepare('UPDATE api_token SET revoked_at = ? WHERE id = ?').bind(Date.now(), w.scout.apiToken.id).run();
     expect((await chatHttp(w.scout.longLived, 'getUpdates')).status).toBe(401);
+  });
+
+  it('enforces OAuth write scope and message ownership for HTTP edit/retract without exposing new MCP tools', async () => {
+    const w = await chatWorld();
+    await channelWith(w, 'general', []);
+    const { ch } = await conv(w);
+    const chat = { id: ch.project_id, kind: 'channel' };
+    const read = (await connectWithTokens(w.lead.token)).tokens.access_token;
+    const write = (await connectWithTokens(w.lead.token, { scope: 'read write' })).tokens.access_token;
+    const sent = await chatHttp(write, 'sendMessage', { chat, text: 'scoped message', client_id: 'oauth-send', after: 0 });
+    expect(sent.status).toBe(200);
+    const edit = { chat, msg_id: sent.body.result.msg_id, text: 'scoped edit', client_id: 'oauth-edit', after: sent.body.result.head };
+    const retract = { chat, msg_id: sent.body.result.msg_id, client_id: 'oauth-retract' };
+    for (const [method, intent] of [['editMessage', edit], ['retractMessage', retract]] as const) expect((await chatHttp(read, method, intent)).body.error.code).toBe('insufficient_scope');
+    expect((await chatHttp(w.dev.token, 'editMessage', edit)).status).toBe(403);
+    expect((await chatHttp(w.dev.token, 'retractMessage', retract)).status).toBe(403);
+    expect((await chatHttp(write, 'editMessage', edit)).status).toBe(200);
+    expect((await chatHttp(write, 'retractMessage', retract)).status).toBe(200);
   });
 
   it('rejects unauthenticated, cross-tenant, malformed and future-offset requests', async () => {
