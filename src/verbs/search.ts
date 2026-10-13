@@ -148,14 +148,14 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
     ctx.db.prepare(`SELECT o.id, o.subject, o.text, o.to_address, o.created_at FROM outbound_mail o WHERE ${outgoingAccess.sql}
       AND ${all("o.subject || ' ' || o.text || ' ' || o.to_address || ' ' || o.from_address", ts.length)}
       ORDER BY o.created_at DESC LIMIT ?`).bind(...outgoingAccess.bindings, ...ts.map(like), SOURCE_LIMITS.outgoing),
-    ctx.db.prepare(`SELECT p.slug AS project, r.slug, r.title, r.body, r.created_at FROM wiki_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND ${currentWiki} AND r.deleted = 0 AND ${all("r.slug || ' ' || r.title || ' ' || r.body", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.wiki),
+    ctx.db.prepare(`SELECT p.slug AS project, r.slug, r.title, r.body, r.created_at, r.research FROM wiki_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND ${currentWiki} AND r.deleted = 0 AND ${all("r.slug || ' ' || r.title || ' ' || r.body || ' ' || COALESCE((SELECT display_name FROM identity WHERE id = r.author_id), '')", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.wiki),
     ctx.db.prepare(`SELECT p.slug AS project, r.path, r.name, r.text, r.created_at FROM file_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND ${currentFile} AND r.deleted = 0 AND ${all("r.path || ' ' || r.text", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.files),
   ]);
   const messages = await messageHits(ctx, ts, null, SOURCE_LIMITS.messages);
   const groups: SearchGroups = {
     reviews: [], situations: [], assistant: [], outgoing: [],
     files: (files!.results as Array<{project: string; path: string; name: string; text: string; created_at: number}>).map(r => ({kind: "File", ref: `${r.project}/${r.path}`, title: r.name, snippet: snippet(r.text, ts), href: `/${r.project}/documents?path=${encodeURIComponent(r.path)}`, at: r.created_at})),
-    wiki: (wiki!.results as Array<{project: string; slug: string; title: string; body: string; created_at: number}>).map(r => ({kind: "Wiki page", ref: `${r.project}/${r.slug}`, title: r.title, snippet: snippet(r.body, ts), href: `/${r.project}/wiki/${r.slug}`, at: r.created_at})),
+    wiki: (wiki!.results as Array<{project: string; slug: string; title: string; body: string; created_at: number; research: string | null}>).map(r => ({kind: r.research ? "Research result" : "Wiki page", ref: `${r.project}/${r.slug}`, title: r.title, snippet: snippet(r.body, ts), href: `/${r.project}/wiki/${r.slug}`, at: r.created_at})),
     work: (work!.results as WorkRow[]).map((r) => workHit(r, ts)),
     mail: (mail!.results as Array<{ id: string; subject: string; text: string; from_email: string; received_at: number }>).map((m) => ({ kind: "Mail", ref: m.from_email, title: m.subject || "(no subject)", snippet: snippet(m.text, ts), href: `/mail/${m.id}`, at: m.received_at })),
     messages: messages.hits,
@@ -181,7 +181,7 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
 
 export const searchQuery = defineVerb({
   name: "search.query", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Search readable text across all projects: work and comments, mail and extracted attachments, chat, wiki pages, project files (txt/md/csv text up to 128 KiB), reviews, situations, your assistant conversations, people, projects and app errors. Results include coverage limits.",
+  summary: "Search readable text across all projects: work and comments, mail and extracted attachments, chat, wiki and structured workspace research pages, project files (txt/md/csv text up to 128 KiB), reviews, situations, your assistant conversations, people, projects and app errors. Results include coverage limits.",
   mcp: {
     scope: "read", destructive: false, title: "Search available sources",
     input: { type: "object", properties: { q: { type: "string", description: "What to find" } }, required: ["q"], additionalProperties: false },

@@ -20,6 +20,8 @@ const TABLE: Record<string, Decl> = {
   "file.put": T("tenant", "member", null, { mcp: "write" }),
   "file.upload_url": T("tenant", "member", null, { mcp: "write" }),
   "file.delete": T("tenant", "admin", null, { mcp: "write" }),
+  "research.list": T("tenant", "reader", null, { mcp: "read" }),
+  "research.save": T("tenant", "member", null, { mcp: "write" }),
   "wiki.list": T("tenant", "reader", null, { mcp: "read" }),
   "wiki.read": T("tenant", "reader", null, { mcp: "read" }),
   "wiki.history": T("tenant", "reader", null, { mcp: "read" }),

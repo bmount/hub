@@ -59,6 +59,8 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `repo_list` | read | reader | no | Implemented | — |
 | `repo_log` | read | reader | no | Implemented | `limit`, `next`, `path`, **`project`**, `ref` |
 | `repo_search` | read | reader | no | Implemented | `case_sensitive`, `limit`, `path`, **`project`**, **`q`**, `ref`, `regex` |
+| `research_list` | read | reader | no | Implemented | `after`, `org`, `person`, **`project`**, `status`, `topic` |
+| `research_save` | write | member | no | Implemented | **`expected_revision`**, `items`, **`note`**, `orgs`, `people`, **`project`**, **`slug`**, **`sources`**, **`status`**, **`summary`**, **`topic`** |
 | `review_ai` | write | member | no | Implemented | **`id`** |
 | `review_comment` | write | member | no | Implemented | **`body`**, **`id`**, `line`, `path` |
 | `review_integrate` | write | member | no | Declared/planned | **`id`** |

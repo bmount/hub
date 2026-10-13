@@ -1,5 +1,15 @@
 # Wiki pages
 
+Workspace knowledge bases use this same page engine, with research as a typed revision (the nullable `research` JSON column in `wiki_revision`), not a second document store.
+
+## Workspace research
+
+`research_save` (member/write) accepts project, slug, expected_revision, topic, summary, draft/final status, sources and a revision note. Each source has exactly one HTTP(S) URL or current workspace file path, a title, ISO retrieved_at timestamp and quote. URLs are recorded, never fetched. Author is the authenticated caller, person or agent; it cannot be supplied or impersonated. Structured content is limited to 64 KiB, with at most 50 sources or references per list. A searchable text projection occupies the normal wiki body.
+
+Optional `people` are active tenant member identity IDs; `items` are validated tenant-local project#number references. `orgs` are named external-organization references, pending the workspace organization graph; they do not grant access to any other tenant. `research_list` (reader/read) returns structured fields and author, filtering by topic substring, exact person/org reference and status, with an alphabetical after cursor (200/page).
+
+The workspace home shows KB pages and research together. Research opens at the regular wiki page URL with source links, quotes, linked items and revision history/diffs. Revise or revert structured pages with `research.save`; ordinary wiki writes cannot replace research metadata, and research cannot overwrite a KB page. Admin wiki deletion retains the structured history. Search includes current research topic, summary, sources, references and author display name under wiki results, with the same coverage limits.
+
 Wiki and workspace projects support Markdown pages at `/<project>/wiki`. Members create pages with a canonical lowercase hyphenated slug, title, body and revision note. Readers can view pages, history and diffs. The renderer escapes text before adding a small Markdown subset and same-project `[[page-slug]]` links; raw HTML is never rendered. Links to missing pages remain links; the page list's new-page form can create the target. Backlinks describe current non-deleted pages, including when viewing old revisions.
 
 ## Verbs and history

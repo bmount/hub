@@ -179,6 +179,53 @@ describe("project files", () => {
   });
 });
 
+describe("workspace research", () => {
+  async function world() {
+    registerAllVerbs();
+    const t = await seedTenant("acme");
+    const h = await seedHuman("pat@example.com", {memberships: [{tenant_id: t.id, role: "member"}]});
+    await createProject(env.HUB_DB, {tenant_id: t.id, namespace_id: null, slug: "lab", kind: "workspace", display_name: "Lab"}, Date.now());
+    const {grant} = await seedGrant(t, h);
+    const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read", "write"], {now: Date.now(), ip: "203.0.113.1"});
+    const item = (await callTool(ctx, "work_create", {project: "lab", kind: "errand", title: "Read research", body: ""})).structuredContent as {item: {number: number}};
+    const input = {project: "lab", slug: "findings", expected_revision: 0, topic: "Needle topic", summary: "Evidence summary", status: "draft", sources: [{url: "https://example.com/one", title: "First source", retrieved_at: "2026-10-12T00:00:00Z", quote: "quotedneedle"}, {url: "https://example.com/two", title: "Second source", retrieved_at: "2026-10-12T00:00:00Z", quote: "Another quote"}], people: [h.identity.id], orgs: ["Example organization"], items: [`lab#${item.item.number}`], note: "File research"};
+    return {t, h, ctx, input, headers: cookieHeaders(h.token, HOST)};
+  }
+  it("saves over MCP in wiki history, filters, renders on workspace/page and searches all source text", async () => {
+    const w = await world();
+    const saved = await callTool(w.ctx, "research_save", w.input);
+    expect(saved.isError, JSON.stringify(saved)).toBeUndefined();
+    const list = (await callTool(w.ctx, "research_list", {project: "lab", topic: "needle", person: w.h.identity.id, org: "Example organization", status: "draft"})).structuredContent;
+    expect(list).toMatchObject({results: [expect.objectContaining({sources: w.input.sources, people: w.input.people, items: w.input.items, author_id: w.h.identity.id, revision: 1})]});
+    for (const filter of [{topic: "absent"}, {org: "absent"}, {person: "absent"}, {status: "final"}, {after: "zzzz"}]) expect((await callTool(w.ctx, "research_list", {project: "lab", ...filter})).structuredContent).toMatchObject({results: []});
+    const home = await (await SELF.fetch(`https://${HOST}/lab`, {headers: w.headers})).text();
+    expect(home).toContain("Research results"); expect(home).toContain("Needle topic");
+    const page = await (await SELF.fetch(`https://${HOST}/lab/wiki/findings`, {headers: w.headers})).text();
+    expect(page).toContain("First source"); expect(page).toContain("Second source"); expect(page).toContain('href="/lab/w/1"'); expect(page).not.toContain('action="/api/wiki.write"');
+    expect((await callTool(w.ctx, "search_query", {q: "quotedneedle"})).structuredContent).toMatchObject({wiki: [expect.objectContaining({ref: "lab/findings"})]});
+    expect((await callTool(w.ctx, "wiki_write", {project: "lab", slug: "findings", expected_revision: 1, title: "overwrite", body: "", note: "bad"})).isError).toBe(true);
+    expect((await callTool(w.ctx, "research_save", {...w.input, expected_revision: 1, summary: "New summary", status: "final"})).isError).toBeUndefined();
+    expect((await callTool(w.ctx, "research_save", {...w.input, expected_revision: 1})).isError).toBe(true);
+    expect((await callTool(w.ctx, "wiki_read", {project: "lab", slug: "findings", revision: 1})).structuredContent).toMatchObject({page: {author_id: w.h.identity.id, research: expect.stringContaining("quotedneedle")}});
+    expect((await callTool(w.ctx, "wiki_history", {project: "lab", slug: "findings"})).structuredContent).toMatchObject({history: [expect.objectContaining({revision: 2}), expect.objectContaining({revision: 1})]});
+  });
+  it("validates fields, references, role, archived workspaces and tenant isolation", async () => {
+    const w = await world();
+    for (const change of [{sources: [{...w.input.sources[0], url: "javascript:alert(1)"}]}, {sources: [{...w.input.sources[0], retrieved_at: "yesterday"}]}, {sources: [{...w.input.sources[0], file: "a.txt"}]}, {sources: [{file: "missing.txt", title: "Missing", retrieved_at: "2026-10-12T00:00:00Z", quote: "quote"}]}, {items: ["lab#999"]}, {people: ["missing"]}, {status: "invalid"}, {expected_revision: undefined}]) expect((await callTool(w.ctx, "research_save", {...w.input, ...change})).isError).toBe(true);
+    const foreign = await seedTenant("foreign");
+    const other = await seedHuman("other@example.com", {memberships: [{tenant_id: foreign.id, role: "member"}]});
+    expect((await callTool(w.ctx, "research_save", {...w.input, people: [other.identity.id]})).isError).toBe(true);
+    expect((await callTool(w.ctx, "research_save", w.input)).isError).toBeUndefined();
+    expect((await SELF.fetch(`https://foreign.pimwell.test/lab/wiki/findings`, {headers: cookieHeaders(other.token, "foreign.pimwell.test")})).status).toBe(404);
+    const reader = await seedHuman("reader@example.com", {memberships: [{tenant_id: w.t.id, role: "reader"}]});
+    expect((await apiPost(HOST, "research.save", w.input, cookieHeaders(reader.token, HOST))).status).toBe(403);
+    await createProject(env.HUB_DB, {tenant_id: w.t.id, namespace_id: null, slug: "guide", kind: "wiki", display_name: "Guide"}, Date.now());
+    expect((await callTool(w.ctx, "research_list", {project: "guide"})).isError).toBe(true);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE tenant_id = ? AND slug = 'lab'").bind(w.t.id).run();
+    expect((await callTool(w.ctx, "research_save", {...w.input, expected_revision: 1})).isError).toBe(true);
+  });
+});
+
 describe("default project channels", () => {
   it("creates the team and ops channels with the project, skipping a taken name", async () => {
     const t = await seedTenant("acme");

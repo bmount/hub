@@ -1,3 +1,4 @@
+import { researchVerbs } from "./research";
 import { fileVerbs } from "./files";
 import { wikiVerbs } from "./wiki";
 import { situationList, situationOpen, situationResolve } from "./situation";
@@ -49,7 +50,7 @@ import { chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable, ch
 
 export function registerAllVerbs(): void {
   registerVerbs([
-    bootstrap, whoami, ...wikiVerbs, ...fileVerbs,
+    bootstrap, whoami, ...wikiVerbs, ...fileVerbs, ...researchVerbs,
     tenantCreate, tenantArchive, tenantUnarchive, tenantList, tenantDelete,
     mailList, mailRead, mailRelease, mailProposeWork, mailResponseRecipients, mailSetResponseRecipients, mailResponseIntent, mailSetResponseIntent,
     workCreate, workList, workRead, workUpdate, workClaim, workLink,
