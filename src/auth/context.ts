@@ -1,3 +1,4 @@
+import { span } from "../perf";
 import type { Env } from "../env";
 import { classifyHost, type HostKind } from "../tenant";
 import { getTenantBySlug } from "../db/tenants";
@@ -93,7 +94,8 @@ export function roleFor(identity: Identity | null, membership: Membership | null
  * Git sessions: only with via "introspect" (the Ardi service binding), pinned to their tenant.
  * Introspection accepts only `git` and `agent_run` sessions; browser and oauth sessions never introspect.
  */
-export async function credentialUsable(
+export const credentialUsable: typeof credentialUsableImpl = (...args) => span("auth.credentialUsable", () => credentialUsableImpl(...args));
+async function credentialUsableImpl(
   db: D1Database, identity: Identity, session: Session | null, apiToken: ApiToken | null, tenant: Tenant | null, via: "http" | "mcp" | "introspect" = "http",
 ): Promise<boolean> {
   if (identity.state !== "active") return false;
@@ -118,7 +120,8 @@ export async function credentialUsable(
   return agentCredentialOk(db, identity, tenant.id, session ? session.parent_token_id : null);
 }
 
-export async function buildContext(request: Request, env: Env, now: number = Date.now(), waitUntil?: (p: Promise<unknown>) => void, opts: { longLivedToken?: boolean } = {}): Promise<Ctx> {
+export const buildContext: typeof buildContextImpl = (...args) => span("auth.buildContext", () => buildContextImpl(...args));
+async function buildContextImpl(request: Request, env: Env, now: number = Date.now(), waitUntil?: (p: Promise<unknown>) => void, opts: { longLivedToken?: boolean } = {}): Promise<Ctx> {
   const db = env.HUB_DB;
   const host = classifyHost(request.headers.get("host") ?? new URL(request.url).host, env.HUB_DOMAIN);
 

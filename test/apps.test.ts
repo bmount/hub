@@ -3,6 +3,7 @@ import siteMigration from "../migrations/0032_sites.sql?raw";
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
+import { writeInvocation } from "../tail/perf";
 import tailWorker from "../tail/index";
 import { validatedAppEvent } from "../src/apps/validate";
 import { exceptionFingerprint } from "../src/apps/fingerprint";
@@ -562,6 +563,26 @@ describe("recorded app-error work evidence", () => {
 });
 
 describe("app telemetry", () => {
+  it("writes native CPU/wall timings by version and request ID without reading request content", () => {
+    const points: Array<NonNullable<Parameters<AnalyticsEngineDataset["writeDataPoint"]>[0]>> = [];
+    const measured = { PERF: { writeDataPoint: (p: typeof points[number]) => points.push(p) } as unknown as AnalyticsEngineDataset };
+    const id = "11111111-1111-4111-8111-111111111111";
+    const marker = { msg: "perf", request: id, tenant: "a".repeat(32), route: "/:project/w/:number", method: "GET", auth: "cookie", status: 200, colo: "DFW", cold: true };
+    const raw = tail({ scriptName: "pimwell-hub", cpuTime: 0.2, wallTime: 180, logs: [{ message: [JSON.stringify(marker)] }] }) as unknown as TraceItem;
+    writeInvocation(measured, raw);
+    expect(points).toHaveLength(1);
+    expect(points[0]!.indexes).toEqual(["v-1111aaaa"]);
+    expect(points[0]!.blobs?.[5]).toBe(id);
+    expect(points[0]!.blobs?.[6]).toBe("invocation");
+    expect(points[0]!.doubles?.slice(11, 13)).toEqual([0.2, 180]);
+    expect(JSON.stringify(points)).not.toMatch(/pms_secret|pb.example|authorization|cookie:|pat@example/);
+    writeInvocation(measured, { ...raw, scriptName: "foreign" });
+    expect(points).toHaveLength(1);
+    writeInvocation(measured, { ...raw, logs: [{ message: [JSON.stringify({ ...marker, tenant: "private-tenant" })] } as TraceLog] });
+    expect(points[1]!.blobs?.[4]).toBe("");
+    expect(points[1]!.blobs?.[5]).toBe("");
+  });
+
   it("forwards only a bounded cause digest from the actual tail handler", async () => {
     const raw = tail({ exceptions: [{ name: "TypeError", message: 'private interview for "person@example.com" token=pms_secretsecret',
       stack: "TypeError: private interview\n    at privateMailBody (worker.js:10:20)" }] });
@@ -569,7 +590,7 @@ describe("app telemetry", () => {
     await tailWorker.tail([raw as unknown as TraceItem], { HUB: { events: async batch => {
       batches.push(batch);
       return { accepted: batch.length, dropped: 0 };
-    } } });
+    } } }, { waitUntil: () => {} } as unknown as ExecutionContext);
     const e = batches[0]![0];
     expect(JSON.stringify(e)).not.toMatch(/private interview|person@example|secretsecret|privateMailBody/);
     expect(validatedAppEvent(e, Date.now())?.exceptions[0]?.fingerprint).toMatch(/^[0-9a-f]{64}$/);

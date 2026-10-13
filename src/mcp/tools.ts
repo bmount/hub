@@ -1,3 +1,4 @@
+import { span, traceFields } from "../perf";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/server";
 import { connectionScopes, type Ctx } from "../auth/context";
 import { projectFeatures, type ProjectFeature } from "../projectFeatures";
@@ -162,7 +163,8 @@ export async function callTool(ctx: Ctx, name: string, args: Record<string, unkn
         if (outside) throw new HubError(403, "forbidden", "this work graph crosses project boundaries; use the organization MCP endpoint");
       }
     }
-    const result = await runVerb(ctx, verb, args);
+    traceFields({ tool: toolName(verb.name), verb: verb.name, tenant: ctx.tenant?.id ?? "", auth: ctx.agentMcp ? "agent" : "MCP" });
+    const result = await span(`mcp.${toolName(verb.name)}`, () => runVerb(ctx, verb, args));
     // Render before classifying success: a rendering failure must still receive its failure audit.
     const rendered = toolResult(verb, result);
     if (isQuietPoll(verb, result)) {

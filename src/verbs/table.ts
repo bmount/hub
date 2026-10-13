@@ -1,3 +1,4 @@
+import { spanFunction, traceFields } from "../perf";
 import type { Ctx } from "../auth/context";
 import type { Role } from "../db/types";
 
@@ -49,7 +50,11 @@ export type VerbDef<P, R> = {
 const REGISTRY = new Map<string, VerbDef<unknown, unknown>>();
 
 export function defineVerb<P, R>(def: VerbDef<P, R>): VerbDef<P, R> {
-  return def;
+  const run = def.run;
+  return { ...def, run: spanFunction(`verb.${def.name}`, (ctx: Ctx, params: P) => {
+    traceFields({ verb: def.name, tenant: ctx.tenant?.id ?? "", auth: ctx.agentMcp || ctx.identity?.kind === "agent" ? "agent" : ctx.authKind === "oauth" ? "MCP" : ctx.authKind === "token" || ctx.authKind === "bearer" ? "API token" : ctx.authKind ?? "anonymous" });
+    return run(ctx, params);
+  }) };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

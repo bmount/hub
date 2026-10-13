@@ -1,3 +1,4 @@
+import { span } from "../perf";
 import type { Env } from "../env";
 import { credentialUsable, oauthContext, type Ctx } from "../auth/context";
 import { liveGrant } from "../db/oauthGrants";
@@ -22,7 +23,8 @@ const tooMany = (retryAfterS: number) => ({ kind: "deny" as const, response: oau
  * Library token validation, then the hub's own check on every request (MCP spec 4.2, 5.3): the grant is live
  * in D1, bound to exactly this host's resource and tenant, and its session is the one in the token.
  */
-export async function mcpAuth(
+export const mcpAuth: typeof mcpAuthImpl = (...args) => span("auth.mcpAuth", () => mcpAuthImpl(...args));
+async function mcpAuthImpl(
   request: Request, env: Env, slug: string, now: number, waitUntil?: (p: Promise<unknown>) => void,
 ): Promise<McpAuth> {
   const resource = tenantResource(env, slug);

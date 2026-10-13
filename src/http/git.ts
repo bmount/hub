@@ -1,3 +1,4 @@
+import { traceFields } from "../perf";
 import type { Env } from "../env";
 import { classifyHost } from "../tenant";
 import { getTenantBySlug } from "../db/tenants";
@@ -25,6 +26,7 @@ export async function forwardGit(request: Request, env: Env): Promise<Response |
   if (host.kind !== "tenant") return null;
   const tenant = await getTenantBySlug(env.HUB_DB, host.slug);
   if (!tenant || tenant.state !== "active") return notFoundPage();
+  traceFields({ tenant: tenant.id, auth: "git", route: "/:repo.git/*" });
   if (env.GIT_PROXY) return env.GIT_PROXY.fetch(request);
   // An agent's own source is only ever on Artifacts.
   if (url.pathname.startsWith("/agent-src/")) return env.GIT_BACKEND === "artifacts" ? artifactGit(request, env, tenant.slug) : notFoundPage();

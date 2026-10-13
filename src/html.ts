@@ -1,3 +1,4 @@
+import { span } from "./perf";
 import { ASSETS } from "./assets";
 
 const MAP: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -142,7 +143,8 @@ ${tabs}
 }
 
 /** A two-pane workbench page. Without an inspector the list takes the whole width. */
-export function workbench(title: string, p: Panes, shell: Shell): string {
+export const workbench: typeof workbenchImpl = (...args) => span("render.workbench", () => workbenchImpl(...args));
+function workbenchImpl(title: string, p: Panes, shell: Shell): string {
   const two = p.inspector !== null && (Boolean(p.inspectorKey) || p.focus === "inspector");
   const main = `<main class="panes${two ? "" : " one"}${two && p.stackOnPhone ? " wb-stacked" : ""}">
 <section id="list" class="pane" data-key="${esc(p.listKey)}">${p.list}</section>
@@ -164,7 +166,8 @@ export function workbench(title: string, p: Panes, shell: Shell): string {
   return frame(title, main, shell, p.focus ?? (two && p.inspectorKey ? "inspector" : "list"));
 }
 
-export function page(title: string, body: string, shell?: Shell): string {
+export const page: typeof pageImpl = (...args) => span("render.page", () => pageImpl(...args));
+function pageImpl(title: string, body: string, shell?: Shell): string {
   if (!shell) {
     return `${head(title)}
 <body class="plain">

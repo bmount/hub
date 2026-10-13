@@ -1,3 +1,4 @@
+import { span } from "../perf";
 import { randomToken, sha256Hex, ulid } from "../ids";
 import type { Identity, Membership, OAuthGrant, Role, Session, State, Tenant } from "./types";
 
@@ -89,7 +90,8 @@ export async function setLibraryGrantId(db: D1Database, id: string, library_gran
  * The per-request check (MCP spec 5.3), one query: grant and session unrevoked and unexpired, identity an
  * active human, tenant active, and membership active unless the identity is root.
  */
-export async function liveGrant(db: D1Database, grant_id: string, now: number): Promise<LiveGrant | null> {
+export const liveGrant: typeof liveGrantImpl = (...args) => span("auth.grant.liveGrant", () => liveGrantImpl(...args));
+async function liveGrantImpl(db: D1Database, grant_id: string, now: number): Promise<LiveGrant | null> {
   const row = await db.prepare(
     `SELECT g.*,
             s.label AS s_label, s.token_hash AS s_token_hash, s.created_at AS s_created_at, s.last_seen_at AS s_last_seen_at,

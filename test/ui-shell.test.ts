@@ -36,7 +36,7 @@ describe("the signed-in shell", () => {
 
   it("reports server time on every page", async () => {
     const w = await world();
-    for (const path of ["/", "/docket", "/site"]) expect((await w.get(path)).headers.get("server-timing"), path).toMatch(/^app;dur=\d+, db;desc="\d+ round trips, \d+ statements";dur=\d+$/);
+    for (const path of ["/", "/docket", "/site"]) expect((await w.get(path)).headers.get("server-timing"), path).toMatch(/^app;dur=\d+(?:\.\d+)?, db;desc="\d+ round trips, \d+ statements";dur=\d+(?:\.\d+)?, span0;/);
   });
 
   it("shows Admin only to admins", async () => {

@@ -1,3 +1,4 @@
+import { installFetchTiming, transferredTrace, withTrace, span, timedEnv, traceFields, deferredTrace, serverTiming, tracedInvocation } from "../src/perf";
 import type { Env } from "../src/env";
 import { classifyHost } from "../src/tenant";
 import { GIT_PATH, artifactGit } from "../src/http/artifactGit";
@@ -9,14 +10,15 @@ import { cleanupGitStages } from "../src/code/gitStageCleanup";
 import { fencedLegacyGit, usesArtifacts } from "../src/code/gitBackend";
 
 type ProxyEnv = Env & { HUB: Fetcher };
+installFetchTiming();
 
 /** One shared deployment, with live authorization directly against the shared database. */
-export default {
-  async fetch(request: Request, env: ProxyEnv, ctx: ExecutionContext): Promise<Response> {
+async function dispatch(request: Request, env: ProxyEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url), host = classifyHost(request.headers.get("host") ?? url.host, env.HUB_DOMAIN);
     if (host.kind === "tenant" && GIT_PATH.test(url.pathname)) {
       const tenant = await getTenantBySlug(env.HUB_DB, host.slug);
       if (!tenant || tenant.state !== "active") return notFoundPage();
+      traceFields({ tenant: tenant.id, auth: "git", route: "/:repo.git/*" });
       if (url.pathname.startsWith("/agent-src/")) return env.GIT_BACKEND === "artifacts" ? artifactGit(request, env, tenant.slug) : notFoundPage();
       const repo = url.pathname.slice(1, url.pathname.indexOf(".git/"));
       return await usesArtifacts(env, tenant.slug, repo) ? artifactGit(request, env, tenant.slug) : fencedLegacyGit(request, env, tenant.slug, repo);
@@ -25,8 +27,30 @@ export default {
     if (host.kind === "tenant" && url.pathname === "/api/session.start" && request.method === "POST") return handleApi(request, env, promise => ctx.waitUntil(promise));
     // A tenant's existing hostname also serves the workbench. Keep those requests unchanged.
     return env.HUB.fetch(request);
+}
+export default {
+  async fetch(request: Request, env: ProxyEnv, ctx: ExecutionContext): Promise<Response> {
+    const trace = transferredTrace(request);
+    trace.route = "/:repo.git/*"; trace.auth = "git";
+    return withTrace(trace, async () => {
+      try {
+        const response = await span("git.request", () => dispatch(request, timedEnv(env), ctx));
+        trace.status = response.status;
+        // Preserve a downstream hub ID when this is a workbench pass-through.
+        if (!response.headers.has("x-request-id")) {
+          const headers = new Headers(response.headers);
+          headers.set("x-request-id", trace.id);
+          headers.set("server-timing", serverTiming(performance.now()-trace.started, { trips: 0, statements: 0, ms: 0 }, trace));
+          return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+        }
+        return response;
+      } catch (error) { trace.status = 500; throw error; }
+      finally { trace.ended = performance.now(); ctx.waitUntil(deferredTrace(env, trace, "pimwell-git")); }
+    });
   },
   async scheduled(_controller: ScheduledController, env: ProxyEnv, ctx: ExecutionContext) {
-    ctx.waitUntil(cleanupGitStages(env, Date.now()).then(result => console.log(JSON.stringify({ msg: "Git staging cleanup", ...result }))));
+    ctx.waitUntil(tracedInvocation(env, p => ctx.waitUntil(p), "scheduled.git.cleanup", async e => {
+      await cleanupGitStages(e, Date.now());
+    }, "pimwell-git"));
   },
 } satisfies ExportedHandler<ProxyEnv>;

@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // @ts-expect-error Host-only release helper is JavaScript.
 import { deployRecorder } from "../../scripts/deploy-record.mjs";
 // @ts-expect-error Host-only release helper is JavaScript.
-import { compatibleBindings } from "../../scripts/release-bindings.mjs";
+import { compatibleBindings, compatibleRuntime } from "../../scripts/release-bindings.mjs";
 import { buildLocalTestWranglerConfig, readWranglerConfig } from "../wrangler-test-config";
 
 describe("wrangler configuration", () => {
+  it("keeps bounded tracer CPU overhead below one millisecond (excluding native Analytics ingestion)", () => {
+    const report = JSON.parse(execFileSync(process.execPath, ["scripts/perf-overhead.mjs"], { encoding: "utf8" }));
+    for (const measurement of report.measurements) expect(measurement.overhead_cpu_ms).toBeLessThan(1);
+  }, 15000);
   it("allows only the additive platform version metadata binding", () => {
     const resource = {name:"HUB_DB",type:"d1",id:"database"};
     const metadata = {name:"WORKER_VERSION",type:"version_metadata"};
@@ -18,6 +23,22 @@ describe("wrangler configuration", () => {
     expect(compatibleBindings([resource], [metadata, {...resource,id:"other"}])).toBe(false);
     expect(compatibleBindings([resource], [resource, {...metadata,type:"secret_text"}])).toBe(false);
     expect(readWranglerConfig().version_metadata).toEqual({binding:"WORKER_VERSION"});
+  });
+  it("permits only the exact additive performance dataset and tail async-context runtime", () => {
+    const db = { name: "HUB_DB", type: "d1", id: "database" };
+    const perf = { name: "PERF", type: "analytics_engine", dataset: "pimwell_perf" };
+    expect(compatibleBindings([db], [db, perf])).toBe(true);
+    expect(compatibleBindings([db, perf], [perf, db])).toBe(true);
+    expect(compatibleBindings([db, perf], [db])).toBe(false);
+    expect(compatibleBindings([db], [db, { ...perf, dataset: "foreign" }])).toBe(false);
+    expect(compatibleBindings([db], [db, { ...perf, type: "secret_text" }])).toBe(false);
+    const runtime = { compatibility_date: "2026-09-01", compatibility_flags: [] };
+    const fresh = { ...runtime, compatibility_flags: ["nodejs_compat"] };
+    expect(compatibleRuntime(runtime, fresh, "pimwell-tail")).toBe(true);
+    expect(compatibleRuntime(runtime, fresh, "pimwell-hub")).toBe(false);
+    expect(compatibleRuntime(runtime, { ...fresh, compatibility_date: "2027-01-01" }, "pimwell-tail")).toBe(false);
+    expect(compatibleRuntime(runtime, { ...fresh, compatibility_flags: ["nodejs_compat", "other"] }, "pimwell-tail")).toBe(false);
+    expect(readWranglerConfig().analytics_engine_datasets).toEqual([{ binding: "PERF", dataset: "pimwell_perf" }]);
   });
   it("starts a release reporting session before recording with a long-lived token", async () => {
     const dir = mkdtempSync(join(tmpdir(), "release-report-"));
@@ -57,6 +78,7 @@ describe("wrangler configuration", () => {
   it("removes production Git proxy defaults from local worker tests", () => {
     const config = buildLocalTestWranglerConfig();
     expect(config.vars).toMatchObject({ GIT_BACKEND: "" });
+    expect(config.analytics_engine_datasets).toEqual([]);
     expect(config.services ?? []).not.toContainEqual(expect.objectContaining({ binding: "GIT_PROXY" }));
     expect(config.r2_buckets).toContainEqual({ binding: "GIT_PUSH_STAGING", bucket_name: "pimwell-git-staging" });
   });

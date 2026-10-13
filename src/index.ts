@@ -17,7 +17,7 @@ import { assetResponse } from "./assets";
 import { htmlResponse, page } from "./html";
 import { Hono } from "hono";
 import type { Env } from "./env";
-import { meteredD1, serverTiming, type Meter } from "./perf";
+import { meteredD1, serverTiming, type Meter, newTrace, withTrace, span, timedEnv, deferredTrace, tracedInvocation, installFetchTiming, spanFunction, traceFields } from "./perf";
 import { emit, note, requestLine } from "./log";
 import { handleApi } from "./http/api";
 import { handleChatApi } from "./http/chatApi";
@@ -61,9 +61,16 @@ import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sess
 export { Conversation } from "./chat/conversationDO";
 export { Inbox } from "./chat/inboxDO";
 
+installFetchTiming();
 registerAllVerbs();
 
-const app = new Hono<{ Bindings: Env }>();
+export const app = new Hono<{ Bindings: Env }>();
+// Registration is the page/API boundary: future routes cannot bypass timing.
+for (const method of ["get", "post", "put", "delete", "patch", "options", "all"] as const) {
+  const register = app[method];
+  Object.assign(app, { [method]: (path: string, ...handlers: Array<(...args: any[]) => any>) =>
+    Reflect.apply(register, app, [path, ...handlers.map(handler => spanFunction(`route.${path}`, (...args) => { traceFields({ route: path }); return handler(...args); }))]) });
+}
 
 // Git smart HTTP on tenant hosts belongs to Ardi (integration spec 3); everything else stays here.
 // Performance is first-class (overnight plan task 7): every hub response says how long the Worker spent on it.
@@ -72,15 +79,24 @@ app.use("*", async (c, next) => {
   const started = Date.now();
   const meter: Meter = { trips: 0, statements: 0, ms: 0 };
   // This request's own copy of the bindings, with D1 metered; other requests are unaffected.
-  c.env = { ...c.env, HUB_DB: meteredD1(c.env.HUB_DB, meter) };
-  await next();
+  const trace = newTrace(c.req.method, String(c.req.raw.cf?.colo ?? ""));
+  const rawEnv = c.env;
+  c.env = { ...timedEnv(c.env), HUB_DB: meteredD1(c.env.HUB_DB, meter) };
+  trace.route = c.req.matchedRoutes.at(-1)?.path ?? "not_found";
+  await withTrace(trace, () => span("request", next));
+  if (c.req.path.includes(".git/")) { trace.route = "/:repo.git/*"; trace.auth = "git"; }
+  trace.status = c.res?.status ?? 500;
+  trace.ended = performance.now();
+  const headers = new Headers(c.res.headers);
+  headers.set("x-request-id", trace.id);
+  headers.set("server-timing", serverTiming(Date.now() - started, meter, trace));
+  c.res = new Response(c.res.body, { status: c.res.status, statusText: c.res.statusText, headers,
+    ...(c.res.webSocket ? { webSocket: c.res.webSocket } : {}) });
+  c.executionCtx.waitUntil(deferredTrace(rawEnv, trace));
   if (c.error) {
     const e = c.error;
     note(c.req.raw, { error: { reason: "exception", detail: e instanceof Error ? `${e.name}: ${e.message}` : String(e) } });
     console.error("request exception");
-  }
-  if (c.res && !c.res.headers.has("server-timing")) {
-    try { c.res.headers.set("server-timing", serverTiming(Date.now() - started, meter)); } catch { /* immutable response: leave it */ }
   }
   // Logging must never break a response.
   try { emit(requestLine(c.req.raw, c.res?.status ?? 500, Date.now() - started, meter)); } catch { /* ignore */ }
@@ -230,17 +246,21 @@ app.get("/:project", (c) => projectPage(c.req.raw, c.env, c.req.param("project")
 
 export default {
   fetch: app.fetch,
-  email: handleEmail,
+  email: (message, env, ctx) => tracedInvocation(env, p => ctx.waitUntil(p), "email", e => handleEmail(message, e, ctx)),
   // Every five minutes: push sync from the git host (src/code/sync.ts).
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(cleanupFileObjects(env, Date.now(), false).then((r) => console.log(JSON.stringify({ msg: "file orphan cleanup", ...r })), () => console.error("file orphan cleanup failed")));
-    ctx.waitUntil(syncAll(env, Date.now()).then((r) => console.log(JSON.stringify({ msg: "push sync", ...r })), () => console.error("push sync failed")));
+    ctx.waitUntil(tracedInvocation(env, p => ctx.waitUntil(p), "scheduled", async e => {
+      await Promise.all([
+        span("cron.cleanup", () => cleanupFileObjects(e, Date.now(), false)),
+        span("cron.git.sync", () => syncAll(e, Date.now())),
+      ]);
+    }));
   },
 } satisfies ExportedHandler<Env>;
 
 /** App telemetry from pimwell-tail (src/apps/ingest.ts). An RPC entrypoint: callable only through a service binding. */
 export class Ingest extends WorkerEntrypoint<Env> {
   async events(batch: unknown): Promise<{ accepted: number; dropped: number }> {
-    return ingest(this.env, batch, Date.now());
+    return tracedInvocation(this.env, p => this.ctx.waitUntil(p), "rpc.ingest", e => ingest(e, batch, Date.now()));
   }
 }

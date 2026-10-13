@@ -5,8 +5,10 @@
   "name": "pimwell-tail",
   "main": "index.ts",
   "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "version_metadata": { "binding": "WORKER_VERSION" },
+  "analytics_engine_datasets": [{ "binding": "PERF", "dataset": "pimwell_perf" }],
   "services": [{ "binding": "HUB", "service": "pimwell-hub", "entrypoint": "Ingest" }],
   "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false, "persist": false } }
 }

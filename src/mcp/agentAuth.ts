@@ -1,3 +1,4 @@
+import { span } from "../perf";
 // /agent/mcp: the MCP server for headless agents, authenticated by the agent's own long-lived pmw_ token (from a
 // connect link, src/auth/connect.ts). /mcp stays OAuth-only for people's assistants.
 // - The agent's rights are its own role, capped at member and at its operator's current role, under the same
@@ -33,7 +34,8 @@ const refused = () => deny(401, "invalid_token", "This server takes an agent tok
 type OperatorRow = { kind: string; state: string; is_root: number; role: Role | null; mstate: string | null };
 type SessionRow = Session & { ciphertext: string; iv: string };
 
-export async function agentMcpAuth(request: Request, env: Env, slug: string, now: number, waitUntil?: (p: Promise<unknown>) => void): Promise<AgentMcpAuth> {
+export const agentMcpAuth: typeof agentMcpAuthImpl = (...args) => span("auth.agentMcpAuth", () => agentMcpAuthImpl(...args));
+async function agentMcpAuthImpl(request: Request, env: Env, slug: string, now: number, waitUntil?: (p: Promise<unknown>) => void): Promise<AgentMcpAuth> {
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
   const header = request.headers.get("authorization") ?? "";
   const token = header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";

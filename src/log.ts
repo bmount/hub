@@ -2,6 +2,7 @@
 // first middleware once the response is ready. Handlers add what they learn through `note`: who acted, in which
 // organization, which verb, and why it failed. Secrets never reach the log: token-bearing paths are reduced to
 // their route, and query strings keep only their key names.
+import { traceFields } from "./perf";
 import type { Ctx } from "./auth/context";
 
 export type LogNote = {
@@ -22,6 +23,7 @@ export function note(request: Request, n: LogNote): void {
 
 /** Note who is acting, from a built context. */
 export function noteCtx(request: Request, ctx: Ctx, via?: string): void {
+  traceFields({ tenant: ctx.tenant?.id ?? "", auth: ctx.identity?.kind === "agent" ? "agent" : ctx.session?.kind === "git" ? "git" : ctx.authKind === "oauth" ? "MCP" : ctx.authKind === "token" || ctx.authKind === "bearer" ? "API token" : ctx.authKind ?? "anonymous" });
   note(request, {
     actor: ctx.identity ? { id: ctx.identity.id, kind: ctx.identity.kind, email: ctx.identity.email, ...(ctx.identity.is_root === 1 ? { root: true } : {}) } : null,
     tenant: ctx.tenant?.slug ?? null,

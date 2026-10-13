@@ -1,6 +1,7 @@
 // Model providers: how to check a key, list models, and ask a question (admin spec 10).
 // Outbound calls go through `modelFetch`, so tests can stand in for the provider.
 
+import { span, spanFields } from "../perf";
 import { modelCall } from "./deadline";
 
 let modelFetch: typeof fetch = (input, init) => fetch(input, init);
@@ -51,12 +52,14 @@ async function readModelJSON(res: Response, signal: AbortSignal, check: () => vo
   const cancel = () => { void reader.cancel().catch(() => {}); };
   signal.addEventListener("abort", cancel, { once: true });
   let bytes = new Uint8Array(8192), size = 0;
+
   try {
     for (;;) {
       check();
       const { value, done } = await reader.read();
       check();
       if (done) break;
+
       if (!(value instanceof Uint8Array)) throw new Error("invalid model response stream");
       const next = size + value.byteLength;
       if (next > MAX_MODEL_RESPONSE_BYTES) throw new Error("model response exceeds byte limit");
@@ -166,6 +169,25 @@ const openai: Provider = {
 
 export const PROVIDERS: Record<string, Provider> = { openai };
 
+const timedProviders = new Map<string, Provider>();
 export function provider(id: string): Provider | null {
-  return PROVIDERS[id] ?? null;
+  const raw = PROVIDERS[id];
+  if (!raw) return null;
+  let wrapped = timedProviders.get(id);
+  if (!wrapped) {
+    wrapped = new Proxy(raw, { get(target, prop) {
+      const value = Reflect.get(target, prop, target);
+      if (typeof value !== "function" || !["ask", "turn", "transcribe", "verify"].includes(String(prop))) return value;
+      return (...args: unknown[]) => span(`model.${id}.${String(prop)}`, async () => {
+        const started = performance.now();
+        spanFields({ provider: id, model: prop === "verify" ? "" : String(args[1]), firstToken: -1 });
+        const result = await Reflect.apply(value, target, args);
+        // These providers are non-streaming: the first text is available only when decoding completes.
+        if (prop !== "verify") spanFields({ firstToken: performance.now() - started });
+        return result;
+      });
+    } });
+    timedProviders.set(id, wrapped);
+  }
+  return wrapped;
 }

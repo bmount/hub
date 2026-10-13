@@ -1,3 +1,4 @@
+import { span } from "./perf";
 import { sha256Hex } from "./ids";
 
 export const RATE_WINDOW_MS = 3600 * 1000;
@@ -62,7 +63,8 @@ async function putCounter(kv: KVNamespace, bucket: RateBucket, key: string, valu
  * `defer`, when given, takes the counter write off the response path for buckets whose writes already fail open: the
  * decision comes from the read either way. The email buckets (addr, ip) always wait, because they fail closed.
  */
-export async function takeRateDetail(
+export const takeRateDetail: typeof takeRateDetailImpl = (...args) => span("rate.takeRateDetail", () => takeRateDetailImpl(...args));
+async function takeRateDetailImpl(
   kv: KVNamespace, bucket: RateBucket, subject: string, now: number, defer?: (p: Promise<unknown>) => void,
 ): Promise<RateResult> {
   const { limit, windowMs } = RATE_RULES[bucket];
@@ -109,7 +111,8 @@ export async function takeRateDetail(
  * limits. `first` is true for exactly the first denied call in a window (the count passes the limit by one).
  * A D1 failure fails open: the same database is needed to serve the call anyway.
  */
-export async function takeRateAtomic(db: D1Database, bucket: RateBucket, subject: string, now: number): Promise<RateResult> {
+export const takeRateAtomic: typeof takeRateAtomicImpl = (...args) => span("rate.takeRateAtomic", () => takeRateAtomicImpl(...args));
+async function takeRateAtomicImpl(db: D1Database, bucket: RateBucket, subject: string, now: number): Promise<RateResult> {
   const { limit, windowMs } = RATE_RULES[bucket];
   const window = Math.floor(now / windowMs);
   const retryAfterS = Math.max(1, Math.ceil(((window + 1) * windowMs - now) / 1000));
@@ -136,7 +139,8 @@ export async function takeRateAtomic(db: D1Database, bucket: RateBucket, subject
  * Several atomic counters for one subject in a single round trip (MCP calls count per minute and per hour). The
  * sweep of finished windows runs after the response when `defer` is given. Fails open, like takeRateAtomic.
  */
-export async function takeRatesAtomic(db: D1Database, buckets: RateBucket[], subject: string, now: number, defer?: (p: Promise<unknown>) => void): Promise<Array<RateResult & { bucket: RateBucket }>> {
+export const takeRatesAtomic: typeof takeRatesAtomicImpl = (...args) => span("rate.takeRatesAtomic", () => takeRatesAtomicImpl(...args));
+async function takeRatesAtomicImpl(db: D1Database, buckets: RateBucket[], subject: string, now: number, defer?: (p: Promise<unknown>) => void): Promise<Array<RateResult & { bucket: RateBucket }>> {
   const hash = await sha256Hex(subject.trim().toLowerCase());
   const plan = buckets.map((bucket) => {
     const { limit, windowMs } = RATE_RULES[bucket];

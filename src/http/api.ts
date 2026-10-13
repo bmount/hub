@@ -1,3 +1,4 @@
+import { traceFields } from "../perf";
 import { sameOrigin } from "./login";
 import { MAX_API_BODY_BYTES, readRequestBytes, requestWithBytes } from "./body";
 import { takeRateDetail } from "../rate";
@@ -100,6 +101,7 @@ export async function handleApi(request: Request, env: Env, waitUntil?: (p: Prom
     }
     const verb = getVerb(name);
     if (!verb) throw new HubError(404, "unknown_verb");
+    traceFields({ verb: verb.name });
     ctx = await buildContext(request, env, Date.now(), waitUntil, { longLivedToken: true });
 
     if (ctx.host.kind === "unknown") throw new HubError(404, "not_found");

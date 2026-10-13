@@ -4,7 +4,7 @@
 // version that keeps the dashboard's vars, refuses binding or runtime changes, records the rollback version, deploys
 // and smoke-checks. Logs and a record go to $RELEASE_DIR/<commit>/ (default ~/.local/state/pimwell/releases).
 import { spawnSync } from 'node:child_process';
-import { compatibleBindings } from './release-bindings.mjs';
+import { compatibleBindings, compatibleRuntime } from './release-bindings.mjs';
 import { deployRecorder } from './deploy-record.mjs';
 import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -84,7 +84,7 @@ for (const { name, config } of WORKERS) {
   if (!version) fail(`${name} upload outcome unknown; nothing was deployed; see ${join(dir, `upload-${name}.log`)}`);
   const fresh = await api(name, `/versions/${version}`, { newlyUploaded: true });
   if (!compatibleBindings(old.resources.bindings, fresh.resources.bindings)) fail(`${name} bindings changed: version ${version} is uploaded but nothing was deployed; deploy by hand after review`);
-  if (JSON.stringify(old.resources.script_runtime) !== JSON.stringify(fresh.resources.script_runtime)) fail(`${name} runtime or migrations changed: version ${version} is uploaded but nothing was deployed; deploy by hand after review`);
+  if (!compatibleRuntime(old.resources.script_runtime, fresh.resources.script_runtime, name)) fail(`${name} runtime or migrations changed: version ${version} is uploaded but nothing was deployed; deploy by hand after review`);
   targets.push({ worker: name, version, rollback_version: rollback, before_deployment: before.id, deployment: null });
 }
 for (const t of targets) if ((await api(t.worker, '/deployments')).deployments[0].id !== t.before_deployment) fail(`${t.worker} changed during the release; versions are uploaded but nothing was deployed`);

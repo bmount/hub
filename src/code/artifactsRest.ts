@@ -1,3 +1,4 @@
+import { instrumentMethods } from "../perf";
 import type { Env } from "../env";
 import { HubError } from "../errors";
 import { packet } from "./gitProtocol";
@@ -244,3 +245,4 @@ export class ArtifactsRest {
     return new Response(replaced, { status: response.status, statusText: response.statusText, headers: response.headers });
   }
 }
+instrumentMethods(ArtifactsRest, "artifacts");

@@ -1,4 +1,4 @@
-import { env, SELF } from "cloudflare:test";
+import { env, SELF, createExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import gitProxy from "../git-proxy/index";
 import { forwardGit, isGitPath } from "../src/http/git";
@@ -90,9 +90,9 @@ describe("git forwarding to Ardi", () => {
     const acme = await seedTenant("acme");
     let calls = 0;
     const proxyEnv = { ...env, HUB: { fetch: () => new Response("hub") }, ARDI: { fetch: () => { calls++;return new Response("ardi", { headers: { "x-ardi-stub": "1" } }); } } } as any;
-    expect((await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/info/refs"), proxyEnv, {} as any)).headers.get("x-ardi-stub")).toBe("1");
+    expect((await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/info/refs"), proxyEnv, createExecutionContext())).headers.get("x-ardi-stub")).toBe("1");
     await env.HUB_DB.prepare("UPDATE tenant SET state = 'archived' WHERE id = ?").bind(acme.id).run();
-    const archived = await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/info/refs"), proxyEnv, {} as any);
+    const archived = await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/info/refs"), proxyEnv, createExecutionContext());
     expect(archived.status).toBe(404);expect(calls).toBe(1);
   });
 
@@ -103,7 +103,7 @@ describe("git forwarding to Ardi", () => {
       ...env, GIT_BACKEND: "ardi", HUB: { fetch: () => new Response("hub") },
       ARDI: { fetch: () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("ok"));c.close(); } }), { status: 200, headers: { "x-ardi-stub": "1" } }) },
     } as any;
-    const res = await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", body: "pack" }), proxyEnv, {} as any);
+    const res = await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", body: "pack" }), proxyEnv, createExecutionContext());
     expect(res.headers.get("x-ardi-stub")).toBe("1");
     expect((await env.HUB_DB.prepare("SELECT state FROM git_legacy_forward WHERE project_id = ?").bind(project.id).first<{ state: string }>())!.state).toBe("forwarding");
     expect(await res.text()).toBe("ok");
@@ -114,7 +114,7 @@ describe("git forwarding to Ardi", () => {
     const acme = await seedTenant("acme"), project = await createProject(env.HUB_DB, { tenant_id: acme.id, namespace_id: null, slug: "site", kind: "repo", display_name: "Site" }, Date.now());
     await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(acme.id, project.id, Date.now()).run();
     const proxyEnv = { ...env, GIT_BACKEND: "ardi", HUB: { fetch: () => new Response("hub") }, ARDI: { fetch: async () => { throw new Error("lost after send"); } } } as any;
-    await expect(gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", body: "pack" }), proxyEnv, {} as any)).rejects.toThrow("lost after send");
+    await expect(gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", body: "pack" }), proxyEnv, createExecutionContext())).rejects.toThrow("lost after send");
     expect(await env.HUB_DB.prepare("SELECT state, status FROM git_legacy_forward WHERE project_id = ?").bind(project.id).first()).toMatchObject({ state: "unknown", status: null });
   });
 
@@ -123,11 +123,11 @@ describe("git forwarding to Ardi", () => {
     await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at, legacy_write_fenced_at) VALUES (?, ?, ?, ?)").bind(acme.id, project.id, Date.now(), Date.now()).run();
     let calls = 0;
     const proxyEnv = { ...env, GIT_BACKEND: "ardi", HUB: { fetch: () => new Response("hub") }, ARDI: { fetch: () => { calls++;return new Response("ardi", { headers: { "x-ardi-stub": "1" } }); } } } as any;
-    const refused = await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", body: "pack" }), proxyEnv, {} as any);
+    const refused = await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", body: "pack" }), proxyEnv, createExecutionContext());
     expect(refused.status).toBe(403);expect(calls).toBe(0);
     expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM git_legacy_forward").first()).toMatchObject({ n: 0 });
-    expect((await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/git-upload-pack", { method: "POST", body: "want" }), proxyEnv, {} as any)).headers.get("x-ardi-stub")).toBe("1");
-    expect((await gitProxy.fetch(new Request("https://acme.pimwell.test/other.git/git-receive-pack", { method: "POST", body: "pack" }), proxyEnv, {} as any)).headers.get("x-ardi-stub")).toBe("1");
+    expect((await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/git-upload-pack", { method: "POST", body: "want" }), proxyEnv, createExecutionContext())).headers.get("x-ardi-stub")).toBe("1");
+    expect((await gitProxy.fetch(new Request("https://acme.pimwell.test/other.git/git-receive-pack", { method: "POST", body: "pack" }), proxyEnv, createExecutionContext())).headers.get("x-ardi-stub")).toBe("1");
   });
 
   it("404s unknown and archived tenants without forwarding", async () => {

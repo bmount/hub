@@ -1,3 +1,4 @@
+import { timedStorage, timedEnv, instrumentDurableObject, traceFields } from "../perf";
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { ulid } from "../ids";
@@ -70,30 +71,32 @@ const MSG_SELECT = "SELECT m.*, a.body, a.meta_json, a.session_id AS current_ses
 
 /** Messaging spec 9.1: one per channel. Serializes every write to the conversation and assigns `seq`. */
 export class Conversation extends DurableObject<Env> {
+  #storage: DurableObjectStorage;
   #tenant = "";
   #id = "";
   /** Tail of the drain chain: drains run one at a time, so index flushes cannot interleave. */
   #draining: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    for (const s of SCHEMA) this.ctx.storage.sql.exec(s);
+    super(ctx, timedEnv(env));
+    this.#storage = timedStorage(ctx.storage, "Conversation");
+    for (const s of SCHEMA) this.#storage.sql.exec(s);
     for (const u of UPGRADES) {
-      const has = this.ctx.storage.sql.exec<{ name: string }>(`SELECT name FROM pragma_table_info('${u.table}')`).toArray().some((c) => c.name === u.column);
-      if (!has) this.ctx.storage.sql.exec(u.ddl);
+      const has = this.#storage.sql.exec<{ name: string }>(`SELECT name FROM pragma_table_info('${u.table}')`).toArray().some((c) => c.name === u.column);
+      if (!has) this.#storage.sql.exec(u.ddl);
     }
   }
 
   #q<T extends Record<string, SqlStorageValue>>(query: string, ...binds: SqlStorageValue[]): T[] {
-    return this.ctx.storage.sql.exec<T>(query, ...binds).toArray();
+    return this.#storage.sql.exec<T>(query, ...binds).toArray();
   }
 
   #run(query: string, ...binds: SqlStorageValue[]): void {
-    this.ctx.storage.sql.exec(query, ...binds);
+    this.#storage.sql.exec(query, ...binds);
   }
 
   #bind(tenant_id: string, conversation_id: string): void {
-    bindOnce(this.ctx.storage.sql, tenant_id, conversation_id);
+    bindOnce(this.#storage.sql, tenant_id, conversation_id);
     if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) throw new Error("conversation deleted");
     this.#tenant = tenant_id;
     this.#id = conversation_id;
@@ -251,7 +254,7 @@ export class Conversation extends DurableObject<Env> {
   /** No expiring lease: ambiguous starts must be reconciled, never automatically reacquired. */
   async claimRun(tenant_id: string, conversation_id: string, identity_id: string, evidence: RunSource, fingerprint: string, now: number): Promise<RunClaimOutcome> {
     this.#bind(tenant_id, conversation_id);
-    return this.ctx.storage.transactionSync(() => {
+    return this.#storage.transactionSync(() => {
       const source = this.#msg(evidence.msg_id);
       if (!source || source.kind !== "say") return { refused: "not_found", detail: "no such source message" };
       const key = this.#runKey(identity_id, source.msg_id);
@@ -365,7 +368,7 @@ export class Conversation extends DurableObject<Env> {
   /** A fixed private chat's membership is announced once, including after an ambiguous opening retry. */
   async announceMembership(tenant: string, conversation: string, members: string[], created_at: number, recipients: string[]): Promise<void> {
     this.#bind(tenant, conversation);
-    this.ctx.storage.transactionSync(() => {
+    this.#storage.transactionSync(() => {
       if (this.#q("SELECT key FROM meta WHERE key = 'membership:announced'").length) return;
       for (const identity of members) for (const recipient of recipients) {
         const update: UpdateDelivery = { key: `open:${conversation}:${identity}:${recipient}`, type: 'membership', chat: { id: conversation, kind: 'channel' }, data: { identity_id: identity, state: 'joined' }, created_at };
@@ -381,7 +384,7 @@ export class Conversation extends DurableObject<Env> {
     const key = `signal:${identity}:${method}:${client_id}`;
     const fingerprint = JSON.stringify(data);
     const readCursor = method === 'read' ? await inboxStub(this.env, tenant, identity).readCursor(tenant, identity, conversation) as number | null : null;
-    const result = this.ctx.storage.transactionSync(() => {
+    const result = this.#storage.transactionSync(() => {
       const prior = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = ?", key)[0];
       if (prior) {
         const saved = JSON.parse(prior.value);
@@ -401,7 +404,7 @@ export class Conversation extends DurableObject<Env> {
       }
       return result;
     });
-    if (this.#q("SELECT key FROM update_outbox LIMIT 1").length && await this.ctx.storage.getAlarm() === null) await this.ctx.storage.setAlarm(Date.now() + 1000);
+    if (this.#q("SELECT key FROM update_outbox LIMIT 1").length && await this.#storage.getAlarm() === null) await this.#storage.setAlarm(Date.now() + 1000);
     if (method === 'read' && !('conflict' in result)) await inboxStub(this.env, tenant, identity).markRead(tenant, identity, conversation, Number(data.seq));
     await this.#drain();
     return result;
@@ -431,7 +434,7 @@ export class Conversation extends DurableObject<Env> {
   async notice(tenant_id: string, conversation_id: string, body: string, now: number): Promise<{ seq: number; msg_id: string }> {
     this.#bind(tenant_id, conversation_id);
     const audience = await updateAudience(this.env.HUB_DB, tenant_id, conversation_id);
-    const result = this.ctx.storage.transactionSync(() => {
+    const result = this.#storage.transactionSync(() => {
       const message = this.#system(body, null, {}, now);
       this.#enqueueUpdate(audience, 'message', message.msg_id, message.seq, now);
       return message;
@@ -449,7 +452,7 @@ export class Conversation extends DurableObject<Env> {
 
   async presence(tenant_id: string, conversation_id: string): Promise<PresenceRow[]> {
     this.#bind(tenant_id, conversation_id);
-    const legacy = (await this.ctx.storage.get<PresenceRow[]>("presence:v1")) ?? [];
+    const legacy = (await this.#storage.get<PresenceRow[]>("presence:v1")) ?? [];
     const current = this.#q<{ value: string }>("SELECT value FROM meta WHERE key LIKE 'presence:%'").map(r => JSON.parse(r.value) as PresenceRow);
     const newest = new Map<string, PresenceRow>();
     for (const row of [...legacy, ...current]) if (!newest.has(row.identity_id) || newest.get(row.identity_id)!.last_seen <= row.last_seen) newest.set(row.identity_id, row);
@@ -493,7 +496,7 @@ export class Conversation extends DurableObject<Env> {
   async post(input: PostInput): Promise<PostOutcome> {
     this.#bind(input.tenant_id, input.conversation_id);
     const intent_fingerprint = input.intent_fingerprint ?? await postIntentFingerprint(input);
-    const outcome = this.ctx.storage.transactionSync(() => this.#post({ ...input, intent_fingerprint }));
+    const outcome = this.#storage.transactionSync(() => this.#post({ ...input, intent_fingerprint }));
     await this.#drain();
     return outcome;
   }
@@ -650,7 +653,7 @@ export class Conversation extends DurableObject<Env> {
   async version(input: VersionInput): Promise<PostOutcome> {
     this.#bind(input.tenant_id, input.conversation_id);
     const intent_fingerprint = input.intent_fingerprint ?? await versionIntentFingerprint(input);
-    const outcome = this.ctx.storage.transactionSync(() => this.#version({ ...input, intent_fingerprint }));
+    const outcome = this.#storage.transactionSync(() => this.#version({ ...input, intent_fingerprint }));
     await this.#drain();
     return outcome;
   }
@@ -812,27 +815,28 @@ export class Conversation extends DurableObject<Env> {
 
   /** Internal RPC only. A tombstone rejects already-authorized, in-flight posts after deletion. */
   async purge(tenant_id: string, conversation_id: string): Promise<number> {
-    bindOnce(this.ctx.storage.sql, tenant_id, conversation_id);
+    bindOnce(this.#storage.sql, tenant_id, conversation_id);
     return this.ctx.blockConcurrencyWhile(async () => {
       await this.#draining;
       const prior = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = 'deleted'")[0];
       if (prior) return Number(prior.value);
       const n = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM artifact")[0]!.n;
-      this.ctx.storage.transactionSync(() => {
+      this.#storage.transactionSync(() => {
         for (const table of ["artifact", "msg", "ref", "thread_sub", "scope_state", "pair_block", "idem", "inbox_outbox", "update_outbox", "index_outbox"]) this.#run(`DELETE FROM ${table}`);
         this.#run("DELETE FROM meta WHERE key NOT IN ('tenant_id', 'owner_id')");
         this.#run("INSERT INTO meta (key, value) VALUES ('deleted', ?)", String(n));
       });
-      await this.ctx.storage.delete("presence:v1");
-      await this.ctx.storage.deleteAlarm();
+      await this.#storage.delete("presence:v1");
+      await this.#storage.deleteAlarm();
       return n;
     });
   }
 
   async alarm(): Promise<void> {
     if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) return;
-    const b = storedBinding(this.ctx.storage.sql);
+    const b = storedBinding(this.#storage.sql);
     if (!b) return;
+    traceFields({ tenant: b.tenant_id });
     this.#tenant = b.tenant_id;
     this.#id = b.owner_id;
     await this.#drain();
@@ -968,8 +972,8 @@ export class Conversation extends DurableObject<Env> {
     if (next !== null) {
       // Pull the alarm earlier when a sooner retry is due; never push one that is already set earlier.
       const due = Math.max(next, Date.now() + 1_000);
-      const set = await this.ctx.storage.getAlarm();
-      if (set === null || set > due) await this.ctx.storage.setAlarm(due);
+      const set = await this.#storage.getAlarm();
+      if (set === null || set > due) await this.#storage.setAlarm(due);
     }
   }
 
@@ -1020,3 +1024,4 @@ export class Conversation extends DurableObject<Env> {
     }
   }
 }
+instrumentDurableObject(Conversation, "Conversation");
