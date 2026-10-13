@@ -54,7 +54,11 @@ if (git('status', '--porcelain')) fail('the tests changed the checkout; nothing 
 
 async function api(worker, path, { newlyUploaded = false } = {}) {
   for (let attempt = 0; ; attempt++) {
-    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${worker}${path}`, { headers: { authorization: `Bearer ${token}` } });
+    // Every call here is a read, so a dropped connection (EPIPE, reset) is retried rather than
+    // aborting a release halfway through its deployments.
+    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${worker}${path}`, { headers: { authorization: `Bearer ${token}` } })
+      .catch((e) => { if (attempt >= 5) throw e; return null; });
+    if (!r) { await new Promise((resolve) => setTimeout(resolve, 2000)); continue; }
     const j = await r.json().catch(() => null);
     // A successful upload can precede visibility in the version-read API. Retry
     // only this read, never an upload/deployment or an authorization refusal.
