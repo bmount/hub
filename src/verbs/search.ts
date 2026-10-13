@@ -97,14 +97,18 @@ async function messageHits(ctx: Ctx, ts: string[], only: string | null, limit: n
   const readable = [...active, ...archived];
   const chans = readable.slice(0, CHANNEL_LIMIT);
   const dir = await people(ctx.db, ctx.tenant!.id);
+  // One unreadable conversation (e.g. purged by an interrupted project deletion) must not fail the whole search:
+  // skip it and count it as not searched, so coverage reports the gap.
   const found = await Promise.all(chans.map(async (c) => {
     const rows = await (conversationStub(ctx.env, ctx.tenant!.id, c.project_id) as unknown as { search(t: string, cid: string, terms: string[], n: number): Promise<Array<{ msg_id: string; seq: number; author_id: string; body: string; created_at: number; thread_root: string | null }>> })
-      .search(ctx.tenant!.id, c.project_id, ts, PER_CHANNEL_LIMIT);
+      .search(ctx.tenant!.id, c.project_id, ts, PER_CHANNEL_LIMIT).catch(() => null);
+    if (!rows) return null;
     return rows.map((m): Hit => ({ kind: "Message", ref: `#${c.slug} #${m.seq}`, title: `@${dir.get(m.author_id)?.handle ?? "unknown"} in #${c.slug}`, snippet: snippet(m.body, ts), href: `/m/${encodeURIComponent(m.msg_id)}`, at: m.created_at }));
   }));
+  const searched = found.filter((rows): rows is Hit[] => rows !== null);
   return {
-    hits: found.flat().sort((a, b) => b.at - a.at).slice(0, limit),
-    coverage: { readable_active_channels: active.length, readable_archived_channels: archived.length, searched_channels: chans.length, channel_limit: CHANNEL_LIMIT, per_channel_limit: PER_CHANNEL_LIMIT, channels_at_hit_limit: found.filter((rows) => rows.length >= PER_CHANNEL_LIMIT).length },
+    hits: searched.flat().sort((a, b) => b.at - a.at).slice(0, limit),
+    coverage: { readable_active_channels: active.length, readable_archived_channels: archived.length, searched_channels: searched.length, channel_limit: CHANNEL_LIMIT, per_channel_limit: PER_CHANNEL_LIMIT, channels_at_hit_limit: searched.filter((rows) => rows.length >= PER_CHANNEL_LIMIT).length },
   };
 }
 

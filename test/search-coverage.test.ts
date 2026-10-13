@@ -6,6 +6,7 @@ import { createChannel, setChannelState } from "../src/db/chat";
 import { liveGrant } from "../src/db/oauthGrants";
 import { callTool } from "../src/mcp/tools";
 import { type SearchResult } from "../src/verbs/search";
+import { conversationStub } from "../src/chat/stubs";
 import { apiPost, bearer, cookieHeaders, seedGrant, seedTenant } from "./helpers";
 import { channelWith, chatWorld, HOST, ok } from "./chat-helpers";
 
@@ -84,6 +85,21 @@ describe("search coverage", () => {
     expect(outsider.coverage.conversations.readable_active_channels).toBe(0);
     expect(outsider.coverage.sources.messages.may_have_more).toBe(false);
   }, 30_000);
+
+  it("skips a purged conversation instead of failing the whole search, and reports it as not searched", async () => {
+    const w = await chatWorld();
+    await channelWith(w, "kept", ["scout"]);
+    await channelWith(w, "purged", ["scout"]);
+    await ok(w.lead.token, "chat.post", { c: "kept", body: "needle kept" });
+    const row = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'purged'").bind(w.acme.id).first<{id: string}>();
+    // An interrupted project deletion purges the conversation before the D1 cascade commits.
+    await conversationStub(env, w.acme.id, row!.id).purge(w.acme.id, row!.id);
+    const r = await result(w.dev.token);
+    expect(r.messages).toHaveLength(1);
+    expect(r.coverage.conversations.readable_active_channels).toBe(2);
+    expect(r.coverage.conversations.searched_channels).toBe(1);
+    expect((await apiPost(HOST, "message.search", { q: "needle" }, bearer(w.dev.token))).status).toBe(200);
+  });
 
   it("finds archived conversation text and links directly to the matching message without expanding agent access", async () => {
     const w = await chatWorld();
