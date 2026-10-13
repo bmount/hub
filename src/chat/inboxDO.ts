@@ -4,6 +4,15 @@ import { bindOnce } from "./bound";
 import { LIMITS, postVerdict } from "./rules";
 import type { InboxItem, InboxPage, WakeItem } from "./types";
 import type { ChatUpdate, UpdateDelivery } from "./updates";
+import { authenticateChat, handleChatApi } from "../http/chatApi";
+import { canRead, readableChannels, viewerOf } from "./access";
+import { getChannelById } from "../db/chat";
+import { checkAccess, checkScope } from "../verbs/dispatch";
+import { getVerb } from "../verbs/table";
+import { conversationStub } from "./stubs";
+
+type SocketState = { tenant: string; identity: string; url: string; headers: Record<string, string>; offset: number; last_seen: number };
+const SOCKET_GRACE_MS = 30_000;
 
 const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -41,6 +50,140 @@ export type ReserveResult =
 export class Inbox extends DurableObject<Env> {
   #waiters = new Set<() => void>();
   #updateWaiters = new Set<() => void>();
+  #socketJobs = new Map<WebSocket, Promise<void>>();
+
+  #request(state: SocketState, method = 'getUpdates', params: Record<string, unknown> = {}): Request {
+    const url = new URL(state.url);
+    url.pathname = `/chat/v1/${method}`;
+    url.search = '';
+    const reading = method.startsWith('get');
+    if (reading) for (const [key, value] of Object.entries(params)) url.searchParams.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+    return new Request(url, { method: reading ? 'GET' : 'POST', headers: { ...state.headers, 'content-type': 'application/json' }, ...(reading ? {} : { body: JSON.stringify(params) }) });
+  }
+
+  async #viewer(state: SocketState) {
+    const ctx = await authenticateChat(this.#request(state), this.env, p => this.ctx.waitUntil(p));
+    const v = viewerOf(ctx);
+    if (v.tenant.id !== state.tenant || v.identity.id !== state.identity) throw new Error('socket identity changed');
+    const verb = getVerb('chat.inbox')!;
+    checkScope(ctx, verb); checkAccess(ctx, verb);
+    return { ctx, v };
+  }
+
+  async #presence(state: SocketState, status: 'online' | 'offline'): Promise<void> {
+    const { ctx, v } = await this.#viewer(state);
+    checkScope(ctx, getVerb('chat.heartbeat')!); checkAccess(ctx, getVerb('chat.heartbeat')!);
+    for (const ch of await readableChannels(ctx.db, v, 'active')) {
+      if (status === 'offline' && this.ctx.getWebSockets().some(ws => ws.readyState === WebSocket.OPEN)) return;
+      await conversationStub(this.env, state.tenant, ch.project_id).heartbeat(state.tenant, ch.project_id, state.identity, status, !!(ctx.oauth || ctx.playground));
+    }
+  }
+
+  #queue(ws: WebSocket, job: () => Promise<void>): Promise<void> {
+    const next = (this.#socketJobs.get(ws) ?? Promise.resolve()).then(job).catch(async () => {
+      // Do not log retained authentication material or message contents.
+      try { ws.close(1008, 'authentication or socket failure'); } catch { /* already closed */ }
+      await this.webSocketClose(ws, 1008);
+    });
+    this.#socketJobs.set(ws, next);
+    void next.then(() => { if (this.#socketJobs.get(ws) === next) this.#socketJobs.delete(ws); });
+    return next;
+  }
+
+  async #push(ws: WebSocket, initial = false): Promise<void> {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const state = ws.deserializeAttachment() as SocketState;
+    for (;;) {
+      const { ctx, v } = await this.#viewer(state);
+      const page = await this.getUpdates(state.tenant, state.identity, state.offset, 100, 0);
+      if (page.error) {
+        ws.send(JSON.stringify({ ok: false, error: { code: page.error, min_offset: page.min_offset } }));
+        ws.close(1008, page.error); return;
+      }
+      const updates: ChatUpdate[] = [];
+      for (const update of page.updates) {
+        const ch = await getChannelById(ctx.db, state.tenant, update.chat.id);
+        if (!ch || !await canRead(ctx.db, v, ch)) continue;
+        if (update.type === 'typing' && Number(update.data.expires_at) <= Date.now()) update.data.active = false;
+        if (update.type === 'presence' && Number(update.data.expires_at) <= Date.now() && update.data.status !== 'offline') update.data.stale = true;
+        updates.push(update);
+      }
+      if (initial || page.next_offset !== state.offset || updates.length) ws.send(JSON.stringify({ ok: true, result: { updates, next_offset: page.next_offset, has_more: page.has_more } }));
+      state.offset = page.next_offset;
+      ws.serializeAttachment(state);
+      initial = false;
+      if (!page.has_more) return;
+    }
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const tenant = request.headers.get('x-chat-tenant')!;
+    const identity = request.headers.get('x-chat-identity')!;
+    bindOnce(this.ctx.storage.sql, tenant, identity);
+    const headers: Record<string, string> = {};
+    for (const name of ['authorization', 'cookie', 'origin']) {
+      const value = request.headers.get(name); if (value) headers[name] = value;
+    }
+    const state: SocketState = { tenant, identity, headers, url: request.url, offset: Number(new URL(request.url).searchParams.get('offset') ?? 0), last_seen: Date.now() };
+    await this.#viewer(state);
+    if (this.ctx.getWebSockets().length >= 8) return Response.json({ ok: false, error: { code: 'rate_limited' } }, { status: 429 });
+    const page = await this.getUpdates(tenant, identity, state.offset, 100, 0);
+    if (page.error) return Response.json({ ok: false, error: { code: page.error, min_offset: page.min_offset } }, { status: 409 });
+    if (this.ctx.getWebSockets().length >= 8) return Response.json({ ok: false, error: { code: 'rate_limited' } }, { status: 429 });
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1]);
+    pair[1].serializeAttachment(state);
+    // Async work uses hibernatable sockets; no timers or parked long-polls.
+    this.ctx.waitUntil(this.#queue(pair[1], async () => {
+      await this.#push(pair[1], true);
+      await this.#presence(state, 'online').catch(() => {});
+    }));
+    await this.#socketAlarm();
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    await this.#queue(ws, async () => {
+      const state = ws.deserializeAttachment() as SocketState;
+      await this.#viewer(state);
+      state.last_seen = Date.now(); ws.serializeAttachment(state);
+      let frame: Record<string, unknown>;
+      try {
+        if (typeof message !== 'string' || new TextEncoder().encode(message).length > 65536) throw new Error();
+        frame = JSON.parse(message);
+        if (!frame || typeof frame !== 'object' || Array.isArray(frame)) throw new Error();
+      } catch {
+        ws.send(JSON.stringify({ ok: false, error: { code: 'bad_request' } })); return;
+      }
+      if (frame.type === 'ping' || frame.type === 'heartbeat') {
+        ws.send(JSON.stringify({ type: 'pong' }));
+        await this.#presence(state, 'online').catch(() => {});
+        await this.#push(ws); return;
+      }
+      const methods = ['sendMessage', 'editMessage', 'retractMessage', 'markRead', 'sendTyping', 'setPresence', 'openChat', 'getUpdates', 'getMessages', 'getChats', 'getPresence'];
+      if (typeof frame.request_id !== 'string' || frame.request_id.length > 64 || typeof frame.method !== 'string' || !methods.includes(frame.method) || !frame.params || typeof frame.params !== 'object' || Array.isArray(frame.params)) {
+        ws.send(JSON.stringify({ request_id: typeof frame.request_id === 'string' ? frame.request_id.slice(0, 64) : null, ok: false, error: { code: 'bad_request' } })); return;
+      }
+      const response = await handleChatApi(this.#request(state, frame.method, { ...frame.params as Record<string, unknown>, ...(frame.method === 'getUpdates' ? { timeout: 0 } : {}) }), this.env, p => this.ctx.waitUntil(p));
+      ws.send(JSON.stringify({ ...await response.json() as object, request_id: frame.request_id }));
+    });
+  }
+
+  async #socketAlarm(): Promise<void> {
+    if (!this.ctx.getWebSockets().length && !this.#q("SELECT key FROM meta WHERE key = 'socket_disconnect'").length) return;
+    const pending = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = 'socket_disconnect'")[0];
+    const due = Math.min(Date.now() + SOCKET_GRACE_MS, pending ? Math.max(Date.now() + 1, Number(JSON.parse(pending.value).due)) : Infinity);
+    const alarm = await this.ctx.storage.getAlarm();
+    if (alarm === null || alarm > due) await this.ctx.storage.setAlarm(due);
+  }
+
+  async webSocketClose(ws: WebSocket, code: number): Promise<void> {
+    try { ws.close(code); } catch { /* already closed */ }
+    this.ctx.storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('socket_disconnect', ?)", JSON.stringify({ state: ws.deserializeAttachment(), due: Date.now() + SOCKET_GRACE_MS }));
+    await this.#socketAlarm();
+  }
+
+  async webSocketError(ws: WebSocket): Promise<void> { await this.webSocketClose(ws, 1011); }
 
   #pruneUpdates(): void {
     this.ctx.storage.sql.exec("DELETE FROM chat_update WHERE created_at < ? OR update_id <= (SELECT COALESCE(MAX(update_id), 0) - 10000 FROM chat_update)", Date.now() - 7 * 86_400_000);
@@ -58,6 +201,22 @@ export class Inbox extends DurableObject<Env> {
 
   async alarm(): Promise<void> {
     this.#pruneUpdates();
+    for (const ws of this.ctx.getWebSockets()) {
+      const state = ws.deserializeAttachment() as SocketState;
+      if (Date.now() - state.last_seen >= 90_000) {
+        ws.close(1001, 'heartbeat expired');
+        await this.webSocketClose(ws, 1001);
+      }
+    }
+    const pending = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = 'socket_disconnect'")[0];
+    if (pending) {
+      const { state, due } = JSON.parse(pending.value) as { state: SocketState; due: number };
+      if (Date.now() >= due) {
+        if (!this.ctx.getWebSockets().some(ws => ws.readyState === WebSocket.OPEN)) await this.#presence(state, 'offline').catch(() => {});
+        this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'socket_disconnect'");
+      }
+    }
+    await this.#socketAlarm();
     await this.#scheduleRetention();
   }
 
@@ -73,6 +232,7 @@ export class Inbox extends DurableObject<Env> {
       this.#pruneUpdates();
     });
     for (const wake of [...this.#updateWaiters]) wake();
+    for (const ws of this.ctx.getWebSockets()) this.ctx.waitUntil(this.#queue(ws, () => this.#push(ws)));
     await this.#scheduleRetention();
   }
 
@@ -131,7 +291,9 @@ export class Inbox extends DurableObject<Env> {
   /** Internal organization deletion: retain only the binding and a delivery tombstone. */
   async purgeTenant(tenant_id: string, identity_id: string): Promise<void> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
+    for (const ws of this.ctx.getWebSockets()) ws.close(1008, 'organization deleted');
     this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec("DELETE FROM meta WHERE key = 'socket_disconnect'");
       for (const table of ["item", "cursor", "mail_delivered", "chat_update", "update_delivered"]) this.ctx.storage.sql.exec(`DELETE FROM ${table}`);
       this.ctx.storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('deleted', '1')");
     });

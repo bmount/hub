@@ -1,4 +1,6 @@
 import { env, SELF } from "cloudflare:test";
+import { inDO } from "./do-helper";
+import { Inbox } from "../src/chat/inboxDO";
 import { describe, expect, it } from "vitest";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
 import { getChannelBySlug } from "../src/db/chat";
@@ -21,6 +23,123 @@ async function chatHttp(token: string, method: string, input: Record<string, unk
   });
   return { status: response.status, body: await response.json() as { ok: boolean; result: any; error: { code: string } } };
 }
+
+describe("chat WebSocket stream", () => {
+  it('caps sockets and applies disconnect grace only after the last socket', async () => {
+    const w = await chatWorld();
+    await channelWith(w, 'general', ['scout']);
+    const { ch, stub } = await conv(w);
+    const box = inboxStub(env, w.acme.id, w.lead.identity.id);
+    const sockets: WebSocket[] = [];
+    for (let i = 0; i < 8; i++) {
+      const response = await SELF.fetch('https://acme.pimwell.test/chat/v1/ws', { headers: { authorization: `Bearer ${w.lead.token}`, upgrade: 'websocket' } });
+      expect(response.status).toBe(101);
+      const ws = response.webSocket!;
+      const next = frames(ws); ws.accept();
+      await next(f => f.result?.updates);
+      ws.send(JSON.stringify({ type: 'ping' }));
+      await next(f => f.type === 'pong');
+      sockets.push(ws);
+    }
+    const excess = await SELF.fetch('https://acme.pimwell.test/chat/v1/ws', { headers: { authorization: `Bearer ${w.lead.token}`, upgrade: 'websocket' } });
+    expect(excess.status).toBe(429);
+    const expireGrace = async () => inDO(box, async (obj: Inbox, state) => {
+      const pending = state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'socket_disconnect'").toArray()[0];
+      expect(pending).toBeDefined();
+      const value = JSON.parse(pending!.value); value.due = Date.now() - 1;
+      state.storage.sql.exec("UPDATE meta SET value = ? WHERE key = 'socket_disconnect'", JSON.stringify(value));
+      await obj.alarm();
+    });
+    sockets.pop()!.close(1000);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    await expireGrace();
+    expect((await stub.presence(w.acme.id, ch.project_id)).find(p => p.identity_id === w.lead.identity.id)?.status).toBe('online');
+    for (const ws of sockets) ws.close(1000);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    // Before grace expiry, disconnect does not publish offline.
+    expect((await stub.presence(w.acme.id, ch.project_id)).find(p => p.identity_id === w.lead.identity.id)?.status).toBe('online');
+    await expireGrace();
+    expect((await stub.presence(w.acme.id, ch.project_id)).find(p => p.identity_id === w.lead.identity.id)?.status).toBe('offline');
+  });
+
+  function frames(ws: WebSocket) {
+    const buffered: any[] = [];
+    let wake: (() => void) | undefined;
+    ws.addEventListener('message', event => { buffered.push(JSON.parse(String(event.data))); wake?.(); });
+    return async (matches: (frame: any) => boolean): Promise<any> => {
+      for (;;) {
+        const index = buffered.findIndex(matches);
+        if (index >= 0) return buffered.splice(index, 1)[0];
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('socket frame timeout')), 5000);
+          wake = () => { clearTimeout(timer); wake = undefined; resolve(); };
+        });
+      }
+    };
+  }
+
+  it('exchanges member/agent commands, resumes missed updates once and checks cookie Origin', async () => {
+    const w = await chatWorld();
+    await channelWith(w, 'general', ['scout']);
+    const { ch } = await conv(w);
+    const chat = { id: ch.project_id, kind: 'channel' };
+    const connect = async (token: string, offset = 0) => {
+      const response = await SELF.fetch(`https://acme.pimwell.test/chat/v1/ws?offset=${offset}`, { headers: { authorization: `Bearer ${token}`, upgrade: 'websocket' } });
+      expect(response.status).toBe(101);
+      const ws = response.webSocket!;
+      const next = frames(ws);
+      ws.accept();
+      await next(f => f.result?.updates);
+      return { ws, next };
+    };
+    const member = await connect(w.lead.token);
+    const agent = await connect(w.scout.longLived);
+    member.ws.send(JSON.stringify({ request_id: 'member', method: 'sendMessage', params: { chat, text: 'live hello', client_id: 'ws-member' } }));
+    expect((await member.next(f => f.request_id === 'member')).ok).toBe(true);
+    const hello = await agent.next(f => f.result?.updates.some((u: any) => u.type === 'message'));
+    const message = hello.result.updates.find((u: any) => u.type === 'message');
+    agent.ws.send(JSON.stringify({ request_id: 'agent', method: 'sendMessage', params: { chat, text: 'live reply', client_id: 'ws-agent', after: message.data.seq } }));
+    expect((await agent.next(f => f.request_id === 'agent')).ok).toBe(true);
+    const reply = await member.next(f => f.result?.updates.some((u: any) => u.type === 'message' && u.data.body === 'live reply'));
+    const offset = reply.result.next_offset;
+    member.ws.close(1000);
+    const missed = await chatHttp(w.dev.token, 'sendMessage', { chat, text: 'while dropped', client_id: 'ws-missed' });
+    expect(missed.status).toBe(200);
+    const response = await SELF.fetch(`https://acme.pimwell.test/chat/v1/ws?offset=${offset}`, { headers: { authorization: `Bearer ${w.lead.token}`, upgrade: 'websocket' } });
+    expect(response.status).toBe(101);
+    const resumed = response.webSocket!;
+    const next = frames(resumed); resumed.accept();
+    const replay = await next(f => f.result?.updates.some((u: any) => u.type === 'message'));
+    expect(replay.result.updates.filter((u: any) => u.type === 'message').map((u: any) => u.data.body)).toEqual(['while dropped']);
+    expect((await chatHttp(w.lead.token, 'getUpdates', { offset: replay.result.next_offset })).body.result.updates.filter((u: any) => u.type === 'message')).toEqual([]);
+    resumed.send(JSON.stringify({ type: 'ping' }));
+    expect(await next(f => f.type === 'pong')).toEqual({ type: 'pong' });
+    const leadBox = inboxStub(env, w.acme.id, w.lead.identity.id);
+    await inDO(leadBox, async (_obj, state) => {
+      const fresh = new Inbox(state, env);
+      const socket = state.getWebSockets().find(ws => ws.readyState === WebSocket.OPEN)!;
+      await fresh.webSocketMessage(socket, JSON.stringify({ type: 'ping' }));
+    });
+    expect(await next(f => f.type === 'pong')).toEqual({ type: 'pong' });
+    const badOrigin = await SELF.fetch('https://acme.pimwell.test/chat/v1/ws', { headers: { cookie: `pmw_session=${w.lead.token}`, origin: 'https://evil.test', upgrade: 'websocket' } });
+    expect(badOrigin.status).toBe(403);
+    const cookie = await SELF.fetch('https://acme.pimwell.test/chat/v1/ws', { headers: { cookie: `pmw_session=${w.lead.token}`, origin: 'https://acme.pimwell.test', upgrade: 'websocket' } });
+    expect(cookie.status).toBe(101); cookie.webSocket!.accept(); cookie.webSocket!.close(1000);
+    const future = await SELF.fetch('https://acme.pimwell.test/chat/v1/ws?offset=999999', { headers: { authorization: `Bearer ${w.lead.token}`, upgrade: 'websocket' } });
+    expect(future.status).toBe(409);
+    expect((await future.json() as any).error.code).toBe('invalid_offset');
+    const noDuplicates = await SELF.fetch(`https://acme.pimwell.test/chat/v1/ws?offset=${replay.result.next_offset}`, { headers: { authorization: `Bearer ${w.lead.token}`, upgrade: 'websocket' } });
+    const duplicateSocket = noDuplicates.webSocket!;
+    const duplicateNext = frames(duplicateSocket); duplicateSocket.accept();
+    expect((await duplicateNext(f => f.result?.updates)).result.updates.filter((u: any) => u.type === 'message')).toEqual([]);
+    duplicateSocket.close(1000);
+    await env.HUB_DB.prepare('UPDATE api_token SET revoked_at = ? WHERE id = ?').bind(Date.now(), w.scout.apiToken.id).run();
+    const closed = new Promise<number>(resolve => agent.ws.addEventListener('close', event => resolve(event.code)));
+    agent.ws.send(JSON.stringify({ type: 'ping' }));
+    expect(await closed).toBe(1008);
+    resumed.close(1000);
+  });
+});
 
 describe("chat HTTP update stream", () => {
   it("sends, replies, edits and retracts without duplicates after offset; enforces audience and replay intent", async () => {

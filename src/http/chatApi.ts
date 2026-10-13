@@ -3,6 +3,7 @@ import { agentMcpAuth } from "../mcp/agentAuth";
 import { mcpAuth } from "../mcp/context";
 import { API_TOKEN_PREFIX } from "../db/apiTokens";
 import { buildContext } from "../auth/context";
+import { readSessionToken } from "../auth/cookie";
 import { checkAccess, checkScope } from "../verbs/dispatch";
 import { getVerb } from "../verbs/table";
 import { HubError, badRequest, notFound } from "../errors";
@@ -20,11 +21,13 @@ const integer = (value: unknown, fallback: number, max = Number.MAX_SAFE_INTEGER
   return n;
 };
 
-async function authenticate(request: Request, env: Env, waitUntil: (p: Promise<unknown>) => void) {
-  if (!request.headers.get('authorization')?.startsWith('Bearer ')) throw new HubError(401, 'unauthorized');
+export async function authenticateChat(request: Request, env: Env, waitUntil: (p: Promise<unknown>) => void) {
+  const bearer = request.headers.get('authorization')?.startsWith('Bearer ');
+  if (!bearer && !readSessionToken(request)) throw new HubError(401, 'unauthorized');
+  if (!bearer && request.headers.get('origin') !== new URL(request.url).origin) throw new HubError(403, 'bad_origin');
   let ctx = await buildContext(request, env, Date.now(), waitUntil, { longLivedToken: true });
   if (ctx.host.kind !== 'tenant') throw notFound();
-  if (ctx.apiToken || !ctx.identity) {
+  if (bearer && (ctx.apiToken || !ctx.identity)) {
     const token = request.headers.get('authorization')!.slice(7);
     const auth = await (token.startsWith(API_TOKEN_PREFIX) ? agentMcpAuth : mcpAuth)(request, env, ctx.host.slug, Date.now(), waitUntil);
     if (auth.kind !== 'ok') throw new HubError(auth.response.status, auth.response.status === 429 ? 'rate_limited' : 'unauthorized');
@@ -36,9 +39,24 @@ async function authenticate(request: Request, env: Env, waitUntil: (p: Promise<u
 
 export async function handleChatApi(request: Request, env: Env, waitUntil: (p: Promise<unknown>) => void): Promise<Response> {
   try {
-    let ctx = await authenticate(request, env, waitUntil);
+    let ctx = await authenticateChat(request, env, waitUntil);
     const v = viewerOf(ctx);
     const method = new URL(request.url).pathname.slice('/chat/v1/'.length);
+    if (method === 'ws') {
+      const verb = getVerb('chat.inbox')!;
+      checkScope(ctx, verb); checkAccess(ctx, verb);
+      if (request.method !== 'GET' || request.headers.get('upgrade')?.toLowerCase() !== 'websocket') throw badRequest('WebSocket upgrade required');
+      integer(new URL(request.url).searchParams.get('offset'), 0);
+      const headers = new Headers();
+      for (const name of ['authorization', 'cookie', 'origin']) {
+        const value = request.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+      headers.set('upgrade', 'websocket');
+      headers.set('x-chat-tenant', v.tenant.id);
+      headers.set('x-chat-identity', v.identity.id);
+      return inboxStub(env, v.tenant.id, v.identity.id).fetch(new Request(request.url, { headers }));
+    }
     const mapping: Record<string, string> = { sendMessage: 'chat.post', editMessage: 'chat.edit', retractMessage: 'chat.retract', markRead: 'chat.mark_read', sendTyping: 'chat.mark_read', getUpdates: 'chat.inbox', getMessages: 'chat.read', getChats: 'chat.conversations', openChat: 'chat.open', setPresence: 'chat.heartbeat', getPresence: 'chat.presence' };
     const verb = getVerb(mapping[method] ?? '');
     if (!verb || ctx.host.kind !== 'tenant') throw notFound();
@@ -59,7 +77,7 @@ export async function handleChatApi(request: Request, env: Env, waitUntil: (p: P
     if (method === 'getUpdates') {
       const page = await inboxStub(env, v.tenant.id, v.identity.id).getUpdates(v.tenant.id, v.identity.id, integer(input.offset, 0), integer(input.limit, 100, 100) || 1, integer(input.timeout, 0, 50)) as { updates: import('../chat/updates').ChatUpdate[]; next_offset: number; has_more: boolean; error?: string; min_offset?: number };
       if (page.error) throw new HubError(page.error === 'rate_limited' ? 429 : 409, page.error, page.error === 'rate_limited' ? 'too many long-polls' : 'resynchronize chat snapshots', { min_offset: page.min_offset });
-      ctx = await authenticate(request, env, waitUntil);
+      ctx = await authenticateChat(request, env, waitUntil);
       checkScope(ctx, verb); checkAccess(ctx, verb);
       const current = viewerOf(ctx);
       const updates = [];
