@@ -1,7 +1,7 @@
 // Apps in the workbench (migration 0013): the organization's apps and their error groups as the list, one group in the
 // inspector; and, on the hub, root's list of registrations to approve.
 import type { Env } from "../env";
-import { esc, htmlResponse, page, workbench } from "../html";
+import { emptyState, esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -11,6 +11,7 @@ import { traceGroupStatement, traceWorkStatement, traceWorkResults, type TraceWo
 import { KINDS, STATES } from "../work/names";
 import { deployStatement, deploysStatement, deployView, deployListResults, deployWorkStatement, deployWorkResults, type DeployWorkItem, type DeployRow } from "../apps/deploy";
 import { sha256Hex } from "../ids";
+import { recordedWorkTable } from "./codeMarkup";
 
 const ago = (ms: number | null, now: number) => {
   if (!ms) return "never";
@@ -49,9 +50,11 @@ export async function appsPage(request: Request, env: Env): Promise<Response> {
   const selected = (selectedDeployR?.results[0] as DeployRow | undefined) ?? null;
   if (did !== null && !selected) return notFoundPage(extra);
   const { deploys: recordedDeploys, coverage } = deployListResults(allDeploysR!.results as DeployRow[]);
+  const deployHref = (id?: string) => { const q = new URLSearchParams(); if (project) q.set("project",project); if (id) q.set("d",id); return `/apps${q.size ? `?${q}` : ""}${id ? "" : "#deploys"}`; };
+  const deployOnly = project !== null;
   const deployList = `<h2 id="deploys">Recorded deploys${project ? ` · ${esc(project)}` : ""}</h2><p class="lede">${coverage.shown} shown${coverage.truncated ? "; capped at 50, more omitted" : "; complete for recorded deploys in scope"}. Observed or reported metadata, not proof of live rollout.</p>
-${recordedDeploys.length ? `<table><tbody>${recordedDeploys.map(d => `<tr data-href="/apps?d=${esc(encodeURIComponent(d.id))}"${d.id === did ? ' aria-selected="true"' : ""}><td>${esc(d.project)}</td><td><a href="/apps?d=${esc(encodeURIComponent(d.id))}">${esc(d.script_name)}</a><div class="lede">${esc(d.tag ?? d.version_id)}</div></td><td>${ago(d.seen_at, ctx.now)}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">No deploy records in this scope.</p>`}`;
-  const list = `<div class="head"><h1>Apps</h1><span>${apps.length} reporting</span></div>
+${recordedDeploys.length ? kitTable("Recorded deploys",[{label:"Project"},{label:"App"},{label:"Version"},{label:"Recorded"}],recordedDeploys.map(d=>({href:deployHref(d.id),selected:d.id === did,cells:[{html:esc(d.project)},{html:`<a href="${esc(deployHref(d.id))}">${esc(d.script_name)}</a>`},{html:`<code>${esc(d.tag ?? d.version_id)}</code>`},{html:ago(d.seen_at,ctx.now)}]}))) : emptyState("No deploy records", "Observed or reported deployments will appear here.", {label:"Apps",href:"/apps"})}`;
+  const list = deployOnly ? `<div class="head"><h1>Deploys</h1>${project ? `<span>${esc(project)}</span>` : ""}</div>${toolbar("Deploy actions and filters", '<a href="/apps">Apps</a>', '<input data-filter aria-label="Filter the list" placeholder="Filter these (/)" size="16">')}${deployList}` : `<div class="head"><h1>Apps</h1><span>${apps.length} reporting</span></div>
 <p class="lede">Errors grouped by cause, deploys, and AI usage from the apps that report here. To add one, ask your agent to set up Pimwell (the onboard skill).</p>
 ${apps.length ? `<table><thead><tr><th>App</th><th>Project</th><th>24h requests</th><th>Errors</th><th class="hide-s">Last deploy</th><th class="hide-s">Last seen</th></tr></thead><tbody>${apps.map((a) =>
     `<tr><td><code>${esc(a.script_name)}</code>${a.state !== "active" ? ` <span class="pill">${esc(a.state === "pending" ? "waiting for approval" : a.state)}</span>` : ""}</td><td>${esc(a.project)}</td><td class="when">${a.requests}</td><td class="when">${a.errors}${a.groups ? ` <small>${a.groups} groups</small>` : ""}</td><td class="hide-s">${esc(a.last_deploy ?? "")}</td><td class="when hide-s">${ago(a.last_event_at, ctx.now)}</td></tr>`).join("")}</tbody></table>` : `<p class="empty">No apps yet. Tell your agent: "set up pimwell.com". It will read ${esc(env.HUB_DOMAIN)}/setup and do the rest.</p>`}
@@ -74,12 +77,12 @@ ${relatedHtml}
   if (selected) {
     const { deploy: d, commitRef, commitHref } = deployView(selected);
     const { relatedWork: work, relatedWorkCoverage: workCoverage } = deployWorkResults((await deployWorkStatement(ctx, selected).all<DeployWorkItem>()).results);
-    inspector = `<a class="back" href="/apps">‹ Apps</a><div class="head"><span>Deploy record</span><code>${esc(d.id)}</code></div>
+    inspector = `<a class="back" href="${esc(deployHref())}">‹ Deploys</a><div class="head"><span>Deploy record</span><code>${esc(d.id)}</code></div>
 <h1>${esc(d.script_name)}</h1><p class="lede">Recorded metadata is not proof of live rollout, continued deployment or execution authority.</p>
-<dl class="meta"><dt>Project</dt><dd>${esc(d.project)}</dd><dt>Recorded at</dt><dd>${new Date(d.seen_at).toISOString()}</dd><dt>Version</dt><dd><code>${esc(d.version_id)}</code></dd><dt>Tag</dt><dd><code>${esc(d.tag ?? "none recorded")}</code></dd></dl>
+${inspectorSection("Deployment", [{label:"Project",html:`${esc(d.project)}`},{label:"Recorded at",html:`${new Date(d.seen_at).toISOString()}`},{label:"Version",html:`<code>${esc(d.version_id)}</code>`},{label:"Tag",html:`<code>${esc(d.tag ?? "none recorded")}</code>`}])}
 ${commitHref ? `<p><a href="${esc(commitHref)}">Recorded commit reference: ${esc(commitRef!)}</a>. The destination checks its own access; this record does not verify the commit exists or was deployed.</p>` : `<p class="lede">No supported full recorded commit reference. Tags, opaque versions and ambiguous repository slugs are not inferred to identify a commit.</p>`}
 <h2>Recorded work</h2><p class="lede">Recorded associations are not proof of feature delivery, completion, revenue or execution authority.</p>
-${work.length ? `<table><tbody>${work.map(w => `<tr><td class="ref">${esc(w.ref)}</td><td>${esc(KINDS[w.kind].name)}</td><td><a href="/${esc(encodeURIComponent(w.project))}/w/${w.number}">${esc(w.title)}</a></td><td>${esc(STATES[w.state])}</td><td>${w.relationship}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">No work associations recorded for this deploy.</p>`}
+${work.length ? recordedWorkTable(work) : `<p class="lede">No work associations recorded for this deploy.</p>`}
 <p class="lede">${workCoverage.shown} related work items shown${workCoverage.truncated ? "; capped at 50, more omitted" : "; complete for recorded associations"}.</p>
 ${d.message ? `<h2>Recorded message</h2><pre>${esc(d.message)}</pre>` : `<p class="lede">No message recorded.</p>`}`;
     inspectorKey = `deploy:${d.id}:${await sha256Hex(JSON.stringify([selected, work, workCoverage]))}`;

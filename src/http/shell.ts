@@ -84,13 +84,17 @@ function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
     view = segments[1];
     if (view) links.push({label: VIEW_LABELS[view] ?? view, href: `${base}/${view === "w" ? "docket" : view}`});
     if (segments.length > 2) links.push({label: (view === "w" ? "#" : "") + decodeURIComponent(segments.slice(2).join("/")), href: url.pathname + url.search});
+  } else if (segments[0] === "apps" && url.searchParams.has("project")) {
+    const project = url.searchParams.get("project")!;
+    links.push({label: ctx.explorer?.path === project ? ctx.explorer.display_name : project, href:`/${encodeURIComponent(project)}`});
+    links.push({label:"Deploys",href:`/apps?project=${encodeURIComponent(project)}#deploys`});
   } else {
     view = segments[0];
     const label = view ? VIEW_LABELS[view] ?? nav.find(n => n.active)?.label ?? view : "Home";
     links.push({label, href: view ? `/${view}` : "/"});
     if (segments.length > 1) links.push({label: decodeURIComponent(segments.slice(1).join("/")), href: url.pathname + url.search});
   }
-  const selected = ["f", "c", "path", "g", "d", "thread"].map(k => url.searchParams.get(k)).find(Boolean);
+  const selected = ["work", "f", "c", "path", "g", "d", "thread"].map(k => url.searchParams.get(k)).find(Boolean);
   if (selected) links.push({label: selected, href: url.pathname + url.search});
   links[links.length - 1]!.current = true;
   return links;

@@ -244,7 +244,7 @@ describe("code views", () => {
     expect(r.result.pushed_by).toBe("pat");
     const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
     expect(page).toContain("<h1>Fix two (site#1)</h1>");
-    expect(page).toContain('<tr class="ins">');
+    expect(page).toContain('<td class="ins"><code>+');
     expect(page).toContain("pushed by pat");
   });
 
@@ -277,15 +277,15 @@ describe("code views", () => {
     const w = await world();
     const get = async (path: string) => (await SELF.fetch(`https://${HOST}${path}`, { headers: w.h })).text();
     const initial = await get("/site/code");
-    const branchHref = [...initial.matchAll(/href="([^"]+)"/g)].map(m => m[1]!).find(h => h.includes("ref=pio%2Ftopic"));
-    expect(branchHref).toBeTruthy();
-    const branch = await get(branchHref!);
+    expect(initial).toContain('<select name="ref">');
+    expect(initial).toContain('<option value="pio/topic">');
+    const branch = await get("/site/code?ref=pio%2Ftopic");
     expect(branch).not.toContain("give a branch");
     const commitHref = [...branch.matchAll(/href="([^"]+)"/g)].map(m => m[1]!.replace(/&amp;/g, "&")).find(h => h.includes(`c=${B}`));
     expect(commitHref).toContain("ref=pio%2Ftopic");
     const commit = await get(commitHref!);
     expect(commit).toContain("<h1>Fix two (site#1)</h1>");
-    expect(commit).toContain('<tr class="ins">');
+    expect(commit).toContain('<td class="ins"><code>+');
     expect(commit).not.toContain("give a branch");
     expect(w.seen.filter(s => s.path.endsWith("/log")).at(-1)!.body.ref).toBe("refs/heads/pio/topic");
     const file = await get("/site/files?ref=pio%2Ftopic&f=app.ts");

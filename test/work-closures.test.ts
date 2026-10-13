@@ -53,7 +53,7 @@ describe("recorded work closure attribution", () => {
     expect(api.status).toBe(200);
     expect((await api.json() as { result: typeof b }).result.closures).toEqual(b.closures);
     const html = await (await SELF.fetch(`https://${HOST}/site/board`, { headers: rh })).text();
-    expect(html).toContain("Recorded closures by actor"); expect(html).toContain("<th>Items</th>");
+    expect(html).toContain("Recorded closures by actor"); expect(html).toContain('<th scope="col">Items</th>');
     expect(html).toContain("structured closure record: 1"); expect(html).toContain(w.a.agent.identity.id);
     expect((await apiPost(HOST, "work.update", { id: item.id, state: "done" }, rh)).status).toBe(403);
     expect((await SELF.fetch(`https://${HOST}/site/board`)).status).toBe(404);

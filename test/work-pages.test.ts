@@ -29,6 +29,31 @@ async function world() {
 }
 
 describe("work item editing", () => {
+  it("selects Board and Status work in the shared inspector without losing scope or filter state", async () => {
+    const w = await world();
+    const item = await w.create({ kind: "snag", title: '<script>unsafe</script>' });
+    for (const view of ["board?actor=someone", "status?since=30d"]) {
+      const path = `/site/${view}&work=site%23${item.number}&filter=unsafe`;
+      const response = await w.get(path);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain('class="wb-table"');
+      expect(html).not.toContain('class="card');
+      expect(html).toContain('&lt;script&gt;unsafe&lt;/script&gt;');
+      expect(html).toContain('aria-selected="true"');
+      expect(html).toContain('name="expected_updated_at"');
+      expect(html).toContain(`name="_back" value="${path.replace(/&/g, "&amp;")}"`);
+      const reader = await (await w.get(path, w.rae.token)).text();
+      expect(reader).not.toContain('action="/api/work.update"');
+      expect(reader).not.toContain('name="expected_updated_at"');
+      expect((await w.get(`/site/${view}&work=other%231`)).status).toBe(404);
+      expect((await w.get(`/site/${view}&work=site%2399999999`)).status).toBe(404);
+      expect((await w.get(`/site/${view}&work=%3Cscript%3E`)).status).toBe(404);
+      const foreign = await seedTenant(`foreign-${view.split("?")[0]}`);
+      const outsider = await seedHuman(`${view.split("?")[0]}@other.test`, { memberships: [{ tenant_id: foreign.id, role: "member" }] });
+      expect((await w.get(path, outsider.token)).status).toBe(404);
+    }
+  });
   it("posts the rendered revision from every edit/state/claim form and refuses a stale page without overwriting", async () => {
     const w = await world();
     const item = await w.create({ kind: "snag", title: "Original", body: "Original details" });

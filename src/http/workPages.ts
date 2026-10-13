@@ -5,8 +5,9 @@ import { projectFeatures } from "../projectFeatures";
 // and the script keeps the list where it was. Every page reads in one D1 batch after the project lookup.
 import { attentionQuery } from "../verbs/collab";
 import type { Env } from "../env";
+import { HubError } from "../errors";
 import { safeExternalUrl } from "../security/urls";
-import { emptyState, esc, htmlResponse, inspectorSection, kitTable, kitTabs, statusChip, toolbar, workbench } from "../html";
+import { emptyState, esc, htmlResponse, inspectorSection, kitList, kitTable, kitTabs, statusChip, toolbar, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -108,7 +109,7 @@ function docketList(ctx: Ctx, project: Project | null, items: WorkItem[], member
 <select name="closed" aria-label="State">${option("", "Open", !f.closed)}${option("1", "Finished", f.closed)}</select>
 <select name="owner" aria-label="Owner">${option("", "Anyone", f.owner === null)}${option("me", "Me", f.owner === "me")}${ownerKnown ? "" : option(f.owner!, f.owner!, true)}${members.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (agent)" : ""}`, f.owner === m.email)).join("")}</select>
 ${project && !f.org ? `<select name="quest" aria-label="Quest">${option("", "Any quest", f.quest === null)}${quests.map((q) => option(String(q.number), `#${q.number} ${q.title}`, f.quest === q.number)).join("")}</select>` : ""}
-<button type="submit" class="quiet">Show</button><input data-filter placeholder="Filter these (/)" aria-label="Filter the list" size="16"></form>`;
+<button type="submit" class="quiet">Show</button><input data-filter name="filter" placeholder="Filter these (/)" aria-label="Filter the list" size="16"></form>`;
   const itemQs = qs(f, {}, true);
   const canBulk = rank(ctx.role) >= rank("member") && items.length > 0;
   const rows = items.map((w) => {
@@ -137,7 +138,7 @@ ${project && !f.org ? `<select name="quest" aria-label="Quest">${option("", "Any
 <select name="owner"><option value="">owner…</option><option value="me">Me</option><option value="none">Nobody</option>${members.map((m) => option(m.email, m.display_name, false)).join("")}</select>
 <button type="submit" class="quiet">Apply</button></form>` : "";
   return `<div class="head"><h1>${esc(DOCKET.name)}</h1><span>${items.length} ${f.closed ? "finished" : "open"} in ${where}</span></div>
-<div class="docket-toolbar" role="group" aria-label="Docket actions and filters">${kinds}${filterForm}</div>
+${toolbar("Docket actions and filters", kinds, filterForm)}
 ${bulk}
 ${items.length ? kitTable("Docket", [...(canBulk ? [{label: "Select", className: "hide-s"}] : []), {label: "Reference"}, {label: "Kind"}, {label: "Title"}, {label: "Owner", className: "hide-s"}, {label: "State", className: "hide-s"}, {label: "Updated", className: "hide-s"}], rows) : emptyState("No work here", empty.replace(/<[^>]*>/g, ""), {label: filtered ? "Show everything open" : "File work", href: filtered ? base : "/new"})}`;
 }
@@ -178,7 +179,7 @@ function workLinkHtml(l: WorkLink): string {
   return `<li>${esc(l.target_kind)}: ${target}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`;
 }
 
-function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string): string {
+function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string, selectedUrl?: string): string {
   const canWrite = rank(ctx.role) >= rank("member");
   const sourceMail = w.source_kind === "mail" ? mailEvidenceHref(w.source_ref) : null;
   const sourceMessage = w.source_kind === "message" ? messageEvidenceHref(w.source_ref) : null;
@@ -186,13 +187,13 @@ function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { l
   const self = `/${esc(project.slug)}/w/${w.number}`;
   const keepParams = new URLSearchParams(back.includes("?") ? back.slice(back.indexOf("?") + 1) : "");
   if (back.startsWith("/docket")) keepParams.set("in", "org");
-  const keep = esc(`${self}${keepParams.size ? `?${keepParams}` : ""}`);
+  const keep = esc(selectedUrl ?? `${self}${keepParams.size ? `?${keepParams}` : ""}`);
   const expectedUpdate = `<input type="hidden" name="expected_updated_at" value="${w.updated_at}">`;
   const action = (state: string, label: string, quiet = true) => `<form class="inline" method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="state" value="${state}"><input type="hidden" name="_back" value="${keep}"><button type="submit"${quiet ? ' class="quiet"' : ""}>${esc(label)}</button></form>`;
   const follow = `<form class="inline" method="post" action="/api/work.subscribe"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="follow" value="${d.following ? "0" : "1"}"><input type="hidden" name="_back" value="${keep}"><button type="submit" class="quiet" title="${d.following ? "Stop hearing about changes" : "Hear about every change in What needs me"}">${d.following ? "Following ✓" : "Follow"}</button></form>`;
   const controls = canWrite ? `<p>${w.state !== "doing" ? `<form class="inline" method="post" action="/api/work.claim"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><button type="submit">I'm on it</button></form> ` : ""}${w.state !== "done" ? action("done", "Done") : ""} ${w.state !== "dropped" ? action("dropped", "Let it go") : ""} ${(w.state === "done" || w.state === "dropped") ? action("open", "Reopen") : ""} ${follow}</p>` : `<p>${follow}</p>`;
   const comments = `<h2>Comments${d.comments.length ? ` <span class="pill">${d.comments.length}</span>` : ""}</h2>
-${d.comments.length ? `<ul class="timeline">${d.comments.map((c) => `<li id="c-${esc(c.id)}"><time title="${when(c.created_at)}">${ago(c.created_at, ctx.now)}</time><span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ""}<div class="prose" style="margin-top:2px">${esc(c.body)}</div></span></li>`).join("")}</ul>` : `<p class="lede">No comments yet.</p>`}
+${d.comments.length ? kitList("comments", d.comments.map((c)=>({html:`<time title="${when(c.created_at)}">${ago(c.created_at, ctx.now)}</time> · <span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ""}<div class="prose" style="margin-top:2px">${esc(c.body)}</div></span>`}))) : `<p class="lede">No comments yet.</p>`}
 ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
 <label style="display:block"><textarea data-voice name="body" rows="3" required maxlength="10000" style="display:block;width:100%" placeholder="Comment. @handle mentions someone."></textarea></label><button type="submit">Comment</button></form>` : ""}`;
   const ownerChoices = d.owner && !d.members.some((m) => m.id === d.owner!.id) ? [d.owner, ...d.members] : d.members;
@@ -211,7 +212,7 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
     {label: "Filed", html: when(w.created_at) + (w.closed_at ? `, closed ${when(w.closed_at)}` : "")},
   ]);
   const under = d.children.length
-    ? `<h2>Under it</h2><table><tbody>${d.children.map((c) => `<tr data-href="/${esc(project.slug)}/w/${c.number}"><td class="ref">#${c.number}</td><td class="k-${c.kind}"><span class="kd"></span>${esc(KINDS[c.kind].name)}</td><td><a href="/${esc(project.slug)}/w/${c.number}">${esc(c.title)}</a></td><td>${esc(STATES[c.state])}</td></tr>`).join("")}</tbody></table>`
+    ? `<h2>Under it</h2>${kitTable("Under it", [{label:"Reference"},{label:"Kind"},{label:"Title"},{label:"State"}], d.children.map(c=>({href:`/${project.slug}/w/${c.number}`,cells:[{html:`#${c.number}`},{html:statusChip(KINDS[c.kind].name,c.kind)},{html:`<a href="/${esc(project.slug)}/w/${c.number}">${esc(c.title)}</a>`},{html:statusChip(STATES[c.state],c.state)}]})))}`
     : w.kind === "quest" ? `<h2>Under it</h2><p class="lede">Nothing yet. To put an item under this quest, choose it as the item's quest when you edit it.</p>` : "";
   const linkForm = canWrite ? `<details><summary>Add link</summary>
 <form method="post" action="/api/work.link"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
@@ -221,9 +222,9 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
 <label>Note (optional) <input name="note" maxlength="500"></label>
 <p class="lede">Adding the same kind and reference again keeps the original link and note.</p>
 <button type="submit">Add link</button></form></details>` : "";
-  const links = `<h2>Links</h2>${d.links.length ? `<ul>${d.links.map(workLinkHtml).join("")}</ul>` : '<p class="lede">No links yet.</p>'}
+  const links = `<h2>Links</h2>${d.links.length ? kitList("Links", d.links.map(l=>({html:workLinkHtml(l).replace(/^<li>|<\/li>$/g, "")}))) : '<p class="lede">No links yet.</p>'}
 <p class="lede">Recorded references, not verified access or existence. Each destination checks your access.</p>${linkForm}`;
-  const activity = d.activity.length ? `<h2>Activity</h2><ul class="timeline">${d.activity.map((a) => `<li><time title="${when(a.created_at)}">${ago(a.created_at, ctx.now)}</time><span>${esc(a.who ?? "Pimwell")}: ${esc(a.summary)}</span></li>`).join("")}</ul>` : "";
+  const activity = d.activity.length ? `<h2>Activity</h2>${kitList("Activity", d.activity.map(a=>({html:`<time title="${when(a.created_at)}">${ago(a.created_at, ctx.now)}</time> · ${esc(a.who ?? "Pimwell")}: ${esc(a.summary)}`})))}` : "";
   return `<a class="back" href="${esc(back)}">‹ ${esc(DOCKET.name)}</a>
 <div class="head">${kindField}<strong>${esc(project.slug)}#${w.number}</strong>${stateField}</div>
 <h1>${titleField}</h1>
@@ -240,6 +241,34 @@ ${comments}
 ${plannedBlock("review.request", "Review")}
 ${links}
 ${activity}`;
+}
+
+/** Board and Status use the same authorized, revision-protected item inspector as Docket. */
+export async function selectedWorkInspector(ctx: Ctx, env: Env, url: URL, scope: string | null) {
+  const ref = url.searchParams.get("work");
+  if (!ref) return { html: null, key: "" };
+  const match = /^([a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)?)#([1-9][0-9]{0,7})$/.exec(ref);
+  if (!match || scope && match[1] !== scope) throw new HubError(404, "not_found");
+  const project = await ctx.db.prepare(`SELECT p.id, ${projectPathSql()} AS slug, p.kind, p.display_name, p.state FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, match[1]).first<Project>();
+  if (!project || !projectFeatures(project.kind).includes("docket")) throw new HubError(404, "not_found");
+  const w = await getWorkByNumber(ctx.db, project.id, Number(match[2]));
+  if (!w) throw new HubError(404, "not_found");
+  const [members, quests, links, children, owner, parent, activity, comments, following] = await ctx.db.batch([
+    membersStatement(ctx), questsStatement(ctx, project.id), listLinksStatement(ctx.db, w.id),
+    listWorkStatement(ctx.db, ctx.tenant!.id, { parent_id: w.id, limit: 200, states: [] }),
+    ctx.db.prepare("SELECT id, display_name, email, kind FROM identity WHERE id = ?").bind(w.owner_id),
+    ctx.db.prepare("SELECT id, number, title FROM work_item WHERE id = ?").bind(w.parent_id),
+    ctx.db.prepare(`SELECT e.kind, e.summary, e.created_at, i.display_name AS who FROM event e LEFT JOIN identity i ON i.id = e.identity_id WHERE e.tenant_id = ? AND e.target_id = ? ORDER BY e.created_at DESC LIMIT 30`).bind(ctx.tenant!.id, w.id),
+    ctx.db.prepare(`SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author, m.handle FROM work_comment c JOIN identity i ON i.id = c.author_id LEFT JOIN membership m ON m.identity_id = c.author_id AND m.tenant_id = c.tenant_id WHERE c.item_id = ? ORDER BY c.created_at LIMIT 200`).bind(w.id),
+    ctx.db.prepare("SELECT 1 FROM follow WHERE identity_id = ? AND target_kind = 'item' AND target_id = ?").bind(ctx.identity!.id, w.id),
+    ctx.db.prepare("UPDATE attention SET done_at = ? WHERE identity_id = ? AND item_id = ? AND done_at IS NULL").bind(ctx.now, ctx.identity!.id, w.id),
+  ]);
+  const back = new URL(url); back.searchParams.delete("work");
+  return { html: itemInspector(ctx, env, project, w, {
+    members: members!.results as Member[], quests: (quests!.results as Quest[]).filter(q => q.id !== w.id),
+    links: links!.results as WorkLink[], children: children!.results as WorkItem[], owner: owner!.results[0] as Member ?? null,
+    parent: parent!.results[0] as Quest ?? null, activity: activity!.results as Activity[], comments: comments!.results as Comment[], following: following!.results.length > 0,
+  }, back.pathname + back.search, url.pathname + url.search), key: `w:${w.id}:${w.updated_at}:${comments!.results.length}` };
 }
 
 // ---------- Pages ----------

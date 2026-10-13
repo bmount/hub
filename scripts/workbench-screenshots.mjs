@@ -44,10 +44,22 @@ try {
       ...(await readdir(path.join(temp, 'build'))).filter(f => f.endsWith('.html')).map(f => ({ type: 'Text', path: path.join(temp, 'build', f) })),
     ],
     compatibilityDate: '2026-09-01', compatibilityFlags: ['nodejs_compat'],
-    bindings: { HUB_DOMAIN: 'pimwell.test', ARDI_REPO_CREATE: 'off' },
+    bindings: { HUB_DOMAIN: 'pimwell.test', ARDI_REPO_CREATE: 'off', HUB_SECRETS_KEY: randomBytes(32).toString('base64') },
     d1Databases: ['HUB_DB'], r2Buckets: ['GIT_PUSH_STAGING'], kvNamespaces: ['RATE', 'OAUTH_KV'],
     durableObjects: { CONVERSATION: { className: 'Conversation', useSQLite: true }, INBOX: { className: 'Inbox', useSQLite: true } },
-    serviceBindings: { ARDI: () => new Response('Local acceptance denies external services', { status: 503 }) },
+    serviceBindings: { ARDI: async request => {
+      // Synthetic git host only; never sends a request outside this process.
+      const body = await request.json(), verb = new URL(request.url).pathname.split('/api/')[1];
+      const a = 'a'.repeat(40), b = 'b'.repeat(40);
+      const commit = oid => ({oid,tree:a,parents:oid === b ? [a] : [],summary:oid === b ? 'Keep navigation visible' : 'Start the workbench',message:'Synthetic repository evidence.',author_name:'Alex Example',author_email:'alex@example.test',author_time:Math.floor(now/1000),committer_name:'Alex Example',committer_email:'alex@example.test',commit_time:Math.floor(now/1000),principal:null,session:null,trailer_principal:null,trailer_session:null});
+      const ok = result => Response.json({ok:true,result,next:null});
+      if (verb === 'refs.list') return ok({refs:[{name:'refs/heads/main',target:a},{name:'refs/heads/topic',target:b}]});
+      if (verb === 'log') return ok({commits:body.ref === 'refs/heads/main' ? [commit(a)] : [commit(b),commit(a)]});
+      if (verb === 'commit.show') return ok({...commit(body.oid),changes:body.oid === b ? [{path:'app.ts',prev_path:null,prev_blob:a,new_blob:b,kind:'modify'}] : []});
+      if (verb === 'tree.list') return ok({entries:[{kind:'blob',mode:'100644',name:'app.ts',oid:b}]});
+      if (verb === 'file.show' && body.path === 'app.ts') { const text = body.rev === a ? 'export const navigation = false;\n' : 'export const navigation = true;\n'; return ok({content_b64:Buffer.from(text).toString('base64'),size:text.length,oid:b,path:body.path,rev:body.rev}); }
+      return Response.json({ok:false,error:'No synthetic path'},{status:404});
+    } },
     outboundService: () => new Response('Local acceptance denies network access', { status: 503 }),
     // No persistence directory: everything, including sessions and memberships,
     // is in this process's temporary Miniflare storage and disposed in finally.
@@ -91,8 +103,11 @@ try {
   const contact = await verb(member, 'person.upsert', {project: 'knowledge', name: 'Alex Example', title: 'Designer', emails: ['alex@example.test']});
   await verb(member, 'channel.create', {slug: 'general', topic: 'Team conversation'});
   await verb(member, 'chat.post', {c: 'general', body: 'Please review the compact workbench.'});
+  await verb(member, 'review.request', {project:'sample',branch:'topic',title:'Keep navigation visible',summary:'Synthetic review of the workbench.',reviewers:['peer@example.test']});
+  const sampleId = await db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'sample'").bind(tenant).first('id');
+  await db.prepare("INSERT INTO app_deploy (id,tenant_id,project_id,script_name,version_id,tag,message,seen_at) VALUES (?,?,?,?,?,?,?,?)").bind('synthetic-deploy',tenant,sampleId,'sample-worker','b'.repeat(40),'workbench','Synthetic deploy record; not a live rollout.',now).run();
   browser = await chromium.launch({headless: true});
-  const pages = {home:'/', docket:'/sample/docket', item:'/sample/w/2', board:'/sample/board', status:'/sample/status', code:'/sample/code', reviews:'/reviews', wiki:'/knowledge/wiki', files:'/knowledge/documents', contacts:'/knowledge/contacts', graph:`/knowledge/contacts/${contact.entity.id}`, mail:'/mail', chat:'/c/general', assistant:'/assistant', people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
+  const pages = {home:'/', docket:'/sample/docket', item:'/sample/w/2', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', files:'/knowledge/documents', contacts:'/knowledge/contacts', graph:`/knowledge/contacts/${contact.entity.id}`, mail:'/mail', chat:'/c/general', assistant:'/assistant', people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
   const phase = process.env.WORKBENCH_PHASE || 'before';
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
@@ -140,6 +155,30 @@ try {
         const visibleNavigation = await page.evaluate(() => ['rail','explorer'].map(id => {const r=document.getElementById(id).getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth;}));
         expect(visibleNavigation).toEqual(viewport.width >= 1280 ? [true,true] : [false,false]);
         if (viewport.width < 760) await expect(page.locator('.tabs')).toBeVisible();
+      }
+      if (phase === 'after' && ['board','status','code','reviews','codeFiles','deploys'].includes(name)) {
+        await expect(page.locator('#list .wb-toolbar')).toHaveCount(1);
+        await expect(page.locator('#list .card')).toHaveCount(0);
+        const row = page.locator('#list tr[data-href]').first();
+        await page.evaluate(() => { window.viewList = document.getElementById('list'); });
+        await row.locator('a').first().click();
+        await expect(page.locator('#inspector .back')).toHaveCount(1);
+        await expect(page.locator('#inspector')).toBeVisible();
+        expect(await page.evaluate(() => window.viewList === document.getElementById('list')), name+' retains its list').toBe(true);
+        const selectedURL = page.url();
+        await page.reload();
+        expect(page.url()).toBe(selectedURL);
+        await expect(page.locator('#inspector')).toBeVisible();
+        if (['board','status'].includes(name)) {
+          await expect(page.locator('#list tr[aria-selected="true"]').first()).toHaveCount(1);
+          await expect(page.locator('#inspector input[name=expected_updated_at]').first()).toHaveCount(1);
+        }
+        if (viewport.width >= 1280) {
+          await page.keyboard.press('Escape');
+          await expect(page.locator('main.panes')).toHaveClass(/one/);
+          await page.goBack();
+          await expect(page.locator('#inspector')).toBeVisible();
+        }
       }
       if (phase === 'after' && name === 'docket') {
         await expect(page.locator('.wb-table tbody tr')).toHaveCount(4);
@@ -232,6 +271,7 @@ try {
         await expect(page).toHaveURL(/\/sample\/docket\?kind=wish&filter=navigation$/);
         await expect(page.locator('#list input[data-filter]')).toHaveValue('navigation');
       }
+      await expect(page.locator('#list')).toHaveAttribute('data-key', 'docket:sample:kind=wish');
       await page.evaluate(() => { window.retainedList = document.getElementById('list'); });
       await page.locator('#list tbody a').click();
       await expect(page.locator('#inspector h1')).toContainText('Keep project navigation visible');
