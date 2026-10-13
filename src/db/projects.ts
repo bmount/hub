@@ -70,6 +70,6 @@ export async function listProjects(db: D1Database, tenant_id: string, state: Sta
 }
 
 export async function setProjectState(db: D1Database, tenant_id: string, id: string, state: State): Promise<boolean> {
-  const r = await db.prepare("UPDATE project SET state = ? WHERE id = ? AND tenant_id = ? AND state <> ?").bind(state, id, tenant_id, state).run();
+  const r = await db.prepare("UPDATE project SET state = ? WHERE id = ? AND tenant_id = ? AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'project_delete:v1:' || project.tenant_id || ':' || project.id)").bind(state, id, tenant_id, state).run();
   return r.meta.changes === 1;
 }

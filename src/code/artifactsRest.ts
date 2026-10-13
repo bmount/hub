@@ -143,6 +143,18 @@ export class ArtifactsRest {
     this.repoPath(target);
     await this.call(namespace, this.repoPath(repo) + "/fork", { name: target, description, default_branch_only: false });
   }
+  /** Never delete a live repository without verifying its tenant/project ownership marker. */
+  async deleteProject(namespace: string, repo: string, ownership: string): Promise<void> {
+    try {
+      const info = await this.info(namespace, repo);
+      if (info.description !== ownership) throw new HubError(409, "conflict", "repository ownership mismatch; nothing deleted");
+      await this.call(namespace, this.repoPath(repo), undefined, "DELETE");
+    } catch (error) {
+      // A retry after a lost response must be safe.
+      if (!(error instanceof HubError) || error.status !== 404) throw error;
+    }
+    for (const key of tokens.keys()) if (key.startsWith(`${this.account}/${namespace}/${repo}/`)) tokens.delete(key);
+  }
   async deleteTemporary(namespace: string, repo: string, id: string): Promise<void> {
     if (repo !== `pimwell-stage-${id}` || !/^[0-9a-f-]{36}$/.test(id)) throw new HubError(400, "bad_request", "not a temporary repository");
     const info = await this.info(namespace, repo);

@@ -164,6 +164,21 @@ describe("Artifacts REST transport", () => {
     expect(sawUpstreamBody).toBe(true);
     expect(new TextDecoder().decode(await response.arrayBuffer())).toContain(`${main} HEAD symref-target:refs/heads/main\n`);
   });
+  it("deletes only the exact owned project repository and handles a missing repository on retry", async () => {
+    const api = configured(), ownership = "Pimwell tenant tid project pid";
+    let exists = true;
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      expect(String(url)).toBe(`https://api.cloudflare.com/client/v4/accounts/${account}/artifacts/namespaces/acme/repos/site`);
+      if (!exists) return new Response("", { status: 404 });
+      if (init?.method === "DELETE") { exists = false; return Response.json({ success: true, result: {} }); }
+      return Response.json({ success: true, result: { name: "site", remote: api.remote("acme", "site"), description: ownership } });
+    });
+    await expect(api.deleteProject("acme", "site", "another project")).rejects.toThrow("ownership mismatch");
+    expect(fake.mock.calls.some(c => c[1]?.method === "DELETE")).toBe(false);
+    await api.deleteProject("acme", "site", ownership);
+    await api.deleteProject("acme", "site", ownership);
+    expect(fake.mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(1);
+  });
   it("does not include upstream error messages or credentials in errors", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ success: false, errors: [{ message: apiToken }] }, { status: 403 }));
     await expect(configured().repoToken("acme", "site", "read")).rejects.toThrow("Artifacts request failed");

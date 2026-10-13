@@ -92,6 +92,7 @@ export class Conversation extends DurableObject<Env> {
 
   #bind(tenant_id: string, conversation_id: string): void {
     bindOnce(this.ctx.storage.sql, tenant_id, conversation_id);
+    if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) throw new Error("conversation deleted");
     this.#tenant = tenant_id;
     this.#id = conversation_id;
   }
@@ -121,6 +122,8 @@ export class Conversation extends DurableObject<Env> {
   }
 
   #append(a: Omit<NewMessage, "author_kind"> & { msg_id: string; rev: number }): number {
+    // A post may have awaited an Inbox reservation after binding but before this transaction.
+    if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) throw new Error("conversation deleted");
     this.#run(
       `INSERT INTO artifact (id, msg_id, rev, kind, author_id, session_id, session_kind, thread_root, body, body_sha256, meta_json, hop, cause_seq, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -372,6 +375,7 @@ export class Conversation extends DurableObject<Env> {
     const now = Date.now();
     const row: PresenceRow = { identity_id, status, via_assistant, last_seen: now, expires_at: status === "offline" ? now : now + PRESENCE_TTL_MS };
     await this.ctx.storage.transaction(async (tx) => {
+      if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) throw new Error("conversation deleted");
       const rows = (await tx.get<PresenceRow[]>("presence:v1")) ?? [];
       await tx.put("presence:v1", retainedPresence([row, ...rows.filter((r) => r.identity_id !== identity_id)], now));
     });
@@ -728,7 +732,27 @@ export class Conversation extends DurableObject<Env> {
     return { head: this.#head(), since, new_messages: counts.n, agent_messages: counts.agents, mentions_me, mentions_truncated, my_threads, my_threads_truncated, threads, authors, refs };
   }
 
+  /** Internal RPC only. A tombstone rejects already-authorized, in-flight posts after deletion. */
+  async purge(tenant_id: string, conversation_id: string): Promise<number> {
+    bindOnce(this.ctx.storage.sql, tenant_id, conversation_id);
+    return this.ctx.blockConcurrencyWhile(async () => {
+      await this.#draining;
+      const prior = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = 'deleted'")[0];
+      if (prior) return Number(prior.value);
+      const n = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM artifact")[0]!.n;
+      this.ctx.storage.transactionSync(() => {
+        for (const table of ["artifact", "msg", "ref", "thread_sub", "scope_state", "pair_block", "idem", "inbox_outbox", "index_outbox"]) this.#run(`DELETE FROM ${table}`);
+        this.#run("DELETE FROM meta WHERE key NOT IN ('tenant_id', 'owner_id')");
+        this.#run("INSERT INTO meta (key, value) VALUES ('deleted', ?)", String(n));
+      });
+      await this.ctx.storage.delete("presence:v1");
+      await this.ctx.storage.deleteAlarm();
+      return n;
+    });
+  }
+
   async alarm(): Promise<void> {
+    if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) return;
     const b = storedBinding(this.ctx.storage.sql);
     if (!b) return;
     this.#tenant = b.tenant_id;

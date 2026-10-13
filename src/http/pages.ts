@@ -12,6 +12,7 @@ import { buildContext, rank } from "../auth/context";
 import { listMembershipsForIdentity } from "../db/memberships";
 import { listNamespaces } from "../db/namespaces";
 import { listProjects } from "../db/projects";
+import { projectControls } from "./projectControls";
 import type { State } from "../db/types";
 import { LANDING_HTML } from "../assets";
 import { intentBox } from "../intent/page";
@@ -82,12 +83,16 @@ function listSection(title: string, items: string[]): string {
   return `<h2>${esc(title)}</h2>` + (items.length ? `<ul>${items.map((i) => `<li>${i}</li>`).join("")}</ul>` : `<p>None.</p>`);
 }
 
-async function tenantListing(env: Env, tenant_id: string, state: State): Promise<string> {
+async function tenantListing(env: Env, tenant_id: string, state: State, admin = false): Promise<string> {
   const namespaces = await listNamespaces(env.HUB_DB, tenant_id, state);
   const all = new Map([...namespaces, ...(await listNamespaces(env.HUB_DB, tenant_id, state === "active" ? "archived" : "active"))].map((n) => [n.id, n]));
   const projects = await listProjects(env.HUB_DB, tenant_id, state);
-  const paths = projects.map((p) => (p.namespace_id ? `${all.get(p.namespace_id)?.slug ?? "?"}/${p.slug}` : p.slug)).sort();
-  return listSection("Namespaces", namespaces.map((n) => esc(n.slug))) + listSection("Projects", paths.map((p) => `<code>${esc(p)}</code>`));
+  const rows = projects.map(p => {
+    const namespace = p.namespace_id ? all.get(p.namespace_id)?.slug ?? null : null;
+    const path = namespace ? `${namespace}/${p.slug}` : p.slug;
+    return `<code>${esc(path)}</code>${admin ? projectControls({ slug: p.slug, namespace }, state === "archived") : ""}`;
+  });
+  return listSection("Namespaces", namespaces.map((n) => esc(n.slug))) + listSection("Projects", rows);
 }
 
 /** How to bring an agent in: steps on the home page, with a direct link to each organization's connect form. */
@@ -137,6 +142,6 @@ export async function archivePage(request: Request, env: Env): Promise<Response>
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role) return notFoundPage(extra);
-  const body = `<p class="crumbs"><a href="/">${esc(ctx.tenant.display_name)}</a> /</p><h1>Archive</h1><p class="lede">Finished work, kept. Nothing here was thrown away.</p>` + (await tenantListing(env, ctx.tenant.id, "archived"));
+  const body = `<p class="crumbs"><a href="/">${esc(ctx.tenant.display_name)}</a> /</p><h1>Archive</h1><p class="lede">Finished work, kept. Nothing here was thrown away.</p>` + (await tenantListing(env, ctx.tenant.id, "archived", rank(ctx.role) >= rank("admin") && ctx.identity?.kind === "human"));
   return htmlResponse(page("Archive", body, shellFor(ctx, env, "home", "archive")), 200, extra);
 }

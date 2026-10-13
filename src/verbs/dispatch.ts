@@ -11,6 +11,7 @@ export function checkScope(ctx: Ctx, verb: VerbDef<unknown, unknown>): void {
 
 /** The table's rules for who may call a verb: one place for /api, the consent page, and /mcp. */
 export function checkAccess(ctx: Ctx, verb: VerbDef<unknown, unknown>): void {
+  if (verb.name === "project.delete" && ctx.identity?.kind === "agent") throw new HubError(403, "forbidden", "project deletion is human-only; sign in on the web as an admin");
   // A long-lived pmw_ token may only start a run or ask whoami (spec 6.5).
   if (ctx.authKind === "token" && verb.longLivedToken !== true) {
     throw new HubError(403, "forbidden", "a long-lived token may only call session.start and whoami");

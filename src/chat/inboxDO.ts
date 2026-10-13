@@ -69,6 +69,18 @@ export class Inbox extends DurableObject<Env> {
     return { head: this.#head(), items, next_after: items.at(-1)?.item_seq ?? after, has_more: rows.length > limit };
   }
 
+  /** Internal cleanup of only the deleted project's conversations and mail. */
+  async purgeProject(tenant_id: string, identity_id: string, conversations: string[], mail: string[]): Promise<number> {
+    bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
+    return this.ctx.storage.transactionSync(() => {
+      const channels = JSON.stringify(conversations), messages = JSON.stringify(mail);
+      const rows = this.#q<{ item_seq: number }>("DELETE FROM item WHERE conversation_id IN (SELECT value FROM json_each(?)) OR (kind = 'mail' AND msg_id IN (SELECT value FROM json_each(?))) RETURNING item_seq", channels, messages);
+      this.ctx.storage.sql.exec("DELETE FROM cursor WHERE conversation_id IN (SELECT value FROM json_each(?))", channels);
+      this.ctx.storage.sql.exec("DELETE FROM mail_delivered WHERE key IN (SELECT 'mail:' || value FROM json_each(?))", messages);
+      return rows.length;
+    });
+  }
+
   async head(tenant_id: string, identity_id: string): Promise<number> {
     bindOnce(this.ctx.storage.sql, tenant_id, identity_id);
     return this.#head();

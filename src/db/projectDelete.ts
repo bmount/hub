@@ -1,0 +1,138 @@
+import type { Ctx } from "../auth/context";
+import type { Project } from "./types";
+import { conflict, HubError } from "../errors";
+import { conversationStub, inboxStub } from "../chat/stubs";
+import { ArtifactsRest, artifactNamespace } from "../code/artifactsRest";
+import { repoOwnership } from "../code/artifactPush";
+import { ulid } from "../ids";
+
+export const projectDeleteKey = (tenant: string, project: string) => `project_delete:v1:${tenant}:${project}`;
+
+/** External stores are idempotently purged first; the D1 cascade and its single event commit together.
+ * A failed external purge leaves an archived, retryable project, never a successfully deleted shell.
+ */
+export async function deleteProject(ctx: Ctx, project: Project) {
+  const db = ctx.db, tid = ctx.tenant!.id;
+  if (project.state !== "archived") throw conflict("archive the project before deleting it");
+  const key = projectDeleteKey(tid, project.id);
+  await db.prepare("INSERT OR IGNORE INTO meta (key, value) SELECT ?, 'deleting' FROM project WHERE id = ? AND tenant_id = ? AND state = 'archived'").bind(key, project.id, tid).run();
+  if (!await db.prepare("SELECT 1 FROM meta WHERE key = ?").bind(key).first()) throw conflict("archive the project before deleting it");
+
+  const channels = (await db.prepare(`SELECT p.id FROM project p JOIN channel c ON c.project_id = p.id AND c.tenant_id = p.tenant_id
+    WHERE p.tenant_id = ? AND p.namespace_id IS NULL AND p.kind = 'channel' AND (
+      EXISTS (SELECT 1 FROM meta m WHERE m.key = 'project_channel:v1:' || p.tenant_id || ':' || p.id AND m.value = ?)
+      OR (NOT EXISTS (SELECT 1 FROM meta m WHERE m.key = 'project_channel:v1:' || p.tenant_id || ':' || p.id) AND ? IS NULL AND p.created_at = ? AND c.created_at = ? AND (
+        (p.slug = ? AND p.display_name = ?) OR (p.slug = ? AND p.display_name = ?))
+        AND NOT EXISTS (SELECT 1 FROM event e WHERE e.tenant_id = p.tenant_id AND e.target_id = p.id AND e.kind = 'channel.create')))`)
+    .bind(tid, project.id, project.namespace_id, project.created_at, project.created_at,
+      `${project.slug}-team`, `${project.display_name} team`, `${project.slug}-ops`, `${project.display_name} ops`)
+    .all<{ id: string }>()).results.map(r => r.id);
+  const ids = JSON.stringify([project.id, ...channels]);
+  const projects = "SELECT value FROM json_each(?2)";
+  const items = `SELECT id FROM work_item WHERE tenant_id = ?1 AND project_id IN (${projects})`;
+  const reviews = `SELECT id FROM review WHERE tenant_id = ?1 AND project_id IN (${projects})`;
+  const mail = `SELECT id FROM inbound_mail WHERE tenant_id = ?1 AND project_id IN (${projects})`;
+  const groups = `SELECT id FROM app_error_group WHERE tenant_id = ?1 AND project_id IN (${projects})`;
+  const proposals = `SELECT id FROM work_proposal WHERE tenant_id = ?1 AND item_id IN (${items})`;
+  const scoped = (sql: string) => db.prepare(sql).bind(tid, ids);
+  await db.batch([
+    scoped(`UPDATE project SET state = 'archived' WHERE tenant_id = ?1 AND id IN (${projects})`),
+    ...channels.map(id => db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").bind(`project_channel:v1:${tid}:${id}`, project.id)),
+  ]);
+
+  const counts: Record<string, number> = {};
+  for (const id of channels) counts.message_versions = (counts.message_versions ?? 0) + await conversationStub(ctx.env, tid, id).purge(tid, id);
+  const mailIds = (await scoped(`SELECT id FROM inbound_mail WHERE tenant_id = ?1 AND project_id IN (${projects})`).all<{ id: string }>()).results.map(r => r.id);
+  const identities = (await db.prepare(`SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?`)
+    .bind(tid, tid).all<{ identity_id: string }>()).results;
+  for (const { identity_id } of identities) {
+    const n = await inboxStub(ctx.env, tid, identity_id).purgeProject(tid, identity_id, channels, mailIds);
+    if (n) counts.inbox_items = (counts.inbox_items ?? 0) + n;
+  }
+
+  const bucket = ctx.env.GIT_PUSH_STAGING;
+  const files = await scoped(`SELECT COUNT(*) AS n FROM file_revision WHERE tenant_id = ?1 AND project_id IN (${projects})`).first<{ n: number }>();
+  if (!bucket && files?.n) throw new HubError(503, "unavailable", "file storage unavailable; sign in on the web and retry deletion");
+  if (bucket) {
+    // Only internal tenant/project ids select storage; trailing slash keeps sibling prefixes disjoint.
+    for (const id of [project.id, ...channels]) {
+      let cursor: string | undefined;
+      do {
+        const page = await bucket.list({ prefix: `project-files/${tid}/${id}/`, cursor });
+        if (page.objects.length) await bucket.delete(page.objects.map(o => o.key));
+        counts.file_objects = (counts.file_objects ?? 0) + page.objects.length;
+        cursor = page.truncated ? page.cursor : undefined;
+      } while (cursor);
+    }
+  }
+  if (project.kind === "repo") {
+    const mapped = await db.prepare("SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).first();
+    if (!mapped && ctx.env.ARDI_REPO_CREATE === "on") throw conflict("repository is not mapped to Artifacts; migrate it before deleting the project");
+    if (mapped) {
+      const api = new ArtifactsRest(ctx.env), ns = artifactNamespace(ctx.tenant!.slug);
+      const pushes = (await db.prepare("SELECT id, namespace, shadow, replay_key FROM git_push WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id)
+        .all<{ id: string; namespace: string; shadow: string; replay_key: string }>()).results;
+      for (const push of pushes) {
+        if (push.namespace !== ns) throw conflict("repository staging ownership mismatch");
+        if (push.replay_key) {
+          if (!bucket) throw new HubError(503, "unavailable", "git staging storage unavailable");
+          if (!push.replay_key.startsWith(`git-push/${tid}/${project.id}/`)) throw conflict("repository replay ownership mismatch");
+          try { await api.deleteTemporary(ns, push.shadow, push.id); }
+          catch (e) { if (!(e instanceof HubError) || e.status !== 404) throw e; }
+          await bucket.delete(push.replay_key);
+        }
+      }
+      await api.deleteProject(ns, project.slug, repoOwnership(tid, project.id));
+      counts.repositories = 1;
+    }
+  }
+
+  const rules: Array<[string, string]> = [
+    ["event", `tenant_id = ?1 AND ((target_kind IN ('project', 'channel') AND target_id IN (${projects})) OR (target_kind = 'work_item' AND target_id IN (${items})) OR (target_kind = 'inbound_mail' AND target_id IN (${mail})) OR (target_kind = 'review' AND target_id IN (${reviews})))`],
+    ["work_proposal_decision", `proposal_id IN (${proposals})`],
+    ["work_proposal", `tenant_id = ?1 AND item_id IN (${items})`],
+    ["work_dep", `tenant_id = ?1 AND (prereq_id IN (${items}) OR dependent_id IN (${items}))`],
+    ["work_resource", `tenant_id = ?1 AND item_id IN (${items})`],
+    ["work_link", `item_id IN (${items})`],
+    ["attention", `tenant_id = ?1 AND (item_id IN (${items}) OR EXISTS (SELECT 1 FROM review r JOIN project p ON p.id = r.project_id WHERE r.id IN (${reviews}) AND attention.href = '/' || p.slug || '/reviews/' || r.number AND attention.actor_id = r.author_id AND attention.created_at = r.created_at))`],
+    ["follow", `tenant_id = ?1 AND ((target_kind = 'item' AND target_id IN (${items})) OR (target_kind = 'project' AND target_id IN (${projects})))`],
+    ["work_comment", `tenant_id = ?1 AND item_id IN (${items})`],
+    ["review_reviewer", `review_id IN (${reviews})`],
+    ["review_comment", `tenant_id = ?1 AND review_id IN (${reviews})`],
+    ["app_event", `tenant_id = ?1 AND group_id IN (${groups})`],
+    ["app_stat", `tenant_id = ?1 AND script_name IN (SELECT script_name FROM app_source WHERE tenant_id = ?1 AND project_id IN (${projects}))`],
+    ["outbound_mail", `tenant_id = ?1 AND (in_reply_to IN (${mail}) OR from_address = ?3)`],
+    ...["file_revision", "file_upload", "wiki_revision", "review", "app_error_group", "app_deploy", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"].map(table => [table, `tenant_id = ?1 AND project_id IN (${projects})`] as [string, string]),
+    ...["msg_ref", "msg_index", "conversation_member"].map(table => [table, `tenant_id = ?1 AND conversation_id IN (${projects})`] as [string, string]),
+    ["channel", `tenant_id = ?1 AND project_id IN (${projects})`],
+    ["work_item", `tenant_id = ?1 AND project_id IN (${projects})`],
+    ["project", `tenant_id = ?1 AND id IN (${projects})`],
+  ];
+  const address = project.namespace_id === null ? `${ctx.tenant!.slug}.${project.slug}@${ctx.env.HUB_DOMAIN}` : "";
+  const statement = (sql: string, condition: string) => db.prepare(sql).bind(tid, ids, ...(condition.includes("?3") ? [address] : []));
+  for (const [table, condition] of rules) {
+    const n = (await statement(`SELECT COUNT(*) AS n FROM ${table} WHERE ${condition}`, condition).first<{ n: number }>())?.n;
+    if (n) counts[table] = n;
+  }
+  const stmts = [db.prepare("PRAGMA defer_foreign_keys = true")];
+  // Keep other projects' records, detaching only references that can no longer resolve.
+  for (const [table, column] of [["work_item", "parent_id"], ["app_error_group", "work_item_id"], ["model_call", "work_item_id"]]) {
+    stmts.push(scoped(`UPDATE ${table} SET ${column} = NULL WHERE tenant_id = ?1 AND ${column} IN (${items}) AND project_id NOT IN (${projects})`));
+  }
+  stmts.push(scoped(`DELETE FROM meta WHERE key IN (SELECT 'mail_response_recipients:v1:' || ?1 || ':' || value FROM json_each(?2))`));
+  stmts.push(scoped(`DELETE FROM meta WHERE key IN (SELECT 'project_channel:v1:' || ?1 || ':' || value FROM json_each(?2))`));
+  stmts.push(scoped(`DELETE FROM meta WHERE substr(key, 1, length('review_request:v1:' || ?1 || ':')) = 'review_request:v1:' || ?1 || ':' AND json_valid(value) AND json_extract(value, '$.result.review.project_id') IN (${projects})`));
+  stmts.push(scoped(`DELETE FROM meta WHERE substr(key, 1, length('mail_response_intent:v1:' || ?1 || ':')) = 'mail_response_intent:v1:' || ?1 || ':' AND substr(key, length('mail_response_intent:v1:' || ?1 || ':') + 1, 26) IN (${mail})`));
+  stmts.push(scoped(`DELETE FROM meta WHERE (substr(key, 1, length('mail_replay:v1:' || ?1 || ':')) = 'mail_replay:v1:' || ?1 || ':' OR substr(key, 1, length('mail_welcome:v1:' || ?1 || ':')) = 'mail_welcome:v1:' || ?1 || ':') AND json_valid(value) AND json_extract(value, '$.mail_id') IN (${mail})`));
+  // Insert before removing the project; a simultaneous retry cannot create a second deletion event.
+  stmts.push(db.prepare(`INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
+    SELECT ?, ?, ?, ?, 'project.delete', 'project', ?, ?, ? WHERE EXISTS (SELECT 1 FROM project WHERE tenant_id = ? AND id = ? AND state = 'archived')`)
+    .bind(ulid(ctx.now), tid, ctx.identity!.id, ctx.session!.id, project.id, `Deleted project ${project.slug}; counts ${JSON.stringify(counts)}`, ctx.now, tid, project.id));
+  for (const [table, condition] of rules) {
+    // The one deletion event remains as the audit record.
+    stmts.push(statement(`DELETE FROM ${table} WHERE ${condition}${table === "event" ? " AND kind <> 'project.delete'" : ""}`, condition));
+  }
+  stmts.push(db.prepare("DELETE FROM meta WHERE key = ?").bind(key));
+  await db.batch(stmts);
+  return { ok: true, slug: project.slug, counts };
+}

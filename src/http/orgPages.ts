@@ -1,5 +1,6 @@
 // An organization's home, its people and agents, and each project's own page (overnight plan task 4).
 // Every page reads in one D1 batch: one round trip, whatever it shows.
+import { projectControls } from "./projectControls";
 import { PROJECT_KINDS, projectFeatures, FEATURE_LABELS } from "../projectFeatures";
 import type { Env } from "../env";
 import { esc, htmlResponse, onramp, page } from "../html";
@@ -40,21 +41,21 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   const t = ctx.tenant!;
   const access = readableMail(ctx), eventAccess = readableMailEvents(ctx);
   const [projects, byKind, events, mail, people] = await ctx.db.batch([
-    ctx.db.prepare(`SELECT p.slug, p.display_name, p.kind, (SELECT COUNT(*) FROM work_item w WHERE w.project_id = p.id AND w.state IN ('open','doing')) AS open_work,
+    ctx.db.prepare(`SELECT p.slug, p.display_name, p.kind, (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) AS namespace, (SELECT COUNT(*) FROM work_item w WHERE w.project_id = p.id AND w.state IN ('open','doing')) AS open_work,
       (SELECT MAX(w.updated_at) FROM work_item w WHERE w.project_id = p.id) AS last_work FROM project p WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind NOT IN ('channel', 'agent-src') ORDER BY p.slug`).bind(t.id),
     ctx.db.prepare("SELECT kind, COUNT(*) AS n FROM work_item WHERE tenant_id = ? AND state IN ('open','doing') GROUP BY kind").bind(t.id),
     ctx.db.prepare(`${EVENTS_SQL} WHERE e.tenant_id = ? AND ${eventAccess.sql} ORDER BY e.created_at DESC LIMIT 12`).bind(t.id, ...eventAccess.bindings),
     ctx.db.prepare(`SELECT m.id, m.subject, m.from_email, m.received_at, pr.slug AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id WHERE ${access.sql} AND m.verdict = 'admitted' ORDER BY m.received_at DESC LIMIT 5`).bind(...access.bindings),
     ctx.db.prepare("SELECT i.kind, COUNT(*) AS n FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' GROUP BY i.kind").bind(t.id),
   ]);
-  const proj = (projects!.results as Array<{ slug: string; display_name: string; kind: string; open_work: number; last_work: number | null }>);
+  const proj = (projects!.results as Array<{ slug: string; namespace: string | null; display_name: string; kind: string; open_work: number; last_work: number | null }>);
   const kinds = new Map((byKind!.results as Array<{ kind: WorkKind; n: number }>).map((r) => [r.kind, r.n]));
   const counts = new Map((people!.results as Array<{ kind: string; n: number }>).map((r) => [r.kind, r.n]));
   const totalOpen = [...kinds.values()].reduce((a, b) => a + b, 0);
 
   const projectCards = proj.length ? `<div class="grid">${proj.map((p) => `<div class="card"><h3><a href="/${esc(p.slug)}">${esc(p.display_name)}</a></h3>
 <p>${esc(p.kind)} · ${p.open_work} open${p.last_work ? ` · active ${esc(ago(ctx.now, p.last_work))}` : ""}</p>
-<p><a href="/${esc(p.slug)}">Open project</a> · <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code></p></div>`).join("")}</div>`
+<p><a href="/${esc(p.slug)}">Open project</a> · <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code></p>${rank(ctx.role) >= rank("admin") && ctx.identity!.kind === "human" ? projectControls(p, false) : ""}</div>`).join("")}</div>`
     : `<p class="lede">No projects yet.</p>`;
   const kindChips = (Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("");
   const mailRows = (mail!.results as Array<{ id: string; subject: string; from_email: string; received_at: number; project: string | null }>);

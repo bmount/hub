@@ -18,7 +18,7 @@ const SELECT = `SELECT p.id AS project_id, p.tenant_id, p.slug, p.display_name, 
   FROM channel c JOIN project p ON p.id = c.project_id`;
 
 export async function createChannel(
-  db: D1Database, input: { tenant_id: string; slug: string; display_name: string; topic: string; created_by: string }, now: number,
+  db: D1Database, input: { tenant_id: string; slug: string; display_name: string; topic: string; created_by: string; owner_project_id?: string }, now: number,
 ): Promise<ChannelRow> {
   const slug = input.slug.trim().toLowerCase();
   if (!isValidSlug(slug)) throw badRequest("invalid channel name");
@@ -33,6 +33,8 @@ export async function createChannel(
         .bind(id, input.tenant_id, slug, display_name, now),
       db.prepare("INSERT INTO channel (project_id, tenant_id, topic, agent_policy, created_by, created_at) VALUES (?, ?, ?, 'open', ?, ?)")
         .bind(id, input.tenant_id, input.topic, input.created_by, now),
+      ...(input.owner_project_id ? [db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)")
+        .bind(`project_channel:v1:${input.tenant_id}:${id}`, input.owner_project_id)] : []),
     ]);
   } catch (e) {
     if (String(e).includes("UNIQUE")) throw conflict("name is taken");
@@ -64,7 +66,7 @@ export async function setAgentPolicy(db: D1Database, tenant_id: string, id: stri
 }
 
 export async function setChannelState(db: D1Database, tenant_id: string, id: string, state: State): Promise<boolean> {
-  const r = await db.prepare("UPDATE project SET state = ? WHERE id = ? AND tenant_id = ? AND kind = 'channel' AND state <> ?").bind(state, id, tenant_id, state).run();
+  const r = await db.prepare("UPDATE project SET state = ? WHERE id = ? AND tenant_id = ? AND kind = 'channel' AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta owner JOIN meta deletion ON deletion.key = 'project_delete:v1:' || project.tenant_id || ':' || owner.value WHERE owner.key = 'project_channel:v1:' || project.tenant_id || ':' || project.id)").bind(state, id, tenant_id, state).run();
   return r.meta.changes === 1;
 }
 

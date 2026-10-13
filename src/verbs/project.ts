@@ -2,10 +2,11 @@ import { PROJECT_KINDS } from "../projectFeatures";
 import { ensureProjectChannels } from "../chat/defaults";
 import { defineVerb } from "./table";
 import { optString, reqString, stateParam } from "./params";
-import { conflict, notFound } from "../errors";
+import { badRequest, conflict, notFound, HubError } from "../errors";
 import { getNamespaceBySlug, listNamespaces } from "../db/namespaces";
 import { createProject, getProjectByPath, listProjects, setProjectState } from "../db/projects";
 import { recordEvent } from "../db/events";
+import { deleteProject, projectDeleteKey } from "../db/projectDelete";
 import { createRepo } from "../code/ardi";
 import type { Ctx } from "../auth/context";
 import type { Namespace, Project, State } from "../db/types";
@@ -25,8 +26,9 @@ async function setState(ctx: Ctx, nsSlug: string | null, slug: string, state: St
   const project = await getProjectByPath(ctx.db, ctx.tenant!.id, nsSlug, slug);
   // Channels are managed only through channel.* (ruling C-2).
   if (!project || project.kind === "channel" || project.kind === "agent-src") throw notFound("no such project");
+  if (await ctx.db.prepare("SELECT 1 FROM meta WHERE key = ?").bind(projectDeleteKey(ctx.tenant!.id, project.id)).first()) throw conflict("project deletion has started; sign in on the web to retry deletion");
   if (project.state === state) throw conflict(`project already ${state}`);
-  await setProjectState(ctx.db, ctx.tenant!.id, project.id, state);
+  if (!await setProjectState(ctx.db, ctx.tenant!.id, project.id, state)) throw conflict("project changed; reload and try again");
   const path = nsSlug ? `${nsSlug}/${slug}` : slug;
   await recordEvent(ctx.db, {
     tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: verb, target_kind: "project", target_id: project.id,
@@ -74,6 +76,20 @@ export const projectUnarchive = defineVerb({
   name: "project.unarchive", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60, summary: "Unarchive a project.",
   parse: (i) => ({ slug: reqString(i, "slug", { max: 63 }), namespace: optString(i, "namespace", { max: 63 }) }),
   run: (ctx, p) => setState(ctx, p.namespace, p.slug, "active", "project.unarchive"),
+});
+
+export const projectDelete = defineVerb({
+  name: "project.delete", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 10, humanOnly: true,
+  summary: "Permanently delete an archived project and its contents. Sign in on the web and type the project slug to confirm.",
+  formBack: () => "/archive",
+  parse: (i) => ({ slug: reqString(i, "slug", { max: 63 }), namespace: optString(i, "namespace", { max: 63 }), confirm: optString(i, "confirm", { max: 63 }) }),
+  run: async (ctx, p) => {
+    if (ctx.authKind !== "cookie" || ctx.session?.kind !== "browser" || ctx.playground) throw new HubError(403, "forbidden", "sign in on the web to delete a project");
+    const project = await getProjectByPath(ctx.db, ctx.tenant!.id, p.namespace, p.slug);
+    if (!project || project.kind === "channel" || project.kind === "agent-src") throw notFound("no such project");
+    if (p.confirm !== project.slug) throw badRequest("type the project slug exactly to confirm");
+    return deleteProject(ctx, project);
+  },
 });
 
 export const projectList = defineVerb({
