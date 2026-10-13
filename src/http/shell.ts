@@ -91,10 +91,14 @@ function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
   } else {
     view = segments[0];
     const label = view ? VIEW_LABELS[view] ?? nav.find(n => n.active)?.label ?? view : "Home";
+    if (p && ["attention", "mail", "c", "assistant"].includes(view ?? "")) links.push({label:p.display_name,href:`/${encodeURIComponent(p.path)}`});
     links.push({label, href: view ? `/${view}` : "/"});
-    if (segments.length > 1) links.push({label: decodeURIComponent(segments.slice(1).join("/")), href: url.pathname + url.search});
+    if (view === "c" && segments[1]) {
+      links.push({label:`#${decodeURIComponent(segments[1])}`,href:`/c/${segments[1]}`});
+      if (segments[2] === "t" && segments[3]) links.push({label:`Thread #${segments[3]}`,href:url.pathname + url.search});
+    } else if (segments.length > 1) links.push({label: decodeURIComponent(segments.slice(1).join("/")), href: url.pathname + url.search});
   }
-  const selected = ["work", "f", "c", "path", "g", "d", "thread"].map(k => url.searchParams.get(k)).find(Boolean);
+  const selected = ["work", "f", "c", "path", "g", "d", "thread", "t"].map(k => url.searchParams.get(k)).find(Boolean);
   if (selected) links.push({label: selected, href: url.pathname + url.search});
   links[links.length - 1]!.current = true;
   return links;

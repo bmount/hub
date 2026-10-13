@@ -147,8 +147,13 @@ describe("mail in the workbench", () => {
     const member = await (await w.get("/mail", w.pat.token)).text();
     expect(member).toContain('data-href="/mail/M1"');
     expect(member).not.toContain("/mail/M2");
-    expect(member).toContain("<code>acme.site@pimwell.test</code>");
-    expect(await (await w.get("/mail", w.ada.token)).text()).toContain('<span class="pill">held</span>');
+    expect(member).toContain('href="/mail?addresses=1"');
+    expect(await (await w.get("/mail?addresses=1", w.pat.token)).text()).toContain("<code>acme.site@pimwell.test</code>");
+    expect(await (await w.get("/mail", w.ada.token)).text()).toContain("· held");
+    const filtered = await (await w.get("/mail/M1?project=site", w.pat.token)).text();
+    expect(filtered).toContain('data-href="/mail/M1?project=site"');
+    expect(filtered).toContain('class="back" href="/mail?project=site"');
+    expect(filtered).toContain('aria-label="Mail"');
     expect((await w.get("/mail/M2", w.pat.token)).status).toBe(404);
   });
 
@@ -178,8 +183,8 @@ describe("mail in the workbench", () => {
     expect(await env.HUB_DB.prepare("SELECT status, error FROM outbound_mail").first()).toEqual({ status: "refused", error: "sending_off" });
     const page = await (await w.get("/mail", w.ada.token)).text();
     expect(page).toContain("Recent outgoing problems");
-    expect(page).toContain('href="/mail#sending"');
-    expect(page).toContain('id="sending"');
+    expect(page).toContain('href="/mail?addresses=1#sending"');
+    expect(await (await w.get("/mail?addresses=1", w.ada.token)).text()).toContain('id="sending"');
     expect(await (await w.get("/mail/M1", w.pat.token)).text()).toContain("Mail blocked — not sent");
     expect(calls).toBe(0);
   });

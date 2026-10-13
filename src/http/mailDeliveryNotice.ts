@@ -29,6 +29,6 @@ export function mailDeliveryNotice(ctx: Ctx, o: DeliveryNotice): string {
 <strong>${blocked ? "Mail blocked — not sent" : beforeTransport ? "Delivery failed — not sent" : "Delivery uncertain"}</strong>
 <p>${esc(reason)}</p><p>Affected recipients: <code>${esc(o.to_address)}</code></p><p>${esc(next)}</p>
 ${canWrite ? `<p><a href="${esc(review)}">Review before another attempt</a></p>` : ""}
-${canInspectMail(ctx) ? '<p><a href="/mail#sending">Review sending configuration</a></p>' : ""}
+${canInspectMail(ctx) ? '<p><a href="/mail?addresses=1#sending">Review sending configuration</a></p>' : ""}
 </div>`;
 }

@@ -243,7 +243,7 @@ it("keeps a serial transcript, model context, navigation and reload history", as
     await page.locator("[data-conversations-link]").click();
     await page.waitForURL(`${threadUrl}&list=1`);
     expect(await draft.inputValue()).toBe("Unsent draft");
-    await page.locator("#inspector .back").click();
+    await page.locator("#list .back").click();
     await page.waitForURL(threadUrl);
     expect(await draft.inputValue()).toBe("Unsent draft");
     await ask(page, "Follow up");

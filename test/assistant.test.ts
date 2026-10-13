@@ -63,6 +63,11 @@ describe("the Assistant", () => {
     const page = await (await SELF.fetch(`https://${HOST}/assistant?t=${j.thread}`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
     expect(page).toContain('<a href="/site/w/1">site#1</a>');
     expect(page).toContain("Used 1 tool");
+    const list = page.slice(page.indexOf('id="list"'),page.indexOf('id="inspector"'));
+    expect(list).toContain('aria-label="Conversations"');
+    expect(list).toContain(`data-href="/assistant?t=${j.thread}"`);
+    expect(list).toContain('aria-selected="true"');
+    expect(page.slice(page.indexOf('id="inspector"'))).toContain('id="chatlog"');
   });
 
   it.each([{ slug: "acme", scopes: "read" }, { slug: "mcc", scopes: "write" }])(

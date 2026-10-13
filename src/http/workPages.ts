@@ -525,17 +525,21 @@ ${params ? `<h2>Inputs</h2><table><tbody>${params}</tbody></table>` : ""}
 export async function attentionPage(request: Request, env: Env): Promise<Response> {
   const { ctx, extra, ok } = await tenantCtx(request, env);
   if (!ok) return notFoundPage(extra);
-  const showDone = new URL(request.url).searchParams.get("done") === "1";
+  const url = new URL(request.url);
+  const showDone = url.searchParams.get("done") === "1";
   const entries = (await attentionQuery(ctx, showDone, 200).all<{ id: string; reason: string; summary: string; created_at: number; done_at: number | null; slug: string | null; number: number | null; title: string | null; actor: string | null; href: string | null }>()).results;
+  let selected;
+  try { selected = await selectedWorkInspector(ctx, env, url, null); } catch (e) { if (e instanceof HubError && e.status === 404) return notFoundPage(extra); throw e; }
   const label: Record<string, string> = { mention: "Mentioned you", comment: "Comment", assigned: "Yours now", changed: "Changed", filed: "Filed for you" };
   const rows = entries.map((e) => {
-    const href = e.slug ? `/${e.slug}/w/${e.number}` : e.href ?? "/attention";
-    return `<tr data-href="${esc(href)}"${e.done_at ? ' style="opacity:.6"' : ""}><td class="when">${esc(label[e.reason] ?? e.reason)}</td><td class="ref">${e.slug ? esc(`${e.slug}#${e.number}`) : ""}</td><td><a href="${esc(href)}">${esc(e.summary)}</a></td><td class="when">${ago(e.created_at, ctx.now)}</td></tr>`;
-  }).join("");
+    const target = new URL(url); target.searchParams.set("work", `${e.slug}#${e.number}`);
+    const href = e.slug ? target.pathname + target.search : e.href ?? "/attention";
+    return { href, selected: url.searchParams.get("work") === `${e.slug}#${e.number}`, cells: [{html:esc(label[e.reason] ?? e.reason)}, {html:e.slug ? esc(`${e.slug}#${e.number}`) : ""}, {html:`<a href="${esc(href)}">${esc(e.summary)}</a>`}, {html:ago(e.created_at, ctx.now)}] };
+  });
   const list = `<div class="head"><h1>Needs me</h1><span>${entries.length} ${showDone ? "recent" : "waiting"}</span>
 ${!showDone && entries.length ? `<form class="inline" method="post" action="/api/attention.done"><input type="hidden" name="all" value="1"><input type="hidden" name="_back" value="/attention"><button type="submit" class="quiet">Mark all done</button></form>` : ""}
 <a href="${showDone ? "/attention" : "/attention?done=1"}">${showDone ? "Only what's waiting" : "Include done"}</a></div>
 <p class="lede">Mentions, comments and changes on what you follow, and work given to you. Opening an item marks its entries done.</p>
-${entries.length ? `<table><tbody>${rows}</tbody></table>` : `<p class="empty">Nothing needs you right now.</p>`}`;
-  return htmlResponse(workbench("Needs me", { list, listKey: `attention:${entries.length}:${entries[0]?.id ?? ""}`, inspector: null }, shellFor(ctx, env, "attention", "attention")!), 200, extra);
+${entries.length ? kitTable("Needs me", [{label:"Reason"},{label:"Item"},{label:"Waiting"},{label:"When"}], rows) : emptyState("Nothing needs you", "Mentions, assignments and followed work appear here.", {label:"Open Docket",href:"/docket"})}`;
+  return htmlResponse(workbench("Needs me", { list, listKey: `attention:${showDone}:${entries.length}:${entries[0]?.id ?? ""}`, stackOnPhone:true, inspector: selected.html, inspectorKey: selected.key }, shellFor(ctx, env, "attention", "attention")!), 200, extra);
 }

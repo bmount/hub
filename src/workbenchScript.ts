@@ -140,7 +140,9 @@ export const WORKBENCH_JS = String.raw`
       // refresh, same-channel posts and stale drafts must replace them even when
       // the title is unchanged. Only explicitly keyed two-pane lists keep state.
       var key = b && b.getAttribute("data-key") || "";
-      if (a && b && (key.indexOf("page:") === 0 || a.getAttribute("data-key") !== key || id === "inspector" || refreshList)) {
+      // Switching the Assistant phone pane is presentation only: keep its unsent draft and transcript.
+      var assistantFocusOnly = id === "inspector" && key.indexOf("assistant:") === 0 && a && a.getAttribute("data-key") === key && !refreshList && doc.body.getAttribute("data-focus") !== document.body.getAttribute("data-focus");
+      if (a && b && !assistantFocusOnly && (key.indexOf("page:") === 0 || a.getAttribute("data-key") !== key || id === "inspector" || refreshList)) {
         // Enhanced pane clients must stop timers/listeners before their DOM is detached.
         document.dispatchEvent(new CustomEvent("wb:before-replace", { detail: a }));
         a.replaceWith(b); revive(b); voiceUp(b);

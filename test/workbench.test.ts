@@ -24,6 +24,24 @@ async function world() {
 const attr = (html: string, id: string) => /data-key="([^"]*)"/.exec(html.slice(html.indexOf(`id="${id}"`)))?.[1];
 
 describe("the workbench", () => {
+  it("selects attention work in place with filters, actions and explicit acknowledgement preserved", async () => {
+    const w = await world();
+    const item = await env.HUB_DB.prepare("SELECT id FROM work_item WHERE tenant_id = ? AND number = 1").bind(w.t.id).first<{id:string}>();
+    await env.HUB_DB.prepare("INSERT INTO attention (id,tenant_id,identity_id,reason,item_id,summary,created_at) VALUES ('attention-selection',?,?, 'comment',?,'Please check checkout',?)").bind(w.t.id,w.pat.identity.id,item!.id,Date.now()).run();
+    const list = await (await w.get("/attention?done=1")).text();
+    expect(list).toContain('aria-label="Needs me"');
+    expect(list).toContain('data-href="/attention?done=1&amp;work=site%231"');
+    const selected = await (await w.get("/attention?done=1&work=site%231")).text();
+    expect(selected).toContain('aria-selected="true"');
+    expect(selected).toContain('class="back" href="/attention?done=1"');
+    const inspector = selected.slice(selected.indexOf('id="inspector"'));
+    expect(inspector).toContain("Checkout fails");
+    expect(inspector).toContain('action="/api/work.update"');
+    expect(inspector).toContain('name="expected_updated_at"');
+    expect(await env.HUB_DB.prepare("SELECT done_at FROM attention WHERE id = 'attention-selection'").first<{done_at:number}>()).toMatchObject({done_at:expect.any(Number)});
+    expect((await w.get("/attention?work=unknown%231")).status).toBe(404);
+  });
+
   it("groups bounded, content-free browser reports as slow and isolates tenant sources", async () => {
     const w = await world();
     const project = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'site'").bind(w.t.id).first<{ id: string }>();

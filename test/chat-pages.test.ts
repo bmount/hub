@@ -235,10 +235,11 @@ describe("chat pages", () => {
     await channelWith(w);
     await ok(w.lead.token, "chat.post", { c: "general", body: "new activity" });
     const channel = await (await get("/c/general", w.dev.token)).text();
-    expect(channel).toContain('class="chat-workspace"');
-    expect(channel).toContain('aria-label="Channels"');
-    expect(channel).toContain('aria-current="page">#general');
-    expect(channel).toContain('class="pill">Unread');
+    expect(channel).toContain('aria-label="Chat workspace"');
+    expect(channel).toContain('id="inspector"');
+    expect(channel).toContain('href="/c?kind=channel"');
+    expect(channel).toContain('aria-current="page">#general · Unread');
+    expect(channel).toContain('· Unread');
     expect(channel).toContain('action="/api/chat.mark_read"');
     expect(channel).toContain('Mark channel read through #1');
     const cursor = async (token: string) => (await ok(token, "chat.conversations")).conversations[0].read_seq;
@@ -250,9 +251,9 @@ describe("chat pages", () => {
     expect([marked.status, marked.headers.get("location")]).toEqual([303, "/c/general"]);
     expect(await cursor(w.dev.token)).toBe(1);
     expect(await cursor(w.lead.token)).toBe(0);
-    expect(await (await get("/c/general", w.dev.token)).text()).not.toContain('class="pill">Unread');
+    expect(await (await get("/c/general", w.dev.token)).text()).not.toContain('· Unread');
     await ok(w.lead.token, "chat.post", { c: "general", body: "later activity" });
-    expect(await (await get("/c/general", w.dev.token)).text()).toContain('class="pill">Unread');
+    expect(await (await get("/c/general", w.dev.token)).text()).toContain('· Unread');
   });
 
   it("places one unread divider at the viewer's cursor and never changes it on channel or thread GET", async () => {
@@ -272,7 +273,7 @@ describe("chat pages", () => {
     const thread = await (await get("/c/general/t/1?after=1", w.dev.token)).text();
     expect(thread).toContain('aria-labelledby="thread-original"');
     expect(thread).toContain('aria-labelledby="thread-replies"');
-    expect(thread).toContain('id="m3"');
+    expect(thread).toContain('id="thread-m3"');
     expect(thread).toContain("Replies (continued)");
     expect((await ok(w.dev.token, "chat.conversations")).conversations[0].read_seq).toBe(first.seq);
     await ok(w.dev.token, "chat.mark_read", { c: "general", seq: 3 });
@@ -292,7 +293,7 @@ describe("chat pages", () => {
     await ok(w.dev.token, "chat.mark_read", { c: "general", seq: root.seq });
     await ok(w.lead.token, "chat.edit", { c: "general", msg: root.seq, body: "updated body" });
     const edited = await (await get("/c/general", w.dev.token)).text();
-    expect(edited).toContain('class="pill">Unread');
+    expect(edited).toContain('· Unread');
     expect(edited).not.toContain('id="unread"');
     for (let i = 0; i < 50; i++) await ok(i % 2 ? w.dev.token : w.lead.token, "chat.post", { c: "general", body: `long message ${i} ${"x".repeat(1000)}` });
     const partial = await (await get("/c/general", w.dev.token)).text();
@@ -319,7 +320,7 @@ describe("chat pages", () => {
     });
     expect(created.status).toBe(200);
     const html = await (await get("/c?q=questions", w.dev.token)).text();
-    const directory = html.split('<ul class="channel-directory grid">')[1]!.split("</ul>")[0]!;
+    const directory = html.split('<table class="wb-table" aria-label="Conversations">')[1]!.split("</table>")[0]!;
     expect(directory).toContain("Customer care");
     expect(directory).not.toContain("#general");
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");

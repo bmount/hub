@@ -104,10 +104,28 @@ try {
   const company = await verb(member, 'company.upsert', {project:'knowledge',name:'Example Company',sector:'Design'});
   await verb(member,'connection.add',{project:'knowledge',a:contact.entity.id,b:company.entity.id,type:'advisor',source:'Synthetic fixture'});
   await verb(member, 'channel.create', {slug: 'general', topic: 'Team conversation'});
-  await verb(member, 'chat.post', {c: 'general', body: 'Please review the compact workbench.'});
+  const chatRoot = await verb(member, 'chat.post', {c: 'general', body: 'Please review the compact workbench.'});
+  await verb(peer,'chat.post',{c:'general',reply_to:chatRoot.seq,body:'The navigation stays visible while I read this thread.'});
+  const viewerId = await db.prepare("SELECT id FROM identity WHERE email = 'dev@example.test'").first('id');
+  const peerId = await db.prepare("SELECT id FROM identity WHERE email = 'peer@example.test'").first('id');
+  const readerId = await db.prepare("SELECT id FROM identity WHERE email = 'reader@example.test'").first('id');
+  await verb(member,'chat.open',{kind:'direct',members:[peerId],client_id:'design-direct'});
+  await verb(member,'chat.open',{kind:'group',members:[peerId,readerId],client_id:'design-group'});
+  const mailId = id(), assistantId = id();
   await verb(member, 'review.request', {project:'sample',branch:'topic',title:'Keep navigation visible',summary:'Synthetic review of the workbench.',reviewers:['peer@example.test']});
   const sampleId = await db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'sample'").bind(tenant).first('id');
   await db.prepare("INSERT INTO app_deploy (id,tenant_id,project_id,script_name,version_id,tag,message,seen_at) VALUES (?,?,?,?,?,?,?,?)").bind('synthetic-deploy',tenant,sampleId,'sample-worker','b'.repeat(40),'workbench','Synthetic deploy record; not a live rollout.',now).run();
+  await db.prepare("INSERT INTO inbound_mail (id,tenant_id,project_id,identity_id,from_email,to_address,subject,received_at,size,verdict,text,attachments,forwarded) VALUES (?,?,?,?,?,?,?, ?,100,'admitted',?,'[]',0)")
+    .bind(mailId,tenant,sampleId,viewerId,'peer@example.test','acme.sample@pimwell.test','Review the communication views',now,'Can you check the Mail inspector and reply actions?').run();
+  await db.prepare("INSERT INTO outbound_mail (id,tenant_id,from_address,to_address,subject,text,in_reply_to,sent_by,status,error,created_at) VALUES (?,?,?,?,?,?,?,?,'refused','sending_off',?)")
+    .bind(id(),tenant,'acme.sample@pimwell.test','peer@example.test','Re: Review the communication views','Thanks; I will check them.',mailId,viewerId,now).run();
+  await db.prepare("UPDATE tenant SET mail_out = 1 WHERE id = ?").bind(tenant).run();
+  for (const [threadId,title] of [[assistantId,'What needs attention?'],[id(),'Review recent changes']]) {
+    await db.prepare("INSERT INTO assistant_thread (id,tenant_id,identity_id,title,scopes,created_at,updated_at) VALUES (?,?,?,?,'read',?,?)").bind(threadId,tenant,viewerId,title,now,now).run();
+  }
+  for (const [role,text] of [['user','What needs my attention today?'],['assistant','Review **sample#2** and the communication views.']]) {
+    await db.prepare("INSERT INTO assistant_message (id,thread_id,tenant_id,role,text,created_at) VALUES (?,?,?,?,?,?)").bind(id(),assistantId,tenant,role,text,now + counter).run();
+  }
   if (process.env.WORKBENCH_PAGES) {
     for (let n=1;n<=10;n++) await verb(member, 'project.create', {slug:'team-'+n,kind:n%2 ? 'tracker' : 'wiki',display_name:'Team '+n});
     const viewer = await db.prepare("SELECT id FROM identity WHERE email = 'dev@example.test'").first('id');
@@ -119,10 +137,11 @@ try {
     await verb(member,'person.upsert',{project:'knowledge',id:contact.entity.id,expected_revision:1,name:'Alex Example',title:'Designer',emails:['alex@example.test'],links:[{kind:'research',ref:'findings'},{kind:'file',ref:'notes.txt'}]});
   }
   browser = await chromium.launch({headless: true});
-  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, mail:'/mail', chat:'/c/general', assistant:'/assistant', people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
+  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
   const phase = process.env.WORKBENCH_PHASE || 'before';
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
+    await db.prepare('UPDATE attention SET done_at = NULL WHERE tenant_id = ?').bind(tenant).run();
     const ctx = await browser.newContext({viewport, serviceWorkers:'block'});
     await ctx.addCookies([{name:'pmw_session',value:member,domain:'.pimwell.test',path:'/',secure:true,httpOnly:true,sameSite:'Lax'}]);
     // Routing follows Worker redirects in-process (Chromium bypasses route
@@ -161,12 +180,45 @@ try {
       if (phase === 'after') {
         await expect(page.locator('.bar .wb-breadcrumb')).toBeVisible();
         await expect(page.locator('#explorer')).toHaveCount(1);
-        await expect(page.locator('#explorer .wb-tree')).toHaveCount(1);
+        await expect(page.locator('#explorer > .wb-tree')).toHaveCount(1);
         await expect(page.locator('#rail #explorer')).toHaveCount(1);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
         const visibleNavigation = await page.evaluate(() => ['rail','explorer'].map(id => {const r=document.getElementById(id).getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth;}));
         expect(visibleNavigation).toEqual(viewport.width >= 1280 ? [true,true] : [false,false]);
         if (viewport.width < 760) await expect(page.locator('.tabs')).toBeVisible();
+      }
+      if (phase === 'after' && ['attention','attentionItem','mail','mailMessage','chat','chatThread','assistant'].includes(name)) {
+        if (name.startsWith('attention')) {
+          await expect(page.getByRole('table',{name:'Needs me',exact:true})).toBeVisible();
+          if (name === 'attentionItem') {
+            await expect(page.locator('#inspector h1')).toContainText('Keep project navigation visible');
+            await expect(page.locator('#inspector form[action="/api/work.update"]')).not.toHaveCount(0);
+            await page.locator('#inspector [data-close-inspector]').click();
+            await expect(page).toHaveURL(/attention\?done=1$/);
+          }
+        }
+        if (name === 'mail' || name === 'mailMessage') {
+          await expect(page.getByRole('table',{name:'Mail',exact:true})).toBeVisible();
+          if (name === 'mailMessage') {
+            await expect(page.locator('#inspector form[action="/api/mail.reply"]')).toBeVisible();
+            await expect(page.locator('#inspector form[action="/api/mail.propose_work"]')).toBeVisible();
+            await expect(page.locator('#inspector [data-delivery=blocked]')).toBeVisible();
+            await page.locator('#inspector [data-close-inspector]').click();
+            await expect(page).toHaveURL(/mail\?project=sample$/);
+          }
+        }
+        if (name === 'chat' || name === 'chatThread') {
+          await expect(page.locator('#explorer a[href="/c?kind=direct"]')).toHaveCount(1);
+          await expect(page.locator('#explorer a[href="/c?kind=group"]')).toHaveCount(1);
+          await expect(page.locator('#list .channel-messages')).toBeVisible();
+          await expect(page.locator('#inspector [data-chat-presence]')).toBeVisible();
+          if (name === 'chatThread') await expect(page.locator('#inspector .thread-root')).toBeVisible();
+        }
+        if (name === 'assistant') {
+          await expect(page.getByRole('table',{name:'Conversations',exact:true})).toBeVisible();
+          await expect(page.locator('#inspector #chatlog')).toContainText('What needs my attention today?');
+          await expect(page.locator('#inspector #ask')).toBeVisible();
+        }
       }
       if (phase === 'after' && ['wiki','research','files','contacts'].includes(name)) {
         await expect(page.locator('#list .wb-toolbar')).not.toHaveCount(0);

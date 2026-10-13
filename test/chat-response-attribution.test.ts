@@ -49,7 +49,7 @@ describe("server-recorded chat response attribution", () => {
       expect(res.status).toBe(200);
       expect(res.headers.get("cache-control")).toBe("no-store");
       const html = await res.text();
-      const article = (seq: number) => html.split(`id="m${seq}"`)[1]!.split("</article>")[0]!;
+      const article = (seq: number) => html.split(`id="thread-m${seq}"`)[1]!.split("</article>")[0]!;
       expect(html.match(/class="response-attribution"/g)).toHaveLength(2);
       expect(article(progress.seq)).toContain(`<a href="/m/${source.msg_id}">#${source.seq}</a> (source r1)`);
       expect(article(progress.seq)).toContain("Recorded progress response to");
@@ -127,7 +127,7 @@ describe("server-recorded chat response attribution", () => {
       expect(m.response_to).toEqual({ ...evidence, stage: "progress", seq: source.seq });
       expect(m.retracted).toBe(retract);
       const browser = await (await browserGet(`/c/general/t/${source.seq}`, w.dev.token)).text();
-      const article = browser.split(`id="m${progress.seq}"`)[1]!.split("</article>")[0]!;
+      const article = browser.split(`id="thread-m${progress.seq}"`)[1]!.split("</article>")[0]!;
       expect(article).toContain("Recorded progress response to");
       expect(article).toContain(`<a href="/m/${source.msg_id}">#${source.seq}</a> (source r1)`);
       expect(article.includes("edited progress text")).toBe(!retract);

@@ -6,7 +6,8 @@ export const CHAT_LIVE_JS = String.raw`(() => {
   const chat = JSON.parse(panel.dataset.chatLive);
   const status = panel.querySelector('[data-live-status]');
   const signals = panel.querySelector('[data-live-signals]');
-  const form = document.querySelector('.channel-compose');
+  const pane = panel.closest('.pane') || document;
+  const form = pane.querySelector('.channel-compose');
   const body = form && form.querySelector('textarea');
   let ws, offset = 0, closed = false, reconnect, heartbeat, expiry, refreshing = false, again = false;
   let pending = null, sendTimeout, adoptPending = false, typingAt = 0, lastSeen = Date.now();
@@ -28,10 +29,12 @@ export const CHAT_LIVE_JS = String.raw`(() => {
       if (closed) return;
       // Only trusted same-origin server-rendered message fragments; never run returned scripts.
       for (const selector of ['.channel-messages', '.thread-root']) {
-        const next = doc.querySelector(selector), current = document.querySelector(selector);
+        const nextPane = pane.id ? doc.getElementById(pane.id) : doc;
+        const next = nextPane && nextPane.querySelector(selector), current = pane.querySelector(selector);
         if (next && current) current.replaceChildren(...next.childNodes);
       }
-      const nextHead = doc.querySelector('.channel-compose input[name="after"]');
+      const nextPane = pane.id ? doc.getElementById(pane.id) : doc;
+      const nextHead = nextPane && nextPane.querySelector('.channel-compose input[name="after"]');
       const currentHead = form && form.querySelector('input[name="after"]');
       // Keep the write's original read-before-write watermark while a draft exists.
       if (nextHead && currentHead && (!body.value || adopt)) currentHead.value = nextHead.value;

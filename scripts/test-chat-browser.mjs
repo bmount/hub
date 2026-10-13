@@ -180,7 +180,7 @@ try {
     return ctx;
   }
   async function noOverflow(page) {
-    const widths = await page.evaluate(() => [...document.querySelectorAll('html, #list, .chat-workspace, .channel-content, .channel-rail')]
+    const widths = await page.evaluate(() => [...document.querySelectorAll('html, #list, .panes, .channel-content, #explorer')]
       .map(el => ({ name: el.className || el.tagName, scroll: el.scrollWidth, client: el.clientWidth })));
     for (const w of widths) expect(w.scroll, `${w.name} has horizontal overflow`).toBeLessThanOrEqual(w.client + 1);
   }
@@ -368,7 +368,9 @@ try {
     await box.screenshot({ path: path.join(artifacts, `${label}-presence-online.png`) });
     // Pane replacement (not a document load/pagehide) must retire old publishers.
     const navStart = presenceCalls.length;
-    await page.locator('.channel-rail a[href="/c/support"]').click();
+    if (viewport.width < 1280) await page.locator('.bar .menu').click();
+    await page.locator('#explorer [aria-label="Conversations"] details').first().locator("summary .wb-chevron").click();
+    await page.locator('#explorer a[href="/c/support"]').click();
     await expect(page.locator('[data-chat-presence]')).toHaveAttribute('data-chat-presence', 'support');
     await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
@@ -729,37 +731,39 @@ try {
     await page.goto(`${base}/c`);
     await expect(page.getByRole('heading', { name: 'Chat', exact: true, level: 1 })).toBeVisible();
     await noOverflow(page);
-    await expect(page.locator('.chat-workspace')).not.toContainText('other-tenant-secret');
+    await expect(page.locator('#explorer')).not.toContainText('other-tenant-secret');
     await tabTo(page, '#channel-query');
     await page.keyboard.type('questions');
     await page.keyboard.press('Enter');
-    await expect(page.locator('.channel-directory')).toContainText('#support');
-    await expect(page.locator('.channel-directory')).not.toContainText('#general');
-    await expect(page.locator('.channel-directory img')).toHaveCount(0);
+    await expect(page.getByRole('table', {name:'Conversations'})).toContainText('#support');
+    await expect(page.getByRole('table', {name:'Conversations'})).not.toContainText('#general');
+    await expect(page.getByRole('table', {name:'Conversations'}).locator('img')).toHaveCount(0);
     await page.screenshot({ path: path.join(artifacts, `${label}-discovery.png`) });
     await page.goto(`${base}/c/general`);
     await expect(page.locator('#unread')).toBeVisible();
     await expect(page.locator('.channel-message script')).toHaveCount(0);
     await noOverflow(page);
-    const rail = await page.locator('.channel-rail').boundingBox();
+    const rail = await page.locator('#rail').boundingBox();
     const content = await page.locator('.channel-content').boundingBox();
     expect(rail && content).toBeTruthy();
-    if (viewport.width > 760) expect(rail.x + rail.width).toBeLessThan(content.x);
-    else expect(rail.y + rail.height).toBeLessThanOrEqual(content.y);
+    if (viewport.width >= 1280) expect(rail.x + rail.width).toBeLessThanOrEqual(content.x);
+    else expect(rail.x + rail.width).toBeLessThanOrEqual(0);
+    await expect(page.locator('#inspector [data-chat-presence]')).toBeVisible();
     await page.screenshot({ path: path.join(artifacts, `${label}-channel.png`) });
     // Discovery, channel and thread GETs must not acknowledge activity.
     expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(lastRead);
     await tabTo(page, `.channel-message a[href="/c/general/t/${rootMsg.seq}"]`);
     await page.keyboard.press('Enter');
     await expect(page.getByRole('heading', { name: 'Original message', exact: true })).toBeVisible();
-    await expect(page.locator('.channel-messages')).toContainText('Thread reply');
+    await expect(page.locator('#inspector .channel-messages')).toContainText('Thread reply');
+    await expect(page.locator('#list .channel-messages')).toBeVisible();
     await noOverflow(page);
     await tabTo(page, '#chat-body');
     await page.keyboard.type(`Keyboard reply ${label}`);
     // Voice enhancement can add a microphone between the textarea and submit.
     await tabTo(page, '.channel-compose button[type="submit"]');
     await page.keyboard.press('Enter');
-    await expect(page.locator('.channel-messages')).toContainText(`Keyboard reply ${label}`);
+    await expect(page.locator('#inspector .channel-messages')).toContainText(`Keyboard reply ${label}`);
     await page.locator('.channel-compose').scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(artifacts, `${label}-thread-composer.png`) });
     await page.locator('.thread-root').screenshot({ path: path.join(artifacts, `${label}-thread-original.png`) });
@@ -805,7 +809,7 @@ try {
   await workPage.goto(`${base}/site/docket?kind=snag`);
   await workPage.evaluate(() => { window.__originalList = document.getElementById('list'); });
   await workPage.locator('tr[data-href]').first().click();
-  await expect(workPage.locator('#inspector h1')).toHaveText('Browser list retention');
+  await expect(workPage.locator('#inspector h1 summary')).toContainText('Browser list retention');
   expect(await workPage.evaluate(() => window.__originalList === document.getElementById('list'))).toBe(true);
   await workCtx.close();
   console.log('PASS same-title refresh/stale draft and explicit two-pane list retention');
@@ -904,8 +908,8 @@ try {
     const boardCtx = await context(reader, viewport), boardPage = await boardCtx.newPage();
     await boardPage.goto(`${base}/site/board`);
     await expect(boardPage.locator('.closure-report h2')).toHaveText('Recorded closures by actor');
-    await expect(boardPage.locator('.closure-counts tbody tr')).toHaveCount(1);
-    await expect(boardPage.locator('.closure-counts tbody td').last()).toHaveText('1');
+    await expect(boardPage.getByRole('table',{name:'Recorded closures',exact:true}).locator('tbody tr')).toHaveCount(1);
+    await expect(boardPage.getByRole('table',{name:'Recorded closures',exact:true}).locator('tbody td').last()).toHaveText('1');
     await expect(boardPage.locator('.closure-report')).toContainText('including reopened items');
     await expect(boardPage.locator('.closure-report')).toContainText('Historical prose events are not attributed');
     await expect(boardPage.locator('.closure-report img')).toHaveCount(0);

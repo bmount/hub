@@ -3,7 +3,7 @@
 // tool directly. Same guards as before: the person's own browser session, same-origin JSON with a custom header.
 import type { Env } from "../env";
 import { ASSETS } from "../assets";
-import { esc, htmlResponse, workbench } from "../html";
+import { esc, htmlResponse, kitList, kitTabs, toolbar, workbench } from "../html";
 import { buildContext, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -98,11 +98,11 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
 </div>
 </form></div>
 <script src="${ASSETS.assistant.path}"></script>`;
-  const inspector = `<a class="back" href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}">‹ Chat</a><h2 style="margin-top:0">Your conversations</h2>
-${threads.length ? `<table><tbody>${threads.map((t) => `<tr data-href="/assistant?t=${esc(t.id)}"${t.id === thread?.id ? ' aria-selected="true"' : ""}><td><a href="/assistant?t=${esc(t.id)}">${esc(t.title)}</a>${t.scopes === "write" ? ' <span class="pill">can change things</span>' : ""}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">Your conversations appear here. Only you see them.</p>`}
-<h2>How it works</h2><p class="lede">It acts as you, here only, with the tools your role allows. It only looks things up unless you let a conversation make changes. Every tool it uses is on the record, and its model use shows on your AI usage.</p>`;
+  const inspector = `<a class="back" data-assistant-return href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}">‹ Conversation</a><h1>Assistant</h1>${toolbar("Conversations", '<a href="/assistant">New conversation</a>', kitTabs("Assistant views", [{label:"Chat",href:"/assistant",current:true},{label:"Tools",href:"/assistant/tools"}]))}<h2>Your conversations</h2>${threads.length ? kitList("Conversations", threads.map(t => ({href:`/assistant?t=${t.id}`,selected:t.id === thread?.id,html:`<a href="/assistant?t=${esc(t.id)}">${esc(t.title)}</a>${t.scopes === "write" ? " · can change things" : ""}`}))) : '<p class="lede">Your private conversations appear here.</p>'}`;
   const showList = new URL(request.url).searchParams.get("list") === "1";
-  return htmlResponse(workbench(thread ? thread.title : "Assistant", { list, listKey: `assistant:${thread?.id ?? "new"}`, inspector, inspectorKey: "assistant-threads", focus: showList ? "inspector" : "list" }, shellFor(ctx, env, "playground", "assistant")!), 200, extra);
+  const shell = shellFor(ctx, env, "playground", "assistant")!;
+  if (thread && shell.breadcrumb) shell.breadcrumb[shell.breadcrumb.length - 1]!.label = thread.title;
+  return htmlResponse(workbench(thread ? thread.title : "Assistant", { list: inspector, listKey: `assistant-threads:${threads.map(t => `${t.id}:${t.updated_at}`).join(",")}`, inspector: `<a class="back" href="/assistant?list=1${thread ? `&amp;t=${esc(thread.id)}` : ""}">‹ Conversations</a>${list}`, inspectorKey: `assistant:${thread?.id ?? "new"}`, stackOnPhone:true, focus: showList ? "list" : "inspector" }, shell), 200, extra);
 }
 
 export async function assistantChat(request: Request, env: Env): Promise<Response> {
