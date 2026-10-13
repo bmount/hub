@@ -39,8 +39,9 @@ export async function doPage(request: Request, env: Env, waitUntil?: (p: Promise
   const ctx = await buildContext(request, env, Date.now(), waitUntil);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind === "apex" && ctx.identity && ctx.identity.kind === "human" && ctx.authKind === "cookie") return apexDo(request, env, ctx, extra);
-  if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.identity || !ctx.role || ctx.identity.kind !== "human" || ctx.authKind !== "cookie") return notFoundPage(extra);
   const url = new URL(request.url);
+  const wantsJson = url.searchParams.get("format") === "json";
+  if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.identity || !ctx.role || (!wantsJson && (ctx.identity.kind !== "human" || ctx.authKind !== "cookie"))) return notFoundPage(extra);
   const q = (url.searchParams.get("q") ?? "").trim().slice(0, 1000);
   const history = readHistory(url.searchParams.get("h"));
   note(request, { verb: "intent", via: "do" });
@@ -54,11 +55,14 @@ export async function doPage(request: Request, env: Env, waitUntil?: (p: Promise
       try {
         const intent = await interpret(env, turns, { tenant_id: ctx.tenant.id, identity_id: ctx.identity.id, session_id: ctx.session?.id ?? null });
         const r = await resolve(ctx, intent);
+        if (wantsJson) return Response.json({ ...r, intent }, { headers: { "cache-control": "no-store", ...extra } });
         if (r.kind === "go") return new Response(null, { status: 303, headers: { location: r.href, "cache-control": "no-store", ...extra } });
         out = r.html;
         if (intent.kind === "ask") turns.push({ who: "pimwell", text: intent.question }); else turns = [];
       } catch (e) {
         if (!(e instanceof HubError)) throw e;
+        if (e.status === 404) return notFoundPage(extra);
+        if (wantsJson) return Response.json({ error: e.reason }, { status: e.status, headers: { "cache-control": "no-store", ...extra } });
         out = `<div class="intent-card"><p class="say">${e.status === 503 ? "This needs a model key: an admin adds one under Models and keys." : "That didn't go through. Try again."}</p></div>`;
         turns = [];
       }

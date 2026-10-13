@@ -6,7 +6,7 @@ import { setModelFetchForTest } from "../src/models/providers";
 import { addCredential } from "../src/models/store";
 import { createProject } from "../src/db/projects";
 import { parseIntent } from "../src/intent/catalog";
-import { cookieHeaders, seedHuman, seedTenant } from "./helpers";
+import { bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
 afterEach(() => setModelFetchForTest(null));
@@ -41,6 +41,38 @@ describe("intent", () => {
     const body = sent.join("\n");
     for (const secret of ["SkyLedger", "skyledger", "Website", "zed", "Rootly", "pat.quill", "acme"]) expect(body.toLowerCase()).not.toContain(secret.toLowerCase());
     expect(body).toContain("Person: open sky ledger");
+  });
+
+  it("resolves agent source only for self, operator or admin, and supports bearer JSON", async () => {
+    const { h } = await setup("member");
+    const t = (await env.HUB_DB.prepare("SELECT * FROM tenant WHERE slug = 'acme'").first())!;
+    const operator = await seedHuman("operator@example.com", { memberships: [{ tenant_id: String(t.id), role: "member" }] });
+    const { token } = await seedAgent(t as any, operator.identity, "pio");
+    reply = '{"action":"open_agent","params":{"agent":"pio","view":"source"}}';
+    expect((await doIt(h, "the source code to pio")).status).toBe(404);
+    expect((await doIt(cookieHeaders(operator.token, HOST), "show me pio source")).headers.get("location")).toBe("/agent-src/pio/code");
+    const r = await doIt(bearer(token), "the source code to pio", "&format=json");
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ kind: "go", href: "/agent-src/pio/code" });
+    const other = await seedTenant("other");
+    const outsider = await seedHuman("outsider@example.com", { memberships: [{ tenant_id: other.id, role: "admin" }] });
+    const foreign = await SELF.fetch("https://other.pimwell.test/do?q=pio&format=json", { headers: cookieHeaders(outsider.token, "other.pimwell.test") });
+    expect(foreign.status).toBe(404);
+    expect(sent.join("\n")).not.toContain("operator@example.com");
+  });
+
+  it("maps project features to existing pages and confirms direct chats without creating them", async () => {
+    const { h } = await setup();
+    for (const [view, path] of Object.entries({ wiki: "wiki", research: "wiki", files: "documents", contacts: "contacts", graph: "contacts" })) {
+      reply = JSON.stringify({ action: "open_project", params: { project: "website", view } });
+      expect((await doIt(h, `open website ${view}`)).headers.get("location")).toBe(`/site/${path}`);
+    }
+    reply = '{"action":"open_chat","params":{"person":"pat.quill"}}';
+    expect(await (await doIt(h, "message pat.quill")).text()).toContain("Which person or agent?");
+    await seedHuman("friend@example.com", { memberships: [{ tenant_id: String((await env.HUB_DB.prepare("SELECT id FROM tenant WHERE slug = 'acme'").first())!.id), role: "member" }] });
+    reply = '{"action":"open_chat","params":{"person":"friend"}}';
+    expect(await (await doIt(h, "message friend")).text()).toContain('action="/api/chat.open"');
+    expect((await env.HUB_DB.prepare("SELECT count(*) AS n FROM project WHERE kind = 'channel'").first())!.n).toBe(0);
   });
 
   it("refuses off-catalog answers and requests for data", async () => {

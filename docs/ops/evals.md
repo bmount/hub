@@ -17,6 +17,13 @@ scripts/evals/intent.sh <agent-address> <project-slug> [purpose] [case-ids]
   the route doesn't exist.
 - **Limits:** at most 60 cases per run and 10 runs an hour.
 
+**Box JSON endpoint:** `GET https://<org>.pimwell.com/do?q=<words>&format=json` accepts the viewer's
+browser cookie or bearer session. It returns the checked `intent` and the resolved `go` link or confirmation
+`card`; it never follows links, opens chats or sends messages. Names resolve within the viewer's organization.
+Agent source resolution uses the same self/operator/admin access rule as the repository; inaccessible agents'
+source requests return the ordinary 404. Research/knowledge-base views open the wiki, uploaded files open
+`documents`, and graph views open contacts, where selecting a contact shows its neighborhood.
+
 **When a case fails:** decide whether the answer was actually wrong.
 - If the person would have been well served, widen the case's expected outcomes, and say why in `why`.
 - If not, fix the catalog or its rules in `src/intent/catalog.ts`.

@@ -10,6 +10,8 @@ import { getVerb } from "../verbs/table";
 import { runVerb } from "../verbs/dispatch";
 import { DATA_NOTE } from "../mcp/render";
 import { format } from "../http/assistantPages";
+import { agentSrcAccess } from "../code/agentSrc";
+import { notFound } from "../errors";
 import { extraCheck, proofFresh } from "../http/extraCheck";
 
 /** "show": the person's own read verb, with their own rights, as they'd get from the API or MCP. The model never sees it. */
@@ -72,7 +74,7 @@ export function bestMatch<T>(said: string, items: T[], names: (t: T) => string[]
 }
 
 type Project = { slug: string; name: string };
-type Person = { name: string; email: string };
+type Person = { id: string; name: string; email: string; kind: string; operator_id: string | null }; 
 const option = (v: string, label: string, sel: boolean) => `<option value="${esc(v)}"${sel ? " selected" : ""}>${esc(label)}</option>`;
 const card = (say: string, body: string) => ({ kind: "card" as const, html: `<div class="intent-card">${say ? `<p class="say">${esc(say)}</p>` : ""}${body}</div>` });
 const field = (label: string, input: string) => `<label class="f"><span>${esc(label)}</span>${input}</label>`;
@@ -84,7 +86,7 @@ export async function resolve(ctx: Ctx, intent: Intent): Promise<Outcome> {
   const str = (k: string) => (typeof p[k] === "string" ? (p[k] as string) : "");
   const [projR, peopleR] = await ctx.db.batch([
     ctx.db.prepare("SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name").bind(ctx.tenant!.id),
-    ctx.db.prepare(`SELECT i.display_name AS name, i.email FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' ORDER BY i.display_name`).bind(ctx.tenant!.id),
+    ctx.db.prepare(`SELECT i.id, i.display_name AS name, i.email, i.kind, i.operator_id FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' ORDER BY i.display_name`).bind(ctx.tenant!.id),
   ]);
   const projects = projR!.results as Project[], people = peopleR!.results as Person[];
   const findProject = (said: string) => bestMatch(said, projects, (x) => [x.slug, x.name]);
@@ -135,11 +137,25 @@ export async function resolve(ctx: Ctx, intent: Intent): Promise<Outcome> {
     }
     case "search": return { kind: "go", href: `/search?q=${encodeURIComponent(str("query"))}`, say };
     case "ask_assistant": return { kind: "go", href: `/assistant?ask=${encodeURIComponent(str("question"))}`, say };
+    case "open_agent": {
+      const agents = people.filter(x => x.kind === "agent" && (str("view") !== "source" || agentSrcAccess({ identity: ctx.identity!, role: ctx.role! }, x)));
+      const m = bestMatch(str("agent"), agents, x => [x.name, x.email, x.email.split("@")[0]!.split(".").slice(1).join(".")]);
+      const to = (x: Person) => str("view") === "source" ? `/agent-src/${encodeURIComponent(x.email.split("@")[0]!.split(".").slice(1).join("."))}/code` : `/people/${encodeURIComponent(x.email)}`;
+      if (m.one) return { kind: "go", href: to(m.one), say };
+      if (!m.maybe.length) throw notFound("no such agent");
+      return card("Which agent?", m.maybe.map(x => `<a class="chip" href="${esc(to(x))}">${esc(x.name)}</a>`).join(""));
+    }
+    case "open_chat": {
+      if (!member) return card("Readers can't open private chats.", "");
+      const m = bestMatch(str("person"), people.filter(x => x.id !== ctx.identity!.id), x => [x.name, x.email, x.email.split("@")[0]!.split(".").slice(1).join(".")]);
+      if (!m.one) return card("Which person or agent?", m.maybe.map(x => `<a class="chip" href="/do?q=${esc(encodeURIComponent(`message ${x.email}`))}">${esc(x.name)}</a>`).join(""));
+      return card(say || `Open a chat with ${m.one.name}.`, `<form method="post" action="/api/chat.open"><input type="hidden" name="_back" value="@result"><input type="hidden" name="kind" value="direct"><input type="hidden" name="members" value="${esc(m.one.id)}"><input type="hidden" name="client_id" value="${crypto.randomUUID()}"><button>Open chat</button></form>`);
+    }
     case "open_project":
     case "open_item": {
       const m = findProject(str("project"));
       const view = str("view") || "docket";
-      const to = (slug: string) => (intent.action.id === "open_item" ? `/${slug}/w/${p.number}` : `/${slug}/${view}`);
+      const to = (slug: string) => (intent.action.id === "open_item" ? `/${slug}/w/${p.number}` : `/${slug}/${({ files: "documents", research: "wiki", graph: "contacts" } as Record<string, string>)[view] ?? view}`);
       return m.one ? { kind: "go", href: to(m.one.slug), say } : whichProject(str("project"), m.maybe, to);
     }
     case "docket": {
