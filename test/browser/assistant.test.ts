@@ -140,11 +140,16 @@ for (const mode of ["lost response", "render failure", "inline lost response", "
       await page.getByRole("button", { name: "Save fixture" }).click();
       await browserExpect(page.getByRole("alert")).toContainText("Outcome unknown");
       await browserExpect(page.getByRole("alert")).toContainText("retrying may duplicate");
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 844 });
+        await browserExpect(page.getByRole("alert")).toBeInViewport({ ratio: 1 });
+      }
       await browserExpect(page.locator('#mutation-fixture input')).toHaveValue("Keep this draft");
       await page.waitForTimeout(250);
       expect(mutations).toBe(1);
       expect(page.url()).toBe(`${BASE}/assistant`);
       // Only an explicit second human submission may send another mutation.
+      await page.setViewportSize({ width: 1280, height: 844 });
       await page.getByRole("button", { name: "Save fixture" }).click();
       await expect.poll(() => mutations).toBe(2);
     } finally { await context.close(); }
