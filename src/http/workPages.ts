@@ -15,6 +15,7 @@ import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
+import { projectImages } from "./projectImages";
 import { getWorkByNumber, listLinksStatement, listWorkStatement, type WorkFilter, type WorkItem, type WorkLink } from "../db/work";
 import { DOCKET, KINDS, STATES, type WorkKind } from "../work/names";
 import { AREAS, PLANNED, plannedIn, type Area, type Plan } from "../verbs/planned";
@@ -245,8 +246,10 @@ async function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, 
   const action = (state: string, label: string, quiet = true) => `<form class="inline" method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="state" value="${state}"><input type="hidden" name="_back" value="${keep}"><button type="submit"${quiet ? ' class="quiet"' : ""}>${esc(label)}</button></form>`;
   const follow = `<form class="inline" method="post" action="/api/work.subscribe"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="follow" value="${d.following ? "0" : "1"}"><input type="hidden" name="_back" value="${keep}"><button type="submit" class="quiet" title="${d.following ? "Stop hearing about changes" : "Hear about every change in What needs me"}">${d.following ? "Following ✓" : "Follow"}</button></form>`;
   const controls = canWrite ? `<p>${w.state !== "doing" ? `<form class="inline" method="post" action="/api/work.claim"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><button type="submit">I'm on it</button></form> ` : ""}${w.state !== "done" ? action("done", "Done") : ""} ${w.state !== "dropped" ? action("dropped", "Let it go") : ""} ${(w.state === "done" || w.state === "dropped") ? action("open", "Reopen") : ""} ${follow}</p>` : `<p>${follow}</p>`;
+  const bodyHtml = await projectImages(ctx, project.slug, w.body, esc);
+  const commentHtml = await Promise.all(d.comments.map(c => projectImages(ctx, project.slug, c.body, esc)));
   const comments = `<h2>Comments${d.comments.length ? ` <span class="pill">${d.comments.length}</span>` : ""}</h2>
-${d.comments.length ? kitList("comments", d.comments.map((c)=>({html:`${ago(c.created_at, ctx.now)} · <span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ""}<div class="prose" style="margin-top:2px">${esc(c.body)}</div></span>`}))) : `<p class="lede">No comments yet.</p>`}
+${d.comments.length ? kitList("comments", d.comments.map((c, i)=>({html:`${ago(c.created_at, ctx.now)} · <span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ""}<div class="prose" style="margin-top:2px">${commentHtml[i]}</div></span>`}))) : `<p class="lede">No comments yet.</p>`}
 ${canWrite ? `<form class="wb-comment" method="post" action="/api/work.comment"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
 <textarea aria-label="Comment" data-voice data-enter-submits name="body" rows="1" required maxlength="10000" placeholder="Comment…"></textarea><button type="submit" class="quiet" aria-label="Send comment">↑</button></form>` : ""}`;
   const ownerChoices = d.owner && !d.members.some((m) => m.id === d.owner!.id) ? [d.owner, ...d.members] : d.members;
@@ -282,7 +285,7 @@ ${canWrite ? `<form class="wb-comment" method="post" action="/api/work.comment">
 <h1>${titleField}</h1>
 ${toolbar("Item actions", controls.replace(/^<p>|<\/p>$/g, "") + '<button type="button" class="quiet" data-close-inspector>Close</button>')}
 ${edit}
-${inlineField(field("Body", w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : '<p class="lede">Add a description</p>', `<textarea name="body" rows="4" maxlength="20000">${esc(w.body)}</textarea>`))}
+${inlineField(field("Body", w.body.trim() ? `<div class="prose">${bodyHtml}</div>` : '<p class="lede">Add a description</p>', `<textarea name="body" rows="4" maxlength="20000">${esc(w.body)}</textarea>`))}
 <p><a href="/usage?work=${esc(encodeURIComponent(`${project.slug}#${w.number}`))}">Recorded AI usage for this work</a></p>
 ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
 ${sourceMail ? `<p>Source: <a href="${sourceMail}">Recorded mail</a>. Access is checked when opened.</p>` : ""}

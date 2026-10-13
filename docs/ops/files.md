@@ -26,6 +26,18 @@ Only canonical `project-files/<tenant ULID>/<project ULID>/<object ULID>` keys u
 - `file_list` supports folder-prefix filtering and path cursor pagination. `file_get` returns metadata and an authenticated download URL; optional `include_base64` fetches small files. `file_history` supports revision-cursor pagination. Lists/history return at most 200 rows per call.
 - `file_delete` requires current admin role and write scope. It hides every version from downloads, current lists and search, retaining metadata, private objects and history as evidence. This does not reclaim quota. A later upload at the same path uses the last revision number and does not revive old downloads.
 
+## Inline project images
+
+In wiki bodies and work-item bodies/comments, put an image on its own line:
+
+```markdown
+![Synthetic plan caption](/barefoot/documents/download?path=debug%2Fplan.png&revision=1)
+```
+
+Use the authenticated `file_get.download_url` (absolute same-tenant URLs also work), or its root-relative path. The project path must match the page/item, including namespace when present. An explicit positive revision is required so retained evidence does not change when a new file version is uploaded. Only existing, non-deleted PNG/JPEG/GIF/WebP revisions render; every request rechecks membership and project access. External URLs, other projects/tenants, active content, missing files and malformed references remain inert text. No public storage URL is emitted.
+
+Captions are escaped and used as alt text. Images preserve aspect ratio within the pane width and a 480px height; clicking the image or **Open original** opens the authenticated original in a new tab. Rendering is limited to 50 image references per body. Upload with `file_put`, then author the same Markdown through `wiki_write`, `work_update` or `work_comment`, or browser forms; no special authoring permission is introduced.
+
 ## Mail and search
 
 After independent mail admission, `retainProjectMailFiles` uses the parts parsed alongside `retainAttachmentEvidence`. Only independently admitted, unreleased mail addressed to an active workspace/wiki project, from a currently active human with member-or-higher authority, creates files; reader, quarantined, manually released, organization and agent-mailbox mail do not. Each attachment outcome is audited against the inbound mail id, and verified project-action summaries report actual retention even if planning is unavailable. Mail uses `mail/<sanitized-filename>` and records `mail:<mail-id>:<part-index>` as an idempotent source. Another admitted message with the same filename creates another version; replaying one message does not. Unsupported types and quota failures remain attachment metadata with an explicit `not_stored` reason. Storage outages remain retryable rather than pretending retention succeeded. Existing mail-admission, replay and mailbox boundaries are unchanged.

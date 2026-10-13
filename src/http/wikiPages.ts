@@ -4,6 +4,7 @@ import { esc, htmlResponse } from "../html";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
 import { miniMarkdown } from "./skillsPages";
+import { projectImages } from "./projectImages";
 import { wikiList, wikiHistory, readWiki, wikiProject, wikiSlug } from "../verbs/wiki";
 import { HubError } from "../errors";
 import { researchList, type Research } from "../verbs/research";
@@ -66,8 +67,9 @@ export async function wikiPage(request: Request, env: Env, project: string, slug
       const h = await wikiHistory.run(ctx, wikiHistory.parse({project, slug, before: url.searchParams.get("before")}));
       const head = await wikiHistory.run(ctx, wikiHistory.parse({project, slug}));
       const expected = revision === null ? r.revision : head.history[0]!.revision;
-      let content = r.research ? researchHtml(r.research, project, people) : `<div class="prose">${wikiMarkdown(r.body, project)}</div>`;
-      if (writable && !r.research) content = inspectorSection("Page", [{label:revision === null ? "Content" : "Revert", html:`<div class="prose">${wikiMarkdown(r.body, project)}</div>`, editHtml:`<form method="post" action="/api/wiki.write"><input type="hidden" name="project" value="${esc(project)}"><input type="hidden" name="slug" value="${esc(slug)}"><input type="hidden" name="expected_revision" value="${expected}"><input type="hidden" name="_back" value="${esc(target(slug))}"><label>Title <input name="title" required maxlength="200" value="${esc(r.title)}"></label><label>Markdown <textarea name="body" rows="15">${esc(r.body)}</textarea></label><label>Revision note <input name="note" required maxlength="500" value="${revision === null ? "" : `Revert to revision ${r.revision}`}"></label><button>${revision === null ? "Save revision" : "Revert page"}</button></form>`}]);
+      const renderedBody = await projectImages(ctx, project, r.body, text => wikiMarkdown(text, project));
+      let content = r.research ? researchHtml(r.research, project, people) : `<div class="prose">${renderedBody}</div>`;
+      if (writable && !r.research) content = inspectorSection("Page", [{label:revision === null ? "Content" : "Revert", html:`<div class="prose">${renderedBody}</div>`, editHtml:`<form method="post" action="/api/wiki.write"><input type="hidden" name="project" value="${esc(project)}"><input type="hidden" name="slug" value="${esc(slug)}"><input type="hidden" name="expected_revision" value="${expected}"><input type="hidden" name="_back" value="${esc(target(slug))}"><label>Title <input name="title" required maxlength="200" value="${esc(r.title)}"></label><label>Markdown <textarea name="body" rows="15">${esc(r.body)}</textarea></label><label>Revision note <input name="note" required maxlength="500" value="${revision === null ? "" : `Revert to revision ${r.revision}`}"></label><button>${revision === null ? "Save revision" : "Revert page"}</button></form>`}]);
       body += `<h1>${esc(r.title)}</h1><p>Revision ${r.revision} · ${esc(r.author)} · ${localTime(r.created_at)} · ${esc(r.note)}${r.deleted ? " · deleted" : ""}</p>${content}<h2>Links</h2><ul>${v.links.map(s => `<li><a href="${base}/${s}">${s}</a></li>`).join("")}</ul><h2>Backlinks</h2><ul>${v.backlinks.map(p => `<li><a href="${base}/${esc(p.slug)}">${esc(p.title)}</a></li>`).join("")}</ul>`;
       body += await documentSharing(ctx, pr.id, project, "page", slug, writable && !r.deleted, target(slug));
       if (url.searchParams.has("diff") && r.revision > 1) {

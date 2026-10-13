@@ -203,14 +203,14 @@ describe("wiki pages", () => {
     expect(projects.result.projects.map((r: any) => r.ref).sort()).toEqual(["east/guide", "west/guide"]);
   });
 
-  async function world() {
+  async function world(kind = "wiki") {
     const tenant = await seedTenant("acme");
     const member = await seedHuman("writer@example.com", {memberships: [{tenant_id: tenant.id, role: "member"}]});
     const admin = await seedHuman("admin@example.com", {memberships: [{tenant_id: tenant.id, role: "admin"}]});
     const reader = await seedHuman("reader@example.com", {memberships: [{tenant_id: tenant.id, role: "reader"}]});
     const host = "acme.pimwell.test";
     const post = (verb: string, args: unknown, token = member.token) => apiPost(host, verb, args, bearer(token));
-    expect((await post("project.create", {slug: "guide", kind: "wiki", display_name: "Guide"})).status).toBe(200);
+    expect((await post("project.create", {slug: "guide", kind, display_name: "Guide"})).status).toBe(200);
     const write = (slug: string, body: string, expected_revision = 0) => post("wiki.write", {project: "guide", slug, title: slug, body, expected_revision, note: "A revision"});
     return {tenant, member, admin, reader, host, post, write};
   }
@@ -283,6 +283,46 @@ describe("wiki pages", () => {
     expect((await w.post("wiki.list", {project: "tracker"})).status).toBe(400);
     expect((await SELF.fetch("https://blue.pimwell.test/guide/wiki/secret", {headers: cookieHeaders(outsider.token, "blue.pimwell.test")})).status).toBe(404);
     expect((await SELF.fetch("https://" + w.host + "/guide/wiki/secret")).status).toBe(404);
+  });
+  it("renders revision-pinned authenticated raster evidence authored over MCP and browser forms", async () => {
+    const w = await world("workspace");
+    const headers = cookieHeaders(w.member.token, w.host);
+    const ctx = await buildContext(new Request(`https://${w.host}/mcp`, {headers: bearer(w.member.token)}), env);
+    ctx.playground = {scopes: ["read", "write"]};
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=";
+    for (const expected_revision of [0, 1]) expect((await callTool(ctx, "file_put", {project: "guide", path: "debug/plan.png", content_type: "image/png", base64: png, expected_revision})).isError).toBeUndefined();
+    const url = "/guide/documents/download?path=debug%2Fplan.png&revision=1";
+    const body = `![Plan <script>bad()</script>](${url})`;
+    expect((await callTool(ctx, "wiki_write", {project: "guide", slug: "visuals", title: "Visuals", body, expected_revision: 0, note: "Evidence"})).isError).toBeUndefined();
+    const get = (path: string, token = w.reader.token) => SELF.fetch(`https://${w.host}${path}`, {headers: cookieHeaders(token, w.host)});
+    const html = await (await get("/guide/wiki/visuals")).text();
+    expect(html).toContain(`<img src="${url.replace("&", "&amp;")}"`);
+    expect(html).toContain("max-height:480px");
+    expect(html).toContain("Open original · revision 1");
+    expect(html).toContain("Plan &lt;script&gt;");
+    expect(html).not.toContain("<script>bad()");
+    const image = await get(url);
+    expect(image.status).toBe(200);
+    expect(image.headers.get("content-type")).toBe("image/png");
+    expect(image.headers.get("cache-control")).toBe("private, no-store");
+    expect(image.headers.get("x-content-type-options")).toBe("nosniff");
+    const outsider = await seedHuman("outsider-image@example.com");
+    expect((await get(url, outsider.token)).status).not.toBe(200);
+    expect((await SELF.fetch(`https://${w.host}${url}`)).status).not.toBe(200);
+    const invalid = ["https://tracker.test/p.png", "https://blue.pimwell.test" + url, url.replace("/guide/", "/other/"), url.replace("revision=1", "revision=0"), url.replace("&revision=1", ""), "javascript:bad", "/guide/documents/download?path=missing.png&revision=1"];
+    const badBody = invalid.map(u => `![bad](${u})`).join("\n");
+    const form = await SELF.fetch(`https://${w.host}/api/wiki.write`, {method: "POST", headers: {...headers, "content-type": "application/x-www-form-urlencoded"}, body: new URLSearchParams({project: "guide", slug: "invalid", title: "Invalid", body: badBody, expected_revision: "0", note: "Browser", _back: "@result"}).toString(), redirect: "manual"});
+    expect(form.status).toBe(303);
+    expect(await (await get("/guide/wiki/invalid")).text()).not.toContain("<img");
+    expect((await w.post("file.put", {project: "guide", path: "bad.svg", content_type: "image/svg+xml", base64: btoa("<svg onload=bad()/>"), expected_revision: 0})).status).toBe(400);
+    const created = await (await w.post("work.create", {project: "guide", kind: "snag", title: "Visual evidence", body})).json() as any;
+    const id = created.result.item.id;
+    expect((await w.post("work.comment", {id, body})).status).toBe(200);
+    const item = await env.HUB_DB.prepare("SELECT number FROM work_item WHERE id = ?").bind(id).first<{number: number}>();
+    expect((await (await get(`/guide/w/${item!.number}`)).text()).match(/<img /g)).toHaveLength(2);
+    expect((await w.post("file.delete", {project: "guide", path: "debug/plan.png"}, w.admin.token)).status).toBe(200);
+    expect(await (await get("/guide/wiki/visuals")).text()).not.toContain("<img");
+    expect((await get(url)).status).toBe(404);
   });
   it("renders safe pages, history and diff and supports form writes/revert with concurrency and CSRF checks", async () => {
     const w = await world();
