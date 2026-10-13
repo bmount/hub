@@ -1,5 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { createProject } from "../src/db/projects";
+import { ASSETS } from "../src/assets";
+import { skill } from "../src/skills";
 import { describe, expect, it } from "vitest";
 import { cookieHeaders, seedHuman, seedTenant } from "./helpers";
 import { HOST, channelWith, chatWorld, ok } from "./chat-helpers";
@@ -119,6 +121,34 @@ describe("message/work navigation", () => {
 });
 
 describe("chat pages", () => {
+  it("enhances authorized server-rendered channels and threads with the same live transport and publishes the piping skill", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const root = await ok(w.lead.token, "chat.post", { c: "general", body: "Safe <img src=x> live root" });
+    const read = await ok(w.dev.token, "chat.read", { c: "general" });
+    const channel = await (await get("/c/general", w.dev.token)).text();
+    expect(channel).toContain(`src="${ASSETS.chatLive.path}"`);
+    expect(channel).toContain(`data-chat-live="{&quot;id&quot;:&quot;${read.conversation_id}&quot;,&quot;kind&quot;:&quot;channel&quot;}"`);
+    expect(channel).toContain('method="post" action="/c/general"');
+    expect(channel).toContain('>Refresh</a>');
+    expect(channel).toContain("Safe &lt;img src=x&gt; live root");
+    const thread = await (await get(`/c/general/t/${root.seq}`, w.dev.token)).text();
+    expect(thread).toContain(`&quot;kind&quot;:&quot;thread&quot;,&quot;root&quot;:&quot;${root.msg_id}&quot;`);
+    expect(thread).toContain('class="thread-root"');
+    expect((await ok(w.dev.token, "chat.conversations", {})).conversations[0].read_seq).toBe(0);
+    const denied = await seedHuman("outsider-live@example.com");
+    const response = await get("/c/general", denied.token);
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain("data-chat-live");
+    const published = skill("chat-client")!;
+    expect(published.body).toContain("scripts/pimwell-chat.mjs");
+    expect(published.body).toContain("ambiguous_delivery");
+    expect(published.body).toContain("PIMWELL_OFFSET");
+    const script = await get(ASSETS.chatLive.path, null);
+    expect(script.status).toBe(200);
+    expect(await script.text()).toContain("new WebSocket(url)");
+  });
+
   it("send visitors without a session to sign in", async () => {
     await chatWorld();
     const res = await get("/c", null);

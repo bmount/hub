@@ -68,7 +68,12 @@ function workspace(channels: Conversation[], active: string, content: string): s
 function presencePanel(slug: string, channels: Conversation[]): string {
   // Archived channels still have readable history, but must not publish or display live presence.
   if (!channels.some((c) => c.channel === slug)) return "";
-  return `<section data-chat-presence="${esc(slug)}" aria-label="Channel presence"><h2>Presence</h2><p data-presence-connection role="status">Presence not connected. Current status is unknown.</p><p data-presence-freshness>No current presence snapshot.</p><p data-presence-sharing>Not sharing. Loading or reading this page does not publish a heartbeat.</p><button type="button" data-presence-toggle>Share presence in this channel</button><ul data-presence-list></ul><noscript>Live presence needs JavaScript; no heartbeat is published without it.</noscript></section><script defer src="${ASSETS.presence.path}"></script>`;
+  return `<section data-chat-presence="${esc(slug)}" aria-label="Channel presence"><h2>Presence</h2><p data-presence-connection role="status">Presence not connected. Current status is unknown.</p><p data-presence-freshness>No current presence snapshot.</p><p data-presence-sharing>No explicit heartbeat requested here. A connected live chat socket separately publishes expiring presence; these controls do not stop it.</p><button type="button" data-presence-toggle>Share presence in this channel</button><ul data-presence-list></ul><noscript>Live presence needs JavaScript; no heartbeat is published without it.</noscript></section><script defer src="${ASSETS.presence.path}"></script>`;
+}
+
+function livePanel(r: ReadResult, kind: string, root?: string): string {
+  const chat = { id: r.conversation_id, kind: root ? "thread" : kind, ...(root ? { root } : {}) };
+  return `<section data-chat-live="${esc(JSON.stringify(chat))}" aria-label="Live chat"><p data-live-status role="status">Connecting live chat. Refresh and ordinary forms work without JavaScript.</p><ul data-live-signals></ul></section><script defer src="${ASSETS.chatLive.path}"></script>`;
 }
 
 function markRead(slug: string, head: number, back: string): string {
@@ -155,7 +160,7 @@ export async function channelPage(request: Request, env: Env, slug: string, draf
     const hasUnreadMessages = current && r.messages.some((m) => m.seq > current.read_seq);
     const unreadLink = hasUnreadMessages ? ' <a class="chip" href="#unread">Jump to new messages on this page</a>' : "";
     const partial = `<p class="lede">${r.next_before !== null ? "This is a partial channel view. Older messages may also be unread. " : ""}The channel shows top-level messages; open threads to read replies. Marking the channel read acknowledges all activity through the displayed head, including activity not shown here.</p>`;
-    const body = `<header class="channel-header"><h1>${esc(current?.kind === "direct" || current?.kind === "group" ? `${current.display_name} (${current.kind})` : `#${r.channel}`)}</h1><p class="lede">${esc(current?.topic ?? "")}</p><a class="chip" href="/c/${esc(r.channel)}">Refresh</a>${unreadLink} ${markRead(r.channel, r.head, `/c/${r.channel}`)}</header>${presencePanel(r.channel, channels)}${partial}${older}`
+    const body = `<header class="channel-header"><h1>${esc(current?.kind === "direct" || current?.kind === "group" ? `${current.display_name} (${current.kind})` : `#${r.channel}`)}</h1><p class="lede">${esc(current?.topic ?? "")}</p><a class="chip" href="/c/${esc(r.channel)}">Refresh</a>${unreadLink} ${markRead(r.channel, r.head, `/c/${r.channel}`)}</header>${livePanel(r, current?.kind ?? "channel")}${presencePanel(r.channel, channels)}${partial}${older}`
       + `<div class="channel-messages">${channelMessages(r.channel, r.messages, current?.read_seq) || '<p class="lede">No messages yet. Start a conversation.</p>'}</div>`
       + (rank(pc.ctx.role) >= rank("member") ? compose(`/c/${r.channel}`, r.head, draft, notice, "Post") : '<p class="lede">You have read-only access.</p>');
     return htmlResponse(page(`#${r.channel}`, workspace(channels, r.channel, body), shellFor(pc.ctx, env, "chat")), 200, pc.extra);
@@ -173,7 +178,7 @@ export async function threadPage(request: Request, env: Env, slug: string, seq: 
     const r = await verb<ReadResult>(pc.ctx, "chat.thread", { c: slug, msg: seq, budget: 8000, ...(after && /^\d{1,12}$/.test(after) ? { after } : {}) });
     const root = r.messages[0]!;
     const channels = await conversations(pc.ctx);
-    const body = `<header class="channel-header"><p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p><h1>Thread #${root.seq}</h1><a class="chip" href="/c/${esc(r.channel)}/t/${root.seq}">Refresh thread</a></header>${presencePanel(r.channel, channels)}`
+    const body = `<header class="channel-header"><p><a href="/c/${esc(r.channel)}">back to #${esc(r.channel)}</a></p><h1>Thread #${root.seq}</h1><a class="chip" href="/c/${esc(r.channel)}/t/${root.seq}">Refresh thread</a></header>${livePanel(r, "thread", root.msg_id)}${presencePanel(r.channel, channels)}`
       + `<section class="thread-root" aria-labelledby="thread-original"><h2 id="thread-original">Original message</h2>${msgHtml(r.channel, root, true)}</section>`
       + `<section aria-labelledby="thread-replies"><h2 id="thread-replies">Replies${after ? " (continued)" : ""}</h2><div class="channel-messages">${r.messages.slice(1).map((m) => msgHtml(r.channel, m, true)).join("") || '<p class="lede">No replies shown.</p>'}</div></section>`
       + (r.next_after !== null ? `<p><a href="/c/${esc(r.channel)}/t/${root.seq}?after=${r.next_after}">More replies</a></p>` : "")

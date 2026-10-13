@@ -4,6 +4,7 @@ import { THEME_CSS } from "./theme";
 import { COMPONENTS_CSS } from "./styles";
 import { WORKBENCH_JS } from "./workbenchScript";
 import { CHAT_PRESENCE_JS } from "./chatPresenceScript";
+import { CHAT_LIVE_JS } from "./chatLiveScript";
 import { ASSISTANT_JS } from "./assistantScript";
 import { PLAYGROUND_JS } from "./playgroundScript";
 import { COPY_JS } from "./copyScript";
@@ -22,6 +23,7 @@ const landingJs = /<script>([\s\S]*?)<\/script>/.exec(intro)![1]!;
 export const ASSETS = {
   css: { path: `/assets/app.${hash(css)}.css`, body: css, type: "text/css; charset=utf-8" },
   js: { path: `/assets/wb.${hash(WORKBENCH_JS)}.js`, body: WORKBENCH_JS, type: "text/javascript; charset=utf-8" },
+  chatLive: { path: `/assets/chatlive.${hash(CHAT_LIVE_JS)}.js`, body: CHAT_LIVE_JS, type: "text/javascript; charset=utf-8" },
   presence: { path: `/assets/presence.${hash(CHAT_PRESENCE_JS)}.js`, body: CHAT_PRESENCE_JS, type: "text/javascript; charset=utf-8" },
   assistant: { path: `/assets/assistant.${hash(ASSISTANT_JS)}.js`, body: ASSISTANT_JS, type: "text/javascript; charset=utf-8" },
   playground: { path: `/assets/playground.${hash(PLAYGROUND_JS)}.js`, body: PLAYGROUND_JS, type: "text/javascript; charset=utf-8" },

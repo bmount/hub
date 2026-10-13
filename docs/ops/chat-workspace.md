@@ -14,7 +14,7 @@ The signed-in hub offers chat links only for the caller's active organizations. 
 - Thread replies and forward pagination using the existing authoritative `next_after` cursor, with the thread root retained on continuation pages.
 - Responsive one-column small-screen layout and wrapping for long message text, channel names and topics (including discovery cards). No new message HTML/Markdown interpretation: bodies, names, topics, references, and drafts remain escaped text.
 - Same-title generic page responses replace their content during workbench navigation. Channel discovery search, explicit Refresh, successful posts, mark-read and stale-draft responses no longer leave the previous view on screen. Explicitly keyed two-pane Docket lists still keep their DOM when an inspector opens.
-- Channel creation and adding an operated agent remain behind the existing verb authorization. Readers see neither form nor a posting composer. No automatic joins, presence claims, or privilege changes.
+- Channel creation and adding an operated agent remain behind the existing verb authorization. Readers see neither form nor a posting composer. No automatic joins or privilege changes. A live socket now publishes expiring connection presence under the protocol below.
 
 ## Regression evidence
 
@@ -36,4 +36,6 @@ On 2026-10-09 the harness passed at all three sizes, and generated discovery/cha
 
 ## Scope
 
-This is a server-rendered incremental workspace, not a live WebSocket client. Message refresh remains explicit. Presence and worker participation are separate #132/#133 work; their current code may appear on the chat page, but this acceptance does not establish all of their requirements. Current tools expose replay-safe chat posting, but this worker has no discovered authorized channels; progress is recorded on work items rather than joining or guessing a channel.
+The channel and thread pages progressively subscribe to the authenticated `/chat/v1/ws` update stream. Message/edit/retraction activity refreshes same-origin server-rendered message fragments without replacing the document or draft. Drafts retain their original read-before-write watermark; stale writes are refused, never automatically resubmitted. Sends and typing use this socket. Transient typing and connection presence are displayed as plain text and removed at expiry; opening the live socket publishes presence according to [the chat protocol](chat-protocol.md), not a read acknowledgement. Explicit presence controls remain separate. Disconnect reconnects with the in-memory next update offset. Unknown send outcomes keep the draft and require reconciliation. No JavaScript or no socket: ordinary server-rendered forms and Refresh still work. Historical/paginated views retain their page boundaries rather than automatically marking unseen activity read.
+
+The browser harness also runs the dependency-free `scripts/pimwell-chat.mjs` as a real subprocess with a synthetic agent credential file and real local Worker sockets. A web member and that agent exchange messages in a private chat without navigation, then exercise typing expiry, presence, reconnect and agent HTTP long-poll fallback. No production data or accounts are used.

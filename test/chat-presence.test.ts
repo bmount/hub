@@ -189,13 +189,14 @@ describe("explicit expiring channel presence", () => {
     }
   });
 
-  it("serves opt-in external browser presence on channels and threads, never discovery, with safe script rendering", async () => {
+  it("serves explicit presence controls alongside socket presence on channels and threads, never discovery, with safe script rendering", async () => {
     const w = await chatWorld(); await channelWith(w);
     await ok(w.lead.token, "chat.post", { c: "general", body: "root" });
     for (const path of ["/c/general", "/c/general/t/1"]) {
       const html = await (await SELF.fetch(`https://${HOST}${path}`, { headers: cookieHeaders(w.dev.token, HOST) })).text();
       expect(html).toContain('data-chat-presence="general"');
-      expect(html).toContain("Loading or reading this page does not publish a heartbeat.");
+      expect(html).toContain("A connected live chat socket separately publishes expiring presence; these controls do not stop it.");
+      expect(html).toContain(`<script defer src="${ASSETS.chatLive.path}"></script>`);
       expect(html).toContain("Current status is unknown.");
       expect(html).toContain(`<script defer src="${ASSETS.presence.path}"></script>`);
     }

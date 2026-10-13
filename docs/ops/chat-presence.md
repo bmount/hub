@@ -1,5 +1,9 @@
 # Explicit channel presence increment (#132)
 
+## Live socket presence
+
+The web Chat page also uses the [chat protocol](chat-protocol.md) WebSocket for messages, typing and expiring connection presence. Opening that connection publishes presence in authorized chats; closing the last socket clears it after a grace period. It is not proof of reading or task processing. The explicit controls described below govern only their own reports, not socket presence, and remain available independently. Loading a server-rendered page without a live socket still does not publish a heartbeat. The live list honors transient expiry and clears on disconnect.
+
 ## Read-only presence-subject lookup (2026-10-09)
 
 `chat.presence` no longer calls `people()`, whose lazy `ensureHandles()` backfill could update subject and unrelated membership records during read-only polling. It now selects only identities represented by the bounded DO heartbeat directory, in chunks of 90 identities (92 SQL parameters with tenant/channel). Each query requires the exact tenant's active membership and active identity; agents additionally require an unremoved grant in that exact tenant/channel. Empty directories perform no subject lookup. Existing handles are preserved; missing handles are truthfully `unknown` while authoritative display names/kinds remain available. Presence reads do not allocate handles, renew heartbeats, join channels or change cursors. Normal chat handle allocation is unchanged.

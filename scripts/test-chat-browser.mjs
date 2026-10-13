@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Entirely disposable local acceptance: real bundled Worker, D1/DOs, browser and
 // synthetic sessions. No remote services, production cookies or credential files.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readdir, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
@@ -16,7 +16,7 @@ const artifacts = path.resolve(process.env.CHAT_BROWSER_ARTIFACTS || await mkdte
 await mkdir(artifacts, { recursive: true });
 const host = 'acme.pimwell.test';
 const base = `https://${host}`;
-let mf, browser, cacheBrowser, cacheServer;
+let mf, browser, cacheBrowser, cacheServer, chatClient;
 let counter = 0;
 const id = () => String(++counter).padStart(26, '0');
 const now = Date.now();
@@ -31,9 +31,10 @@ try {
     export { Conversation, Inbox } from './index.js';
     export default { fetch(request, env, ctx) {
       const headers = new Headers(request.headers);
-      headers.set('host', headers.get('x-local-browser-host'));
+      headers.set('host', headers.get('x-local-browser-host') || 'acme.pimwell.test');
       headers.delete('x-local-browser-host');
-      return worker.fetch(new Request(request, { headers }), env, ctx);
+      const url = new URL(request.url); url.host = headers.get('host'); url.protocol = 'https:';
+      return worker.fetch(new Request(url, new Request(request, { headers })), env, ctx);
     }};
   `);
   mf = new Miniflare(convertV4MiniflareOptions({ workers: [{
@@ -100,9 +101,11 @@ try {
   const wrongChannelSnapshot = new WeakSet();
   const oversizedPresenceResponse = new WeakMap();
   const repeatedSnapshot = new WeakMap();
-  async function context(token, viewport) {
+  async function context(token, viewport, live = false) {
     const ctx = await browser.newContext({ viewport, serviceWorkers: 'block' });
     if (token) await ctx.addCookies([{ name: 'pmw_session', value: token, domain: '.pimwell.test', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
+    // Legacy acceptance covers the ordinary server-rendered fallback.
+    if (!live) await ctx.routeWebSocket('**/chat/v1/ws*', ws => ws.close());
     await ctx.route('**/*', async route => {
       if (disconnected.has(ctx)) return route.abort('internetdisconnected');
       const req = route.request();
@@ -230,7 +233,7 @@ try {
   await expect(anonymousOrgPage.getByRole('heading', { name: 'Sign in to Pimwell', exact: true })).toBeVisible();
   await anonymousOrgCtx.close();
   const operator = (await db.prepare("SELECT id FROM identity WHERE email = 'dev@example.test'").first()).id;
-  const agentId = id(), parentId = id(), agentRun = randomBytes(32).toString('hex');
+  const agentId = id(), parentId = id(), agentRun = 'pms_' + randomBytes(32).toString('hex');
   await db.prepare("INSERT INTO identity (id, kind, display_name, email, operator_id, created_at) VALUES (?, 'agent', 'Org refusal bot', 'acme.orgbot@pimwell.test', ?, ?)").bind(agentId, operator, now).run();
   await db.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, created_at) VALUES (?, ?, ?, 'member', ?)").bind(id(), agentId, tenant, now).run();
   await db.prepare("INSERT INTO api_token (id, identity_id, tenant_id, name, token_hash, created_by, created_at) VALUES (?, ?, ?, 'local-only', ?, ?, ?)").bind(parentId, agentId, tenant, createHash('sha256').update(randomBytes(32)).digest('hex'), operator, now).run();
@@ -241,6 +244,108 @@ try {
   }
   console.log('PASS non-root browser organization creation, member invite, archive, typed deletion, cross-tenant preservation, agents refused and signed-out sign-in redirect');
 
+  // Reference Node process and browser use real authenticated Worker sockets.
+  const openedLive = await verb(member, 'chat.open', { kind: 'direct', members: [agentId], client_id: 'live-browser-open' });
+  const liveInfo = (await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === openedLive.channel);
+  const wireChat = { id: liveInfo.id, kind: 'direct' };
+  const liveCtx = await context(member, { width: 1440, height: 1000 }, true);
+  let socketOpens = 0;
+  const liveSockets = [];
+  await liveCtx.routeWebSocket('**/chat/v1/ws*', async route => {
+    const url = new URL(route.url()); url.protocol = 'https:';
+    const response = await mf.dispatchFetch(url.href, { headers: { upgrade: 'websocket', cookie: `pmw_session=${member}`, origin: base, 'x-local-browser-host': host } });
+    expect(response.status).toBe(101);
+    const socket = response.webSocket; liveSockets.push(socket); socketOpens++;
+    socket.addEventListener('message', event => route.send(String(event.data)));
+    socket.addEventListener('close', () => route.close());
+    route.onMessage(message => socket.send(message)); route.onClose(() => { try { socket.close(1000); } catch {} }); socket.accept();
+  });
+  const livePage = await liveCtx.newPage();
+  await livePage.goto(`${base}/c/${liveInfo.channel}`);
+  await expect(livePage.locator('[data-live-status]')).toContainText('connected');
+  await livePage.evaluate(() => { window.__liveDocument = document; });
+  const credential = path.join(temp, 'local-agent.token');
+  await writeFile(credential, agentRun, { mode: 0o600 });
+  const frames = [], clientDiagnostics = [];
+  const localOrigin = (await mf.ready).origin;
+  function startClient(pollOnly = false, resume = 0) {
+    const client = spawn(process.execPath, [path.join(root, 'scripts/pimwell-chat.mjs')], { env: { ...process.env,
+      PIMWELL_ORIGIN: localOrigin, PIMWELL_TOKEN_FILE: credential, PIMWELL_OFFSET: String(resume), PIMWELL_POLL_ONLY: pollOnly ? '1' : '0' }, stdio: ['pipe', 'pipe', 'pipe'] });
+    let buffer = '';
+    client.stdout.on('data', data => { buffer += data; let newline; while ((newline = buffer.indexOf('\n')) >= 0) { frames.push(JSON.parse(buffer.slice(0, newline))); buffer = buffer.slice(newline + 1); } });
+    client.stderr.on('data', data => clientDiagnostics.push(String(data)));
+    return client;
+  }
+  chatClient = startClient();
+  const send = (request_id, method, params) => chatClient.stdin.write(JSON.stringify({ request_id, method, params }) + '\n');
+  const reply = async request_id => { await expect.poll(() => frames.find(f => f.request_id === request_id)).toBeTruthy(); return frames.find(f => f.request_id === request_id); };
+  await expect.poll(() => frames.some(f => !f.request_id && f.result?.updates)).toBe(true);
+  expect(clientDiagnostics.join('')).not.toContain('Socket unavailable');
+  chatClient.stdin.write('not command JSON\n');
+  await expect.poll(() => frames.some(f => f.error?.code === 'invalid_stdin')).toBe(true);
+  send('live-read', 'getMessages', { chat: wireChat });
+  const liveRead = await reply('live-read'); expect(liveRead.ok).toBe(true);
+  send('live-hello', 'sendMessage', { chat: wireChat, text: 'Agent live hello <script>inert</script>', after: liveRead.result.head, client_id: 'live-hello' });
+  expect((await reply('live-hello')).ok).toBe(true);
+  await expect(livePage.locator('.channel-messages')).toContainText('Agent live hello <script>inert</script>');
+  await expect(livePage.locator('.channel-message script')).toHaveCount(0);
+  await livePage.getByLabel('Message channel').fill('Web live reply');
+  await livePage.locator('.channel-compose button[type="submit"]').click();
+  await expect.poll(() => frames.some(f => f.result?.updates?.some(u => u.type === 'message' && u.data.body === 'Web live reply'))).toBe(true);
+  await expect(livePage.locator('.channel-messages')).toContainText('Web live reply');
+  expect(await livePage.evaluate(() => window.__liveDocument === document)).toBe(true);
+  // Inbound activity must not silently rebase an existing draft's write intent.
+  await livePage.getByLabel('Message channel').fill('Reviewed stale live draft');
+  const originalHead = await livePage.locator('.channel-compose [name="after"]').inputValue();
+  send('draft-read', 'getMessages', { chat: wireChat });
+  const draftRead = await reply('draft-read');
+  send('draft-inbound', 'sendMessage', { chat: wireChat, text: 'Inbound during live draft', after: draftRead.result.head, client_id: 'draft-inbound' });
+  expect((await reply('draft-inbound')).ok).toBe(true);
+  await expect(livePage.locator('.channel-messages')).toContainText('Inbound during live draft');
+  expect(await livePage.locator('.channel-compose [name="after"]').inputValue()).toBe(originalHead);
+  await livePage.locator('.channel-compose button[type="submit"]').click();
+  await expect(livePage.locator('[data-live-status]')).toContainText('stale_view');
+  await expect(livePage.getByLabel('Message channel')).toHaveValue('Reviewed stale live draft');
+  await expect.poll(() => livePage.locator('.channel-compose [name="after"]').inputValue()).not.toBe(originalHead);
+  await livePage.locator('.channel-compose button[type="submit"]').click();
+  await expect(livePage.locator('.channel-messages')).toContainText('Reviewed stale live draft');
+  send('edit-read', 'getMessages', { chat: wireChat });
+  const editRead = await reply('edit-read');
+  const agentHello = editRead.result.messages.find(m => m.body.startsWith('Agent live hello'));
+  send('live-edit', 'editMessage', { chat: wireChat, msg_id: agentHello.msg_id, text: 'Edited live hello', after: editRead.result.head, client_id: 'live-edit' });
+  expect((await reply('live-edit')).ok).toBe(true);
+  await expect(livePage.locator('.channel-messages')).toContainText('Edited live hello');
+  send('live-retract', 'retractMessage', { chat: wireChat, msg_id: agentHello.msg_id, client_id: 'live-retract' });
+  expect((await reply('live-retract')).ok).toBe(true);
+  await expect(livePage.locator('.channel-messages')).not.toContainText('Edited live hello');
+  await expect(livePage.locator('.channel-messages')).toContainText('retracted');
+  send('live-typing', 'sendTyping', { chat: wireChat, active: true, client_id: 'live-typing' });
+  expect((await reply('live-typing')).ok).toBe(true);
+  await expect(livePage.locator('[data-live-signals]')).toContainText('is typing');
+  await expect(livePage.locator('[data-live-signals]')).not.toContainText('is typing', { timeout: 10000 });
+  send('live-presence', 'setPresence', { chat: wireChat, status: 'away', client_id: 'live-presence' });
+  expect((await reply('live-presence')).ok).toBe(true);
+  await expect(livePage.locator('[data-live-signals]')).toContainText('is away');
+  const opens = socketOpens;
+  liveSockets.at(-1).close(1000);
+  await expect.poll(() => socketOpens).toBeGreaterThan(opens);
+  await expect(livePage.locator('[data-live-status]')).toContainText('connected');
+  expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === liveInfo.channel).read_seq).toBe(0);
+  const resume = Math.max(0, ...frames.filter(f => !f.request_id).map(f => f.result?.next_offset || 0));
+  chatClient.kill('SIGTERM'); await new Promise(resolve => chatClient.once('exit', resolve));
+  frames.length = 0; chatClient = startClient(true, resume);
+  await verb(member, 'chat.post', { c: liveInfo.channel, body: 'HTTP fallback arrives' });
+  await expect.poll(() => frames.some(f => f.result?.updates?.some(u => u.data.body === 'HTTP fallback arrives')), { timeout: 65000 }).toBe(true);
+  chatClient.kill('SIGTERM'); await new Promise(resolve => chatClient.once('exit', resolve)); chatClient = null;
+  frames.length = 0; chatClient = startClient(true, Number.MAX_SAFE_INTEGER);
+  await expect.poll(() => frames.some(f => f.error?.code === 'invalid_offset')).toBe(true);
+  await expect.poll(() => chatClient.exitCode).toBe(1);
+  chatClient = null;
+  await livePage.screenshot({ path: path.join(artifacts, 'live-web-agent.png') });
+  await liveCtx.close();
+  console.log('PASS live web/member and reference Node agent: no reload, inert text, typing expiry, presence, reconnect, read cursor unchanged and HTTP fallback');
+
+  if (process.env.CHAT_BROWSER_LIVE_ONLY !== '1') {
   // Real Chromium + shipped assets + authentic synthetic browser sessions; no
   // production credentials. Network-disconnect tests use Chromium's offline mode.
   for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }], ['narrow', { width: 320, height: 740 }]]) {
@@ -824,8 +929,11 @@ try {
     const res = await mf.dispatchFetch(`${base}/c/general`, { headers: { 'x-local-browser-host': host, ...(token ? { cookie: `pmw_session=${token}` } : {}) }, redirect: 'manual' });
     expect(res.status).toBe(status);
   }
-  console.log(`PASS reader/viewer isolation and outside-tenant/unauthenticated denials; ${requests} local browser requests. Screenshots: ${artifacts}`);
+  console.log('PASS reader/viewer isolation and outside-tenant/unauthenticated denials');
+  }
+  console.log(`${requests} local browser requests. Screenshots: ${artifacts}`);
 } finally {
+  chatClient?.kill('SIGTERM');
   await browser?.close();
   await cacheBrowser?.close();
   if (cacheServer) await new Promise(resolve => cacheServer.close(resolve));
