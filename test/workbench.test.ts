@@ -170,6 +170,73 @@ describe("the workbench", () => {
     expect(mail).toContain('Mail · notes');
   });
 
+  it("keeps knowledge selections beside their kit lists and preserves URL filters and revisions", async () => {
+    const w = await world();
+    const call = async (name: string, input: unknown) => {
+      const res = await apiPost(HOST,name,input,w.h);
+      expect(res.status,await res.clone().text()).toBe(200);
+      return (await res.json() as {result:{entity:{id:string}}}).result;
+    };
+    await call("project.create",{slug:"notes",kind:"workspace",display_name:"Notes"});
+    await call("wiki.write",{project:"notes",slug:"guide",title:"Guide <safe>",body:"Handbook",expected_revision:0,note:"Create"});
+    await call("research.save",{project:"notes",slug:"finding",topic:"Topic <safe>",summary:"Evidence",status:"draft",sources:[],expected_revision:0,note:"Save"});
+    await call("file.put",{project:"notes",path:"handbook/guide.txt",content_type:"text/plain",expected_revision:0,base64:btoa("Handbook")});
+    const a = await call("person.upsert",{project:"notes",name:"Alex <safe>",links:[{kind:"research",ref:"finding"}]});
+    const b = await call("company.upsert",{project:"notes",name:"Company"});
+    await call("connection.add",{project:"notes",a:a.entity.id,b:b.entity.id,type:"advisor"});
+    const html = async (path: string) => {const res=await w.get(path); expect(res.status).toBe(200); return res.text();};
+    const list = (body: string) => body.split('<section id="list"')[1]!.split('<div class="wb-resizer"')[0]!;
+    const inspector = (body: string) => body.split('<section id="inspector"')[1]!;
+    const wiki = await html("/notes/wiki/guide");
+    expect(list(wiki)).toContain('aria-label="Page tree"');
+    expect(inspector(wiki)).toContain("Guide &lt;safe&gt;");
+    expect(inspector(wiki)).toContain('class="wb-inline-edit"');
+    expect(inspector(wiki)).toContain('name="expected_revision" value="1"');
+    expect(attr(wiki,"list")).toBe(attr(await html("/notes/wiki"),"list"));
+    const research = await html("/notes/wiki/finding?view=research&status=draft&topic=Topic");
+    expect(list(research)).toContain('aria-label="Research"');
+    expect(list(research)).toContain('data-href="/notes/wiki/finding?view=research&amp;status=draft&amp;topic=Topic"');
+    expect(inspector(research)).toContain("Topic &lt;safe&gt;");
+    expect(inspector(research)).toContain('revision=1');
+    expect(inspector(research)).toContain('view=research&amp;status=draft&amp;topic=Topic&amp;revision=1');
+    const files = await html("/notes/documents?folder=handbook&path=handbook%2Fguide.txt");
+    expect(list(files)).toContain('aria-label="Folders"');
+    expect(list(files)).toContain('aria-label="Files"');
+    expect(inspector(files)).toContain('aria-label="Versions"');
+    expect(inspector(files)).toContain('Mail sharing');
+    expect(attr(files,"list")).toBe(attr(await html("/notes/documents?folder=handbook"),"list"));
+    const upload = await html("/notes/documents?upload=1");
+    expect(inspector(upload)).toContain('data-reload enctype="multipart/form-data"');
+    expect(inspector(upload)).toContain('select name="person_id"');
+    for (const [n,back,expected] of [[1,"/notes/documents?folder=handbook","/notes/documents?folder=handbook"],[2,"//evil.test/notes/documents","/notes/documents"],[3,"/mail?private=1","/notes/documents"]] as const) {
+      const form = new FormData();
+      form.set("file",new File(["Native upload"],`native-${n}.txt`,{type:"text/plain"}));
+      form.set("expected_revision","0"); form.set("_back",back);
+      const response = await SELF.fetch(`https://${HOST}/notes/documents/upload`,{method:"POST",headers:{...w.h,origin:`https://${HOST}`},body:form,redirect:"manual"});
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(expected);
+    }
+    const contact = await html(`/notes/contacts/${a.entity.id}?q=Alex`);
+    expect(list(contact)).toContain('aria-label="Contacts"');
+    expect(inspector(contact)).toContain('aria-label="Backlinks"');
+    expect(inspector(contact)).toContain('aria-label="Connections"');
+    const graph = await html(`/notes/contacts/${a.entity.id}?view=graph&q=Alex`);
+    expect(list(graph)).toContain('aria-label="Contact neighborhood"');
+    expect(list(graph)).toContain(`/${b.entity.id}?view=graph&amp;q=Alex&amp;kind=company`);
+    expect(inspector(graph)).toContain('Alex &lt;safe&gt;');
+    expect(inspector(graph)).not.toContain('<svg');
+    const reader = await seedHuman("reader@example.com",{memberships:[{tenant_id:w.t.id,role:"reader"}]});
+    for (const path of ["/notes/wiki/guide","/notes/documents?upload=1","/notes/contacts?new=1"]) {
+      const body = await (await w.get(path,cookieHeaders(reader.token,HOST))).text();
+      expect(body).not.toContain('action="/api/wiki.write"');
+      expect(body).not.toContain('action="/api/person.upsert"');
+      expect(body).not.toContain('enctype="multipart/form-data"');
+    }
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE tenant_id = ? AND slug = 'notes'").bind(w.t.id).run();
+    expect(await html("/notes/wiki/guide")).not.toContain('action="/api/wiki.write"');
+    expect(await html("/notes/documents?upload=1")).not.toContain('enctype="multipart/form-data"');
+  });
+
   it("reloads instead of retaining panes when enhanced navigation sees a different account or role", () => {
     const swap = WORKBENCH_JS.slice(WORKBENCH_JS.indexOf("  function swap("), WORKBENCH_JS.indexOf("  var busy ="));
     const run = new Function("$", "doc", "location", `${swap}\nswap(doc, '/docket', true);`);

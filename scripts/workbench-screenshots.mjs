@@ -101,6 +101,8 @@ try {
   }
   await verb(member, 'wiki.write', {project: 'knowledge', slug: 'welcome', title: 'Team handbook', body: 'Synthetic team handbook for design evidence.', expected_revision: 0, note: 'Fixture'});
   const contact = await verb(member, 'person.upsert', {project: 'knowledge', name: 'Alex Example', title: 'Designer', emails: ['alex@example.test']});
+  const company = await verb(member, 'company.upsert', {project:'knowledge',name:'Example Company',sector:'Design'});
+  await verb(member,'connection.add',{project:'knowledge',a:contact.entity.id,b:company.entity.id,type:'advisor',source:'Synthetic fixture'});
   await verb(member, 'channel.create', {slug: 'general', topic: 'Team conversation'});
   await verb(member, 'chat.post', {c: 'general', body: 'Please review the compact workbench.'});
   await verb(member, 'review.request', {project:'sample',branch:'topic',title:'Keep navigation visible',summary:'Synthetic review of the workbench.',reviewers:['peer@example.test']});
@@ -113,9 +115,11 @@ try {
     for (let n=1;n<=5;n++) await db.prepare("INSERT INTO attention (id,tenant_id,identity_id,reason,item_id,summary,created_at) VALUES (?,?,?,'comment',?,?,?)").bind(id(),tenant,viewer,work,'Review navigation change '+n,now+n).run();
     await verb(member, 'research.save', {project:'knowledge',slug:'findings',expected_revision:0,topic:'Workbench findings',summary:'Synthetic research fixture.',status:'draft',sources:[],note:'Fixture'});
     await verb(member, 'file.put', {project:'knowledge',path:'notes.txt',content_type:'text/plain',expected_revision:0,base64:Buffer.from('Synthetic file fixture.').toString('base64')});
+    await verb(member, 'file.put', {project:'knowledge',path:'handbook/notes.txt',content_type:'text/plain',expected_revision:0,base64:Buffer.from('Folder fixture.').toString('base64')});
+    await verb(member,'person.upsert',{project:'knowledge',id:contact.entity.id,expected_revision:1,name:'Alex Example',title:'Designer',emails:['alex@example.test'],links:[{kind:'research',ref:'findings'},{kind:'file',ref:'notes.txt'}]});
   }
   browser = await chromium.launch({headless: true});
-  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', files:'/knowledge/documents', contacts:'/knowledge/contacts', graph:`/knowledge/contacts/${contact.entity.id}`, mail:'/mail', chat:'/c/general', assistant:'/assistant', people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
+  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, mail:'/mail', chat:'/c/general', assistant:'/assistant', people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
   const phase = process.env.WORKBENCH_PHASE || 'before';
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
@@ -163,6 +167,57 @@ try {
         const visibleNavigation = await page.evaluate(() => ['rail','explorer'].map(id => {const r=document.getElementById(id).getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth;}));
         expect(visibleNavigation).toEqual(viewport.width >= 1280 ? [true,true] : [false,false]);
         if (viewport.width < 760) await expect(page.locator('.tabs')).toBeVisible();
+      }
+      if (phase === 'after' && ['wiki','research','files','contacts'].includes(name)) {
+        await expect(page.locator('#list .wb-toolbar')).not.toHaveCount(0);
+        await page.evaluate(() => { window.knowledgeList = document.getElementById('list'); });
+        await page.locator('#list a').filter({hasText: name === 'wiki' ? 'Team handbook' : name === 'research' ? 'Workbench findings' : name === 'files' ? /^notes.txt$/ : 'Alex Example'}).first().click();
+        await expect(page.locator('#inspector h1')).toBeVisible();
+        expect(await page.evaluate(() => window.knowledgeList === document.getElementById('list')),name+' retains working pane').toBe(true);
+        const selected = page.url();
+        await page.reload();
+        expect(page.url()).toBe(selected);
+        await expect(page.locator('#inspector h1')).toBeVisible();
+        await page.locator('[data-close-inspector]').click();
+        await expect(page.locator('main.panes')).toHaveClass(/one/);
+        await page.goBack();
+        await expect(page.locator('#inspector h1')).toBeVisible();
+      }
+      if (phase === 'after' && name === 'files') {
+        await page.locator('#list a').filter({hasText:/^Upload$/}).click();
+        await expect(page.locator('#inspector form[action="/knowledge/documents/upload"]')).toHaveAttribute('enctype','multipart/form-data');
+        await page.locator('#inspector input[type=file]').setInputFiles({name:'browser-knowledge-'+label+'.txt',mimeType:'text/plain',buffer:Buffer.from('Native knowledge upload')});
+        const uploaded = page.waitForResponse(r=>r.url().endsWith('/knowledge/documents/upload'));
+        await page.locator('#inspector button').filter({hasText:/^Upload$/}).click();
+        expect((await uploaded).status()).toBe(200);
+        await expect(page.locator('#list table[aria-label=Files]')).toContainText('browser-knowledge-'+label+'.txt');
+      }
+      if (phase === 'after' && name === 'wikiPage') {
+        await page.locator('#inspector summary[aria-label="Change Content"]').click();
+        await page.locator('#inspector textarea[name=body]').fill('Inline browser revision');
+        await page.locator('#inspector form[action="/api/wiki.write"] input[name=note]').fill('Browser edit');
+        await page.locator('#inspector button').filter({hasText:'Save revision'}).click();
+        await expect(page.locator('#inspector .prose')).toHaveText('Inline browser revision');
+      }
+      if (phase === 'after' && name === 'graph') {
+        await expect(page.locator('#list svg[aria-label="Contact neighborhood"]')).toBeVisible();
+        await expect(page.locator('#inspector h1')).toHaveText('Alex Example');
+        await expect(page.locator('#inspector table[aria-label=Connections]')).toContainText('Example Company');
+        if (viewport.width >= 1280) {
+          const working = await page.locator('#list').boundingBox(), inspector = await page.locator('#inspector').boundingBox();
+          expect(working.x + working.width <= inspector.x).toBe(true);
+          expect(inspector.x + inspector.width <= viewport.width).toBe(true);
+        }
+        if (viewport.width < 760) {
+          await page.locator('#list svg [data-node]').first().scrollIntoViewIfNeeded();
+          await page.screenshot({path:path.join(artifacts,`${phase}-graph-neighborhood-${label}.png`),fullPage:false});
+          manifest.push({phase,name:'graph-neighborhood',route,viewport,file:`${phase}-graph-neighborhood-${label}.png`});
+        }
+        await page.locator('#list svg a').filter({hasText:'Example Company'}).click();
+        await expect(page.locator('#inspector h1')).toHaveText('Example Company');
+        await expect(page.locator('#list svg')).toBeVisible();
+        await page.goBack();
+        await expect(page.locator('#inspector h1')).toHaveText('Alex Example');
       }
       if (phase === 'after' && ['home','overview','workspace'].includes(name)) {
         await expect(page.locator('#list .card, #list .grid, #list .onramp')).toHaveCount(0);
@@ -420,6 +475,9 @@ try {
   }
   await writeFile(path.join(artifacts,`${phase}-manifest.json`),JSON.stringify(manifest,null,2));
   console.log(`Screenshots: ${artifacts}`);
+} catch (error) {
+  console.error(error);
+  throw error;
 } finally {
   await browser?.close();
   await mf?.dispose();

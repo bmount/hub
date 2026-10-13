@@ -89,7 +89,9 @@ describe("project files", () => {
     expect((await callTool(w.ctx, "search_query", {q: "original"})).structuredContent).toMatchObject({files: []});
     const page = await (await SELF.fetch(`https://${HOST}/docs/documents?path=notes%2Fmemo.md`, {headers: w.headers})).text();
     expect(page).toContain("Version 1");
-    expect(page).toContain('enctype="multipart/form-data"');
+    expect(page).toContain('href="/docs/documents?upload=1"');
+    const upload = await (await SELF.fetch(`https://${HOST}/docs/documents?upload=1`,{headers:w.headers})).text();
+    expect(upload).toContain('enctype="multipart/form-data"');
   });
   it("uploads multipart web files and returns safe authenticated downloads, with tenant/project isolation", async () => {
     const w = await world();
@@ -261,12 +263,14 @@ describe("workspace contacts", () => {
     expect((await callTool(w.ctx, "person_list", {project: "fund", after: "zzzz"})).structuredContent).toMatchObject({entities: []});
     expect((await callTool(w.ctx, "connection_list", {project: "fund", entity: b.id})).structuredContent).toMatchObject({connections: [expect.objectContaining({type: "knows"}), expect.objectContaining({type: "founder"})]});
     expect((await callTool(w.ctx, "search_query", {q: "researchneedle"})).structuredContent).toMatchObject({contacts: [expect.objectContaining({title: expect.stringContaining("Contactneedle"), href: `/fund/contacts/${a.id}`})]});
-    const page = await SELF.fetch(`https://${HOST}/fund/contacts/${a.id}?hops=2`, {headers: w.headers});
+    const page = await SELF.fetch(`https://${HOST}/fund/contacts/${a.id}?hops=2&view=graph`, {headers: w.headers});
     const html = await page.text();
     expect(page.status).toBe(200); expect(html).toContain("data-contact-graph"); expect(html).toContain("<svg"); expect(html).toContain(`src="${ASSETS.graph.path}"`); expect(html).toContain("Companyneedle"); expect(html).not.toContain("<script>alert(1)</script>");
     expect((await SELF.fetch(`https://${HOST}${ASSETS.graph.path}`)).headers.get("content-type")).toContain("javascript");
     const list = await (await SELF.fetch(`https://${HOST}/fund/contacts`, {headers: w.headers})).text();
-    expect(list).toContain("Introducer"); expect(list).toContain('action="/api/person.upsert"');
+    expect(list).toContain("Introducer"); expect(list).toContain('href="/fund/contacts?new=1"');
+    const create = await (await SELF.fetch(`https://${HOST}/fund/contacts?new=1`,{headers:w.headers})).text();
+    expect(create).toContain('action="/api/person.upsert"');
     const home = await (await SELF.fetch(`https://${HOST}/fund`, {headers: w.headers})).text(); expect(home).toContain('href="/fund/contacts"');
     await w.call("connection_remove", {id: edge.id});
     expect((await callTool(w.ctx, "graph_path", {project: "fund", from: a.id, to: c.id})).structuredContent).toMatchObject({found: false});

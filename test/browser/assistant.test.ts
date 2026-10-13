@@ -204,7 +204,7 @@ it("renders the workspace graph and supports zoom, drag and contact navigation a
   for (const [id, a, b] of [["GRAPH-AB", "GRAPH-A", "GRAPH-B"], ["GRAPH-BC", "GRAPH-B", "GRAPH-C"]]) await db.prepare("INSERT INTO contact_connection (tenant_id, project_id, id, a, b, type, source, date) VALUES (?, 'GRAPH', ?, ?, ?, 'knows', 'Fixture', '2026-10-13')").bind(ID, id, a, b).run();
   const {context, page} = await open();
   try {
-    await page.goto(`${BASE}/fund/contacts/GRAPH-A?hops=2`);
+    await page.goto(`${BASE}/fund/contacts/GRAPH-A?hops=2&view=graph`);
     const graph = page.locator('[data-contact-graph]');
     await browserExpect(graph).toHaveAttribute('data-ready', '1');
     await browserExpect(graph.locator('[data-node]')).toHaveCount(3);
@@ -219,12 +219,13 @@ it("renders the workspace graph and supports zoom, drag and contact navigation a
     await page.mouse.down(); await page.mouse.move(bounds.x + 70, bounds.y + 50, {steps: 5}); await page.mouse.up();
     expect(await node.getAttribute('transform')).not.toBe(beforeDrag);
     await graph.getByRole('link', {name: 'Introducer', exact: true}).click();
-    await page.waitForURL(`${BASE}/fund/contacts/GRAPH-B`);
+    await page.waitForURL(`${BASE}/fund/contacts/GRAPH-B?hops=2&view=graph&kind=person`);
     await browserExpect(page.locator('[data-contact-graph]')).toHaveAttribute('data-ready', '1');
     await browserExpect(page.locator('[data-contact-graph] [data-node]')).toHaveCount(3);
     await page.locator('[data-contact-graph]').getByRole('link', {name: 'Portfolio Company', exact: true}).click();
-    await page.waitForURL(`${BASE}/fund/contacts/GRAPH-C`);
-    await browserExpect(page.locator('#list h1')).toHaveText('Portfolio Company');
+    await page.waitForURL(`${BASE}/fund/contacts/GRAPH-C?hops=2&view=graph&kind=company`);
+    await browserExpect(page.locator('#inspector h1')).toHaveText('Portfolio Company');
+    await browserExpect(page.locator('#list svg')).toBeVisible();
     expect(await page.evaluate(() => (globalThis as any).cspViolations)).toEqual([]);
   } finally {await context.close();}
 });

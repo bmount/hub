@@ -82,7 +82,7 @@ function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
     const base = `/${encodeURIComponent(p.path)}`;
     links.push({label: p.display_name, href: base});
     view = segments[1];
-    if (view) links.push({label: VIEW_LABELS[view] ?? view, href: `${base}/${view === "w" ? "docket" : view}`});
+    if (view) links.push({label: view === "wiki" && url.searchParams.get("view") === "research" ? "Research" : view === "contacts" && url.searchParams.get("view") === "graph" ? "Contact graph" : VIEW_LABELS[view] ?? view, href: `${base}/${view === "w" ? "docket" : view}${url.searchParams.has("view") ? `?view=${encodeURIComponent(url.searchParams.get("view")!)}` : ""}`});
     if (segments.length > 2) links.push({label: (view === "w" ? "#" : "") + decodeURIComponent(segments.slice(2).join("/")), href: url.pathname + url.search});
   } else if (segments[0] === "apps" && url.searchParams.has("project")) {
     const project = url.searchParams.get("project")!;
@@ -109,7 +109,7 @@ function projectExplorer(ctx: Ctx, env: Env): string {
   if (features.includes("docket")) nodes.push({...node("Docket", `${base}/docket`, p.open), expanded: true, children: [node("Graph", `${base}/graph`), node("Frontier", `${base}/frontier`), node("Board", `${base}/board`, p.open), node("Status", `${base}/status`, p.open)]});
   if (features.includes("repo")) nodes.push({...node("Repository and code", `${base}/code`), expanded: true, children: [node("Code files", `${base}/files`), node("Reviews", `${base}/reviews`, p.reviews), node("Deploys", `/apps?project=${encodeURIComponent(p.path)}#deploys`, p.deploys)]});
   if (features.includes("wiki")) nodes.push(node("Wiki", `${base}/wiki`, p.wiki));
-  if (features.includes("knowledge")) nodes.push({...node("Knowledge base and research", `${base}?resource=wiki`, p.wiki), expanded: true, children: [node("Knowledge base", `${base}?resource=wiki`, p.wiki - p.research), node("Research", `${base}?resource=research`, p.research)]});
+  if (features.includes("knowledge")) nodes.push({...node("Knowledge base and research", `${base}/wiki`, p.wiki), expanded: true, children: [node("Knowledge base", `${base}/wiki`, p.wiki - p.research), node("Research", `${base}/wiki?view=research`, p.research)]});
   if (features.includes("files")) nodes.push(node("Files", `${base}/documents`, p.files));
   if (features.includes("people")) nodes.push(node("Contacts and graph", `${base}/contacts`, p.contacts));
   nodes.push({...node("Channels", "/c", p.channels.length), expanded: true, children: p.channels.map(c => node(c.display_name, `/c/${encodeURIComponent(c.slug)}`, c.count))});
