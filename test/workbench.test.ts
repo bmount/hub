@@ -3,6 +3,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { WORKBENCH_JS } from "../src/workbenchScript";
+import { clientSlow } from "../src/http/clientSlow";
 import { createProject } from "../src/db/projects";
 import { addAgentMember, createChannel } from "../src/db/chat";
 import { apiPost, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
@@ -51,11 +52,22 @@ describe("the workbench", () => {
   it("caps browser-report examples and rate-limits each signed-in identity", async () => {
     const w = await world();
     await env.HUB_DB.prepare("INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_at) SELECT 'bounded-source', ?, id, 'pimwell-hub', 'active', ? FROM project WHERE tenant_id = ? AND slug = 'site'").bind(w.t.id, Date.now(), w.t.id).run();
-    const send = () => SELF.fetch(`https://${HOST}/client/slow`, { method: "POST", headers: { ...w.h, origin: `https://${HOST}`, "x-pimwell-client": "1" }, body: JSON.stringify({ path: "/people", duration: 15000, phase: "headers", result: "timeout", status: null }) });
-    for (let i = 0; i < 60; i++) expect((await send()).status).toBe(204);
-    expect((await send()).status).toBe(429);
-    expect(await env.HUB_DB.prepare("SELECT count(*) AS n FROM app_event").first()).toEqual({ n: 50 });
-    expect(await env.HUB_DB.prepare("SELECT count FROM app_error_group").first()).toEqual({ count: 60 });
+    // Keep every request in one rate window, even when the suite crosses a minute boundary.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const send = async () => {
+      const pending: Promise<unknown>[] = [];
+      const res = await clientSlow(new Request(`https://${HOST}/client/slow`, { method: "POST", headers: { ...w.h, origin: `https://${HOST}`, "x-pimwell-client": "1" }, body: JSON.stringify({ path: "/people", duration: 15000, phase: "headers", result: "timeout", status: null }) }), env, p => { pending.push(p); });
+      await Promise.all(pending);
+      return res;
+    };
+    try {
+      for (let i = 0; i < 60; i++) expect((await send()).status).toBe(204);
+      expect((await send()).status).toBe(429);
+      expect(await env.HUB_DB.prepare("SELECT count(*) AS n FROM app_event").first()).toEqual({ n: 50 });
+      expect(await env.HUB_DB.prepare("SELECT count FROM app_error_group").first()).toEqual({ count: 60 });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("shows the rail with live counts on every page, read in the sign-in batch", async () => {
