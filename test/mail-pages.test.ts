@@ -148,7 +148,7 @@ describe("mail in the workbench", () => {
     expect(member).toContain('data-href="/mail/M1"');
     expect(member).not.toContain("/mail/M2");
     expect(member).toContain('href="/mail?addresses=1"');
-    expect(await (await w.get("/mail?addresses=1", w.pat.token)).text()).toContain("<code>acme.site@pimwell.test</code>");
+    expect(await (await w.get("/mail?addresses=1", w.pat.token)).text()).toContain("acme.site@pimwell.test</code>");
     expect(await (await w.get("/mail", w.ada.token)).text()).toContain("· held");
     const filtered = await (await w.get("/mail/M1?project=site", w.pat.token)).text();
     expect(filtered).toContain('data-href="/mail/M1?project=site"');

@@ -33,7 +33,7 @@ export function snippet(text: string, ts: string[], max = 160): string {
   return `${start > 0 ? "…" : ""}${flat.slice(start, start + max)}${start + max < flat.length ? "…" : ""}`;
 }
 
-export type Hit = { kind: string; ref: string; title: string; snippet: string; href: string; at: number };
+export type Hit = { kind: string; ref: string; title: string; snippet: string; href: string; at: number; project_name?: string | null };
 const SOURCE_LIMITS = { contacts: 20, files: 20, wiki: 20, work: 20, mail: 15, messages: 15, people: 10, projects: 10, errors: 10, reviews: 15, situations: 15, assistant: 15, outgoing: 15 } as const;
 const CHANNEL_LIMIT = 40;
 const PER_CHANNEL_LIMIT = 10;
@@ -133,12 +133,12 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
   const attachments = "COALESCE((SELECT GROUP_CONCAT(COALESCE(json_extract(CASE WHEN json_valid(a.value) THEN a.value ELSE '{}' END, '$.text'), ''), ' ') FROM json_each(CASE WHEN json_valid(m.attachments) THEN m.attachments ELSE '[]' END) a), '')";
   const [work, mail, ppl, proj, errs, reviews, situations, assistant, outgoing, wiki, files, contacts] = await ctx.db.batch([
     workHitsStatement(ctx, ts, null, SOURCE_LIMITS.work),
-    ctx.db.prepare(`SELECT m.id, m.subject, m.text || ' ' || ${attachments} AS text, m.from_email, m.received_at FROM inbound_mail m WHERE ${access.sql}
+    ctx.db.prepare(`SELECT m.id, (SELECT p.display_name FROM project p WHERE p.id = m.project_id AND p.tenant_id = m.tenant_id) AS project_name, m.subject, m.text || ' ' || ${attachments} AS text, m.from_email, m.received_at FROM inbound_mail m WHERE ${access.sql}
       AND ${all("m.subject || ' ' || m.text || ' ' || m.from_email || ' ' || " + attachments, ts.length)} ORDER BY m.received_at DESC LIMIT ?`).bind(...access.bindings, ...ts.map(like), SOURCE_LIMITS.mail),
     ctx.db.prepare(`SELECT i.display_name, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active'
       AND ${all("i.display_name || ' ' || i.email", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.people),
     ctx.db.prepare(`SELECT (CASE WHEN namespace_id IS NULL THEN slug ELSE (SELECT n.slug FROM namespace n WHERE n.id = project.namespace_id AND n.tenant_id = project.tenant_id) || '/' || slug END) AS slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND ${all("slug || ' ' || display_name", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.projects),
-    ctx.db.prepare(`SELECT g.id, g.script_name, g.title, g.last_message, g.last_seen FROM app_error_group g WHERE g.tenant_id = ? AND ${all("g.title || ' ' || g.last_message || ' ' || g.script_name", ts.length)}
+    ctx.db.prepare(`SELECT g.id, (SELECT p.display_name FROM project p WHERE p.id = g.project_id AND p.tenant_id = g.tenant_id) AS project_name, g.script_name, g.title, g.last_message, g.last_seen FROM app_error_group g WHERE g.tenant_id = ? AND ${all("g.title || ' ' || g.last_message || ' ' || g.script_name", ts.length)}
       ORDER BY g.last_seen DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.errors),
     ctx.db.prepare(`SELECT ${projectPathSql()} AS slug, r.number, r.title, r.updated_at, r.summary || ' ' || COALESCE((SELECT GROUP_CONCAT(c.body, ' ') FROM review_comment c WHERE c.review_id = r.id AND c.tenant_id = r.tenant_id), '') AS text
       FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ?
@@ -164,11 +164,11 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
     files: (files!.results as Array<{project: string; path: string; name: string; text: string; created_at: number}>).map(r => ({kind: "File", ref: `${r.project}/${r.path}`, title: r.name, snippet: snippet(r.text, ts), href: `/${r.project}/documents?path=${encodeURIComponent(r.path)}`, at: r.created_at})),
     wiki: (wiki!.results as Array<{project: string; slug: string; title: string; body: string; created_at: number; research: string | null}>).map(r => ({kind: r.research ? "Research result" : "Wiki page", ref: `${r.project}/${r.slug}`, title: r.title, snippet: snippet(r.body, ts), href: `/${r.project}/wiki/${r.slug}`, at: r.created_at})),
     work: (work!.results as WorkRow[]).map((r) => workHit(r, ts)),
-    mail: (mail!.results as Array<{ id: string; subject: string; text: string; from_email: string; received_at: number }>).map((m) => ({ kind: "Mail", ref: m.from_email, title: m.subject || "(no subject)", snippet: snippet(m.text, ts), href: `/mail/${m.id}`, at: m.received_at })),
+    mail: (mail!.results as Array<{ id: string; project_name: string | null; subject: string; text: string; from_email: string; received_at: number }>).map((m) => ({ kind: "Mail", project_name:m.project_name, ref: m.from_email, title: m.subject || "(no subject)", snippet: snippet(m.text, ts), href: `/mail/${m.id}`, at: m.received_at })),
     messages: messages.hits,
     people: (ppl!.results as Array<{ display_name: string; email: string; kind: string }>).map((x) => ({ kind: x.kind === "agent" ? "Agent" : "Person", ref: x.email, title: x.display_name, snippet: "", href: `/people/${encodeURIComponent(x.email)}`, at: 0 })),
     projects: (proj!.results as Array<{ slug: string; display_name: string }>).map((x) => ({ kind: "Project", ref: x.slug, title: x.display_name, snippet: "", href: `/${x.slug}`, at: 0 })),
-    errors: (errs!.results as Array<{ id: string; script_name: string; title: string; last_message: string; last_seen: number }>).map((g) => ({ kind: "Error", ref: g.script_name, title: g.title, snippet: snippet(g.last_message, ts), href: `/apps?g=${g.id}`, at: g.last_seen })),
+    errors: (errs!.results as Array<{ id: string; project_name: string | null; script_name: string; title: string; last_message: string; last_seen: number }>).map((g) => ({ kind: "Error", project_name:g.project_name, ref: g.script_name, title: g.title, snippet: snippet(g.last_message, ts), href: `/apps?g=${g.id}`, at: g.last_seen })),
   };
   groups.reviews = (reviews!.results as Array<{slug: string; number: number; title: string; text: string; updated_at: number}>).map(r => ({kind: 'Review', ref: `${r.slug}!${r.number}`, title: r.title, snippet: snippet(r.text, ts), href: `/${r.slug}/reviews/${r.number}`, at: r.updated_at}));
   groups.situations = (situations!.results as Array<{id: string; title: string; text: string; created_at: number}>).map(s => ({kind: 'Situation', ref: '', title: s.title, snippet: snippet(s.text, ts), href: `/situations?s=${encodeURIComponent(s.id)}`, at: s.created_at}));

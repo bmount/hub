@@ -1,7 +1,7 @@
 import { projectControls } from "./projectControls";
 import { PROJECT_KINDS, projectFeatures } from "../projectFeatures";
 import type { Env } from "../env";
-import { COPY_SCRIPT, esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
+import { naturalName, plural, COPY_SCRIPT, esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { readableMailEvents } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
@@ -52,7 +52,7 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
       FROM project p WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind NOT IN ('channel','agent-src') ORDER BY path`).bind(ctx.identity!.id, ...eventAccess.bindings, ...(ctx.identity!.kind === "human" ? [] : [ctx.identity!.id]), t.id),
     ctx.db.prepare(`SELECT a.id, a.summary, a.created_at, ${projectPathSql()} AS slug, w.number, a.href FROM attention a LEFT JOIN work_item w ON w.id = a.item_id LEFT JOIN project p ON p.id = w.project_id AND p.tenant_id = a.tenant_id WHERE a.tenant_id = ? AND a.identity_id = ? AND a.done_at IS NULL ORDER BY a.created_at DESC LIMIT 6`).bind(t.id,ctx.identity!.id),
   ]);
-  const rows = projects!.results as Array<Project & { open_work: number; needs: number; last_activity: number }>;
+  const rows = (projects!.results as Array<Project & { open_work: number; needs: number; last_activity: number }>).sort((a,b)=>naturalName(a.display_name,b.display_name));
   const entries = needs!.results as Entry[];
   const url = new URL(request.url);
   const selected = url.searchParams.get("project");
@@ -65,7 +65,7 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   const chosen = selected === null ? null : rows.find(p => p.path === selected);
   if (selected !== null && !chosen) return notFoundPage(extra);
   const actions = `${rank(ctx.role) >= rank("member") ? '<a href="/projects/new">New project</a><a href="/people?connect=1">Connect an agent</a>' : ""}${rank(ctx.role) >= rank("admin") ? '<a href="/people?invite=1">Invite a person</a>' : ""}${rank(ctx.role) >= rank("member") ? '<a href="/new">File</a>' : ""}<a href="/archive">Archive</a>`;
-  const list = `<div class="head"><h1>${esc(t.display_name)}</h1><span>${rows.length} projects</span></div>${toolbar("Home actions", actions)}<p class="wb-hint">${esc(shellFor(ctx,env,"home")!.tip)}</p>
+  const list = `<div class="head"><h1>${esc(t.display_name)}</h1><span>${plural(rows.length,"project")}</span></div>${toolbar("Home actions", actions)}<p class="wb-hint">${esc(shellFor(ctx,env,"home")!.tip)}</p>
 <h2>Projects</h2>${kitTable("Projects", [{label:"Project"},{label:"Kind"},{label:"Open work"},{label:"Needs me"},{label:"Last activity"}], rows.map(p => {
     const href = `/?project=${encodeURIComponent(p.path)}`;
     return {href, selected: p.path === selected, cells: [{html:`<a href="${esc(href)}">${esc(p.display_name)}</a> <small>${esc(p.path)}</small>`},{html:esc(p.kind)},{html:String(p.open_work)},{html:String(p.needs)},{html:esc(ago(ctx.now,p.last_activity))}]};

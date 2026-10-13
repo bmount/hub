@@ -2,7 +2,7 @@ import { sameOrigin } from "./login";
 import type { Env } from "../env";
 import { shellFor } from "./shell";
 import { orgHomePage } from "./orgPages";
-import { esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
+import { localTime, esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
 import { classifyHost } from "../tenant";
 import { findInviteByToken, inviteIsOpen } from "../db/invites";
 import { getTenantById, listTenants } from "../db/tenants";
@@ -69,11 +69,11 @@ export async function sessionsPage(request: Request, env: Env): Promise<Response
   const selected = rows.find(s=>s.id === selectedId);
   if (selectedId && !selected) return notFoundPage(extra);
   const list = `<h1>Your sessions</h1>
-${toolbar("Session actions",'<a href="/me">Account</a><form class="inline" method="post" action="/api/session.end"><button type="submit">Sign out</button></form>')}
-${kitTable("Sessions",[{label:"Session"},{label:"Kind"},{label:"Started"},{label:"Last seen"}],rows.map(s=>({href:`/me/sessions?session=${encodeURIComponent(s.id)}`,selected:s.id === selectedId,cells:[{html:`<a href="/me/sessions?session=${esc(encodeURIComponent(s.id))}">${esc(s.label ?? s.kind)}${s.id === ctx.session!.id ? " (this one)" : ""}</a>`},{html:esc(s.kind)},{html:new Date(s.created_at).toISOString().slice(0,16).replace("T"," ")},{html:new Date(s.last_seen_at).toISOString().slice(0,16).replace("T"," ")}]}))) }`;
+${toolbar("Session actions",'<a href="/me">Account</a>')}
+${kitTable("Sessions",[{label:"Session"},{label:"Kind"},{label:"Started"},{label:"Last seen"}],rows.map(s=>({href:`/me/sessions?session=${encodeURIComponent(s.id)}`,selected:s.id === selectedId,cells:[{html:`<a href="/me/sessions?session=${esc(encodeURIComponent(s.id))}">${esc(s.label ?? s.kind)}${s.id === ctx.session!.id ? " (this one)" : ""}</a>`},{html:esc(s.kind)},{html:localTime(s.created_at)},{html:localTime(s.last_seen_at)}]}))) }`;
   const inspector = selected ? `<a class="back" href="/me/sessions">‹ Sessions</a><h1>${esc(selected.label ?? selected.kind)}</h1>
-${inspectorSection("Session",[{label:"Id",html:esc(selected.id)},{label:"Kind",html:esc(selected.kind)},{label:"Started",html:new Date(selected.created_at).toISOString()},{label:"Last seen",html:new Date(selected.last_seen_at).toISOString()}])}
-<form method="post" action="/api/session.revoke"><input type="hidden" name="session_id" value="${esc(selected.id)}"><input type="hidden" name="_back" value="/me/sessions"><button type="submit" class="quiet">Revoke</button></form>` : null;
+${inspectorSection("Session",[{label:"Kind",html:esc(selected.kind)},{label:"Started",html:localTime(selected.created_at)},{label:"Last seen",html:localTime(selected.last_seen_at)}])}
+<form method="post" action="/api/session.revoke"><input type="hidden" name="session_id" value="${esc(selected.id)}"><input type="hidden" name="_back" value="/me/sessions"><button type="submit" class="quiet destructive">Revoke</button></form>` : null;
   return htmlResponse(workbench("Sessions",{list,listKey:"sessions",inspector,inspectorKey:selected ? `session:${selected.id}:${selected.last_seen_at}` : "",stackOnPhone:true},shellFor(ctx,env,"hub","sessions")!),200,extra);
 }
 
@@ -113,7 +113,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind === "apex") {
-    const createForm = `<section><h2>New organization</h2><form data-reload method="post" action="/api/tenant.create"><label>Organization slug <input name="slug" pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="63" required></label><label>Display name <input name="display_name" maxlength="80" required></label><button type="submit">Create organization</button></form></section>`;
+    const createForm = `<section><h2>New organization</h2><form data-reload method="post" action="/api/tenant.create"><label>Organization slug <input name="slug" pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="63" required></label><label>Display name <input name="display_name" maxlength="80" required></label><button type="submit" class="quiet">Create organization</button></form></section>`;
     if (!ctx.identity) return htmlResponse(LANDING_HTML.replace("</body>", `${createForm}</body>`), 200, extra);
     const allMemberships = await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id, true);
     const memberships = allMemberships.filter((m) => m.tenant.state === "active" && m.membership.state === "active");
@@ -128,7 +128,7 @@ ${setupCard(env, memberships.filter((m) => m.membership.role !== "reader" || ctx
       body += createForm;
       body += `<h2>Manage your organizations</h2>` + allMemberships.filter(m => m.membership.role === "admin" || ctx.identity!.is_root === 1).map(m => {
         const slug = esc(m.tenant.slug), archived = m.tenant.state === "archived";
-        return `<section><h3>${esc(m.tenant.display_name)} (${slug})</h3><form data-reload method="post" action="/api/tenant.${archived ? "unarchive" : "archive"}"><input type="hidden" name="slug" value="${slug}"><button>${archived ? "Unarchive" : "Archive"} organization</button></form>${archived ? `<form data-reload method="post" action="/api/tenant.delete"><input type="hidden" name="slug" value="${slug}"><label>Type ${slug} to delete permanently <input name="confirm" required autocomplete="off"></label><button>Delete permanently</button><p>This cannot be undone. All organization data and repositories will be removed.</p></form>` : ""}</section>`;
+        return `<section><h3>${esc(m.tenant.display_name)} (${slug})</h3><form data-reload method="post" action="/api/tenant.${archived ? "unarchive" : "archive"}"><input type="hidden" name="slug" value="${slug}"><button class="quiet${archived ? "" : " destructive"}">${archived ? "Unarchive" : "Archive"} organization</button></form>${archived ? `<form data-reload method="post" action="/api/tenant.delete"><input type="hidden" name="slug" value="${slug}"><label>Type ${slug} to delete permanently <input name="confirm" required autocomplete="off"></label><button class="quiet destructive">Delete permanently</button><p>This cannot be undone. All organization data and repositories will be removed.</p></form>` : ""}</section>`;
       }).join("");
     }
     if (ctx.identity.is_root === 1) {

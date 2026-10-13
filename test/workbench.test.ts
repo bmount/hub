@@ -2,6 +2,7 @@
 // + File, the jump box, and the planned areas in plain view.
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
+import { address, localTime, naturalName, plural } from "../src/html";
 import { WORKBENCH_JS } from "../src/workbenchScript";
 import { clientSlow } from "../src/http/clientSlow";
 import { createProject } from "../src/db/projects";
@@ -24,6 +25,53 @@ async function world() {
 const attr = (html: string, id: string) => /data-key="([^"]*)"/.exec(html.slice(html.indexOf(`id="${id}"`)))?.[1];
 
 describe("the workbench", () => {
+  it("keeps reviewed shell, search, usage and numeric names compact", async () => {
+    const w = await world();
+    for (const n of [10,2]) await createProject(env.HUB_DB, {tenant_id:w.t.id,namespace_id:null,slug:`team-${n}`,kind:"workspace",display_name:`Team ${n}`},Date.now());
+    const people = await (await w.get("/people")).text();
+    const crumb = people.match(/aria-label="Breadcrumb"[\s\S]*?<\/nav>/)![0];
+    expect(crumb).toContain("People and agents");
+    expect(crumb).not.toContain(">Site<");
+    expect(people).not.toContain("Your account</h4>");
+    expect(people.match(/action="\/api\/session.end"/g)).toHaveLength(1);
+    const explorer = people.slice(people.indexOf('id="explorer"'),people.indexOf('aria-label="Other projects"'));
+    expect(explorer.indexOf('id="project-filter"')).toBeLessThan(explorer.indexOf('aria-label="Project resources"'));
+    const otherProjects = people.slice(people.indexOf('aria-label="Other projects"'));
+    expect(otherProjects.indexOf("Team 2")).toBeLessThan(otherProjects.indexOf("Team 10"));
+    const home = await (await w.get("/")).text();
+    const projects = home.slice(home.indexOf('<table class="wb-table" aria-label="Projects"'));
+    expect(projects.indexOf("Team 2")).toBeLessThan(projects.indexOf("Team 10"));
+    expect((await (await w.get("/new?project=site")).text()).split("</header>")[0]).not.toContain('+ File');
+    const search = await (await w.get("/search?q=Checkout")).text();
+    const list = search.slice(search.indexOf('id="list"'),search.indexOf('id="inspector"'));
+    expect(list).not.toContain('<form');
+    expect(list.match(/<table/g)).toHaveLength(1);
+    for (const heading of ["Kind","Reference","Title","Project","When"]) expect(list).toContain(`>${heading}</th>`);
+    expect(list).not.toContain('<td></td>');
+    expect(list).toContain("Site");
+    expect(search).toContain('value="Checkout" placeholder="Search');
+    const usage = await (await w.get("/usage?group=work")).text();
+    expect(usage.match(/<table/g)).toHaveLength(1);
+    expect(usage).toContain('name="group"');
+    for (const heading of ["Cost (USD)","Calls","Input","Output"]) expect(usage).toContain(`>${heading}</th>`);
+    expect(usage.match(/>ⓘ</g)).toHaveLength(1);
+    const board = await (await w.get("/site/board")).text();
+    for (const title of ["Open","Under way","Done lately"]) expect(board).toContain(`<h2>${title} `);
+    expect(board).not.toContain("Recorded totals · rows sampled");
+  });
+
+  it("renders safe, browser-local time hooks, copyable addresses and singular counts", () => {
+    expect(localTime(null)).toBe("Not recorded");
+    expect(localTime(Date.UTC(2026,9,13,17,8))).toContain('data-local-time="1791911280000"');
+    expect(WORKBENCH_JS).toContain('d.toLocaleTimeString');
+    expect(WORKBENCH_JS).toContain('"Today"');
+    expect(address('x<y@example.test')).toContain('x&lt;y@example.test</code>');
+    expect(address('x@example.test')).toContain('data-copy="address"');
+    expect(naturalName("Team 2","Team 10")).toBeLessThan(0);
+    expect(plural(1,"agent")).toBe("1 agent");
+    expect(plural(1,"work group")).toBe("1 work group");
+    expect(plural(1,"active source")).toBe("1 active source");
+  });
   it("keeps navigation on signed-in views without retired components", async () => {
     const w = await world();
     await apiPost(HOST, "project.create", {slug:"notes",kind:"workspace",display_name:"Notes"}, w.h);
@@ -162,7 +210,10 @@ describe("the workbench", () => {
     const html = await (await w.get("/site/w/1", {cookie})).text();
     expect(html).toContain('data-project="site" data-in-project="1"');
     const bar = html.slice(html.indexOf('<header class="bar">'), html.indexOf('</header>'));
-    expect(bar).toMatch(/ACME.*Site.*Docket.*#1/s);
+    expect(bar).toMatch(/ACME.*Site.*Docket.*Checkout fails/s);
+    expect(bar).not.toContain(">#1<");
+    const orgBar = (await (await w.get("/people", {cookie})).text()).split("</header>")[0]!;
+    expect(orgBar).not.toContain(">Notes<");
     const foreign = await seedTenant("other");
     await createProject(env.HUB_DB, {tenant_id: foreign.id, namespace_id: null, slug: "secret", kind: "wiki", display_name: "Secret project"}, Date.now());
     for (const preference of [`${w.pat.identity.id}:secret`, "other-person:site", `${w.pat.identity.id}:missing`, "%invalid"]) {
@@ -247,7 +298,10 @@ describe("the workbench", () => {
     const files = await html("/notes/documents?folder=handbook&path=handbook%2Fguide.txt");
     expect(list(files)).toContain('aria-label="Folders"');
     expect(list(files)).toContain('aria-label="Files"');
-    expect(inspector(files)).toContain('aria-label="Versions"');
+    expect(inspector(files)).not.toContain('aria-label="Versions"');
+    expect(inspector(files)).not.toContain("SHA-256");
+    expect(inspector(files)).toContain("modified ");
+    expect(inspector(files)).toContain("data-local-time=");
     expect(inspector(files)).toContain('Mail sharing');
     expect(attr(files,"list")).toBe(attr(await html("/notes/documents?folder=handbook"),"list"));
     const upload = await html("/notes/documents?upload=1");
@@ -308,8 +362,9 @@ describe("the workbench", () => {
         expect(res.headers.get("cache-control")).toBe("no-store");
         const html = await res.text();
         const role = who === root ? "root" : host === HOST ? "member" : null;
-        expect(html).toContain(`<a class="me" href="https://pimwell.test/me">${who.identity.email}${role ? ` (${role})` : ""}</a>`);
-        expect(html).toContain(`<li class="account-details">${who.identity.email}${role ? `<span>Role: ${role}</span>` : ""}</li>`);
+        expect(html).toContain(`<a class="me" href="https://pimwell.test/me"><code id="header-email">${who.identity.email}</code>${role ? ` (${role})` : ""}</a>`);
+        expect(html).not.toContain('class="account-details"');
+        expect(html.match(/action="\/api\/session.end"/g)).toHaveLength(1);
         expect(html).not.toContain(who === root ? member.identity.email : root.identity.email);
       }
     }
@@ -381,7 +436,7 @@ describe("the workbench", () => {
     expect((await w.get("/planned/nosuch")).status).toBe(404);
   });
 
-  it("links one cached stylesheet and script, offers Log out, and signs out to a page that needs no session", async () => {
+  it("links one cached stylesheet and script, offers Sign out, and signs out to a page that needs no session", async () => {
     const w = await world();
     const html = await (await w.get("/docket")).text();
     const css = /href="(\/assets\/app\.[a-z0-9]+\.css)"/.exec(html)![1]!;
@@ -394,7 +449,9 @@ describe("the workbench", () => {
     expect(await (await SELF.fetch(`https://${HOST}${css}`)).text()).toContain("--accent:");
     expect((await SELF.fetch(`https://${HOST}/assets/app.old.css`)).status).toBe(404);
     expect(html).not.toContain("<style>");
-    expect(html).toContain('<h4>Your account</h4>');
+    expect(html).not.toContain('<h4>Your account</h4>');
+    expect(html).toContain('class="button quiet file"');
+    expect(html).toContain('>Sign out</button>');
     expect(html).toContain('action="/api/session.end" data-reload><input type="hidden" name="_back" value="/signed-out">');
     const out = await SELF.fetch(`https://${HOST}/api/session.end`, { method: "POST", redirect: "manual", headers: { ...w.h, origin: `https://${HOST}`, "content-type": "application/x-www-form-urlencoded" }, body: "_back=%2Fsigned-out" });
     expect(out.status).toBe(303);

@@ -170,15 +170,15 @@ describe("Sign in with Google", () => {
     expect(await getMembership(env.HUB_DB, root.identity.id, tenant.id)).toBeNull();
     for (const host of [HOST, "work.pimwell.test"]) {
       const page = await (await SELF.fetch(`https://${host}/`, { headers: cookieHeaders(token, host) })).text();
-      expect(page).toContain('<li class="account-details">work@example.com');
-      expect(page).not.toContain("Role: root");
+      expect(page).toContain('<code id="header-email">work@example.com</code>');
+      expect(page).not.toContain("(root)");
       expect(page).not.toContain("owner@example.com");
     }
     // Switching this browser does not rewrite sessions in other browsers.
     const old = await env.HUB_DB.prepare("SELECT identity_id, revoked_at FROM session WHERE id = ?").bind(root.session.id).first();
     expect(old).toEqual({ identity_id: root.identity.id, revoked_at: null });
     const ownerPage = await (await SELF.fetch(`https://${HOST}/`, { headers: cookieHeaders(root.token, HOST) })).text();
-    expect(ownerPage).toContain('<li class="account-details">owner@example.com<span>Role: root</span>');
+    expect(ownerPage).toContain('<code id="header-email">owner@example.com</code> (root)');
   });
 
   it("promotes an existing invited account to root only after its independent verified sign-in", async () => {

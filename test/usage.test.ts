@@ -253,7 +253,7 @@ describe("recorded AI usage by work item", () => {
     expect((await w.call(w.pat, "usage.summary", { everyone: true })).status).toBe(403);
     const all = await w.call(w.ada, "usage.summary", { everyone: true });
     expect((all.result.byWork as WorkGroup[])[0]).toMatchObject({ calls: 3, cost_micros: 9_250_000, unpriced: 1 });
-    const page = await (await SELF.fetch(`https://${HOST}/usage?who=ada%40example.com`, { headers: w.pat })).text();
+    const page = await (await SELF.fetch(`https://${HOST}/usage?group=work&who=ada%40example.com`, { headers: w.pat })).text();
     expect(page).toContain("By work item");
     expect(page).toContain('<a href="/site/w/1">site#1</a>');
     expect(page).toContain("price unknown (1 unpriced)");
@@ -336,7 +336,7 @@ describe("recorded AI usage by work item", () => {
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toMatchObject({ work: "site#1", total: { calls: 1, cost_micros: null }, byWork: [{ ref: "site#1", calls: 1, cost_micros: null, unpriced: 1 }], byWorkCoverage: { limit: 50, shown: 1, truncated: false } });
     const text = result.content.filter(c => c.type === "text").map(c => c.text).join("\n");
-    expect(text).toContain("By work item (1 groups shown; complete for recorded calls in this scope)");
+    expect(text).toContain("By work item (1 group shown; complete for recorded calls in this scope)");
     expect(text).toContain("price unknown (1 unpriced)");
     expect(text).toContain("not the full cost of the work");
     expect(text).toContain("for site#1");
@@ -366,8 +366,8 @@ describe("AI usage cost provenance", () => {
     for (const key of ["byWho", "bySource", "byDay", "byWork"]) expect(summary.result[key]).toMatchObject([money]);
     expect(summary.result.byModel).toMatchObject([{ calls: 3, estimated_micros: 3_150_000 }, { calls: 1, estimated_micros: null, unpriced: 1 }]);
     const page = await (await SELF.fetch(`https://${HOST}/usage?project=site&work=site%231`, { headers: w.pat })).text();
-    for (const text of ["Reported amounts: $0 (1 call)", "API-rate estimates: $3.15 (1 call)", "Unclassified amounts: $0.25 (1 call)", "price unknown (1 unpriced)", "2/4 input and 1/4 output counts known", "Billing mode: unknown", "Subscription fees are not configured", "not audited invoices", "not charges", "Rate-tier coverage", "anthropic/exact-model", "$3.15 · API-rate estimate", "$0.25 · unclassified amount", "$0 · reported amount", "unknown / unknown"]) expect(page).toContain(text);
-    expect(page).not.toContain("$3.40");
+    for (const text of ["Reported amounts: $0 (1 call)", "API-rate estimates: $3.15 (1 call)", "Unclassified amounts: $0.25 (1 call)", "price unknown (1 unpriced)", "2/4 input and 1/4 output counts known", "Billing mode: unknown", "Subscription fees are not configured", "not audited invoices", "not charges", "Rate-tier coverage", "exact-model", 'aria-label="Estimate caveats"', 'class="wb-num"']) expect(page).toContain(text);
+    expect(page).toContain("$3.40"); // Combined recorded amount is qualified by the provenance note.
     expect(page).not.toContain("every call priced");
   });
 
@@ -468,7 +468,7 @@ describe("AI usage accounting", () => {
     expect((all.result.total as { calls: number }).calls).toBe(2);
     const page = await (await SELF.fetch(`https://${HOST}/usage`, { headers: w.ada })).text();
     expect(page).toContain("By person or agent");
-    const patPage = await (await SELF.fetch(`https://${HOST}/usage?who=ada%40example.com`, { headers: w.pat })).text();
+    const patPage = await (await SELF.fetch(`https://${HOST}/usage?group=work&who=ada%40example.com`, { headers: w.pat })).text();
     expect(patPage).not.toContain("By person or agent");
     expect(patPage).toContain("<h1>pat@example.com</h1>");
   });

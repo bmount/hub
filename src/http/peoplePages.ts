@@ -3,7 +3,7 @@
 // everyone else sees who is here and what they are on. One D1 batch per page.
 import { agentSrcAccess } from "../code/agentSrc";
 import type { Env } from "../env";
-import { emptyState, esc, htmlResponse, inspectorSection, kitTable, toolbar, workbench } from "../html";
+import { address, naturalName, plural, emptyState, esc, htmlResponse, inspectorSection, kitTable, toolbar, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { readableMailEvents } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
@@ -37,7 +37,7 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
   const connecting = canConnect && url.searchParams.get("connect") === "1";
   const fresh = proofFresh(ctx), sent = url.searchParams.get("check") === "sent";
   const pre = (k: string) => (url.searchParams.get(k) ?? "").slice(0, 254);
-  const AGENT_WHY = "Agents act on your behalf, so we confirm it's really you before connecting one.";
+  const AGENT_WHY = "Confirm it’s you before connecting an agent.";
   const email = who ? decodeURIComponent(who).trim().toLowerCase() : null;
   const tid = ctx.tenant.id;
   const eventAccess = readableMailEvents(ctx);
@@ -52,7 +52,7 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
     ctx.db.prepare(`SELECT e.summary, e.created_at FROM event e JOIN identity i ON i.id = e.identity_id WHERE e.tenant_id = ? AND i.email = ? AND ${eventAccess.sql} ORDER BY e.created_at DESC LIMIT 15`).bind(tid, email ?? "", ...eventAccess.bindings),
   ];
   const [peopleR, invitesR, activityR] = await ctx.db.batch(stmts);
-  const people = peopleR!.results as Person[];
+  const people = (peopleR!.results as Person[]).sort((a,b)=>naturalName(a.display_name,b.display_name));
   const invites = invitesR!.results as Invite[];
   const person = email ? people.find((p) => p.email === email) ?? null : null;
   if (email && !person) return notFoundPage(extra);
@@ -61,15 +61,15 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
     ? ` <a href="/agent-src/${esc(encodeURIComponent(p.email.slice(p.email.indexOf(".") + 1, p.email.indexOf("@"))))}/code">Source</a>` : "";
   const humans = people.filter((p) => p.kind === "human"), agents = people.filter((p) => p.kind !== "human");
   const table = (rows: Person[], agent: boolean) => rows.length ? kitTable(agent ? "Agents" : "People",
-    [{label:"Name"},{label:"Address",className:"hide-s"},{label:"Role"},...(agent ? [{label:"Answers to",className:"hide-s"}] : []),{label:"Open"},{label:"Active"}],
+    [{label:"Name"},...(agent ? [{label:"Source",className:"hide-s"}] : []),{label:"Address",className:"hide-s"},{label:"Role"},...(agent ? [{label:"Answers to",className:"hide-s"}] : []),{label:"Open"},{label:"Active"}],
     rows.map(p => { const href = `/people/${encodeURIComponent(p.email)}`; return {href,selected:person?.id === p.id,cells:[
-      {html:`<a href="${esc(href)}">${esc(p.display_name)}</a>${sourceLink(p)}`},{html:`<code>${esc(p.email)}</code>`,className:"hide-s"},{html:esc(p.is_root ? "root" : p.role)},
+      {html:`<a href="${esc(href)}">${esc(p.display_name)}</a>`},...(agent ? [{html:sourceLink(p) || "—",className:"hide-s"}] : []),{html:address(p.email),className:"hide-s"},{html:esc(p.is_root ? "root" : p.role)},
       ...(agent ? [{html:esc(p.sponsor ?? "nobody"),className:"hide-s"}] : []),{html:String(p.open)},{html:ago(p.last_seen,ctx.now)}]}; }))
     : emptyState(agent ? "No agents yet" : "No people yet", agent ? "Connect an agent to work alongside you." : "Invite a person to this organization.", {label:agent ? "Connect an agent" : "People",href:agent && canConnect ? "/people?connect=1" : "/people"});
   const pending = admin ? `<h2>Invites waiting</h2>${invites.length ? kitTable("Invites",[{label:"Address"},{label:"Role"},{label:"By",className:"hide-s"},{label:"Expires"},{label:"Action"}],invites.map(v=>({cells:[
-    {html:`<code>${esc(v.email)}</code>`},{html:esc(v.role)},{html:esc(v.by ?? ""),className:"hide-s"},{html:day(v.expires_at)},
+    {html:address(v.email)},{html:esc(v.role)},{html:esc(v.by ?? ""),className:"hide-s"},{html:day(v.expires_at)},
     {html:`<form class="inline" method="post" action="/api/invite.revoke"><input type="hidden" name="invite_id" value="${esc(v.id)}"><input type="hidden" name="_back" value="/people"><button class="quiet" type="submit">Revoke</button></form>`}]}))) : '<p class="lede">None.</p>'}` : "";
-  const list = `<div class="head"><h1>People and agents</h1><span>${humans.length} people, ${agents.length} agents</span></div>
+  const list = `<div class="head"><h1>People and agents</h1><span>${plural(humans.length,"person","people")}, ${plural(agents.length,"agent")}</span></div>
 ${toolbar("People actions", `${canConnect ? '<a href="/people?connect=1">Connect an agent</a>' : ""}${admin ? '<a href="/people?invite=1">Invite a person</a><a href="/admin/agents">Manage agents</a>' : ""}`)}
 <h2>People</h2>${table(humans,false)}<h2>Agents</h2>${table(agents,true)}${pending}`;
 
@@ -77,11 +77,11 @@ ${toolbar("People actions", `${canConnect ? '<a href="/people?connect=1">Connect
   if (connecting) {
     const back = `/people?connect=1${pre("name") ? `&name=${encodeURIComponent(pre("name"))}` : ""}`;
     inspector = `<a class="back" href="/people">‹ People</a><h1>Connect an agent</h1>
-<p class="lede">For agents on machines without a browser, such as Claude Code or Codex on a server. You get a one-time link to paste to the agent; it works for 24 hours. The agent answers to you and can do what you can here, up to a member's rights.</p>
+${fresh ? '<p class="lede">Paste the one-time, 24-hour link to your agent.</p>' : ""}
 ${fresh ? `<form method="post" action="/api/agent.connect">
 <label style="display:block">Name <input name="display_name" required maxlength="80" style="display:block;width:100%" placeholder="Build box" value="${esc(pre("name"))}" autofocus></label>
 <p><button type="submit">Make connect link</button></p></form>` : extraCheck(env, ctx, back, AGENT_WHY, sent)}
-<p class="lede">People connect their own chat apps with the assistant connection instead: <code>https://${esc(ctx.tenant.slug)}.${esc(env.HUB_DOMAIN)}/mcp</code>.</p>`;
+`;
     key = "connect";
   } else if (inviting) {
     const root = ctx.identity.is_root === 1;
@@ -118,12 +118,12 @@ ${fresh ? `<form method="post" action="/api/invite.create">
     const manage = canManage ? `<h2>Manage</h2>
 <form method="post" action="/api/member.set_role"><input type="hidden" name="email" value="${esc(person.email)}"><input type="hidden" name="_back" value="/people/${esc(encodeURIComponent(person.email))}">
 <label>Role <select name="role">${roles.map((r) => option(r, r, r === person.role)).join("")}</select></label> <button type="submit" class="quiet">Change role</button></form>
-<details class="edit"><summary>Remove from ${esc(ctx.tenant.display_name)}</summary><p class="lede">Their history stays. Their access and assistant connections here end now, and their open work goes back to nobody.${sponsored.length ? ` ${sponsored.length} agent(s) answer to them; reassign or archive those on the Agents page.` : ""}</p>
+<details class="edit"><summary>Remove from ${esc(ctx.tenant.display_name)}</summary><p class="lede">Their history stays. Their access and assistant connections here end now, and their open work goes back to nobody.${sponsored.length ? ` ${plural(sponsored.length,"agent")} ${sponsored.length === 1 ? "answers" : "answer"} to them; reassign or archive those on the Agents page.` : ""}</p>
 <form method="post" action="/api/member.remove"><input type="hidden" name="email" value="${esc(person.email)}"><input type="hidden" name="_back" value="/people">
 <label>Type their email to confirm <input name="confirm" required autocomplete="off"></label><button type="submit">Remove</button></form></details>` : "";
     inspector = `<a class="back" href="/people">‹ People</a>
 <div class="head"><span>${person.kind === "human" ? "Person" : "Agent"}</span></div><h1>${esc(person.display_name)}</h1>${sourceLink(person)}
-${inspectorSection("Identity", [{label:"Address",html:`<code>${esc(person.email)}</code>`},{label:"Role",html:esc(person.is_root ? "root" : person.role)},...(person.sponsor ? [{label:"Answers to",html:esc(person.sponsor)}] : []),{label:"Here since",html:day(person.created_at)},{label:"Last active",html:ago(person.last_seen,ctx.now)},{label:"Open work",html:`<a href="/docket?owner=${esc(encodeURIComponent(person.email))}">${person.open} items</a>`}])}
+${inspectorSection("Identity", [{label:"Address",html:address(person.email)},{label:"Role",html:esc(person.is_root ? "root" : person.role)},...(person.sponsor ? [{label:"Answers to",html:esc(person.sponsor)}] : []),{label:"Here since",html:day(person.created_at)},{label:"Last active",html:ago(person.last_seen,ctx.now)},{label:"Open work",html:`<a href="/docket?owner=${esc(encodeURIComponent(person.email))}">${plural(person.open,"item")}</a>`}])}
 ${person.kind === "agent" && canConnect && (admin || person.operator_id === ctx.identity.id) ? `<h2>Connect</h2><p class="lede">A new one-time link, valid 24 hours, gives the agent a fresh token. Its earlier tokens keep working until they expire or are revoked.</p>
 ${fresh ? `<form method="post" action="/api/agent.connect"><input type="hidden" name="agent_id" value="${esc(person.id)}"><button type="submit" class="quiet">Make connect link</button></form>` : extraCheck(env, ctx, `/people/${encodeURIComponent(person.email)}`, AGENT_WHY, sent)}` : ""}
 ${sponsored.length ? `<h2>Agents who answer to them</h2><ul>${sponsored.map((s) => `<li><a href="/people/${esc(encodeURIComponent(s.email))}">${esc(s.display_name)}</a></li>`).join("")}</ul>` : ""}

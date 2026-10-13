@@ -2,7 +2,7 @@
 // the work filed from it, and Propose work) in the inspector. Quarantined mail is shown to admins only.
 import type { Env } from "../env";
 import { shellFor } from "./shell";
-import { esc, htmlResponse, kitTable, kitTree, toolbar, inspectorSection, workbench } from "../html";
+import { address, naturalName, esc, htmlResponse, kitTable, kitTree, toolbar, inspectorSection, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { canInspectMail, readableMail, readableOutgoingMail } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
@@ -56,16 +56,16 @@ async function mailPage(request: Request, env: Env, id: string | null): Promise<
   ]);
   const sendingOn = (switchR!.results[0] as { mail_out: number } | undefined)?.mail_out === 1;
   const rows = rowsR!.results as Row[];
-  const projects = projR!.results as Array<{ slug: string; display_name: string }>;
+  const projects = (projR!.results as Array<{ slug: string; display_name: string }>).sort((a,b)=>naturalName(a.display_name,b.display_name));
   const m = (msgR!.results[0] as Msg | undefined) ?? null;
   if (id && (!m || (m.verdict === "quarantined" && !admin))) return notFoundPage(extra);
 
   const org = ctx.tenant.slug;
   const mailboxUrl = `/mail${project ? `?project=${encodeURIComponent(project)}` : ""}`;
   const messageUrl = (id: string) => `/mail/${encodeURIComponent(id)}${project ? `?project=${encodeURIComponent(project)}` : ""}`;
-  const list = `<div class="head"><h1>Mail${project ? ` · ${esc(project)}` : ""}</h1><span>${rows.length} message${rows.length === 1 ? "" : "s"}</span></div>
+  const list = `<div class="head"><h1>Mail${project ? ` · ${esc(projects.find(p=>p.slug === project)?.display_name ?? project)}` : ""}</h1><span>Sending ${sendingOn ? "on" : "off"}</span><span>${rows.length} message${rows.length === 1 ? "" : "s"}</span></div>
 ${toolbar("Mailbox", '<a href="/mail?addresses=1">Addresses and sending</a>' + (ctx.identity.kind === "human" && rank(ctx.role) >= rank("admin") ? ' <a href="/mail/recipients">Response-recipient preferences</a>' : ""))}
-${rows.length ? kitTable("Mail", [{label:"To"},{label:"From",className:"hide-s"},{label:"Subject"},{label:"Received"}], rows.map(r => ({href:messageUrl(r.id),selected:m?.id === r.id,cells:[{html:esc(r.project ?? "inbox")},{html:esc(r.from_email),className:"hide-s"},{html:`<a href="${esc(messageUrl(r.id))}">${esc(r.subject || "(no subject)")}</a>${r.forwarded ? " · forwarded" : ""}${r.verdict === "quarantined" ? " · held" : ""}`},{html:ago(r.received_at,ctx.now)}]}))) : `<p class="empty">No mail yet. Forward a thread to a project's address to start.</p>`}
+${rows.length ? kitTable("Mail", [{label:"To"},{label:"From",className:"hide-s"},{label:"Subject"},{label:"Received"}], rows.map(r => ({href:messageUrl(r.id),selected:m?.id === r.id,cells:[{html:esc(r.project ?? "inbox")},{html:address(r.from_email),className:"hide-s"},{html:`<a href="${esc(messageUrl(r.id))}">${esc(r.subject || "(no subject)")}</a>${r.forwarded ? " · forwarded" : ""}${r.verdict === "quarantined" ? " · held" : ""}`},{html:ago(r.received_at,ctx.now)}]}))) : `<p class="empty">No mail yet. Forward a thread to a project's address to start.</p>`}
 `;
 
   let inspector: string; let key = "";
@@ -81,7 +81,7 @@ ${rows.length ? kitTable("Mail", [{label:"To"},{label:"From",className:"hide-s"}
     inspector = `<a class="back" href="${esc(mailboxUrl)}">‹ Mail</a>
 <div class="head"><span>${esc(m.project ?? "Organization inbox")}</span><span>${when(m.received_at)}</span>${m.forwarded ? '<span class="pill">forwarded</span>' : ""}</div>
 <h1>${esc(m.subject || "(no subject)")}</h1>
-${inspectorSection("Message", [{label:"From",html:esc(m.from_email)},{label:"To",html:`<code>${esc(m.to_address)}</code>`},{label:"Attachments",html:atts.length ? atts.map(a => `${esc(a.filename ?? "unnamed")} (${esc(a.mime_type)}, ${a.size} bytes)`).join(", ") : "none"}])}
+${inspectorSection("Message", [{label:"From",html:address(m.from_email)},{label:"To",html:address(m.to_address)},{label:"Attachments",html:atts.length ? atts.map(a => `${esc(a.filename ?? "unnamed")} (${esc(a.mime_type)}, ${a.size} bytes)`).join(", ") : "none"}])}
 ${release}
 ${workSection("Filed from this", relatedWork.filter(w => w.relationship === "filed"))}${workSection("Linked to this", relatedWork.filter(w => w.relationship === "linked"))}
 ${relatedWork.length ? `<p class="lede">${relatedWorkCoverage.shown} related work items shown${relatedWorkCoverage.truncated ? `; capped at ${relatedWorkCoverage.limit}, more omitted` : "; complete for recorded associations"}. Recorded associations are not proof that this mail authorized the work.</p>` : ""}
@@ -101,13 +101,14 @@ ${m.verdict === "admitted" && !m.recipient_id && ctx.identity.kind === "human" &
     inspector = `<a class="back" href="${esc(mailboxUrl)}">‹ Mail</a><div class="head"><span>Addresses</span></div><h1>Send anything here</h1>
 <p class="lede">Write or forward from your own address. Only members' mail is accepted. Independently verified senders may receive one-time setup guidance; later mail gets no routine receipt. Mail whose sender can't be proven is held for an admin. Nothing in mail is acted on until a member chooses to.</p>
 ${toggle}
-${kitTable("Mail addresses",[{label:"Address"},{label:"Mailbox"}],[{cells:[{html:`<code>${esc(org)}@${esc(env.HUB_DOMAIN)}</code>`},{html:"Organization inbox"}]},...projects.map(p=>({cells:[{html:`<code>${esc(org)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code>`},{html:esc(p.display_name)}]}))])}
+${kitTable("Mail addresses",[{label:"Address"},{label:"Mailbox"}],[{cells:[{html:`${address(`${org}@${env.HUB_DOMAIN}`)}`},{html:"Organization inbox"}]},...projects.map(p=>({cells:[{html:`${address(`${org}.${p.slug}@${env.HUB_DOMAIN}`)}`},{html:esc(p.display_name)}]}))])}
 ${ctx.identity.kind === "human" && rank(ctx.role) >= rank("admin") ? '<p><a href="/mail/recipients">Set response-recipient preferences</a> — preferences only; no automatic scheduling or guaranteed reply.</p>' : ""}
 <h2>Then</h2><p>Open a message and choose <b>Propose work from this</b>: wishes, snags, errands and calls appear, each quoting the message. File the ones you want; they link back here.</p>`;
   }
   const shell = shellFor(ctx, env, "mail", m?.id ?? "mail")!;
-  shell.explorer = kitTree("Mailboxes", [{label:"Mailboxes",href:"/mail",expanded:true,children:[{label:"All mail",href:"/mail",current:!project},...projects.map(p=>({label:p.display_name,href:`/mail?project=${encodeURIComponent(p.slug)}`,current:p.slug === project}))]}]) + shell.explorer;
+  const mailboxes = kitTree("Mailboxes", [{label:"Mailboxes",href:"/mail",expanded:true,children:[{label:"All mail",href:"/mail",current:!project},...projects.map(p=>({label:p.display_name,href:`/mail?project=${encodeURIComponent(p.slug)}`,current:p.slug === project}))]}]);
+  shell.explorer = shell.explorer?.replace(/(<input id="project-filter"[^>]*>)/, "$1" + mailboxes);
   if (m && shell.breadcrumb) shell.breadcrumb[shell.breadcrumb.length - 1]!.label = m.subject || "(no subject)";
-  return htmlResponse(workbench(m ? m.subject || "Mail" : "Mail", { list, listKey: `mail:${project ?? ""}:${rows.length}:${rows[0]?.id ?? ""}`, stackOnPhone:true, inspector: m || new URL(request.url).searchParams.has("addresses") ? inspector : null, inspectorKey: m || new URL(request.url).searchParams.has("addresses") ? key : "" },
+  return htmlResponse(workbench(m ? m.subject || "Mail" : "Mail", { list, listKey: `mail:${sendingOn}:${project ?? ""}:${rows.length}:${rows[0]?.id ?? ""}`, stackOnPhone:true, inspector: m || new URL(request.url).searchParams.has("addresses") ? inspector : null, inspectorKey: m || new URL(request.url).searchParams.has("addresses") ? key : "" },
     shell), 200, extra);
 }

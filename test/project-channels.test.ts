@@ -89,7 +89,11 @@ describe("project files", () => {
     expect(search.structuredContent).toMatchObject({files: [expect.objectContaining({title: "memo.md", snippet: "needle revised"})]});
     expect((await callTool(w.ctx, "search_query", {q: "original"})).structuredContent).toMatchObject({files: []});
     const page = await (await SELF.fetch(`https://${HOST}/docs/documents?path=notes%2Fmemo.md`, {headers: w.headers})).text();
-    expect(page).toContain("Version 1");
+    expect(page).not.toContain("Version 1");
+    expect(page).toContain("modified ");
+    expect(page).toContain("by ");
+    expect(page).toContain("Download");
+    expect(page).not.toContain("SHA-256");
     expect(page).toContain('href="/docs/documents?upload=1"');
     const upload = await (await SELF.fetch(`https://${HOST}/docs/documents?upload=1`,{headers:w.headers})).text();
     expect(upload).toContain('enctype="multipart/form-data"');

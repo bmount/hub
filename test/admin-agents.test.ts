@@ -20,7 +20,7 @@ describe("/admin/agents", () => {
     const html = await res.text();
     expect(html).toContain("acme.bot@pimwell.test");
     expect(html).toContain("op@example.com");
-    expect(html).toContain("<dt>Sessions</dt><dd>1 tokens · 1 runs</dd>");
+    expect(html).toContain("<dt>Sessions</dt><dd>1 token · 1 run</dd>");
     expect(html).toContain('<summary aria-label="Change Access">');
     expect(html).toContain('href="/mail?addresses=1"');
     expect(html).toContain('action="/api/agent.archive"');

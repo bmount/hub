@@ -1,7 +1,7 @@
 // "Models and keys" (admin spec 10.4): what is needed, what is in use, and how to change it. Apex, root only.
 import type { Env } from "../env";
 import { shellFor } from "./shell";
-import { esc, htmlResponse, inspectorSection, kitTable, page, toolbar } from "../html";
+import { plural, esc, htmlResponse, inspectorSection, kitTable, page, toolbar } from "../html";
 import { buildContext } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -12,7 +12,7 @@ import { newerModels } from "../models/purposes";
 const when = (ms: number | null) => (ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") : "never");
 const BACK = `<input type="hidden" name="_back" value="/admin/models">`;
 const form = (verb: string, fields: Record<string, string>, label: string) =>
-  `<form class="inline" method="post" action="/api/${verb}">${Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join("")}${BACK}<button type="submit">${esc(label)}</button></form>`;
+  `<form class="inline" method="post" action="/api/${verb}">${Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join("")}${BACK}<button type="submit" class="quiet">${esc(label)}</button></form>`;
 
 export async function adminModelsPage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
@@ -53,7 +53,7 @@ export async function adminModelsPage(request: Request, env: Env): Promise<Respo
       {label:"Route source",html:p.route.source === "default" ? "default" : "set by admin"},
       {label:"Key",html:p.key ? `<code>${esc(p.key.fingerprint)}</code> · ${esc(p.key.label)}` : "none"}
     ]) + `<form method="post" action="/api/model.route_set"><input type="hidden" name="purpose" value="${esc(p.purpose)}"><input type="hidden" name="provider" value="${esc(p.route.provider)}"><label>Model <input name="model" value="${esc(p.route.model)}" list="models-${esc(p.purpose)}" required></label><datalist id="models-${esc(p.purpose)}">${options}</datalist>${BACK}<button type="submit" class="quiet">Change</button></form>${newer.length ? `<small>Newer available: ${newer.slice(0,4).map(esc).join(", ")}</small>` : ""}` + form("model.test",{purpose:p.purpose},"Test");
-    return {label:p.title,html:`<code>${esc(p.route.provider)}/${esc(p.route.model)}</code> · ${p.calls_24h} calls · ${p.errors_24h} errors`,editHtml:details};
+    return {label:p.title,html:`<code>${esc(p.route.provider)}/${esc(p.route.model)}</code> · ${plural(p.calls_24h,"call")} · ${plural(p.errors_24h,"error")}`,editHtml:details};
   }));
 
   const keyRows = keys.map(k=>inspectorSection(k.label || k.provider,[
@@ -72,7 +72,7 @@ export async function adminModelsPage(request: Request, env: Env): Promise<Respo
   const hints = Object.values(PROVIDERS).map((p) => `<li>${esc(p.name)}: ${esc(p.keyHint)}</li>`).join("");
 
   const body = `<h1>Models and keys</h1>${toolbar("Hub admin",'<a href="/admin/orgs">Organizations</a><a href="/admin/apps">Apps</a>')}
-<details><summary>Setup needed · ${needed.length} purposes</summary>${neededHtml}</details>
+<details><summary>Setup needed · ${plural(needed.length,"purpose")}</summary>${neededHtml}</details>
 ${inUse}
 <h2>Keys</h2>
 ${keys.length ? keyRows : "<p>No keys yet.</p>"}
@@ -95,6 +95,6 @@ ${unpriced.length ? `<p>Used without a price in the last 30 days: ${unpriced.map
 <label>Input $ <input name="input_usd" required inputmode="decimal" size="6"></label>
 <label>Cached input $ <input name="cached_input_usd" inputmode="decimal" size="6"></label>
 <label>Output $ <input name="output_usd" required inputmode="decimal" size="6"></label>${BACK}
-<button type="submit">Set price</button></form></details>`;
+<button type="submit" class="quiet">Set price</button></form></details>`;
   return htmlResponse(page("Models and keys", body, shellFor(ctx, env, "admin", "models")), 200, extra);
 }

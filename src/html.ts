@@ -7,9 +7,23 @@ export function esc(s: string): string {
 }
 
 /** Kit slots named `html` contain trusted, already-escaped server markup; labels are plain text. */
-export type KitLink = { label: string; href: string; current?: boolean; count?: number };
+export type KitLink = { label: string; href: string; current?: boolean; count?: number; selection?: boolean };
 const kitHref = (href: string) => esc(/^(\/(?!\/)|https?:\/\/|mailto:|#)/i.test(href) ? href : "#");
 const kitLink = (l: KitLink) => `<a href="${kitHref(l.href)}"${l.current ? ' aria-current="page"' : ""}>${esc(l.label)}${l.count !== undefined && l.count > 0 ? `<span class="wb-count">${esc(String(l.count))}</span>` : ""}</a>`;
+
+export function localTime(ms: number | null): string {
+  if (!ms) return "Not recorded";
+  const date = new Date(ms);
+  if (!Number.isFinite(date.getTime())) return "Not recorded";
+  return `<time datetime="${date.toISOString()}" data-local-time="${ms}" title="${esc(date.toUTCString())}">${esc(date.toLocaleString("en", {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", hour12:false, timeZone:"UTC"}))} UTC</time>`;
+}
+
+export const naturalName = (a: string, b: string) => a.localeCompare(b, undefined, {numeric:true, sensitivity:"base"});
+export const plural = (n: number, singular: string, multiple = singular + "s") => `${n} ${n === 1 ? singular : multiple}`;
+
+export function address(email: string, href?: string): string {
+  return `<span class="wb-address">${href ? `<a href="${kitHref(href)}">` : ""}<code>${esc(email)}</code>${href ? "</a>" : ""}<button type="button" class="quiet" data-copy="address" aria-label="Copy ${esc(email)}">⧉</button></span>`;
+}
 
 export function breadcrumb(links: KitLink[]): string {
   return `<nav class="wb-breadcrumb" aria-label="Breadcrumb"><ol>${links.map(l => `<li>${kitLink(l)}</li>`).join("")}</ol></nav>`;
@@ -67,7 +81,7 @@ export type RailLink = { href: string; label: string; active: boolean; count?: n
  */
 export type Shell = {
   brandHref: string; org: { name: string; href: string } | null; nav: RailLink[]; me: { name: string; email: string; role: string | null; href: string }; tip: string;
-  projects?: RailLink[]; planned?: RailLink[]; tabs?: RailLink[]; canFile?: boolean;
+  projects?: RailLink[]; planned?: RailLink[]; tabs?: RailLink[]; canFile?: boolean; searchQuery?: string;
   breadcrumb?: KitLink[]; explorer?: string; projectPath?: string; inProject?: boolean; preferenceKey?: string;
 };
 
@@ -89,20 +103,20 @@ const railLink = (l: RailLink) =>
   `<li><a href="${esc(l.href)}"${l.active ? ' aria-current="page"' : ""}>${esc(l.label)}</a>${l.planned ? '<span class="pill">planned</span>' : ""}${typeof l.count === "number" ? `<span class="n">${l.count}</span>` : ""}</li>`;
 
 /** Log out: a real POST to this host, then a page that does not need a session. */
-export const logout = (back: string) => `<form class="inline" method="post" action="/api/session.end" data-reload><input type="hidden" name="_back" value="${esc(back)}"><button type="submit" class="link">Log out</button></form>`;
+export const logout = (back: string) => `<form class="inline" method="post" action="/api/session.end" data-reload><input type="hidden" name="_back" value="${esc(back)}"><button type="submit" class="link">Sign out</button></form>`;
 
 function frame(title: string, main: string, shell: Shell, focus: "list" | "inspector"): string {
   const org = shell.org !== null;
   const rail = `<aside id="rail" class="rail"><div class="railhead"><b>${esc(org ? shell.org!.name : "Pimwell")}</b><a class="close" href="#" aria-label="Close menu">✕ Close</a></div><div id="org-places">${kitTree("Primary", shell.nav.map(l => ({href: l.href, label: l.label, current: l.active, count: l.count ?? undefined})))}</div><!--PROJECT-TREE-->
 ${shell.projects?.length ? `<h4>Projects</h4><ul>${shell.projects.map(railLink).join("")}</ul>` : ""}
 ${shell.planned?.length ? `<h4>Coming</h4><ul>${shell.planned.map(railLink).join("")}</ul>` : ""}
-<h4>Your account</h4><ul><li><a href="${esc(shell.me.href)}">${esc(shell.me.name)}</a></li><li class="account-details">${esc(shell.me.email)}${shell.me.role ? `<span>Role: ${esc(shell.me.role)}</span>` : ""}</li><li>${logout(org ? "/signed-out" : "/")}</li></ul></aside>`;
+</aside>`;
   const explorer = `<aside id="explorer" class="explorer" aria-label="Project explorer" data-project="${esc(shell.projectPath ?? "")}" data-in-project="${shell.inProject ? "1" : "0"}" data-preference="${esc(shell.preferenceKey ?? "")}"><div class="railhead"><b>Project explorer</b><a class="close" href="#" aria-label="Close project explorer">✕ Close</a></div>${shell.explorer ?? '<p>Open an organization to explore its projects.</p>'}</aside>`;
   const bar = `<header class="bar"><a class="menu" href="#rail" aria-label="Menu"><span aria-hidden="true">☰</span><span class="ml">Menu</span></a><button type="button" class="quiet sidebar-toggle" data-toggle-sidebar aria-label="Collapse sidebar" aria-expanded="true">☰</button>${breadcrumb(shell.breadcrumb ?? [{label: shell.org?.name ?? "Pimwell", href: shell.org?.href ?? shell.brandHref}, {label: title, href: "#", current: true}])}
-${org ? `<form class="jump" action="/search" method="get" role="search"><input name="q" placeholder="Search all projects…" maxlength="200" autocomplete="off" aria-label="Search all projects"><kbd>⌘K</kbd></form>` : `<span class="jump"></span>`}
-${org && shell.canFile ? `<a class="button file" href="/new" title="File work (c)">+ File</a>` : ""}<a class="me" href="${esc(shell.me.href)}">${esc(shell.me.email)}${shell.me.role ? ` (${esc(shell.me.role)})` : ""}</a></header>`;
+${org ? `<form class="jump" action="/search" method="get" role="search"><input name="q" value="${esc(shell.searchQuery ?? "")}" placeholder="Search all projects…" maxlength="200" autocomplete="off" aria-label="Search all projects"><kbd>⌘K</kbd></form>` : `<span class="jump"></span>`}
+${org && shell.canFile && !shell.breadcrumb?.some(c => c.label === "File work") ? `<a class="button quiet file" href="/new" title="File work (c)">+ File</a>` : ""}<a class="me" href="${esc(shell.me.href)}"><code id="header-email">${esc(shell.me.email)}</code>${shell.me.role ? ` (${esc(shell.me.role)})` : ""}</a><button type="button" class="quiet header-copy" data-copy="#header-email" aria-label="Copy your address">⧉</button>${logout(org ? "/signed-out" : "/")}</header>`;
   const tabs = shell.tabs?.length ? `<nav class="tabs" aria-label="Sections">${shell.tabs.map((t) => `<a href="${esc(t.href)}"${t.active ? ' aria-current="page"' : ""}>${esc(t.label)}${typeof t.count === "number" && t.count > 0 ? `<span class="n">${t.count}</span>` : ""}</a>`).join("")}<a href="#rail">More</a></nav>` : "";
-  const status = `<footer class="status"><span id="perf"></span><span id="connection-state" role="status"></span><span class="keys hide-s"><kbd>⌘K</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>e</kbd> edit · <kbd>c</kbd> file · <kbd>/</kbd> filter</span><a href="${esc(shell.brandHref)}privacy">Privacy</a><a href="${esc(shell.brandHref)}terms">Terms</a></footer>`;
+  const status = `<footer class="status"><span id="perf"></span><span id="connection-state" role="status"></span><span class="keys hide-s">${org ? `<kbd>⌘K</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> move${shell.canFile ? ' · <kbd>c</kbd> file' : ''} · <kbd>/</kbd> filter` : ""}</span><a href="${esc(shell.brandHref)}privacy">Privacy</a><a href="${esc(shell.brandHref)}terms">Terms</a></footer>`;
   return `${head(title)}
 <body class="wb" data-focus="${focus}">
 ${bar}
@@ -125,6 +139,18 @@ export function workbench(title: string, p: Panes, shell: Shell): string {
 <div class="wb-resizer" role="separator" aria-label="Inspector width" aria-orientation="vertical" tabindex="0"></div>
 <section id="inspector" class="pane" data-key="${esc(p.inspectorKey ?? "")}">${two && !p.inspector?.includes('data-close-inspector') ? '<button type="button" class="quiet wb-close" data-close-inspector aria-label="Close inspector">Close · Esc</button>' : ""}${two ? p.inspector : ""}</section>
 </main>`;
+  if (p.inspector && shell.breadcrumb && (p.inspectorKey || p.focus === "inspector")) {
+    const heading = /<h1[^>]*>([\s\S]*?)<\/h1>/.exec(p.inspector)?.[1];
+    if (heading) {
+      const entities: Record<string,string> = {amp:"&",lt:"<",gt:">",quot:'"',"#39":"'"};
+      const text = heading.replace(/<form[\s\S]*?<\/form>/g, "").replace(/<span class="wb-pencil"[^>]*>[\s\S]*?<\/span>/g, "").replace(/<[^>]*>/g, "").replace(/&(amp|lt|gt|quot|#39);/g, (_, key: string) => entities[key]!).trim();
+      if (text && text !== "Conversation") {
+        const last = shell.breadcrumb.at(-1)!;
+        const crumbs = last.selection ? [...shell.breadcrumb.slice(0,-1), {...last,label:text}] : last.label === text ? shell.breadcrumb : [...shell.breadcrumb.map(c=>({...c,current:false})), {label:text,href:last.href,current:true}];
+        shell = {...shell,breadcrumb:crumbs};
+      }
+    }
+  }
   return frame(title, main, shell, p.focus ?? (two && p.inspectorKey ? "inspector" : "list"));
 }
 

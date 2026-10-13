@@ -99,14 +99,14 @@ describe("html", () => {
     expect(workbench("Create", {...panes, focus: "inspector"}, shell)).toContain('<main class="panes">');
   });
 
-  it("escapes account names, addresses and roles in both account displays", () => {
+  it("escapes the account address and role in the single top-bar display", () => {
     const doc = page("Account", "", {
       brandHref: "/", org: null, nav: [], tip: "",
       me: { name: "<Name>", email: 'a"<b>@example.com', role: "<role>", href: "/me" },
     });
-    expect(doc).toContain('>a&quot;&lt;b&gt;@example.com (&lt;role&gt;)</a>');
-    expect(doc).toContain('<li class="account-details">a&quot;&lt;b&gt;@example.com<span>Role: &lt;role&gt;</span></li>');
-    expect(doc).toContain(">&lt;Name&gt;</a>");
+    expect(doc).toContain('<code id="header-email">a&quot;&lt;b&gt;@example.com</code> (&lt;role&gt;)</a>');
+    expect(doc).not.toContain('class="account-details"');
+    expect(doc).not.toContain('<Name>');
     expect(doc).not.toContain("<role>");
   });
 

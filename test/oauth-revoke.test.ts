@@ -21,7 +21,7 @@ describe("revoking an assistant", () => {
     expect(html).toContain("<h2>Assistants</h2>");
     expect(html).toContain('"Claude Code"');
     expect(html).toContain("<code>loopback</code>");
-    expect(html).toContain(`<code>${grant.session_id}</code>`);
+    expect(html).not.toContain(`<code>${grant.session_id}</code>`);
     expect(html).toContain(`name="session_id" value="${grant.session_id}"`);
     expect(html).not.toContain(c.tokens.access_token);
     const res = await SELF.fetch("https://pimwell.test/api/session.revoke", {

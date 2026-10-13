@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { shellFor } from "./shell";
-import { esc, htmlResponse, kitTable, page, logout, toolbar } from "../html";
+import { localTime, address, esc, htmlResponse, kitTable, page, toolbar } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { listAgentRunsForOperator, listSessions } from "../db/sessions";
@@ -12,12 +12,12 @@ import { listConsent } from "../db/consent";
 import { listLiveGrantsForIdentity } from "../db/oauthGrants";
 import { notFoundPage } from "./pages";
 
-const when = (ms: number | null) => (ms === null ? "never" : new Date(ms).toISOString().slice(0, 16).replace("T", " "));
+const when = localTime;
 const BACK = `<input type="hidden" name="_back" value="/me">`;
 
 function button(verb: string, fields: Record<string, string>, label: string): string {
   const hidden = Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join("");
-  return `<form class="inline" method="post" action="/api/${esc(verb)}">${hidden}${BACK}<button type="submit">${esc(label)}</button></form>`;
+  return `<form class="inline" method="post" action="/api/${esc(verb)}">${hidden}${BACK}<button type="submit" class="quiet destructive">${esc(label)}</button></form>`;
 }
 
 function table(headers: string[], rows: string[][]): string {
@@ -46,29 +46,29 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
     ? (await listTenants(ctx.db, "active")).map((t) => t.slug)
     : memberships.filter((m) => rank(m.membership.role) >= rank("member")).map((m) => m.tenant.slug);
 
-  let body = `<h1>Your account</h1><p>${esc(me.display_name)} &lt;${esc(me.email)}&gt;</p>${toolbar("Account actions",`<a href="/me/sessions">Sessions</a><a href="/">Your organizations</a>${logout("/")}`)}`;
+  let body = `<h1>Your account</h1><p>${esc(me.display_name)} ${address(me.email)}</p>${toolbar("Account actions",`<a href="/me/sessions">Sessions</a><a href="/">Your organizations</a>`)}`;
 
-  body += `<h2>Sessions</h2>` + table(["Id", "Kind", "Started", "Last seen", ""], sessions.map((s) => [
-    `${esc(s.id)}${s.id === ctx.session!.id ? " (this one)" : ""}`, esc(s.kind) + (s.kind === "git" && s.label ? ` (${esc(s.label)})` : ""), when(s.created_at), when(s.last_seen_at),
+  body += `<h2>Sessions</h2>` + table(["Session", "Kind", "Started", "Last seen", "Action"], sessions.map((s) => [
+    `${esc(s.label ?? s.kind)}${s.id === ctx.session!.id ? " (this one)" : ""}`, esc(s.kind) + (s.kind === "git" && s.label ? ` (${esc(s.label)})` : ""), when(s.created_at), when(s.last_seen_at),
     button("session.revoke", { session_id: s.id }, "Revoke"),
-  ])) + `<form method="post" action="/api/session.end"><button type="submit">Sign out</button></form>`;
+  ]));
 
   const gitTenants = me.is_root === 1 ? (await listTenants(ctx.db, "active")).map((t) => t.slug) : memberships.map((m) => m.tenant.slug);
   body += `<details><summary>Git credentials</summary><p>A password for <code>git clone https://&lt;tenant&gt;.${esc(env.HUB_DOMAIN)}/&lt;repo&gt;.git</code>, with your email as the username. It works only for git on that tenant, lasts 90 days, and is listed under Sessions as <code>git</code>.</p>`
     + (gitTenants.length === 0 ? "<p>You are not a member of any tenant.</p>" : gitTenants.map((slug) =>
       `<form method="post" action="/api/session.git"><input type="hidden" name="tenant" value="${esc(slug)}">`
       + `<label>Label <input name="label" required maxlength="80" placeholder="laptop"></label> `
-      + `<button type="submit">New git credential for ${esc(slug)}</button></form>`).join("")) + "</details>";
+      + `<button type="submit" class="quiet">New git credential for ${esc(slug)}</button></form>`).join("")) + "</details>";
 
   body += `<h2>Assistants</h2><p>Assistants you connected. Each acts as you in one tenant; its activity is listed by <code>event.list</code> with its session id.</p>`
-    + table(["Assistant", "Sends codes to", "Tenant", "Scopes", "Connected", "Last used", "Session", ""], grants.map(({ grant, tenant_slug, last_seen_at }) => [
+    + table(["Assistant", "Sends codes to", "Tenant", "Scopes", "Connected", "Last used", "Action"], grants.map(({ grant, tenant_slug, last_seen_at }) => [
       `"${esc(grant.client_name)}"`, `<code>${esc(grant.redirect_host)}</code>`, esc(tenant_slug), esc(grant.scopes), when(grant.created_at), when(last_seen_at),
-      `<code>${esc(grant.session_id)}</code>`, button("session.revoke", { session_id: grant.session_id }, "Revoke"),
+      button("session.revoke", { session_id: grant.session_id }, "Revoke"),
     ]));
 
   body += `<h2>Agents you operate</h2>` + table(["Address", "Name", "Tenant", "Role", "Created", ""], agents.map((a) => [
-    `<code>${esc(a.identity.email)}</code>`, esc(a.identity.display_name), esc(a.tenant.slug), esc(a.membership.role), when(a.identity.created_at),
-    `<form class="inline" method="post" action="/api/token.create"><input type="hidden" name="agent_id" value="${esc(a.identity.id)}"><input name="name" placeholder="token name" required maxlength="80"><button type="submit">New token</button></form> `
+    address(a.identity.email), esc(a.identity.display_name), esc(a.tenant.slug), esc(a.membership.role), when(a.identity.created_at),
+    `<form class="inline" method="post" action="/api/token.create"><input type="hidden" name="agent_id" value="${esc(a.identity.id)}"><input name="name" placeholder="token name" required maxlength="80"><button type="submit" class="quiet">New token</button></form> `
       + button("agent.archive", { agent_id: a.identity.id }, "Archive"),
   ]));
 
@@ -77,15 +77,15 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
     + `<p>Address: <code>${esc(slug)}.&lt;slug&gt;@${esc(env.HUB_DOMAIN)}</code>. Agents and projects share names in this organization.</p>`
     + `<label>Slug <input name="slug" required maxlength="63" pattern="[a-z0-9-]+"></label> `
     + `<label>Name <input name="display_name" required maxlength="80"></label> `
-    + `<button type="submit">Create agent in ${esc(slug)}</button></form>`).join("")) + "</details>";
+    + `<button type="submit" class="quiet">Create agent in ${esc(slug)}</button></form>`).join("")) + "</details>";
 
   body += `<h2>Tokens</h2>` + table(["Name", "Agent", "Tenant", "Created", "Last used", "Expires", ""], tokens.map((t) => [
-    esc(t.token.name), `<code>${esc(t.agent_email)}</code>`, esc(t.tenant_slug), when(t.token.created_at), when(t.token.last_used_at),
+    esc(t.token.name), address(t.agent_email), esc(t.tenant_slug), when(t.token.created_at), when(t.token.last_used_at),
     when(t.token.expires_at), button("token.revoke", { token_id: t.token.id }, "Revoke"),
   ]));
 
   body += `<h2>Agent runs</h2>` + table(["Label", "Agent", "Tenant", "Started", "Expires", ""], runs.map((r) => [
-    esc(r.session.label ?? ""), `<code>${esc(r.agent_email)}</code>`, esc(r.tenant_slug), when(r.session.created_at), when(r.session.expires_at),
+    esc(r.session.label ?? ""), address(r.agent_email), esc(r.tenant_slug), when(r.session.created_at), when(r.session.expires_at),
     button("session.revoke", { session_id: r.session.id }, "Revoke"),
   ]));
 

@@ -149,7 +149,7 @@ try {
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
     await db.prepare('UPDATE attention SET done_at = NULL WHERE tenant_id = ?').bind(tenant).run();
-    const ctx = await browser.newContext({viewport, serviceWorkers:'block'});
+    const ctx = await browser.newContext({viewport, timezoneId:'America/Chicago', serviceWorkers:'block'});
     await ctx.addCookies([{name:'pmw_session',value:member,domain:'.pimwell.test',path:'/',secure:true,httpOnly:true,sameSite:'Lax'}]);
     // Routing follows Worker redirects in-process (Chromium bypasses route
     // interception after a redirect). Expose the final URL to the real client.
@@ -179,6 +179,7 @@ try {
       await route.fulfill({status:res.status,headers:{...Object.fromEntries(res.headers),'x-local-final-url':finalURL},body:Buffer.from(await res.arrayBuffer())});
     });
     const page = await ctx.newPage();
+    let searchPosition;
     for (const [name, route] of Object.entries(pages).filter(([name]) => !process.env.WORKBENCH_PAGES || process.env.WORKBENCH_PAGES.split(',').includes(name))) {
       if (name === 'attention') await db.prepare('UPDATE attention SET done_at = NULL WHERE tenant_id = ?').bind(tenant).run();
       const response = await page.goto(route.startsWith('https:') ? route : base+route);
@@ -187,6 +188,88 @@ try {
       await page.screenshot({path:path.join(artifacts,`${phase}-${name}-${label}.png`),fullPage:false});
       manifest.push({phase,name,route,viewport,file:`${phase}-${name}-${label}.png`});
       if (phase === 'after') {
+        await expect(page.locator('#rail')).not.toContainText('Your account');
+        await expect(page.locator('form[action="/api/session.end"]')).toHaveCount(1);
+        const darkButtons = await page.evaluate(()=>{
+          const probe=document.createElement('span'); probe.style.backgroundColor='var(--ink)'; document.body.append(probe);
+          const dark=getComputedStyle(probe).backgroundColor; probe.remove();
+          return [...document.querySelectorAll('button,a.button')].filter(e=>e.checkVisibility() && getComputedStyle(e).backgroundColor === dark).length;
+        });
+        expect(darkButtons,name+' one primary action').toBeLessThanOrEqual(1);
+        const searchBox = page.locator('.jump input');
+        if (viewport.width === 1440 && await searchBox.count()) {
+          const rect = await searchBox.boundingBox();
+          searchPosition ??= rect.x;
+          expect(Math.abs(rect.x - searchPosition), name+' stable search position').toBeLessThan(1);
+        }
+        if (name === 'newWork') await expect(page.locator('.bar .file')).toHaveCount(0);
+        else if (!route.startsWith('https:')) await expect(page.locator('.bar .file')).toHaveClass(/quiet/);
+        if (route.startsWith('https:')) await expect(page.locator('.status .keys')).toHaveText('');
+        if (name === 'search') {
+          await expect(page.locator('#list input[name=q]')).toHaveCount(0);
+          await expect(page.locator('#list table')).toHaveCount(1);
+          await expect(page.locator('#list th')).toHaveText(['Kind','Reference','Title','Project','When']);
+          const kinds = await page.locator('#list tbody tr td:first-child').allTextContents();
+          expect(kinds).toEqual([...kinds].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:'base'})));
+          expect(await page.locator('#list td').evaluateAll(cells=>cells.every(c=>c.textContent.trim()))).toBe(true);
+        }
+        if (name === 'people') {
+          const agentName = page.locator('#list table[aria-label=Agents] tbody tr td:first-child');
+          await expect(agentName).not.toContainText('Source');
+          await expect(page.locator('#list table[aria-label=Agents] th')).toContainText(['Name','Source']);
+          if (viewport.width >= 760) {
+          const copied = page.locator('#list .wb-address').first();
+          const email = await copied.locator('code').innerText();
+          await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{window.copiedAddress=value;}}}));
+          await copied.locator('button').click();
+          expect(await page.evaluate(()=>window.copiedAddress)).toBe(email);
+          }
+        }
+        if (['newWork','situations','invite'].includes(name) && viewport.width === 1440) {
+          expect(await page.locator('.wb-form-row').evaluateAll(rows=>rows.every(row=>{
+            const label=row.querySelector('label').getBoundingClientRect(), field=row.querySelector('input,textarea,select').getBoundingClientRect();
+            return label.bottom <= field.top;
+          })),name+' labels above fields').toBe(true);
+          expect(await page.locator('.voice-field').evaluateAll(boxes=>boxes.every(box=>{
+            const field=box.querySelector('textarea').getBoundingClientRect(), mic=box.querySelector('.mic').getBoundingClientRect();
+            return mic.left >= field.left && mic.right <= field.right && mic.top >= field.top && mic.bottom <= field.bottom;
+          })),name+' inset microphone').toBe(true);
+        }
+        if (name === 'usage') {
+          await expect(page.locator('#list table')).toHaveCount(1);
+          await expect(page.locator('#list select[name=group]')).toBeVisible();
+          await expect(page.locator('#list th')).toHaveText(['Group','Cost (USD)','Calls','Input','Output']);
+          await page.locator('select[name=group]').selectOption('model');
+          await expect(page).toHaveURL(/group=model/);
+          await expect(page.locator('#list table')).toHaveCount(1);
+          await page.reload();
+          await expect(page.locator('select[name=group]')).toHaveValue('model');
+          await page.goto(route.startsWith('https:') ? route : base+route);
+        }
+        if (name === 'mailSettings') {
+          const on = (await page.locator('#inspector #sending dd').innerText()).replace('✎','');
+          await expect(page.locator('#list .head')).toContainText('Sending '+on.trim().toLowerCase());
+          const boxes = await page.locator('[aria-label=Mailboxes] a').allTextContents();
+          expect(boxes.indexOf('Team 2')).toBeLessThan(boxes.indexOf('Team 10'));
+        }
+        if (name === 'fileRecord') {
+          await expect(page.locator('#inspector')).not.toContainText('SHA-256');
+          await expect(page.locator('#inspector table')).toHaveCount(0);
+          await expect(page.locator('#inspector')).toContainText('modified');
+          await expect(page.locator('#inspector button').last()).toHaveText('Remove file and all downloads');
+          await expect(page.locator('#inspector button').last()).toHaveClass(/quiet destructive/);
+        }
+        if (name === 'board') await expect(page.locator('.wb-board-columns h2')).toContainText(['Open','Under way','Done lately']);
+        if (name === 'orgs') await expect(page.locator('#list table[aria-label=Organizations] tbody tr')).toHaveCount(2);
+        if (['admin','appGroup','person','fileRecord'].includes(name) && viewport.width === 1440) {
+          expect(await page.locator('.wb-section dl').evaluateAll(rows=>rows.every(row=>{
+            const label=row.querySelector('dt').getBoundingClientRect(), value=row.querySelector('dd').getBoundingClientRect();
+            return value.left-label.right <= 20;
+          })),name+' adjacent labels').toBe(true);
+        }
+        if (['fileRecord','sessions','search','appGroup'].includes(name)) {
+          expect(await page.locator('time[data-local-time]').evaluateAll(times=>times.every(t=>! /\\d{4}-\\d{2}-\\d{2}T/.test(t.textContent) && t.title.length > 10))).toBe(true);
+        }
         await expect(page.locator('.card,.grid,.onramp,.intent-card,.bars,.board,.bcol,.bcard,.progress,.closure-counts,.diff')).toHaveCount(0);
         await expect(page.locator('#rail #org-places')).toHaveCount(1);
         await expect(page.locator('#rail #explorer')).toHaveCount(1);
@@ -263,6 +346,10 @@ try {
         await page.locator('#new-title').fill('Browser filed work '+label);
         await page.locator('#list button[type=submit]').click();
         await expect(page.locator('#inspector h1')).toContainText('Browser filed work '+label);
+        await expect(page.locator('.bar .file')).toHaveCount(1);
+        await page.locator('.bar .file').click();
+        await expect(page.locator('#list h1')).toHaveText('File work');
+        await expect(page.locator('.bar .file')).toHaveCount(0);
       }
       if (phase === 'after' && ['attention','attentionItem','mail','mailMessage','chat','chatThread','assistant'].includes(name)) {
         if (name.startsWith('attention')) {

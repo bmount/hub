@@ -129,7 +129,7 @@ describe("pages", () => {
     expect(projectRow).toContain("<td>1</td><td>2</td>");
     expect(home).not.toMatch(/class="(?:card|grid|onramp)"/);
     const selected = await (await SELF.fetch("https://acme.pimwell.test/?project=team%2Fdocs",{headers})).text();
-    expect(selected).toContain('data-key="home:docs:');
+    expect(selected).toMatch(/data-key="home:[^"]*docs:/);
     expect(selected).toContain('data-key="home:team/docs"');
     expect(selected).toContain("acme.team.docs@pimwell.test");
     expect(selected).toContain("/p/team/docs/mcp");

@@ -48,7 +48,7 @@ describe("exact board totals and bounded examples", () => {
     expect(html).toContain('Under way <span class="wb-count">45</span>');
     expect(html).toContain('Open <span class="wb-count">510</span>');
     expect(html).toContain("60 sampled of 510"); expect(html).toContain("0 sampled of 45");
-    expect(html).toContain("Recorded totals"); expect(html).not.toContain('None.</p>');
+    expect(html).not.toContain("Recorded totals"); expect(html).not.toContain('None.</p>');
   });
 
   it("uses strict done/stall boundaries and reports empty and complete samples truthfully", async () => {

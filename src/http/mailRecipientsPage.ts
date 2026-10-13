@@ -2,7 +2,7 @@
 import type { Env } from "../env";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
-import { esc, htmlResponse, inspectorSection, kitTable, workbench } from "../html";
+import { address as mailAddress, naturalName, esc, htmlResponse, inspectorSection, kitTable, workbench } from "../html";
 import { HubError } from "../errors";
 import { responseRecipients } from "../mail/responseRecipients";
 import { extraCheck, proofFresh } from "./extraCheck";
@@ -33,11 +33,11 @@ export async function mailRecipientsPage(request: Request, env: Env): Promise<Re
   ]);
   const choices = choicesR!.results as Choice[];
   const mailboxes = [{ address: orgAddress, name: "Organization inbox" },
-    ...(projectsR!.results as Array<{ slug: string; display_name: string }>).map(p => ({ address: `${ctx.tenant!.slug}.${p.slug}@${env.HUB_DOMAIN}`, name: p.display_name }))];
+    ...(projectsR!.results as Array<{ slug: string; display_name: string }>).sort((a,b)=>naturalName(a.display_name,b.display_name)).map(p => ({ address: `${ctx.tenant!.slug}.${p.slug}@${env.HUB_DOMAIN}`, name: p.display_name }))];
   const path = `/mail/recipients?address=${encodeURIComponent(address)}`;
   const list = `<a class="back" href="/mail">‹ Mail</a><h1>Response-recipient preferences</h1>
 <p class="lede">Shared mailboxes only. Direct-agent mail keeps its private recipient.</p>
-${kitTable("Mailbox preferences",[{label:"Mailbox"},{label:"Address"}],mailboxes.map(m=>({href:`/mail/recipients?address=${encodeURIComponent(m.address)}`,selected:m.address === address,cells:[{html:`<a href="/mail/recipients?address=${esc(encodeURIComponent(m.address))}">${esc(m.name)}</a>`},{html:`<code>${esc(m.address)}</code>`}]})))}`;
+${kitTable("Mailbox preferences",[{label:"Mailbox"},{label:"Address"}],mailboxes.map(m=>({href:`/mail/recipients?address=${encodeURIComponent(m.address)}`,selected:m.address === address,cells:[{html:`<a href="/mail/recipients?address=${esc(encodeURIComponent(m.address))}">${esc(m.name)}</a>`},{html:`${mailAddress(m.address)}`}]})))}`;
   const fresh = proofFresh(ctx);
   const selected = new Set(config.recipients);
   const omittedSelection = config.recipients.some(id => !choices.some(c => c.id === id));
@@ -56,7 +56,7 @@ ${kitTable("Mailbox preferences",[{label:"Mailbox"},{label:"Address"}],mailboxes
 <input type="hidden" name="_recipients_present" value="1">
 <input type="hidden" name="_back" value="${esc(path)}">
 <fieldset><legend>Preferred responders (up to ten active human members or admins)</legend>
-${choices.length ? choices.map(c => `<label style="display:block"><input type="checkbox" name="recipients" value="${esc(c.id)}"${selected.has(c.id) ? " checked" : ""}> ${esc(c.display_name)} — ${esc(c.email)}</label>`).join("\n") : '<p>No eligible people. Add people in <a href="/people">People and agents</a>; readers and agents cannot be selected.</p>'}
+${choices.length ? choices.map(c => `<label style="display:block"><input type="checkbox" name="recipients" value="${esc(c.id)}"${selected.has(c.id) ? " checked" : ""}> ${esc(c.display_name)} — ${mailAddress(c.email)}</label>`).join("\n") : '<p>No eligible people. Add people in <a href="/people">People and agents</a>; readers and agents cannot be selected.</p>'}
 </fieldset>
 <p>Leave all unchecked to explicitly clear preferences.${config.state === "stale" ? ` Saving replaces the stale list and removes ${config.unavailable_count} unavailable recipient(s).` : ""}</p>
 <button type="submit">Save preferences only</button>

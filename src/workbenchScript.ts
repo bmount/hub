@@ -144,7 +144,7 @@ export const WORKBENCH_JS = String.raw`
       if (a && b && !assistantFocusOnly && (key.indexOf("page:") === 0 || a.getAttribute("data-key") !== key || id === "inspector" || refreshList)) {
         // Enhanced pane clients must stop timers/listeners before their DOM is detached.
         document.dispatchEvent(new CustomEvent("wb:before-replace", { detail: a }));
-        a.replaceWith(b); revive(b); voiceUp(b);
+        a.replaceWith(b); revive(b); voiceUp(b); localTimes(b);
       }
     });
     cur.className = next.className;
@@ -157,6 +157,9 @@ export const WORKBENCH_JS = String.raw`
       restoreExplorer(explorer);
     }
     var crumb = $(".bar .wb-breadcrumb"), ncrumb = doc.querySelector(".bar .wb-breadcrumb"); if (crumb && ncrumb) crumb.replaceWith(ncrumb);
+    var file = $(".bar .file"), nfile = doc.querySelector(".bar .file");
+    if (file && nfile) file.replaceWith(nfile); else if (file) file.remove(); else if (nfile) me.before(nfile);
+    var search = $(".jump input"), nsearch = doc.querySelector(".jump input"); if (search && nsearch) search.value = nsearch.value;
     var tabs = $(".tabs"), ntabs = doc.querySelector(".tabs"); if (tabs && ntabs) tabs.innerHTML = ntabs.innerHTML;
     var connection = $("#connection-state"); if (connection && !document.querySelector("[data-chat-live]")) connection.replaceChildren();
     document.body.setAttribute("data-focus", doc.body.getAttribute("data-focus") || "list");
@@ -461,7 +464,7 @@ export const WORKBENCH_JS = String.raw`
       var st = document.createElement("span"); st.className = "voicestate"; st.setAttribute("aria-live", "polite");
       var box = ta.closest(".box");
       if (box) { box.insertBefore(b, box.querySelector(".send")); box.parentNode.insertBefore(st, box.nextSibling); }
-      else { var bar = document.createElement("div"); bar.className = "voicebar"; bar.appendChild(b); bar.appendChild(st); ta.parentNode.insertBefore(bar, ta.nextSibling); }
+      else { var bar = document.createElement("div"); bar.className = "voice-field"; ta.parentNode.insertBefore(bar, ta); bar.appendChild(ta); bar.appendChild(b); bar.appendChild(st); }
       wireMic(b, ta, st);
     });
   }
@@ -552,6 +555,16 @@ export const WORKBENCH_JS = String.raw`
     b.addEventListener("click", function (e) { e.preventDefault(); if (e.detail === 0) { if (s) stop(); else start(); } });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape" && s) { s.cancelled = true; stop(); } });
   }
+  function localTimes(root) {
+    $$("time[data-local-time]", root).forEach(function (el) {
+      var d = new Date(Number(el.getAttribute("data-local-time"))), now = new Date();
+      var yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+      var day = d.toDateString() === now.toDateString() ? "Today" : d.toDateString() === yesterday.toDateString() ? "Yesterday" : d.toLocaleDateString(undefined, {day:"numeric", month:"short", year:d.getFullYear() === now.getFullYear() ? undefined : "numeric"});
+      el.textContent = day + " " + d.toLocaleTimeString(undefined, {hour:"2-digit", minute:"2-digit", hour12:false});
+      el.title = d.toLocaleString(undefined, {dateStyle:"full", timeStyle:"long"});
+    });
+  }
+  localTimes(document);
   voiceUp(document);
 
   // Keyboard.
@@ -590,7 +603,7 @@ export const WORKBENCH_JS = String.raw`
     window.__pwCopy = 1;
     document.addEventListener("click", function (e) {
       var b = e.target.closest && e.target.closest("[data-copy]"); if (!b) return;
-      var t = document.querySelector(b.getAttribute("data-copy")); if (!t) return;
+      var t = b.getAttribute("data-copy") === "address" ? b.parentElement.querySelector("code") : document.querySelector(b.getAttribute("data-copy")); if (!t) return;
       var v = t.tagName === "INPUT" || t.tagName === "TEXTAREA" ? t.value : t.textContent;
       var done = function () { var o = b.textContent; b.textContent = "Copied"; setTimeout(function () { b.textContent = o; }, 1600); };
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(done, function () {});

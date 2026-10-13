@@ -45,7 +45,7 @@ describe("people management", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toMatch(/value="https:\/\/pimwell\.test\/invite\/[^"]+"/);
-    expect(await (await w.get("/people", w.ada.token)).text()).toContain("<code>new@example.com</code>");
+    expect(await (await w.get("/people", w.ada.token)).text()).toContain("new@example.com</code>");
   });
 
   it("changes roles within the rules: admins manage members and readers, only root touches admin, nobody changes themselves", async () => {

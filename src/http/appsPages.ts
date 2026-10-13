@@ -1,7 +1,7 @@
 // Apps in the workbench (migration 0013): the organization's apps and their error groups as the list, one group in the
 // inspector; and, on the hub, root's list of registrations to approve.
 import type { Env } from "../env";
-import { emptyState, esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
+import { localTime, plural, emptyState, esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -13,11 +13,7 @@ import { deployStatement, deploysStatement, deployView, deployListResults, deplo
 import { sha256Hex } from "../ids";
 import { recordedWorkTable } from "./codeMarkup";
 
-const ago = (ms: number | null, now: number) => {
-  if (!ms) return "never";
-  const m = Math.max(0, Math.round((now - ms) / 60_000));
-  return m < 1 ? "now" : m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
-};
+const ago = (ms: number | null, _now: number) => localTime(ms);
 
 type App = { script_name: string; project: string; state: string; last_event_at: number | null; requests: number; errors: number; groups: number; last_deploy: string | null };
 type Group = { id: string; project: string; script_name: string; kind: string; title: string; last_message: string; count: number; first_seen: number; last_seen: number; last_version: string | null; first_deploy: string | null; first_commit: string | null };
@@ -31,7 +27,7 @@ export async function appsPage(request: Request, env: Env): Promise<Response> {
   const gid = params.get("g") ?? "";
   const did = params.get("d");
   if (did !== null && (!did || did.length > 40 || params.has("g"))) return notFoundPage(extra);
-  const [appsR, groupsR, oneR, eventsR, deploysR, relatedR, allDeploysR, selectedDeployR] = await ctx.db.batch([
+  const [appsR, groupsR, oneR, eventsR, deploysR, relatedR, allDeploysR, namesR, selectedDeployR] = await ctx.db.batch([
     appsStatement(ctx.db, ctx.tenant.id, ctx.now),
     ctx.db.prepare(`SELECT g.id, p.slug AS project, g.script_name, COALESCE(g.client_kind, g.kind) AS kind, g.title, g.last_message, g.count, g.first_seen, g.last_seen, g.last_version FROM app_error_group g JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
       WHERE g.tenant_id = ? AND g.last_seen >= ? ORDER BY g.last_seen DESC LIMIT 100`).bind(ctx.tenant.id, ctx.now - 7 * 86_400_000),
@@ -40,8 +36,12 @@ export async function appsPage(request: Request, env: Env): Promise<Response> {
     ctx.db.prepare("SELECT d.id, d.tag, d.version_id, d.message, d.seen_at FROM app_deploy d JOIN app_error_group g ON g.script_name = d.script_name AND g.tenant_id = d.tenant_id AND g.project_id = d.project_id WHERE g.id = ? AND g.tenant_id = ? ORDER BY d.seen_at DESC LIMIT 5").bind(gid, ctx.tenant.id),
     traceWorkStatement(ctx, gid),
     deploysStatement(ctx, project),
+    ctx.db.prepare(`SELECT
+      (SELECT p.display_name FROM app_error_group g JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id WHERE g.id = ? AND g.tenant_id = ?) AS group_name,
+      (SELECT p.display_name FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id WHERE d.id = ? AND d.tenant_id = ?) AS deploy_name`).bind(gid,ctx.tenant.id,did ?? "",ctx.tenant.id),
     ...(did !== null ? [deployStatement(ctx, did)] : []),
   ]);
+  const names = namesR!.results[0] as {group_name:string|null;deploy_name:string|null};
   const apps = appsR!.results as App[];
   const groups = groupsR!.results as Group[];
   const g = (oneR!.results[0] as Group | undefined) ?? null;
@@ -58,7 +58,7 @@ ${recordedDeploys.length ? kitTable("Recorded deploys",[{label:"Project"},{label
   const list = deployOnly ? `<div class="head"><h1>Deploys</h1>${project ? `<span>${esc(project)}</span>` : ""}</div>${toolbar("Deploy actions and filters", '<a href="/apps">Apps</a>', '<input data-filter aria-label="Filter the list" placeholder="Filter these (/)" size="16">')}${deployList}` : `<div class="head"><h1>Apps</h1><span>${apps.length} reporting</span></div>
 <p class="lede">Errors grouped by cause, deploys, and AI usage from the apps that report here. To add one, ask your agent to set up Pimwell (the onboard skill).</p>
 ${toolbar("Apps actions",'<a href="/usage">AI usage</a>', '<input data-filter aria-label="Filter the list" placeholder="Filter these (/)" size="16">')}
-${apps.length ? kitTable("Apps",[{label:"App"},{label:"Project"},{label:"24h requests"},{label:"Errors"},{label:"Last deploy",className:"hide-s"},{label:"Last seen",className:"hide-s"}],apps.map(a=>({cells:[{html:`<code>${esc(a.script_name)}</code>${a.state !== "active" ? ` · ${esc(a.state === "pending" ? "waiting for approval" : a.state)}` : ""}`},{html:esc(a.project)},{html:String(a.requests)},{html:`${a.errors}${a.groups ? ` · ${a.groups} groups` : ""}`},{html:esc(a.last_deploy ?? ""),className:"hide-s"},{html:ago(a.last_event_at,ctx.now),className:"hide-s"}]}))) : emptyState("No apps yet","Ask your agent to set up Pimwell reporting.",{label:"Setup guide",href:`https://${env.HUB_DOMAIN}/setup`})}
+${apps.length ? kitTable("Apps",[{label:"App"},{label:"Project"},{label:"24h requests"},{label:"Errors"},{label:"Last deploy",className:"hide-s"},{label:"Last seen",className:"hide-s"}],apps.map(a=>({cells:[{html:`<code>${esc(a.script_name)}</code>${a.state !== "active" ? ` · ${esc(a.state === "pending" ? "waiting for approval" : a.state)}` : ""}`},{html:esc(a.project)},{html:String(a.requests)},{html:`${a.errors}${a.groups ? ` · ${plural(a.groups,"group")}` : ""}`},{html:esc(a.last_deploy ?? ""),className:"hide-s"},{html:ago(a.last_event_at,ctx.now),className:"hide-s"}]}))) : emptyState("No apps yet","Ask your agent to set up Pimwell reporting.",{label:"Setup guide",href:`https://${env.HUB_DOMAIN}/setup`})}
 ${deployList}
 <h2>Errors, last 7 days</h2>
 ${groups.length ? kitTable("Error groups",[{label:"App"},{label:"Error"},{label:"Occurrences"},{label:"Last seen"}],groups.map(x=>({href:`/apps?g=${encodeURIComponent(x.id)}`,selected:g?.id === x.id,cells:[{html:esc(x.script_name)},{html:`<a href="/apps?g=${esc(encodeURIComponent(x.id))}">${esc(x.title)}</a>`},{html:String(x.count)},{html:ago(x.last_seen,ctx.now)}]}))) : '<p class="lede">No errors recorded.</p>'}`;
@@ -66,20 +66,20 @@ ${groups.length ? kitTable("Error groups",[{label:"App"},{label:"Error"},{label:
   const relatedHtml = relatedWork.length ? `<h2>Recorded work</h2><table><tbody>${relatedWork.map(w => `<tr><td class="ref">${esc(w.ref)}</td><td>${esc(KINDS[w.kind].name)}</td><td><a href="/${esc(encodeURIComponent(w.project))}/w/${w.number}">${esc(w.title)}</a></td><td>${esc(STATES[w.state])}</td><td>${w.relationship}</td></tr>`).join("")}</tbody></table><p class="lede">${relatedWorkCoverage.shown} related work items shown${relatedWorkCoverage.truncated ? `; capped at ${relatedWorkCoverage.limit}, more omitted` : "; complete for recorded associations"}. Recorded associations do not prove these logs authorized the work.</p>` : "";
   let inspector = g ? `<a class="back" href="/apps">‹ Apps</a><div class="head"><span>${esc(g.kind)}</span><code>${esc(g.script_name)}</code><span>×${g.count}</span></div>
 <h1>${esc(g.title)}</h1>
-${inspectorSection("Error group",[{label:"Project",html:`<a href="/${esc(g.project)}/docket">${esc(g.project)}</a>`},{label:"First seen",html:new Date(g.first_seen).toISOString().slice(0,16).replace("T"," ")},{label:"Last seen",html:ago(g.last_seen,ctx.now)},{label:"Version",html:`<code>${esc(g.last_version?.slice(0,8) ?? "unknown")}</code>`}])}
+${inspectorSection("Error group",[{label:"Project",html:`<a href="/${esc(g.project)}/docket">${esc(names.group_name ?? g.project)}</a>`},{label:"First seen",html:localTime(g.first_seen)},{label:"Last seen",html:ago(g.last_seen,ctx.now)},{label:"Version",html:`<code>${esc(g.last_version?.slice(0,8) ?? "unknown")}</code>`}])}
 <p class="lede">First observed deploy: ${g.first_deploy ? `<a href="/apps?d=${esc(g.first_deploy)}">${esc(g.first_deploy)}</a>` : "unknown"}; commit ${originView?.commitHref ? `<a href="${esc(originView.commitHref)}">${esc(g.first_commit ?? "unknown")}</a>` : esc(g.first_commit ?? "unknown")}. Correlation, not proof of causation.</p>
 ${rank(ctx.role) >= rank("member") ? `<p><a class="button" href="/new?trace=${esc(encodeURIComponent(g.id))}">File a snag</a></p>` : ""}
 ${relatedHtml}
 <pre>${esc(g.last_message)}</pre>
 <h2>Recent</h2>${kitTable("Recent occurrences",[{label:"When"},{label:"Request"},{label:"Status"},{label:"Ray",className:"hide-s"}],(eventsR!.results as Array<{at:number;method:string|null;path:string|null;status:number|null;ray:string|null}>).map(e=>({cells:[{html:ago(e.at,ctx.now)},{html:`<code>${esc(`${e.method ?? ""} ${e.path ?? ""}`.trim())}</code>`},{html:String(e.status ?? "")},{html:esc(e.ray ?? ""),className:"hide-s"}]})))}
-<h2>Deploys</h2>${(deploysR!.results as Array<{ id: string; tag: string | null; version_id: string; message: string | null; seen_at: number }>).map((d) => `<p><a href="/apps?d=${esc(encodeURIComponent(d.id))}"><code>${esc(d.tag ?? d.version_id.slice(0, 8))}</code></a> ${esc(d.message ?? "")} <small>${ago(d.seen_at, ctx.now)} ago</small></p>`).join("") || "<p class=\"lede\">None seen.</p>"}` : null;
+<h2>Deploys</h2>${(deploysR!.results as Array<{ id: string; tag: string | null; version_id: string; message: string | null; seen_at: number }>).map((d) => `<p><a href="/apps?d=${esc(encodeURIComponent(d.id))}"><code>${esc(d.tag ?? d.version_id.slice(0, 8))}</code></a> ${esc(d.message ?? "")} <small>${ago(d.seen_at, ctx.now)}</small></p>`).join("") || "<p class=\"lede\">None seen.</p>"}` : null;
   let inspectorKey = g ? `group:${g.id}:${g.count}:${g.first_deploy}:${g.first_commit}:${relatedWork.length}:${relatedWorkCoverage.truncated}` : "";
   if (selected) {
     const { deploy: d, commitRef, commitHref } = deployView(selected);
     const { relatedWork: work, relatedWorkCoverage: workCoverage } = deployWorkResults((await deployWorkStatement(ctx, selected).all<DeployWorkItem>()).results);
     inspector = `<a class="back" href="${esc(deployHref())}">‹ Deploys</a><div class="head"><span>Deploy record</span><code>${esc(d.id)}</code></div>
 <h1>${esc(d.script_name)}</h1><p class="lede">Recorded metadata is not proof of live rollout, continued deployment or execution authority.</p>
-${inspectorSection("Deployment", [{label:"Project",html:`${esc(d.project)}`},{label:"Recorded at",html:`${new Date(d.seen_at).toISOString()}`},{label:"Version",html:`<code>${esc(d.version_id)}</code>`},{label:"Tag",html:`<code>${esc(d.tag ?? "none recorded")}</code>`}])}
+${inspectorSection("Deployment", [{label:"Project",html:`${esc(names.deploy_name ?? d.project)}`},{label:"Recorded at",html:`${localTime(d.seen_at)}`},{label:"Version",html:`<code>${esc(d.version_id)}</code>`},{label:"Tag",html:`<code>${esc(d.tag ?? "none recorded")}</code>`}])}
 ${commitHref ? `<p><a href="${esc(commitHref)}">Recorded commit reference: ${esc(commitRef!)}</a>. The destination checks its own access; this record does not verify the commit exists or was deployed.</p>` : `<p class="lede">No supported full recorded commit reference. Tags, opaque versions and ambiguous repository slugs are not inferred to identify a commit.</p>`}
 <h2>Recorded work</h2><p class="lede">Recorded associations are not proof of feature delivery, completion, revenue or execution authority.</p>
 ${work.length ? recordedWorkTable(work) : `<p class="lede">No work associations recorded for this deploy.</p>`}
@@ -98,7 +98,7 @@ export async function adminAppsPage(request: Request, env: Env): Promise<Respons
   const rows = (await ctx.db.prepare(`SELECT s.script_name, s.state, s.created_at, s.last_event_at, t.slug AS org, p.slug AS project, i.display_name AS who FROM app_source s
     JOIN tenant t ON t.id = s.tenant_id JOIN project p ON p.id = s.project_id LEFT JOIN identity i ON i.id = s.created_by ORDER BY s.state = 'pending' DESC, s.created_at DESC`)
     .all<{ script_name: string; state: string; created_at: number; last_event_at: number | null; org: string; project: string; who: string | null }>()).results;
-  const form = (script: string, enable: boolean, label: string) => `<form class="inline" method="post" action="/api/app.approve"><input type="hidden" name="script" value="${esc(script)}"><input type="hidden" name="enable" value="${enable ? "1" : "0"}"><input type="hidden" name="_back" value="/admin/apps"><button type="submit"${enable ? "" : ' class="quiet"'}>${label}</button></form>`;
+  const form = (script: string, enable: boolean, label: string) => `<form class="inline" method="post" action="/api/app.approve"><input type="hidden" name="script" value="${esc(script)}"><input type="hidden" name="enable" value="${enable ? "1" : "0"}"><input type="hidden" name="_back" value="/admin/apps"><button type="submit" class="quiet">${label}</button></form>`;
   const body = `<h1>Apps</h1><p class="lede">Apps in this Cloudflare account that report through pimwell-tail. A script name is account-wide, so which organization receives an app's errors is yours to approve.</p>
 ${toolbar("Hub admin",'<a href="/admin/orgs">Organizations</a><a href="/admin/models">Models and keys</a>')}
 ${rows.length ? rows.map(r=>inspectorSection(r.script_name,[{label:"App",html:`<code>${esc(r.script_name)}</code>`},{label:"Organization / project",html:esc(r.org) + " / " + esc(r.project)},{label:"State",html:esc(r.state)},{label:"Asked by",html:esc(r.who ?? "")},{label:"Last event",html:ago(r.last_event_at,ctx.now)},{label:"Controls",html:"Manage reporting",editHtml:r.state === "active" ? form(r.script_name,false,"Disable") : form(r.script_name,true,"Approve")}])).join("") : "<p>No registrations yet.</p>"}`;
