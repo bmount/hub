@@ -187,10 +187,11 @@ try {
       await page.screenshot({path:path.join(artifacts,`${phase}-${name}-${label}.png`),fullPage:false});
       manifest.push({phase,name,route,viewport,file:`${phase}-${name}-${label}.png`});
       if (phase === 'after') {
-        await expect(page.locator('.card,.grid,.onramp,.intent-card,.bars')).toHaveCount(0);
+        await expect(page.locator('.card,.grid,.onramp,.intent-card,.bars,.board,.bcol,.bcard,.progress,.closure-counts,.diff')).toHaveCount(0);
         await expect(page.locator('#rail #org-places')).toHaveCount(1);
         await expect(page.locator('#rail #explorer')).toHaveCount(1);
         await expect(page.locator('.bar .wb-breadcrumb')).toBeVisible();
+        expect(await page.locator('.pane').evaluateAll(panes => panes.every(p => p.scrollWidth <= p.clientWidth + 1)), `${name}: pane horizontal overflow`).toBe(true);
         if (!route.startsWith('https:')) {
         await expect(page.locator('#explorer')).toHaveCount(1);
         expect(await page.locator('#explorer .wb-tree').count()).toBeGreaterThanOrEqual(1);
@@ -200,6 +201,14 @@ try {
         expect(visibleNavigation).toEqual(viewport.width >= 1280 ? [true,true] : [false,false]);
         if (viewport.width < 760) await expect(page.locator('.tabs')).toBeVisible();
         } else expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
+      }
+      if (phase === 'after' && name === 'board') {
+        // Native selects size to their longest option, including unselected names.
+        await db.prepare("UPDATE identity SET display_name = ? WHERE email = 'dev@example.test'").bind('<img src=x onerror=alert(1)>' + 'X'.repeat(120)).run();
+        await page.reload();
+        expect(await page.locator('.pane').evaluateAll(panes => panes.every(p => p.scrollWidth <= p.clientWidth + 1)), 'Board: long person picker overflow').toBe(true);
+        await db.prepare("UPDATE identity SET display_name = 'dev' WHERE email = 'dev@example.test'").run();
+        await page.reload();
       }
       if (phase === 'after' && ['people','apps','situations','usage','search','sessions'].includes(name)) {
         await expect(page.locator('#list .card, #list .grid, #list .bars')).toHaveCount(0);

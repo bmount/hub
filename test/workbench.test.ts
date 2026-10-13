@@ -36,7 +36,7 @@ describe("the workbench", () => {
       expect(html, path).toContain('id="org-places"');
       expect(html, path).toContain('id="explorer"');
       for (const classes of html.matchAll(/class="([^"]*)"/g)) {
-        expect(classes[1]!.split(/\s+/).filter(c => ["card","grid","onramp","intent-card","bars"].includes(c)), path).toEqual([]);
+        expect(classes[1]!.split(/\s+/).filter(c => ["card","grid","onramp","intent-card","bars","board","bcol","bcard","progress","closure-counts","diff"].includes(c)), path).toEqual([]);
       }
     }
     const item = await (await w.get("/site/w/1")).text();

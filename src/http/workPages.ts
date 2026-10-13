@@ -10,7 +10,7 @@ import { attentionQuery } from "../verbs/collab";
 import type { Env } from "../env";
 import { HubError } from "../errors";
 import { safeExternalUrl } from "../security/urls";
-import { emptyState, esc, htmlResponse, inspectorSection, formRow, kitList, kitTable, kitTabs, statusChip, toolbar, workbench } from "../html";
+import { emptyState, esc, htmlResponse, inspectorSection, formRow, kitList, kitTable, kitTabs, statusChip, toolbar, workbench, type KitRow } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -88,7 +88,7 @@ export async function dependencyPage(request: Request, env: Env, slug: string, v
   if (!project) return notFoundPage(extra);
   const url = new URL(request.url);
   const href = (ref: string) => { const u = new URL(url); u.searchParams.set("work", ref); return u.pathname + u.search; };
-  const row = (v: View) => ({href: href(v.ref), selected: url.searchParams.get("work") === v.ref, cells: [{html: `<a href="${esc(href(v.ref))}">${esc(v.ref)} ${esc(v.title)}</a>`}, {html: `P${v.priority}`}, {html: readinessHtml(v.readiness)}]});
+  const row = (v: View): KitRow => ({href: href(v.ref), selected: url.searchParams.get("work") === v.ref, cells: [{html: `<a href="${esc(href(v.ref))}">${esc(v.ref)} ${esc(v.title)}</a>`}, {html: `P${v.priority}`}, {html: readinessHtml(v.readiness)}]});
   const table = (label: string, items: View[]) => items.length ? kitTable(label, [{label: "Item"}, {label: "Priority"}, {label: "Readiness"}], items.map(row)) : `<p class="lede">No ${esc(label.toLowerCase())}.</p>`;
   let content: string;
   if (view === "graph") {
@@ -100,7 +100,7 @@ export async function dependencyPage(request: Request, env: Env, slug: string, v
     content = `<p class="lede">Prerequisites first; each later stage waits on earlier work. External prerequisites are included.</p><div class="wb-dependency-graph">${layers.map(level => `<section aria-label="Dependency stage ${level + 1}"><h2>Stage ${level + 1}</h2>${kitList(`Dependency stage ${level + 1}`, result.items.filter(n => levels.get(n.ref) === level).map(n => ({href: href(n.ref), selected: url.searchParams.get("work") === n.ref, html: `<a href="${esc(href(n.ref))}">${esc(n.ref)} ${esc(n.title)}</a> P${n.priority}<br>${readinessHtml(n.readiness)}<div class="lede">Waits on: ${result.edges.filter(e => e.dependent === n.ref).map(e => `<a href="${esc(href(e.prerequisite))}">${esc(e.prerequisite)}</a>`).join(", ") || "nothing"}</div>`})))}</section>`).join("")}</div>${!result.items.length ? '<p class="lede">No open items. File work from + File.</p>' : ""}`;
   } else {
     const result = await workFrontier.run(ctx, workFrontier.parse({project: slug, limit: 100}));
-    content = `<p aria-label="Readiness counts">Ready ${result.counts.ready} · Blocked ${result.counts.blocked} · Claimed ${result.counts.claimed} · Waiting for a resource ${result.counts.conflict}</p><h2>Ready now</h2><p class="lede">Ranked by priority, critical chain, downstream work, estimate and age. Showing ${result.ready.length} of ${result.counts.ready}.</p>${result.ready.length ? kitTable("Ready now", [{label:"Item"},{label:"Priority"},{label:"Readiness"},{label:"Chain"},{label:"Downstream"}], result.ready.map(v => { const r = row(v); r.cells.push({html:`${v.critical}h`}, {html:String(v.downstream)}); return r; })) : '<p class="lede">No executable work can start now.</p>'}<h2>Stuck behind dropped items</h2>${table("Stuck items", result.stuck)}`;
+    content = `<p aria-label="Readiness counts">Ready ${result.counts.ready} · Blocked ${result.counts.blocked} · Claimed ${result.counts.claimed} · Waiting for a resource ${result.counts.conflict}</p><h2>Ready now</h2><p class="lede">Ranked by priority, critical chain, downstream work, estimate and age. Showing ${result.ready.length} of ${result.counts.ready}.</p>${result.ready.length ? kitTable("Ready now", [{label:"Item"},{label:"Priority"},{label:"Readiness"},{label:"Chain",className:"hide-s"},{label:"Downstream",className:"hide-s"}], result.ready.map(v => { const r = row(v); r.cells.push({html:`${v.critical}h`,className:"hide-s"}, {html:String(v.downstream),className:"hide-s"}); return r; })) : '<p class="lede">No executable work can start now.</p>'}<h2>Stuck behind dropped items</h2>${table("Stuck items", result.stuck)}`;
   }
   let selected;
   try { selected = await selectedWorkInspector(ctx, env, url, null); } catch (e) { if (e instanceof HubError && e.status === 404) return notFoundPage(extra); throw e; }
