@@ -1,3 +1,4 @@
+import { projectFeatures } from "../projectFeatures";
 // The workbench's work views (2026-10-07): the Docket as the list pane, and the selected item, a new item, or an
 // overview as the inspector. Item links carry the list's filters, so opening an item rebuilds the same list beside it
 // and the script keeps the list where it was. Every page reads in one D1 batch after the project lookup.
@@ -25,7 +26,7 @@ const ago = (ms: number, now: number) => {
 
 type Member = { id: string; display_name: string; email: string; kind: string };
 type Quest = { id: string; number: number; title: string };
-type Project = { id: string; slug: string; display_name: string; state: string };
+type Project = { id: string; slug: string; kind: string; display_name: string; state: string };
 type Activity = { kind: string; summary: string; created_at: number; who: string | null };
 type Comment = { id: string; body: string; created_at: number; reply_to: string | null; author: string; handle: string | null };
 
@@ -48,9 +49,9 @@ async function tenantCtx(request: Request, env: Env) {
 async function projectCtx(request: Request, env: Env, slug: string) {
   const { ctx, extra, ok } = await tenantCtx(request, env);
   if (!ok) return { ctx, extra, project: null };
-  const project = await ctx.db.prepare("SELECT id, slug, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, slug)
+  const project = await ctx.db.prepare("SELECT id, slug, kind, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, slug)
     .first<Project>();
-  return { ctx, extra, project };
+  return { ctx, extra, project: project && projectFeatures(project.kind).includes("docket") ? project : null };
 }
 
 // ---------- Filters ----------

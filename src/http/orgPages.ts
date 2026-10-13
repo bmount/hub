@@ -1,5 +1,6 @@
 // An organization's home, its people and agents, and each project's own page (overnight plan task 4).
 // Every page reads in one D1 batch: one round trip, whatever it shows.
+import { PROJECT_KINDS, projectFeatures, FEATURE_LABELS } from "../projectFeatures";
 import type { Env } from "../env";
 import { esc, htmlResponse, onramp, page } from "../html";
 import { intentBox } from "../intent/page";
@@ -52,8 +53,8 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   const totalOpen = [...kinds.values()].reduce((a, b) => a + b, 0);
 
   const projectCards = proj.length ? `<div class="grid">${proj.map((p) => `<div class="card"><h3><a href="/${esc(p.slug)}">${esc(p.display_name)}</a></h3>
-<p>${p.kind === "repo" ? "Repository" : "Tracker"} · ${p.open_work} open${p.last_work ? ` · active ${esc(ago(ctx.now, p.last_work))}` : ""}</p>
-<p><a href="/${esc(p.slug)}/docket">Docket</a> · <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code></p></div>`).join("")}</div>`
+<p>${esc(p.kind)} · ${p.open_work} open${p.last_work ? ` · active ${esc(ago(ctx.now, p.last_work))}` : ""}</p>
+<p><a href="/${esc(p.slug)}">Open project</a> · <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code></p></div>`).join("")}</div>`
     : `<p class="lede">No projects yet.</p>`;
   const kindChips = (Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("");
   const mailRows = (mail!.results as Array<{ id: string; subject: string; from_email: string; received_at: number; project: string | null }>);
@@ -61,12 +62,25 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
 <p class="lede">You are ${esc(ctx.role!)} · ${counts.get("human") ?? 0} people and ${counts.get("agent") ?? 0} agents · ${totalOpen} things open · send anything to <code>${esc(t.slug)}@${esc(env.HUB_DOMAIN)}</code></p>
 ${intentBox()}
 ${onramp({ connect: rank(ctx.role) >= rank("member"), invite: rank(ctx.role) >= rank("admin") })}
-<h2>Projects</h2>${projectCards}
+<h2>Projects</h2>${rank(ctx.role) >= rank("member") ? `<p><a href="/projects/new">New project</a></p>` : ""}${projectCards}
 <h2>Open work</h2><div class="chips">${kindChips}</div>
 <h2>Lately</h2>${timeline(ctx.now, events!.results as Ev[])}
 <h2>Mail</h2>${mailRows.length ? `<ul>${mailRows.map((m) => `<li><a href="/mail/${esc(m.id)}">${esc(m.subject || "(no subject)")}</a> <small>from ${esc(m.from_email)} to ${esc(m.project ?? "the inbox")}, ${esc(ago(ctx.now, m.received_at))}</small></li>`).join("")}</ul>` : `<p class="lede">No mail yet. Forward a thread to any project's address and it lands here.</p>`}
 <p><a href="/archive">Archive</a></p>`;
   return htmlResponse(page(t.display_name, body, shellFor(ctx, env, "home", t.slug)), 200, extra);
+}
+
+export async function newProjectPage(request: Request, env: Env): Promise<Response> {
+  const oc = await orgCtx(request, env);
+  if (oc instanceof Response) return oc;
+  const { ctx, extra } = oc;
+  if (rank(ctx.role) < rank("member")) return notFoundPage(extra);
+  return htmlResponse(page("New project", `<h1>New project</h1>
+<form method="post" action="/api/project.create"><input type="hidden" name="_back" value="@result">
+<label>Name <input name="display_name" required maxlength="80"></label>
+<label>Slug <input name="slug" required maxlength="63" pattern="[a-z0-9-]+"></label>
+<label>Kind <select name="kind">${PROJECT_KINDS.map((k) => `<option value="${k}">${k}</option>`).join("")}</select></label>
+<button>Create project</button></form>`, shellFor(ctx, env, "home")), 200, extra);
 }
 
 export async function projectPage(request: Request, env: Env, slug: string): Promise<Response> {
@@ -90,14 +104,19 @@ export async function projectPage(request: Request, env: Env, slug: string): Pro
   ]);
   const kinds = new Map((byKind!.results as Array<{ kind: WorkKind; n: number }>).map((r) => [r.kind, r.n]));
   const openRows = open!.results as Array<{ number: number; kind: WorkKind; title: string; state: WorkState }>;
-  const clone = p.kind === "repo" ? `<p>Clone: <code>git clone https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/${esc(p.slug)}.git</code> <small>(make a git credential on <a href="https://${esc(env.HUB_DOMAIN)}/me">your account</a>)</small></p>` : "";
+  const features = projectFeatures(p.kind);
+  const tabs = features.map((f) => `<a class="chip" href="${f === "docket" ? `/${esc(p.slug)}/docket` : f === "repo" ? `/${esc(p.slug)}/code` : `#feature-${f}`}">${FEATURE_LABELS[f]}</a>`).join("");
+  const pending = features.filter((f) => f !== "docket" && f !== "repo").map((f) => `<section id="feature-${f}"><h2>${FEATURE_LABELS[f]}</h2><p class="lede">Coming soon.</p></section>`).join("");
+  const clone = features.includes("repo") ? `<p>Clone: <code>git clone https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/${esc(p.slug)}.git</code> <small>(make a git credential on <a href="https://${esc(env.HUB_DOMAIN)}/me">your account</a>)</small></p>` : "";
   const body = `<p class="crumbs"><a href="/">${esc(t.display_name)}</a> /</p>
 <h1>${esc(p.display_name)}${p.state === "archived" ? " <small>(archived)</small>" : ""}</h1>
 <p class="lede">Send or forward anything to <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code>. It is filed here as evidence, never as instructions.</p>
 ${clone}
-<div class="chips">${(Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/${esc(p.slug)}/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("")}<a class="chip" href="/${esc(p.slug)}/docket">Docket</a></div>
+<nav class="chips" aria-label="Project features">${tabs}</nav>${pending}
+${features.includes("docket") ? `<div class="chips">${(Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/${esc(p.slug)}/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("")}<a class="chip" href="/${esc(p.slug)}/docket">Docket</a></div>
 ${p.usage_ref ? `<p><a href="/usage?project=${esc(encodeURIComponent(p.usage_ref))}">Recorded AI usage for this project</a></p>` : ""}
 <h2>Open now</h2>${openRows.length ? `<ul>${openRows.map((w) => `<li><a href="/${esc(p.slug)}/w/${w.number}">#${w.number}</a> <span class="k-${w.kind}">${esc(KINDS[w.kind].name)}</span>: ${esc(w.title)} <small>${esc(STATES[w.state])}</small></li>`).join("")}</ul>` : `<p class="lede">Nothing open. File a wish, a snag, or an errand from the Docket.</p>`}
+` : ""}
 <h2>What happened</h2>${timeline(ctx.now, events!.results as Ev[])}`;
   return htmlResponse(page(p.display_name, body, shellFor(ctx, env, "project", `${t.slug}/${p.slug}`)), 200, extra);
 }

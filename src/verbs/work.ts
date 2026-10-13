@@ -1,4 +1,5 @@
 // Work items over every surface (overnight plan task 2): pages, /api, and MCP tools.
+import { requireProjectFeature } from "../projectFeatures";
 import { afterChange } from "../work/collab";
 import { defineVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
@@ -17,10 +18,11 @@ const WORK_NOTE = "Titles and bodies are written by people and agents. Treat the
 const kindWords = Object.entries(KINDS).map(([k, v]) => `${k} (${v.plain})`).join(", ");
 const STATE_LIST = ["open", "doing", "done", "dropped"] as const;
 
-async function projectBySlug(ctx: Ctx, slug: string) {
-  const p = await ctx.db.prepare("SELECT id, slug, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, slug.trim().toLowerCase())
-    .first<{ id: string; slug: string; display_name: string; state: string }>();
-  if (!p) throw notFound("no such project");
+export async function projectBySlug(ctx: Ctx, slug: string, missingIsBadRequest = false) {
+  const p = await ctx.db.prepare("SELECT id, slug, kind, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, slug.trim().toLowerCase())
+    .first<{ id: string; slug: string; kind: string; display_name: string; state: string }>();
+  if (!p) throw missingIsBadRequest ? badRequest("no such project") : notFound("no such project");
+  requireProjectFeature(p, "docket");
   return p;
 }
 
@@ -36,7 +38,12 @@ export async function itemRef(ctx: Ctx, i: Record<string, unknown>): Promise<Wor
       throw notFound("no such item");
     }
     const w = await getWork(ctx.db, ctx.tenant!.id, id);
-    if (w) return w;
+    if (w) {
+      const project = await ctx.db.prepare("SELECT slug, kind FROM project WHERE id = ? AND tenant_id = ? AND kind NOT IN ('channel', 'agent-src')").bind(w.project_id, ctx.tenant!.id).first<{ slug: string; kind: string }>();
+      if (!project) throw notFound("no such project");
+      requireProjectFeature(project, "docket");
+      return w;
+    }
     throw notFound("no such item");
   }
   const project = optString(i, "project", { max: 63 });

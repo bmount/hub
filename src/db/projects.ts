@@ -3,7 +3,8 @@ import { badRequest, conflict } from "../errors";
 import { isValidSlug } from "../tenant";
 import type { Project, State } from "./types";
 
-const KINDS = new Set(["repo", "tracker"]);
+import { PROJECT_KINDS } from "../projectFeatures";
+const KINDS = new Set(PROJECT_KINDS);
 
 /** Built-in pages on an organization's host. A project page lives at /<project>, so a project may not take these names. */
 export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([

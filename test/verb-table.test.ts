@@ -81,7 +81,7 @@ const TABLE: Record<string, Decl> = {
   "provider.key_add": T("hub", "root", 60, { humanOnly: true }), "provider.key_promote": T("hub", "root", 60, { humanOnly: true }),
   "provider.key_retire": T("hub", "root", 60, { humanOnly: true }), "model.route_set": T("hub", "root", 60, { humanOnly: true }),
   "namespace.create": T("tenant", "admin", 60), "namespace.archive": T("tenant", "admin", 60), "namespace.unarchive": T("tenant", "admin", 60),
-  "project.create": T("tenant", "member", null), "project.archive": T("tenant", "admin", 60), "project.unarchive": T("tenant", "admin", 60), "project.list": T("tenant", "reader", null, { mcp: "read" }),
+  "project.create": T("tenant", "member", null, { mcp: "write" }), "project.archive": T("tenant", "admin", 60), "project.unarchive": T("tenant", "admin", 60), "project.list": T("tenant", "reader", null, { mcp: "read" }),
   "invite.create": T("tenant", "admin", 60), "invite.revoke": T("tenant", "admin", 60), "invite.list": T("tenant", "admin", null),
   "session.list": T("public", "public", null), "session.revoke": T("public", "public", null), "session.end": T("public", "public", null),
   "session.start": T("tenant", "reader", null, { longLived: true }),

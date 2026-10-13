@@ -1,6 +1,7 @@
 // The board and bulk changes (planned verbs built 2026-10-07). The board groups work by state, shows each quest's
 // progress, and flags what has stalled. Bulk update runs work.update once per item, so every change is audited and
 // followers hear about it exactly as for a single edit.
+import { requireProjectFeature } from "../projectFeatures";
 import { defineVerb } from "./table";
 import { optString } from "./params";
 import { badRequest } from "../errors";
@@ -31,6 +32,10 @@ export type Board = {
 };
 
 export async function board(ctx: Ctx, project: string | null, actorId: string | null = null): Promise<Board> {
+  if (project) {
+    const pr = await ctx.db.prepare("SELECT slug, kind FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, project).first<{ slug: string; kind: string }>();
+    if (pr) requireProjectFeature(pr, "docket");
+  }
   // Counts and bounded examples share predicates and one D1 batch. Never infer totals
   // (especially old stalled items) from the globally newest-item sample.
   const scope = "w.tenant_id = ? AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src') AND (? IS NULL OR p.slug = ?)";

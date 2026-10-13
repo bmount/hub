@@ -1,3 +1,4 @@
+import { PROJECT_KINDS } from "../projectFeatures";
 import { ensureProjectChannels } from "../chat/defaults";
 import { defineVerb } from "./table";
 import { optString, reqString, stateParam } from "./params";
@@ -36,6 +37,10 @@ async function setState(ctx: Ctx, nsSlug: string | null, slug: string, state: St
 
 export const projectCreate = defineVerb({
   name: "project.create", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null, summary: "Create a project, optionally inside a namespace.",
+  formBack: (r) => `/${(r as { project: { path: string } }).project.path}`,
+  mcp: { scope: "write", destructive: false, title: "Create project", input: { type: "object", properties: {
+    slug: { type: "string" }, kind: { type: "string", enum: PROJECT_KINDS }, display_name: { type: "string" }, namespace: { type: "string" },
+  }, required: ["slug", "kind", "display_name"], additionalProperties: false } },
   parse: (i) => ({
     slug: reqString(i, "slug", { max: 63 }), kind: reqString(i, "kind", { max: 20 }),
     display_name: reqString(i, "display_name", { max: 80 }), namespace: optString(i, "namespace", { max: 63 }),

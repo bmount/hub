@@ -1,3 +1,4 @@
+import { requireProjectFeature } from "../projectFeatures";
 import { rank } from "../auth/context";
 import { agentByName, agentSrcAccess, agentSrcSlug } from "../code/agentSrc";
 import { connectionNames } from "../auth/connect";
@@ -27,9 +28,10 @@ export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false)
     if (!source) throw notFound("no such repository");
     return { ...source, slug };
   }
-  const p = await ctx.db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'").bind(ctx.tenant!.id, slug.trim().toLowerCase())
-    .first<{ id: string; slug: string; display_name: string }>();
+  const p = await ctx.db.prepare("SELECT id, slug, kind, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, slug.trim().toLowerCase())
+    .first<{ id: string; slug: string; kind: string; display_name: string }>();
   if (!p) throw notFound("no such repository project");
+  requireProjectFeature(p, "repo");
   return p;
 }
 

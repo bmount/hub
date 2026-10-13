@@ -41,6 +41,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `mail_reply` | write | member | no | Implemented | `all`, **`body`**, **`id`** |
 | `mail_send` | write | member | no | Implemented | **`body`**, `cc`, `from_project`, **`subject`**, **`to`** |
 | `message_search` | read | reader | no | Implemented | `c`, **`q`** |
+| `project_create` | write | member | no | Implemented | **`display_name`**, **`kind`**, `namespace`, **`slug`** |
 | `project_history` | read | reader | no | Implemented | `before`, `limit`, **`project`** |
 | `project_list` | read | reader | no | Implemented | `state` |
 | `project_status` | read | reader | no | Implemented | **`project`**, `since` |

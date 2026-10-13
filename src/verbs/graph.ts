@@ -5,7 +5,7 @@ import { optInt, optString, reqString } from "./params";
 import { badRequest } from "../errors";
 import { eventStatement } from "../db/events";
 import { releaseWork, type WorkItem } from "../db/work";
-import { itemRef, ref, slugOf } from "./work";
+import { itemRef, projectBySlug, ref, slugOf } from "./work";
 import { changeDeps, deleteWork, setResources } from "../work/graphEdit";
 import { closure, rankReady, topoOrder } from "../work/graph";
 import { describeReadiness, graphContext, graphLine as line, type ReadinessView, type View } from "../work/graphView";
@@ -107,8 +107,7 @@ export const workGraph = defineVerb({
         upstream: closure(c.g.edges, item.id, "up").map(c.refOf), downstream: closure(c.g.edges, item.id, "down").map(c.refOf),
       };
     }
-    const projectId = p.project ? (await ctx.db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, p.project.trim().toLowerCase()).first<{ id: string }>())?.id : null;
-    if (p.project && !projectId) throw badRequest("no such project");
+    const projectId = p.project ? (await projectBySlug(ctx, p.project, true)).id : null;
     const openIds = new Set(c.g.nodes.filter((n) => (n.state === "open" || n.state === "doing") && (!projectId || n.project_id === projectId)).map((n) => n.id));
     for (const e of c.g.edges) if (openIds.has(e.dependent_id)) openIds.add(e.prereq_id);
     const nodes = c.g.nodes.filter((n) => openIds.has(n.id));
@@ -139,8 +138,7 @@ export const workFrontier = defineVerb({
   parse: (i) => ({ project: optString(i, "project", { max: 63 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 20 }),
   run: async (ctx, p): Promise<FrontierResult> => {
     const c = await graphContext(ctx);
-    const projectId = p.project ? (await ctx.db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, p.project.trim().toLowerCase()).first<{ id: string }>())?.id : null;
-    if (p.project && !projectId) throw badRequest("no such project");
+    const projectId = p.project ? (await projectBySlug(ctx, p.project, true)).id : null;
     // Only work can be started: quests, sparks and calls never appear on the frontier.
     const inScope = (id: string) => EXECUTABLE.has(c.byId.get(id)!.kind) && (!projectId || c.byId.get(id)!.project_id === projectId);
     const counts = { ready: 0, blocked: 0, claimed: 0, conflict: 0 };

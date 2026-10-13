@@ -147,7 +147,10 @@ export const reviewList = defineVerb({
     render: (r) => { const x = (r as { reviews: Listed[] }).reviews; return [DATA_NOTE, NOTE, "", `**Reviews** (${x.length})`, ...x.map((v) => `- **${v.slug}!${v.number}** [${v.status}]${v.mine ? " (waiting on you)" : ""} ${cleanText(v.title)} — ${v.branch} into ${v.base}, by ${cleanText(v.author)}`)].join("\n"); },
   },
   parse: (i) => ({ project: optString(i, "project", { max: 63 }), open: !(i.closed === true || i.closed === "1") }),
-  run: async (ctx, p) => ({ reviews: (await reviewListStatement(ctx, p.project, p.open).all<Listed>()).results }),
+  run: async (ctx, p) => {
+    if (p.project) await repoProject(ctx, p.project);
+    return { reviews: (await reviewListStatement(ctx, p.project, p.open).all<Listed>()).results };
+  },
 });
 
 export type ReviewView = ReturnType<typeof reviewWorkResults> & {

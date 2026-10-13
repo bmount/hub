@@ -46,7 +46,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
       link("/usage", "AI usage", "usage"),
       ...(rank(ctx.role) >= rank("admin") ? [link("/admin/agents", "Admin", "admin")] : []),
     ];
-    const projects = (r?.projects ?? []).map((p) => ({ href: `/${p.slug}/docket`, label: p.display_name, active: active !== "home" && key === p.slug, count: p.open }));
+    const projects = (r?.projects ?? []).map((p) => ({ href: `/${p.slug}`, label: p.display_name, active: active !== "home" && key === p.slug, count: p.open }));
     const planned = PLANNED_LINKS.map((l) => ({ href: l.href, label: l.label, active: active === "planned" && key === l.key, planned: true }));
     const tabs = [
       { href: "/docket", label: "Docket", active: active === "docket" || active === "project", count: r?.open },

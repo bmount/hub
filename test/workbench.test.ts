@@ -29,7 +29,7 @@ describe("the workbench", () => {
     expect(html).toContain('<body class="wb"');
     expect(html).toMatch(/aria-current="page">Docket<\/a><span class="n">3<\/span>/);
     expect(html).toMatch(/>Mine<\/a><span class="n">1<\/span>/);
-    expect(html).toMatch(/href="\/site\/docket">Site<\/a><span class="n">3<\/span>/);
+    expect(html).toMatch(/href="\/site">Site<\/a><span class="n">3<\/span>/);
     expect(html).toContain('<span class="pill">planned</span>');
     expect(html).toContain('<nav class="tabs" aria-label="Sections">');
     expect(res.headers.get("server-timing")).toMatch(/db;desc="2 round trips/);

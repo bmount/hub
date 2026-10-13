@@ -20,7 +20,7 @@ const input = { type: "object" as const, properties: {}, additionalProperties: f
 
 describe("MCP exposure rules", () => {
   it("exposes exactly these tools", () => {
-    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["app.list", "app.register", "attention.done", "attention.list", "capabilities", "chat.catchup", "chat.heartbeat", "chat.history", "chat.inbox", "chat.mark_read", "chat.post", "chat.post_status", "chat.presence", "chat.read", "chat.read_status", "chat.response_status", "chat.run_claim", "chat.run_status", "chat.thread", "deploy.list", "deploy.read", "deploy.record", "event.list", "inbox.ack", "inbox.ack_status", "mail.list", "mail.propose_work", "mail.read", "mail.reply", "mail.send", "message.search", "project.history", "project.list", "project.status", "ref.backlinks", "repo.branches", "repo.commit", "repo.connect", "repo.diff", "repo.file", "repo.list", "repo.log", "repo.search", "review.ai", "review.comment", "review.list", "review.read", "review.request", "review.verdict", "search.query", "situation.list", "situation.resolve", "skill.list", "skill.read", "trace.list", "trace.read", "usage.report", "usage.summary", "whoami", "work.board", "work.bulk_update", "work.claim", "work.comment", "work.create", "work.delete", "work.depend", "work.frontier", "work.graph", "work.link", "work.list", "work.proposals", "work.propose", "work.read", "work.release", "work.resources", "work.review", "work.search", "work.subscribe", "work.update"]);
+    expect(names(listVerbs().filter((v) => v.mcp))).toEqual(["app.list", "app.register", "attention.done", "attention.list", "capabilities", "chat.catchup", "chat.heartbeat", "chat.history", "chat.inbox", "chat.mark_read", "chat.post", "chat.post_status", "chat.presence", "chat.read", "chat.read_status", "chat.response_status", "chat.run_claim", "chat.run_status", "chat.thread", "deploy.list", "deploy.read", "deploy.record", "event.list", "inbox.ack", "inbox.ack_status", "mail.list", "mail.propose_work", "mail.read", "mail.reply", "mail.send", "message.search", "project.create", "project.history", "project.list", "project.status", "ref.backlinks", "repo.branches", "repo.commit", "repo.connect", "repo.diff", "repo.file", "repo.list", "repo.log", "repo.search", "review.ai", "review.comment", "review.list", "review.read", "review.request", "review.verdict", "search.query", "situation.list", "situation.resolve", "skill.list", "skill.read", "trace.list", "trace.read", "usage.report", "usage.summary", "whoami", "work.board", "work.bulk_update", "work.claim", "work.comment", "work.create", "work.delete", "work.depend", "work.frontier", "work.graph", "work.link", "work.list", "work.proposals", "work.propose", "work.read", "work.release", "work.resources", "work.review", "work.search", "work.subscribe", "work.update"]);
     expect(toolName("project.list")).toBe("project_list");
   });
 
@@ -95,7 +95,7 @@ describe("dispatcher under an oauth context", () => {
     expect(await reject("project.list")).toBeNull();
     expect(await reject("event.list")).toBe("403 forbidden");
     expect(await reject("session.list")).toBe("403 forbidden");
-    expect(await reject("project.create")).toBe("403 forbidden");
+    expect(await reject("project.create")).toBe("403 insufficient_scope");
     expect(await reject("project.list", { ...ctx, oauth: { ...ctx.oauth!, scopes: [] } })).toBe("403 insufficient_scope");
   });
 });
