@@ -4,9 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 // @ts-expect-error Host-only release helper is JavaScript.
 import { deployRecorder } from "../../scripts/deploy-record.mjs";
+// @ts-expect-error Host-only release helper is JavaScript.
+import { compatibleBindings } from "../../scripts/release-bindings.mjs";
 import { buildLocalTestWranglerConfig, readWranglerConfig } from "../wrangler-test-config";
 
 describe("wrangler configuration", () => {
+  it("allows only the additive platform version metadata binding", () => {
+    const resource = {name:"HUB_DB",type:"d1",id:"database"};
+    const metadata = {name:"WORKER_VERSION",type:"version_metadata"};
+    expect(compatibleBindings([resource], [metadata, resource])).toBe(true);
+    expect(compatibleBindings([metadata, resource], [resource, metadata])).toBe(true);
+    expect(compatibleBindings([metadata, resource], [resource])).toBe(false);
+    expect(compatibleBindings([resource], [metadata, {...resource,id:"other"}])).toBe(false);
+    expect(compatibleBindings([resource], [resource, {...metadata,type:"secret_text"}])).toBe(false);
+    expect(readWranglerConfig().version_metadata).toEqual({binding:"WORKER_VERSION"});
+  });
   it("starts a release reporting session before recording with a long-lived token", async () => {
     const dir = mkdtempSync(join(tmpdir(), "release-report-"));
     try {

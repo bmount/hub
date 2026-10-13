@@ -10,7 +10,7 @@ const TENANT_TABLES = [
   "document_delivery", "file_revision", "file_upload", "wiki_revision", "review_comment", "review",
   "situation", "assistant_message", "assistant_thread", "ardi_cred", "agent_mcp_session", "agent_connect_link", "code_event", "code_sync",
   "attention", "follow", "work_comment",
-  "app_event", "app_error_group", "app_deploy", "app_stat", "app_source",
+  "app_event", "app_error_group", "app_deploy", "app_stat", "site", "app_source",
   "msg_ref", "msg_index", "conversation_member", "agent_chat_state", "chat_control", "channel",
   "model_call", "model_route", "provider_credential", "signin_grant",
   "event", "oauth_grant", "api_token", "invite", "consent",
@@ -62,6 +62,7 @@ export async function deleteTenant(db: D1Database, slug: string, deleted_by: str
   stmts.push(db.prepare("DELETE FROM review_reviewer WHERE review_id IN (SELECT id FROM review WHERE tenant_id = ?)").bind(t.id));
   // Work links carry no tenant column; they go with their items, before the items.
   stmts.push(db.prepare("DELETE FROM work_link WHERE item_id IN (SELECT id FROM work_item WHERE tenant_id = ?)").bind(t.id));
+  stmts.push(db.prepare("DELETE FROM site_app WHERE site_id IN (SELECT id FROM site WHERE tenant_id = ?) OR app_id IN (SELECT id FROM app_source WHERE tenant_id = ?)").bind(t.id, t.id));
   for (const table of TENANT_TABLES) stmts.push(db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).bind(t.id));
   for (const id of agents) {
     stmts.push(db.prepare("UPDATE event SET identity_id = NULL WHERE identity_id = ?").bind(id));

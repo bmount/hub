@@ -11,6 +11,7 @@ import { reviewComment, reviewList, reviewRead, reviewRequest, reviewVerdict } f
 import { repoBranches, repoCommit, repoConnect, repoDiff, repoFile, repoList, repoLog, repoSearch } from "./code";
 import { messageSearch, searchQuery, workSearch } from "./search";
 import { mailReply, mailSend, mailSending } from "./mailOut";
+import { siteList, siteRead, siteRegister } from "./sites";
 import { appApprove, appList, appRegister, deployList, deployRead, deployRecord, traceList, traceRead } from "./apps";
 import { modelPriceSet, usageReport, usageSummary } from "./usage";
 import { attentionDone, attentionList, workComment, workSubscribe } from "./collab";
@@ -61,7 +62,7 @@ export function registerAllVerbs(): void {
     memberSetRole, memberRemove,
     workComment, workSubscribe, attentionList, attentionDone,
     usageReport, usageSummary, modelPriceSet,
-    appRegister, appApprove, appList, traceList, traceRead, deployList, deployRead, deployRecord,
+    siteList, siteRead, siteRegister, appRegister, appApprove, appList, traceList, traceRead, deployList, deployRead, deployRecord,
     mailReply, mailSend, mailSending,
     workSearch, messageSearch, searchQuery,
     workDepend, workResources, workGraph, workFrontier, workRelease, workDelete, workPropose, workProposals, workReview,

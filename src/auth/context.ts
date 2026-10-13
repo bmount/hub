@@ -53,6 +53,7 @@ export type Ctx = {
 export type ExplorerData = {
   path: string; display_name: string; kind: string; inProject: boolean;
   choices: Array<{ path: string; display_name: string }>;
+  sites?: Array<{ name: string }>;
   channels: Array<{ slug: string; display_name: string; count: number }>;
   open: number; reviews: number; deploys: number; wiki: number; research: number; files: number; contacts: number; mail: number;
 };
@@ -205,8 +206,8 @@ async function prefetch(db: D1Database, slug: string | null, tokenHash: string, 
   const one = <T>(r: D1Result<unknown> | undefined): T | null => ((r?.results[0] as T | undefined) ?? null);
   const counts = one<Omit<RailData, "projects"> & { projects: string }>(rc);
   const rail: RailData | null = wantRail && counts ? { ...counts, projects: JSON.parse(counts.projects) } : null;
-  const row = one<Omit<ExplorerData, "choices" | "channels" | "inProject"> & { choices: string; channels: string; inProject: number }>(ec);
-  const explorer = row ? { ...row, choices: JSON.parse(row.choices), channels: JSON.parse(row.channels), inProject: !!row.inProject } : null;
+  const row = one<Omit<ExplorerData, "choices" | "channels" | "inProject" | "sites"> & { choices: string; channels: string; sites: string; inProject: number }>(ec);
+  const explorer = row ? { ...row, choices: JSON.parse(row.choices), sites: JSON.parse(row.sites), channels: JSON.parse(row.channels), inProject: !!row.inProject } : null;
   return { tenant: one<Tenant>(t), session: one<Session>(s), identity: one<Identity>(i), membership: one<Membership>(m), rail, explorer };
 }
 
@@ -233,6 +234,7 @@ function explorerStatement(db: D1Database, slug: string | null, live: string, to
           OR EXISTS (SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = c.tenant_id AND cm.conversation_id = c.id AND cm.identity_id = (SELECT identity_id FROM actor) AND cm.removed_at IS NULL))
       ORDER BY c.slug
     ) SELECT p.path, p.display_name, p.kind, p.inProject,
+      (SELECT json_group_array(json_object('name', s.name)) FROM site s WHERE s.tenant_id = p.tenant_id AND s.project_id = p.id) AS sites,
       (SELECT json_group_array(json_object('path', path, 'display_name', display_name)) FROM (SELECT path, display_name FROM choices WHERE state = 'active' OR path = p.path ORDER BY display_name, path)) AS choices,
       (SELECT json_group_array(json_object('slug', slug, 'display_name', display_name, 'count', count)) FROM channels) AS channels,
       (SELECT COUNT(*) FROM work_item w WHERE w.tenant_id = p.tenant_id AND w.project_id = p.id AND w.state IN ('open','doing')) AS open,

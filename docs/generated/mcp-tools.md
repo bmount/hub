@@ -85,6 +85,9 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `review_request` | write | member | no | Implemented | `base`, **`branch`**, `idempotency_key`, **`project`**, `reviewers`, `summary`, `title` |
 | `review_verdict` | write | member | no | Implemented | **`id`**, `reason`, **`verdict`** |
 | `search_query` | read | reader | no | Implemented | **`q`** |
+| `site_list` | read | reader | no | Implemented | `project` |
+| `site_read` | read | reader | no | Implemented | **`name`** |
+| `site_register` | write | member | no | Implemented | **`apps`**, **`hostnames`**, **`name`**, **`project`** |
 | `situation_list` | read | reader | no | Implemented | — |
 | `situation_resolve` | write | member | no | Implemented | **`id`**, **`outcome`** |
 | `skill_list` | read | public | no | Implemented | — |

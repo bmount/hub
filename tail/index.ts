@@ -6,6 +6,7 @@ import { redact, type AppEvent } from "../src/apps/redact";
 import { exceptionFingerprint } from "../src/apps/fingerprint";
 
 interface Env {
+  WORKER_VERSION?: { id: string; tag: string; timestamp: string };
   HUB: { events(batch: AppEvent[]): Promise<{ accepted: number; dropped: number }> };
 }
 

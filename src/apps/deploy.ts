@@ -8,13 +8,23 @@ const SELECT = `SELECT d.id, p.slug AS project, d.script_name, d.version_id, d.t
     THEN p.slug ELSE NULL END AS commit_project
   FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind NOT IN ('channel', 'agent-src')`;
 
+/** Latest reported production release, not a privileged live rollout check. */
+export function currentDeployStatement(ctx: Ctx, projectId: string, script: string) {
+  return ctx.db.prepare(`${SELECT} WHERE d.tenant_id = ? AND d.project_id = ? AND d.script_name = ? AND length(d.version_id) = 73
+    AND CASE WHEN json_valid(d.message) THEN json_extract(d.message, '$.release') = 1 AND json_extract(d.message, '$.environment') = 'production' ELSE 0 END
+    ORDER BY d.seen_at DESC, d.id DESC LIMIT 1`).bind(ctx.tenant!.id, projectId, script);
+}
+
 export function deployStatement(ctx: Ctx, id: string) {
   return ctx.db.prepare(`${SELECT} WHERE d.id = ? AND d.tenant_id = ?`).bind(id, ctx.tenant!.id);
 }
 
-export function deploysStatement(ctx: Ctx, project: string | null = null) {
-  return ctx.db.prepare(`${SELECT} WHERE d.tenant_id = ? AND (? IS NULL OR p.slug = ?) ORDER BY d.seen_at DESC, d.id DESC LIMIT 51`)
-    .bind(ctx.tenant!.id, project, project);
+export function deploysStatement(ctx: Ctx, project: string | null = null, siteId: string | null = null) {
+  return ctx.db.prepare(`${SELECT} WHERE d.tenant_id = ? AND (? IS NULL OR p.slug = ?)
+    AND (? IS NULL OR EXISTS (SELECT 1 FROM site_app sa JOIN site s ON s.id = sa.site_id JOIN app_source a ON a.id = sa.app_id
+      WHERE s.id = ? AND s.tenant_id = d.tenant_id AND s.project_id = d.project_id AND a.tenant_id = s.tenant_id AND a.project_id = s.project_id AND a.script_name = d.script_name))
+    ORDER BY d.seen_at DESC, d.id DESC LIMIT 51`)
+    .bind(ctx.tenant!.id, project, project, siteId, siteId);
 }
 
 export function deployView(row: DeployRow) {

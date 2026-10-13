@@ -1,6 +1,7 @@
 import type { Conversation } from "./chat/conversationDO";
 import type { Inbox } from "./chat/inboxDO";
 export type Env = {
+  WORKER_VERSION?: { id: string; tag: string; timestamp: string };
   HUB_DB: D1Database;
   RATE: KVNamespace;
   OAUTH_KV: KVNamespace;

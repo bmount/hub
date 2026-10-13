@@ -1,4 +1,5 @@
 // App telemetry (migration 0013): redaction at the source, registration and approval, grouping, deploys, usage.
+import siteMigration from "../migrations/0032_sites.sql?raw";
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
@@ -38,6 +39,81 @@ async function world() {
   };
   return { t, p, pat, root, call };
 }
+
+describe("sites", () => {
+  it("seeds only MCC code projects and their own registered apps", async () => {
+    for (const slug of ["mcc","other"]) {
+      const t = await seedTenant(slug);
+      for (const project of ["pimwell","agentfeed"]) {
+        const p = await createProject(env.HUB_DB,{tenant_id:t.id,namespace_id:null,slug:project,kind:"repo",display_name:project},Date.now());
+        await env.HUB_DB.prepare("INSERT INTO app_source (id,tenant_id,project_id,script_name,state,created_at) VALUES (?, ?, ?, ?, 'active', ?)").bind(`${slug}:${project}`,t.id,p.id,`${slug}-${project}`,Date.now()).run();
+      }
+    }
+    const seedSql = siteMigration.slice(siteMigration.indexOf("INSERT INTO site "));
+    for (const sql of seedSql.split(";").map(s=>s.trim()).filter(Boolean)) await env.HUB_DB.prepare(sql).run();
+    const rows = (await env.HUB_DB.prepare("SELECT t.slug, s.name, a.script_name FROM site s JOIN tenant t ON t.id = s.tenant_id JOIN site_app sa ON sa.site_id = s.id JOIN app_source a ON a.id = sa.app_id ORDER BY s.name").all()).results;
+    expect(rows).toEqual([{slug:"mcc",name:"agentfeeds.dev",script_name:"mcc-agentfeed"},{slug:"mcc",name:"pimwell.com",script_name:"mcc-pimwell"}]);
+  });
+  it("reuses app approval, scopes tenant/project/version links and exposes matching API/MCP data", async () => {
+    const w = await world();
+    await w.call(w.root.token, "app.register", {project:"pricebench",script:"pricebench"});
+    const registration = {project:"pricebench",name:"prices.example.com",hostnames:["prices.example.com","*.prices.example.com"],apps:["pricebench"]};
+    expect((await w.call(w.pat.token, "site.register", registration)).status).toBe(200);
+    expect((await w.call(w.pat.token, "site.read", {name:registration.name})).result).toMatchObject({site:{apps:[{currentVersion:null}]}});
+    const sha = "a".repeat(40), version = "11111111-1111-4111-8111-111111111111";
+    const release = await w.call(w.pat.token, "deploy.record", {project:"pricebench",worker:"pricebench",commit:sha,version,deployment:"22222222-2222-4222-8222-222222222222"});
+    const read = (await w.call(w.pat.token, "site.read", {name:registration.name})).result;
+    expect(read).toMatchObject({site:{name:registration.name,hostnames:registration.hostnames,project:"pricebench",apps:[{script:"pricebench",state:"active",currentVersion:{id:version,deployRecord:(release.result.deploy as {id:string}).id,commitRef:`pricebench@${sha}`,commitHref:`/pricebench/code?c=${sha}`}}]}});
+    const reader = await seedHuman("reader@example.com",{memberships:[{tenant_id:w.t.id,role:"reader"}]});
+    expect((await w.call(reader.token,"site.register",registration)).status).toBe(403);
+    const {grant} = await seedGrant(w.t,reader);
+    const ctx = oauthContext(env,(await liveGrant(env.HUB_DB,grant.id,Date.now()))!,["read"],{now:Date.now(),ip:"203.0.113.1"});
+    expect((await callTool(ctx,"site_read",{name:registration.name})).structuredContent).toEqual(read);
+    expect((await callTool(ctx,"site_list",{project:"pricebench"})).structuredContent).toMatchObject({sites:[read.site]});
+    const other = await seedTenant("other");
+    const otherHuman = await seedHuman("other@example.com",{memberships:[{tenant_id:other.id,role:"member"}]});
+    expect((await w.call(otherHuman.token,"site.read",{name:registration.name},"other.pimwell.test")).status).toBe(404);
+    expect((await w.call(otherHuman.token,"site.list",{},"other.pimwell.test")).result).toEqual({sites:[]});
+    expect((await w.call(w.pat.token,"site.register",{...registration,apps:["foreign-worker"]})).status).toBe(400);
+    const foreignProject = await createProject(env.HUB_DB,{tenant_id:other.id,namespace_id:null,slug:"pricebench",kind:"repo",display_name:"Foreign"},Date.now());
+    await env.HUB_DB.prepare("INSERT INTO app_source (id,tenant_id,project_id,script_name,state,created_at) VALUES ('foreign-app', ?, ?, 'foreign-worker', 'active', ?)").bind(other.id,foreignProject.id,Date.now()).run();
+    const siteId = (read.site as {id:string}).id;
+    await env.HUB_DB.prepare("INSERT INTO site_app (site_id,app_id) VALUES (?, 'foreign-app')").bind(siteId).run();
+    const defended = (await w.call(w.pat.token,"site.read",{name:registration.name})).result;
+    expect(defended).toEqual(read);
+    expect(await (await SELF.fetch(`https://${HOST}/apps?site=prices.example.com&view=deploys`,{headers:cookieHeaders(w.pat.token,HOST)})).text()).not.toContain("foreign-worker");
+    // A same-tenant project move cannot keep a site's access to an app or its deploys.
+    const elsewhere = await createProject(env.HUB_DB,{tenant_id:w.t.id,namespace_id:null,slug:"elsewhere",kind:"repo",display_name:"Elsewhere"},Date.now());
+    await env.HUB_DB.prepare("UPDATE app_source SET project_id = ? WHERE script_name = 'pricebench'").bind(elsewhere.id).run();
+    expect((await w.call(w.pat.token,"site.read",{name:registration.name})).result).toMatchObject({site:{apps:[]}});
+  });
+
+  it("filters site errors/deploys and inspector selection, shows the sidebar and preserves disabled/unknown states", async () => {
+    const w = await world();
+    for (const script of ["pricebench","extra-worker"]) await w.call(w.root.token,"app.register",{project:"pricebench",script});
+    await w.call(w.pat.token,"site.register",{project:"pricebench",name:"prices.example.com",hostnames:["prices.example.com"],apps:["pricebench"]});
+    await ingest(env,[redact(tail({scriptName:"pricebench"}))!,redact(tail({scriptName:"extra-worker"}))!],Date.now());
+    const foreign = (await env.HUB_DB.prepare("SELECT id FROM app_error_group WHERE script_name = 'extra-worker'").first<{id:string}>())!.id;
+    const get = async (suffix:string) => SELF.fetch(`https://${HOST}/apps?project=pricebench&site=prices.example.com&${suffix}`,{headers:cookieHeaders(w.pat.token,HOST)});
+    const errors = await (await get("view=errors")).text();
+    expect(errors).toContain("Site: prices.example.com");
+    expect(errors).toContain("Performance");
+    expect(errors).not.toContain("extra-worker");
+    expect((await get(`view=errors&g=${foreign}`)).status).toBe(404);
+    expect(await (await get("view=performance")).text()).toContain("No performance data yet");
+    const excluded = await w.call(w.pat.token,"deploy.record",{project:"pricebench",worker:"extra-worker",commit:"b".repeat(40),version:"33333333-3333-4333-8333-333333333333",deployment:"44444444-4444-4444-8444-444444444444"});
+    const unknown = await w.call(w.pat.token,"deploy.record",{project:"pricebench",worker:"pricebench",commit:"unknown",version:"55555555-5555-4555-8555-555555555555",deployment:"66666666-6666-4666-8666-666666666666"});
+    const deploys = await (await get("view=deploys")).text();
+    expect(deploys).not.toContain("extra-worker");
+    expect(deploys).toContain((unknown.result.deploy as {id:string}).id);
+    expect((await get(`view=deploys&d=${(excluded.result.deploy as {id:string}).id}`)).status).toBe(404);
+    await env.HUB_DB.prepare("UPDATE app_source SET state = 'disabled' WHERE script_name = 'pricebench'").run();
+    const r = await w.call(w.pat.token,"site.read",{name:"prices.example.com"});
+    expect(r.result).toMatchObject({site:{apps:[{state:"disabled",currentVersion:{commitRef:null,commitHref:null}}]}});
+    expect((await w.call(w.pat.token,"site.register",{project:"pricebench",name:"empty.example.com",hostnames:["empty.example.com"],apps:[]})).result).toMatchObject({site:{apps:[]}});
+    expect((await SELF.fetch(`https://${HOST}/apps?site=missing.example.com`,{headers:cookieHeaders(w.pat.token,HOST)})).status).toBe(404);
+  });
+});
 
 describe("redaction at the source", () => {
   it("does not recursively forward telemetry delivery RPCs", () => {

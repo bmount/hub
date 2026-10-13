@@ -7,7 +7,7 @@ import { repoOwnership } from "../code/artifactPush";
 import { ulid } from "../ids";
 
 // Used by the cascade and the schema-coverage test; children precede their parents.
-export const PROJECT_DELETE_SCOPED_TABLES = ["contact_link", "contact_connection", "contact_entity", "document_delivery", "file_revision", "file_upload", "wiki_revision", "review", "app_error_group", "app_deploy", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"] as const;
+export const PROJECT_DELETE_SCOPED_TABLES = ["contact_link", "contact_connection", "contact_entity", "document_delivery", "file_revision", "file_upload", "wiki_revision", "review", "app_error_group", "app_deploy", "site", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"] as const;
 export const PROJECT_DELETE_OTHER_TABLES = ["channel", "work_item"] as const;
 
 export const projectDeleteKey = (tenant: string, project: string) => `project_delete:v1:${tenant}:${project}`;
@@ -58,6 +58,7 @@ export async function deleteProject(ctx: Ctx, project: Project) {
     ["work_comment", `tenant_id = ?1 AND item_id IN (${items})`],
     ["review_reviewer", `review_id IN (${reviews})`],
     ["review_comment", `tenant_id = ?1 AND review_id IN (${reviews})`],
+    ["site_app", `site_id IN (SELECT id FROM site WHERE tenant_id = ?1 AND project_id IN (${projects})) OR app_id IN (SELECT id FROM app_source WHERE tenant_id = ?1 AND project_id IN (${projects}))`],
     ["app_event", `tenant_id = ?1 AND group_id IN (${groups})`],
     ["app_stat", `tenant_id = ?1 AND script_name IN (SELECT script_name FROM app_source WHERE tenant_id = ?1 AND project_id IN (${projects}))`],
     ["outbound_mail", `tenant_id = ?1 AND (in_reply_to IN (${mail}) OR from_address = ?3)`],

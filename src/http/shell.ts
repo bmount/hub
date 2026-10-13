@@ -88,7 +88,9 @@ function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
   } else if (segments[0] === "apps" && url.searchParams.has("project")) {
     const project = url.searchParams.get("project")!;
     links.push({label: ctx.explorer?.path === project ? ctx.explorer.display_name : project, href:`/${encodeURIComponent(project)}`});
-    links.push({label:"Deploys",href:`/apps?project=${encodeURIComponent(project)}#deploys`});
+    const site = url.searchParams.get("site"), view = url.searchParams.get("view");
+    if (site) links.push({label:`Site: ${site}`,href:`/apps?project=${encodeURIComponent(project)}&site=${encodeURIComponent(site)}&view=performance`});
+    links.push({label:site ? view === "errors" ? "Errors" : view === "deploys" ? "Deploys" : "Performance" : "Deploys",href:url.pathname + url.search});
   } else {
     view = segments[0];
     const label = view ? VIEW_LABELS[view] ?? nav.find(n => n.active)?.label ?? view : "Home";
@@ -112,6 +114,10 @@ function projectExplorer(ctx: Ctx, env: Env): string {
   const node = (label: string, href: string, count?: number): TreeNode => ({label, href, count, current: pathname === href.split("#")[0] && (!href.includes("#") || url.hash === href.slice(href.indexOf("#")))});
   if (features.includes("docket")) nodes.push({...node("Docket", `${base}/docket`, p.open), expanded: true, children: [node("Graph", `${base}/graph`), node("Frontier", `${base}/frontier`), node("Board", `${base}/board`, p.open), node("Status", `${base}/status`, p.open)]});
   if (features.includes("repo")) nodes.push({...node("Repository and code", `${base}/code`), expanded: true, children: [node("Code files", `${base}/files`), node("Reviews", `${base}/reviews`, p.reviews), node("Deploys", `/apps?project=${encodeURIComponent(p.path)}#deploys`, p.deploys)]});
+  for (const site of p.sites ?? []) {
+    const q = `/apps?project=${encodeURIComponent(p.path)}&site=${encodeURIComponent(site.name)}`;
+    nodes.push({...node(`Site: ${site.name}`, `${q}&view=performance`), expanded: true, children: ["performance","errors","deploys"].map(view => ({...node(view[0]!.toUpperCase() + view.slice(1), `${q}&view=${view}`), current: pathname === "/apps" && url.searchParams.get("site") === site.name && url.searchParams.get("view") === view}))});
+  }
   if (features.includes("wiki")) nodes.push(node("Wiki", `${base}/wiki`, p.wiki));
   if (features.includes("knowledge")) nodes.push({...node("Knowledge base and research", `${base}/wiki`, p.wiki), expanded: true, children: [node("Knowledge base", `${base}/wiki`, p.wiki - p.research), node("Research", `${base}/wiki?view=research`, p.research)]});
   if (features.includes("files")) nodes.push(node("Files", `${base}/documents`, p.files));
