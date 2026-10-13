@@ -9,7 +9,7 @@ export function esc(s: string): string {
 /** Kit slots named `html` contain trusted, already-escaped server markup; labels are plain text. */
 export type KitLink = { label: string; href: string; current?: boolean; count?: number };
 const kitHref = (href: string) => esc(/^(\/(?!\/)|https?:\/\/|mailto:|#)/i.test(href) ? href : "#");
-const kitLink = (l: KitLink) => `<a href="${kitHref(l.href)}"${l.current ? ' aria-current="page"' : ""}>${esc(l.label)}${l.count !== undefined ? `<span class="wb-count">${esc(String(l.count))}</span>` : ""}</a>`;
+const kitLink = (l: KitLink) => `<a href="${kitHref(l.href)}"${l.current ? ' aria-current="page"' : ""}>${esc(l.label)}${l.count !== undefined && l.count > 0 ? `<span class="wb-count">${esc(String(l.count))}</span>` : ""}</a>`;
 
 export function breadcrumb(links: KitLink[]): string {
   return `<nav class="wb-breadcrumb" aria-label="Breadcrumb"><ol>${links.map(l => `<li>${kitLink(l)}</li>`).join("")}</ol></nav>`;
@@ -36,9 +36,9 @@ export function kitList(label: string, rows: { html: string; href?: string; sele
 }
 
 export type TreeNode = KitLink & { children?: TreeNode[]; expanded?: boolean };
-/** Native details supplies accessible keyboard expand/collapse without inline scripts. */
+/** Native details keeps the row link distinct from its expansion chevron. */
 export function kitTree(label: string, nodes: TreeNode[]): string {
-  const branch = (items: TreeNode[]): string => `<ul>${items.map(n => `<li>${n.children ? `<details${n.expanded ? " open" : ""}><summary>${esc(n.label)}${n.count !== undefined ? `<span class="wb-count">${esc(String(n.count))}</span>` : ""}</summary>${kitLink({...n, label: `Open ${n.label}`, count: undefined})}${branch(n.children)}</details>` : kitLink(n)}</li>`).join("")}</ul>`;
+  const branch = (items: TreeNode[]): string => `<ul>${items.map(n => `<li>${n.children ? `<details${n.expanded ? " open" : ""}><summary><span class="wb-chevron" aria-hidden="true">›</span>${kitLink(n)}</summary>${branch(n.children)}</details>` : kitLink(n)}</li>`).join("")}</ul>`;
   return `<nav class="wb-tree" aria-label="${esc(label)}">${branch(nodes)}</nav>`;
 }
 
@@ -48,7 +48,7 @@ export function statusChip(label: string, tone: ChipTone): string {
 }
 
 export function inspectorSection(heading: string, rows: { label: string; html: string; editHtml?: string }[], actionsHtml = ""): string {
-  return `<section class="wb-section"><h2>${esc(heading)}</h2><dl>${rows.map(r => `<dt>${esc(r.label)}</dt><dd>${r.html}${r.editHtml ? `<details class="wb-inline-edit"><summary>Edit ${esc(r.label)}</summary>${r.editHtml}</details>` : ""}</dd>`).join("")}</dl>${actionsHtml}</section>`;
+  return `<section class="wb-section"><h2>${esc(heading)}</h2><dl>${rows.map(r => `<dt>${esc(r.label)}</dt><dd>${r.editHtml ? `<details class="wb-inline-edit"><summary aria-label="Change ${esc(r.label)}">${r.html}<span class="wb-pencil" aria-hidden="true">✎</span></summary>${r.editHtml}</details>` : r.html}</dd>`).join("")}</dl>${actionsHtml}</section>`;
 }
 
 export function formRow(id: string, label: string, controlHtml: string, hint = ""): string {
@@ -62,7 +62,7 @@ export function emptyState(heading: string, description: string, action: KitLink
 export type RailLink = { href: string; label: string; active: boolean; count?: number | null; planned?: boolean };
 
 /**
- * The signed-in frame, the workbench: a persistent rail, a top bar with jump and file, and panes. `nav` is the rail's
+ * The signed-in frame: one sidebar, a top bar with jump and file, and panes. `nav` is the sidebar's
  * sections; `projects` and `planned` are its lower groups; `tabs` is the phone's bottom bar.
  */
 export type Shell = {
@@ -93,12 +93,12 @@ export const logout = (back: string) => `<form class="inline" method="post" acti
 
 function frame(title: string, main: string, shell: Shell, focus: "list" | "inspector"): string {
   const org = shell.org !== null;
-  const rail = `<aside id="rail" class="rail"><div class="railhead"><b>${esc(org ? shell.org!.name : "Pimwell")}</b><a class="close" href="#" aria-label="Close menu">✕ Close</a></div>${kitTree("Primary", shell.nav.map(l => ({href: l.href, label: l.label, current: l.active, count: l.count ?? undefined})))}
+  const rail = `<aside id="rail" class="rail"><div class="railhead"><b>${esc(org ? shell.org!.name : "Pimwell")}</b><a class="close" href="#" aria-label="Close menu">✕ Close</a></div><div id="org-places">${kitTree("Primary", shell.nav.map(l => ({href: l.href, label: l.label, current: l.active, count: l.count ?? undefined})))}</div><!--PROJECT-TREE-->
 ${shell.projects?.length ? `<h4>Projects</h4><ul>${shell.projects.map(railLink).join("")}</ul>` : ""}
 ${shell.planned?.length ? `<h4>Coming</h4><ul>${shell.planned.map(railLink).join("")}</ul>` : ""}
 <h4>Your account</h4><ul><li><a href="${esc(shell.me.href)}">${esc(shell.me.name)}</a></li><li class="account-details">${esc(shell.me.email)}${shell.me.role ? `<span>Role: ${esc(shell.me.role)}</span>` : ""}</li><li>${logout(org ? "/signed-out" : "/")}</li></ul></aside>`;
   const explorer = `<aside id="explorer" class="explorer" aria-label="Project explorer" data-project="${esc(shell.projectPath ?? "")}" data-in-project="${shell.inProject ? "1" : "0"}" data-preference="${esc(shell.preferenceKey ?? "")}"><div class="railhead"><b>Project explorer</b><a class="close" href="#" aria-label="Close project explorer">✕ Close</a></div>${shell.explorer ?? '<p>Open an organization to explore its projects.</p>'}</aside>`;
-  const bar = `<header class="bar"><a class="menu" href="#rail" aria-label="Menu"><span aria-hidden="true">☰</span><span class="ml">Menu</span></a><a class="explorer-toggle" href="#explorer">Project</a>${breadcrumb(shell.breadcrumb ?? [{label: shell.org?.name ?? "Pimwell", href: shell.org?.href ?? shell.brandHref}, {label: title, href: "#", current: true}])}
+  const bar = `<header class="bar"><a class="menu" href="#rail" aria-label="Menu"><span aria-hidden="true">☰</span><span class="ml">Menu</span></a><button type="button" class="quiet sidebar-toggle" data-toggle-sidebar aria-label="Collapse sidebar" aria-expanded="true">☰</button>${breadcrumb(shell.breadcrumb ?? [{label: shell.org?.name ?? "Pimwell", href: shell.org?.href ?? shell.brandHref}, {label: title, href: "#", current: true}])}
 ${org ? `<form class="jump" action="/search" method="get" role="search"><input name="q" placeholder="Search all projects…" maxlength="200" autocomplete="off" aria-label="Search all projects"><kbd>⌘K</kbd></form>` : `<span class="jump"></span>`}
 ${org && shell.canFile ? `<a class="button file" href="/new" title="File work (c)">+ File</a>` : ""}<a class="me" href="${esc(shell.me.href)}">${esc(shell.me.email)}${shell.me.role ? ` (${esc(shell.me.role)})` : ""}</a></header>`;
   const tabs = shell.tabs?.length ? `<nav class="tabs" aria-label="Sections">${shell.tabs.map((t) => `<a href="${esc(t.href)}"${t.active ? ' aria-current="page"' : ""}>${esc(t.label)}${typeof t.count === "number" && t.count > 0 ? `<span class="n">${t.count}</span>` : ""}</a>`).join("")}<a href="#rail">More</a></nav>` : "";
@@ -106,8 +106,7 @@ ${org && shell.canFile ? `<a class="button file" href="/new" title="File work (c
   return `${head(title)}
 <body class="wb" data-focus="${focus}">
 ${bar}
-${rail}
-${explorer}
+${rail.replace("<!--PROJECT-TREE-->", explorer)}
 <a class="scrim" href="#" aria-hidden="true" tabindex="-1"></a>
 ${main}
 ${status}
@@ -124,7 +123,7 @@ export function workbench(title: string, p: Panes, shell: Shell): string {
   const main = `<main class="panes${two ? "" : " one"}">
 <section id="list" class="pane" data-key="${esc(p.listKey)}">${p.list}</section>
 <div class="wb-resizer" role="separator" aria-label="Inspector width" aria-orientation="vertical" tabindex="0"></div>
-<section id="inspector" class="pane" data-key="${esc(p.inspectorKey ?? "")}">${two ? '<button type="button" class="quiet wb-close" data-close-inspector aria-label="Close inspector">Close · Esc</button>' : ""}${two ? p.inspector : ""}</section>
+<section id="inspector" class="pane" data-key="${esc(p.inspectorKey ?? "")}">${two && !p.inspector?.includes('data-close-inspector') ? '<button type="button" class="quiet wb-close" data-close-inspector aria-label="Close inspector">Close · Esc</button>' : ""}${two ? p.inspector : ""}</section>
 </main>`;
   return frame(title, main, shell, p.focus ?? (two && p.inspectorKey ? "inspector" : "list"));
 }

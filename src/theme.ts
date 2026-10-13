@@ -6,7 +6,7 @@ export const THEME_CSS = `
 --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-6:24px;--space-8:32px;
 --fs:14px;--fs-md:14px;--fs-sm:13px;--fs-xs:12px;--fs-h1:20px;--fs-chat:14px;--tap:28px;--row-h:28px;--separator:1px;
 --r:4px;--r-sm:4px;--r-xs:2px;--shadow:0 8px 24px rgba(0,0,0,.12);
---rail-w:208px;--bar-h:42px;--status-h:24px;
+--rail-w:248px;--bar-h:42px;--status-h:24px;
 --bg:#f2f4f7;--panel:#fff;--sunk:#eaeef2;--line:#d3dae2;--ink:#111a24;--muted:#46525f;--faint:#66727f;
 --accent:#1b7a69;--accent-soft:#dff0ec;--focus:#1b7a69;
 --state-open:var(--muted);--state-doing:var(--accent);--state-done:#1a7f37;--state-dropped:var(--faint);--state-blocked:#b42318;

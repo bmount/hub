@@ -112,9 +112,9 @@ function projectExplorer(ctx: Ctx, env: Env): string {
   const address = `${ctx.tenant!.slug}.${p.path.replace("/", ".")}@${env.HUB_DOMAIN}`;
   const endpoint = `https://${ctx.tenant!.slug}.${env.HUB_DOMAIN}/p/${p.path}/mcp`;
   nodes.push(node("Mail", `/mail?project=${encodeURIComponent(p.path)}`, p.mail));
-  return `<label for="project-filter">Project</label><input id="project-filter" type="search" placeholder="Find a project…" aria-label="Find a project" autocomplete="off"><nav class="project-switcher" aria-label="Project switcher"><details><summary>${esc(p.display_name)}</summary><ul>${p.choices.map(c => `<li><a href="/${esc(encodeURIComponent(c.path))}"${c.path === p.path ? ' aria-current="page"' : ""}>${esc(c.display_name)} <small>${esc(c.path)}</small></a></li>`).join("")}</ul></details></nav>
-    <a class="project-overview" href="${esc(base)}">Project overview</a>${kitTree("Project resources", nodes)}
-    <section class="project-endpoints"><h2>Mail address</h2><a href="mailto:${esc(address)}">${esc(address)}</a><h2>MCP endpoint</h2><code id="explorer-mcp">${esc(endpoint)}</code><button type="button" data-copy="#explorer-mcp">Copy MCP URL</button></section>`;
+  return `<nav class="project-switcher" aria-label="Project switcher"><a class="project-heading" href="${esc(base)}">${esc(p.display_name)}</a></nav>${kitTree("Project resources", nodes)}
+    <section class="project-endpoints"><div><a id="explorer-mail" href="mailto:${esc(address)}" title="${esc(address)}">${esc(address)}</a><button type="button" class="quiet" data-copy="#explorer-mail" aria-label="Copy mail address">⧉</button></div><div><code id="explorer-mcp" title="${esc(endpoint)}">${esc(endpoint)}</code><button type="button" class="quiet" data-copy="#explorer-mcp" aria-label="Copy MCP endpoint">⧉</button></div></section>
+    <input id="project-filter" type="search" placeholder="Find a project…" aria-label="Find a project" autocomplete="off"><nav class="project-switcher" aria-label="Other projects"><ul>${p.choices.filter(c => c.path !== p.path).map(c => `<li><a href="/${esc(encodeURIComponent(c.path))}"><span aria-hidden="true">›</span> ${esc(c.display_name)}</a></li>`).join("")}</ul></nav>`;
 }
 
 /** Areas still being built, kept in plain view (src/verbs/planned.ts). */

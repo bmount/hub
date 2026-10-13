@@ -56,8 +56,8 @@ describe("work item editing", () => {
     const quest = await w.create({ kind: "quest", title: "Launch" });
     const item = await w.create({ kind: "snag", title: "Old title", body: "Old details", owner: "sam@example.com", parent: quest.number });
     const html = await (await w.get(`/site/w/${item.number}`)).text();
-    expect(html).toContain('<details class="wb-inline-edit"><summary>Edit Title</summary>');
-    expect(html).toContain('<summary>Edit Priority</summary>');
+    expect(html).toContain('<details class="wb-inline-edit"><summary aria-label="Change Title">');
+    expect(html).toContain('<summary aria-label="Change Priority">');
     expect(html.match(/name="expected_updated_at"/g)!.length).toBeGreaterThanOrEqual(7);
     expect(html).toContain('<option value="sam@example.com" selected>');
     expect(html).toContain(`<option value="${quest.number}" selected>`);
@@ -287,7 +287,7 @@ describe("Docket filters", () => {
     await w.create({ kind: "snag", title: "Pat snag", owner: "me", parent: quest.number });
     await w.create({ kind: "wish", title: "Sam wish", owner: "sam@example.com" });
     await w.create({ kind: "errand", title: "Nobody errand" });
-    const titles = async (path: string) => [...(await (await w.get(path)).text()).matchAll(/<td><a href="\/[^\"]+\/w\/[^\"]+">([^<]*)<\/a>/g)].map((m) => m[1]).sort();
+    const titles = async (path: string) => [...(await (await w.get(path)).text()).matchAll(/<td class="work-title"><a href="\/[^\"]+\/w\/[^\"]+" title="[^\"]*">([^<]*)<\/a>/g)].map((m) => m[1]).sort();
 
     expect(await titles("/site/docket?owner=me")).toEqual(["Pat snag"]);
     expect(await titles("/docket?owner=sam%40example.com")).toEqual(["Sam wish"]);

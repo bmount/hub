@@ -78,7 +78,7 @@ describe("the workbench", () => {
     expect(html).toMatch(/aria-current="page">Docket<span class="wb-count">3<\/span><\/a>/);
     expect(html).toMatch(/>Mine<span class="wb-count">1<\/span><\/a>/);
     expect(html).toContain('id="explorer"');
-    expect(html).toContain('<summary>Docket<span class="wb-count">3</span></summary>');
+    expect(html).toContain('<a href="/site/docket">Docket<span class="wb-count">3</span></a></summary>');
     expect(html).toContain('aria-label="Project switcher"');
     expect(html).toContain('class="bar"');
     expect(html).toContain('aria-label="Breadcrumb"');
@@ -164,7 +164,8 @@ describe("the workbench", () => {
     const changed = await (await w.get("/notes/wiki")).text();
     expect(changed).toContain('data-project="notes" data-in-project="1"');
     expect(changed).toContain('Wiki<span class="wb-count">1</span>');
-    expect(changed).toContain('Files<span class="wb-count">0</span>');
+    expect(changed).toContain('Files</a>');
+    expect(changed).not.toContain('wb-count">0</span>');
     const mail = await (await w.get("/mail?project=notes")).text();
     expect(mail).toContain('Mail · notes');
   });
@@ -214,7 +215,7 @@ describe("the workbench", () => {
     expect(attr(item, "list")).toBe(attr(list, "list"));
     expect(attr(item, "inspector")).toMatch(/^w:/);
     expect(item).toContain('data-focus="inspector"');
-    expect(item).toContain("<h1>Checkout fails</h1>");
+    expect(item).toContain('<summary aria-label="Change Title">Checkout fails');
     expect(item).toContain('<a class="back" href="/site/docket?kind=snag">');
     expect(item).toContain('name="_back" value="/site/w/1?kind=snag"');
     expect(item).toContain("<h2>Comments</h2>");

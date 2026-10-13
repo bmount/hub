@@ -23,9 +23,9 @@ describe("workbench kit", () => {
       {label: 'Archive', href: '/wiki/archive', children: []},
     ]}]);
     expect(tree).toContain('aria-label="Project &lt;resources&gt;"');
-    expect(tree).toContain('<details open><summary>Wiki<span class="wb-count">0</span></summary>');
+    expect(tree).toContain('<details open><summary><span class="wb-chevron" aria-hidden="true">›</span><a href="/wiki">Wiki</a></summary>');
     expect(tree).toContain('<a href="/wiki/handbook" aria-current="page">&lt;Handbook&gt;</a>');
-    expect(tree).toContain('<details><summary>Archive</summary>');
+    expect(tree).toContain('<details><summary><span class="wb-chevron" aria-hidden="true">›</span><a href="/wiki/archive">Archive</a></summary>');
   });
 
   it("renders URL tabs, breadcrumb and labeled action/filter groups", () => {
@@ -40,7 +40,7 @@ describe("workbench kit", () => {
     expect(statusChip('Under way', 'doing')).toBe('<span class="wb-chip wb-tone-doing">Under way</span>');
     expect(statusChip('<Snag>', 'snag')).toContain('&lt;Snag&gt;');
     const section = inspectorSection('Details <1>', [{label: 'Title', html: 'Item', editHtml: '<form><input name="title"></form>'}]);
-    expect(section).toContain('<h2>Details &lt;1&gt;</h2><dl><dt>Title</dt><dd>Item<details class="wb-inline-edit"><summary>Edit Title</summary><form>');
+    expect(section).toContain('<h2>Details &lt;1&gt;</h2><dl><dt>Title</dt><dd><details class="wb-inline-edit"><summary aria-label="Change Title">Item');
     expect(formRow('title', 'Title <required>', '<input id="title" aria-describedby="title-hint">', 'Be clear & brief')).toContain('<label for="title">Title &lt;required&gt;</label><div><input id="title" aria-describedby="title-hint"><p class="wb-hint" id="title-hint">Be clear &amp; brief</p>');
   });
 

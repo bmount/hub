@@ -33,7 +33,7 @@ export const WORKBENCH_JS = String.raw`
   }
   function closeRail() { ["#rail", "#explorer"].forEach(function (id) { var r = $(id); if (r) r.classList.remove("open"); }); if (location.hash === "#rail" || location.hash === "#explorer") history.replaceState(history.state, "", location.pathname + location.search); }
   function explorerKey(el) { return "wb:explorer:" + el.getAttribute("data-preference") + ":" + el.getAttribute("data-project"); }
-  function branchKey(el) { var s = $("summary", el); return s && s.firstChild ? s.firstChild.textContent : ""; }
+  function branchKey(el) { var s = $("summary", el), a = s && $("a", s); if (a) { var url = new URL(a.href, location.href); return url.pathname + url.search + url.hash; } return s ? s.textContent : ""; }
   function saveExplorer(el) {
     if (!el) return;
     var branches = {}; $$("details", el).forEach(function (d) { branches[branchKey(d)] = d.open; });
@@ -73,7 +73,30 @@ export const WORKBENCH_JS = String.raw`
     go(url.href);
   }
   document.addEventListener("click", function (e) { if (e.target.closest("[data-close-inspector]")) closeInspector(); });
+  function sidebarKey() { var el = $("#explorer"); return "wb:sidebar:" + (el ? el.getAttribute("data-preference") : ""); }
+  function sidebarState(collapsed) {
+    document.body.classList.toggle("sidebar-collapsed", collapsed);
+    var button = $("[data-toggle-sidebar]");
+    if (button) { button.setAttribute("aria-expanded", String(!collapsed)); button.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar"); }
+  }
+  try { sidebarState(localStorage.getItem(sidebarKey()) === "collapsed"); } catch (e) {}
+  document.addEventListener("click", function (e) {
+    var toggle = e.target.closest("[data-toggle-sidebar]");
+    if (toggle) {
+      if (innerWidth < 1280) { var rail = $("#rail"); rail.classList.toggle("open"); return; }
+      var collapsed = !document.body.classList.contains("sidebar-collapsed"); sidebarState(collapsed);
+      try { localStorage.setItem(sidebarKey(), collapsed ? "collapsed" : "expanded"); } catch (e) {}
+    }
+    var value = e.target.closest(".wb-inline-edit summary");
+    if (value) { e.preventDefault(); var details = value.parentElement; details.open = true; var input = $("input:not([type=hidden]),select,textarea", details); if (input) input.focus(); }
+  });
+  document.addEventListener("keydown", function (e) {
+    var details = e.target.closest(".wb-inline-edit"); if (!details || !details.open) return;
+    if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); var form = $("form", details); if (form) form.reset(); details.open = false; $("summary", details).focus(); }
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); var form = $("form", details); if (form) form.requestSubmit(); }
+  });
   restoreExplorer($("#explorer"));
+  document.addEventListener("toggle", function (e) { if (e.target.closest("#explorer")) saveExplorer($("#explorer")); }, true);
   addEventListener("pagehide", function () { saveExplorer($("#explorer")); });
   document.addEventListener("input", function (e) {
     if (e.target.id !== "project-filter") return;
@@ -125,7 +148,7 @@ export const WORKBENCH_JS = String.raw`
     });
     cur.className = next.className;
     var rail = $("#rail"), nrail = doc.getElementById("rail");
-    if (rail && nrail) { var top = rail.scrollTop; rail.innerHTML = nrail.innerHTML; rail.scrollTop = top; }
+    if (rail && nrail) { var places = $("#org-places", rail), nextPlaces = doc.getElementById("org-places"); if (places && nextPlaces) places.innerHTML = nextPlaces.innerHTML; }
     var explorer = $("#explorer"), nexplorer = doc.getElementById("explorer");
     if (explorer && nexplorer) {
       saveExplorer(explorer); explorer.innerHTML = nexplorer.innerHTML;
@@ -535,7 +558,7 @@ export const WORKBENCH_JS = String.raw`
     if (e.key === "j") move(1);
     else if (e.key === "k") move(-1);
     else if (e.key === "Enter" || e.key === "o") { var s = rows().find(function (r) { return r.getAttribute("aria-selected") === "true"; }); if (s) go(s.getAttribute("data-href")); }
-    else if (e.key === "e") { var d = $("#inspector details.wb-inline-edit, #inspector details.edit"); if (d) { e.preventDefault(); d.open = true; var f = $("input,textarea,select", d); if (f) f.focus(); } }
+    else if (e.key === "e") { var d = $("#inspector details.wb-inline-edit, #inspector details.edit"); if (d) { e.preventDefault(); d.open = true; var f = $("input:not([type=hidden]),textarea,select", d); if (f) f.focus(); } }
     else if (e.key === "c") { var b = $(".bar .file"); if (b) { e.preventDefault(); go(b.href); } }
     else if (e.key === "/") { var q = $("#list input[data-filter]") || jump; if (q) { e.preventDefault(); q.focus(); } }
     else if (e.key === "Escape") { closeRail(); closeInspector(); }

@@ -5,8 +5,7 @@ Pimwell's signed-in application is a compact, desktop-first project console, not
 ## Anatomy
 
 - **Top bar:** org › project › view › object breadcrumb, Search (⌘K), + File, account.
-- **Rail:** persistent, labeled organization places and counts: Needs me, Docket, Mine, Mail, Chat, People and agents, Assistant, Reviews, Situations, Apps, AI usage, Admin.
-- **Explorer:** project switcher and resource tree, from `projectFeatures(kind)`, with counts. Include the project's channels, mail address and MCP endpoint; show only capabilities belonging to that project kind.
+- **Sidebar:** one 248px labeled pane: organization places and counts, then the current project heading and resource tree from `projectFeatures(kind)`, then other projects collapsed to heading links. Include the project's channels and compact copyable mail/MCP rows; show only capabilities belonging to that project kind.
 - **Working pane:** the widest pane; table, list, document or graph, with actions and filters beside the content they affect.
 - **Inspector:** the selected object's details, inline edits and actions, without removing the list.
 - **Status bar:** request timing, sync state, keyboard hints.
@@ -21,7 +20,7 @@ Project resources come from `projectFeatures(kind)`. Docket includes Board and S
 
 Counts are request-local, read in the existing sign-in batch without a cache or extra database round trip: open work and non-closed reviews, current non-deleted wiki/research/file heads, contacts, project channels and their current live messages, admitted shared project mail, and recorded deploys. Repository/code links do not invent counts from unavailable remote git metadata.
 
-The rail and explorer containers survive pane swaps. The rail retains scroll; explorer scroll and native disclosure state are saved per identity/project in tab-local session storage and restored on swaps and reload. Counts and breadcrumb are refreshed from the response. At ≥1280px both sidebars remain visible. Below 1280px labeled Menu and Project toggles open separate drawers; phone layouts keep the menu, project drawer, breadcrumb and bottom tabs.
+The rail and explorer containers survive pane swaps. The rail retains scroll; explorer scroll and native disclosure state are saved per identity/project in tab-local session storage and restored on swaps and reload. Counts and breadcrumb are refreshed from the response. At ≥1280px the single sidebar is visible, or collapsed to a 36px strip by the top-bar toggle. Collapse state is saved per identity in local storage and survives reload and pane navigation. Below 1280px Menu or the sidebar toggle opens one drawer containing both organization places and project resources; phone layouts retain the breadcrumb and bottom tabs.
 
 ## Rules
 
@@ -31,7 +30,7 @@ The rail and explorer containers survive pane swaps. The rail retains scroll; ex
 4. **Density is less padding, not smaller text.** Body 14px, secondary text 13px, 4/8px spacing grid, approximately 28px desktop rows, 1px separators and small radii. Phone targets and rows are 44px without shrinking text. Use aligned tables/lists, not cards.
 5. **Visible first.** Core categories and frequent actions are labeled and visible. Search and shortcuts supplement navigation. Progressive disclosure is for settings and detail, not for hiding capabilities.
 6. **Calm and consistent.** One accent; colors communicate state and kind, always accompanied by text. Use theme variables in both light and system dark mode. No one-off component colors or decorative card grids.
-7. **Desktop-first, not desktop-only.** At ≥1280px the shell exposes rail, explorer, working pane and inspector. Narrow layouts collapse navigation into drawers; phone panes stack and retain bottom tabs and the breadcrumb.
+7. **Desktop-first, not desktop-only.** At ≥1280px the shell exposes one sidebar, working pane and inspector. Narrow layouts collapse navigation into drawers; phone panes stack and retain bottom tabs and the breadcrumb.
 8. **Data boundaries stay unchanged.** Helpers only render already-authorized data; they do not fetch or decide access. Counts, tree entries, links and inspector content must come from the same tenant/project/mailbox checks as the existing pages.
 
 ## Tokens
@@ -59,11 +58,11 @@ Import helpers from `src/html.ts`. Their styles are scoped under `wb-*` so a pag
 | --- | --- |
 | `kitTable(label, headings, rows)` | Headings `{label, className?}`; rows `{cells: [{html, className?}], href?, selected?}`. Native table and scoped column headings, horizontal overflow container, `data-href` and `aria-selected` on selectable rows. Keep a real anchor in one cell. Reuse `hide-s` for optional phone columns. |
 | `kitList(label, rows)` | Rows `{html, href?, selected?}`; one-column table so selection has the same semantics and script behavior as tables. |
-| `kitTree(label, nodes)` | Nodes `{label, href, count?, current?, children?, expanded?}`. Native `details`/`summary` branches for keyboard expand/collapse, counts including zero, current leaf link. Branches have a separate Open link; no nested link inside summary. `expanded` is server initial state; the explorer restores the person's expansion state across swaps. |
+| `kitTree(label, nodes)` | Nodes `{label, href, count?, current?, children?, expanded?}`. Native `details`/`summary` branches for keyboard expand/collapse, positive counts, current links. A branch's row link opens its resource; the separate chevron expands/collapses children. Zero counts are hidden. `expanded` is server initial state; the explorer restores the person's expansion state across swaps. |
 | `kitTabs(label, links)` | Labeled navigation with `{label, href, current?, count?}`. These are URL links, **not** ARIA tab widgets: native history/reload works. Preserve other query filters when building each href. |
 | `toolbar(label, actionsHtml, filtersHtml?)` | Labeled group, action and filter slots, wrapping on narrow screens. Supply real labeled links/buttons and GET filter forms; hide actions the reader cannot perform. |
 | `statusChip(label, tone)` | Text plus colored indicator. Tone is open/doing/done/dropped/blocked or one of the six kinds. Do not rely on color alone. |
-| `inspectorSection(heading, rows, actionsHtml?)` | Rows `{label, html, editHtml?}` rendered as key–value pairs. Optional native Edit disclosure holds an existing verb form, including stale-edit fields, labels and save controls. |
+| `inspectorSection(heading, rows, actionsHtml?)` | Rows `{label, html, editHtml?}` rendered as key–value pairs. An editable value is the native summary of an existing verb form, including stale-edit fields and labeled controls. Click the value to edit, Enter to save and Esc to reset/cancel; there are no separate Edit rows. |
 | `formRow(id, label, controlHtml, hint?)` | Label/control alignment. Control must have matching `id`; when a hint is present, add `aria-describedby="<id>-hint"` to the control. |
 | `emptyState(heading, description, action)` | Plain-language explanation of what belongs here and how to add it or clear filters, plus a labeled `{label, href}` action. Not just “Empty”. |
 | `breadcrumb(links)` | Labeled ordered navigation; mark the final `{label, href, current: true}` entry current. |

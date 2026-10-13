@@ -135,6 +135,7 @@ try {
         await expect(page.locator('.bar .wb-breadcrumb')).toBeVisible();
         await expect(page.locator('#explorer')).toHaveCount(1);
         await expect(page.locator('#explorer .wb-tree')).toHaveCount(1);
+        await expect(page.locator('#rail #explorer')).toHaveCount(1);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
         const visibleNavigation = await page.evaluate(() => ['rail','explorer'].map(id => {const r=document.getElementById(id).getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth;}));
         expect(visibleNavigation).toEqual(viewport.width >= 1280 ? [true,true] : [false,false]);
@@ -159,77 +160,59 @@ try {
     }
     if (phase === 'after') {
       await page.goto(base+'/sample/docket');
-      if (viewport.width < 1280) await page.locator('.explorer-toggle').click();
-      if (viewport.width < 760) {
-        await expect.poll(async () => (await page.locator('#explorer').boundingBox()).x).toBeGreaterThanOrEqual(0);
-        const file = `${phase}-explorer-${label}.png`;
-        await page.screenshot({path:path.join(artifacts,file),fullPage:false});
-        manifest.push({phase,name:'explorer',route:'/sample/docket',viewport,file});
-      }
-      const repository = page.locator('#explorer details').filter({has: page.locator('summary', {hasText:'Repository and code'})});
-      await repository.locator('summary').click();
-      await expect(repository).not.toHaveAttribute('open');
-      await page.evaluate(() => {
-        window.shellNodes = ['rail','explorer'].map(id => document.getElementById(id));
-        return window.shellNodes.map(el => {el.style.maxHeight='160px'; el.scrollTop=48; return el.scrollTop;});
-      });
-      if (viewport.width < 1280) await page.locator('#explorer .close').click();
-      const before = await page.evaluate(() => window.shellNodes.map(el => el.scrollTop));
-      await page.locator('#list a').filter({hasText:'Keep project navigation visible'}).click();
-      await expect(page).toHaveURL(/\/sample\/w\/2$/);
-      await expect(page.locator('.bar .wb-breadcrumb')).toContainText('Docket');
-      await expect(page.locator('.bar .wb-breadcrumb')).toContainText('#2');
-      const after = await page.evaluate(() => window.shellNodes.map(el => ({same:el === document.getElementById(el.id),top:el.scrollTop})));
-      expect(after).toEqual(before.map(top => ({same:true,top})));
-      await expect(repository).not.toHaveAttribute('open');
-      await page.evaluate(() => window.shellNodes.forEach(el => el.style.maxHeight=''));
-      if (viewport.width < 1280) await page.locator('.menu').click();
-      await page.locator('#rail a[href="/mail"]').click();
-      await expect(page).toHaveURL(/\/mail$/);
-      await expect(page.locator('#explorer')).toHaveAttribute('data-project','sample');
-      await expect(page.locator('.bar .wb-breadcrumb')).toContainText('Mail');
-      await page.reload();
-      await expect(page.locator('#explorer')).toHaveAttribute('data-project','sample');
-      await expect(repository).not.toHaveAttribute('open');
-      if (viewport.width < 1280) await page.locator('.explorer-toggle').click();
-      await page.locator('#project-filter').fill('knowledge');
-      await expect(page.locator('.project-switcher li:visible')).toHaveCount(1);
-      await page.locator('.project-switcher a[href="/knowledge"]').click();
-      await expect(page).toHaveURL(/\/knowledge$/);
-      await expect(page.locator('#explorer')).toHaveAttribute('data-project','knowledge');
-      if (viewport.width < 1280) await page.locator('.explorer-toggle').click();
-      await page.locator('#explorer a[href="/knowledge#project-research"]').click();
-      await expect(page).toHaveURL(/\/knowledge#project-research$/);
-      await expect(page.locator('#project-research')).toBeInViewport();
-      await page.goBack();
-      await expect(page).toHaveURL(/\/knowledge$/);
-      await expect(page.locator('.bar [data-fragment]')).toHaveCount(0);
-      if (viewport.width < 1280) await page.locator('.explorer-toggle').click();
-      await page.locator('#explorer a[href="/knowledge/documents"]').click();
-      await expect(page).toHaveURL(/\/knowledge\/documents$/);
-      await expect(page.locator('.bar .wb-breadcrumb')).toContainText('Files');
-      await page.goBack();
-      await expect(page).toHaveURL(/\/knowledge$/);
-      await expect(page.locator('.bar .wb-breadcrumb')).not.toContainText('Files');
-      await page.goBack();
-      await expect(page).toHaveURL(/\/mail$/);
-      await expect(page.locator('#explorer')).toHaveAttribute('data-project','knowledge');
-      await page.goBack();
-      await expect(page).toHaveURL(/\/sample\/w\/2$/);
-      await expect(page.locator('#explorer')).toHaveAttribute('data-project','sample');
       if (viewport.width >= 1280) {
-        await page.setViewportSize({width:1100,height:900});
-        await expect(page.locator('.menu')).toBeVisible();
-        await expect(page.locator('.explorer-toggle')).toBeVisible();
-        await page.locator('.explorer-toggle').click();
-        await expect(page.locator('#explorer')).toHaveClass(/open/);
-        if (label === '1440') {
-          await expect.poll(async () => (await page.locator('#explorer').boundingBox()).x).toBeGreaterThanOrEqual(0);
-          const file = `${phase}-explorer-1100.png`;
-          await page.screenshot({path:path.join(artifacts,file),fullPage:false});
-          manifest.push({phase,name:'explorer',route:'/sample/w/2',viewport:{width:1100,height:900},file});
+        expect(await page.locator('#list').evaluate(el => el.clientWidth)).toBeGreaterThanOrEqual(900);
+        for (const title of await page.locator('.work-title').all()) {
+          expect(await title.evaluate(el => el.scrollHeight)).toBeLessThanOrEqual(28);
+          expect(await title.evaluate(el => getComputedStyle(el).whiteSpace)).toBe('nowrap');
         }
-        await page.locator('#explorer .close').click();
+        await expect(page.locator('#explorer summary')).not.toContainText(['Open ']);
+        await page.locator('[data-toggle-sidebar]').click();
+        await expect(page.locator('body')).toHaveClass(/sidebar-collapsed/);
+        await page.reload();
+        await expect(page.locator('body')).toHaveClass(/sidebar-collapsed/);
+        await expect(page.locator('[data-toggle-sidebar]')).toHaveAttribute('aria-expanded','false');
+        await page.locator('#list tbody a').filter({hasText:'Keep project navigation visible'}).click();
+        await expect(page.locator('body')).toHaveClass(/sidebar-collapsed/);
+        await page.locator('[data-toggle-sidebar]').click();
+        await expect(page.locator('body')).not.toHaveClass(/sidebar-collapsed/);
+        expect(await page.locator('#list').evaluate(el => el.clientWidth)).toBeGreaterThanOrEqual(640);
+        const titleEdit = page.locator('#inspector h1 details');
+        await titleEdit.locator('summary').click();
+        await titleEdit.locator('input[name=title]').fill('Cancelled title');
+        await page.keyboard.press('Escape');
+        await expect(titleEdit).not.toHaveAttribute('open');
+        await expect(titleEdit.locator('input[name=title]')).toHaveValue('Keep project navigation visible');
+        await expect(page.locator('#inspector summary')).not.toContainText(['Edit ']);
+        await page.goto(base+'/sample/docket');
+        const repository = page.locator('#explorer details').filter({has:page.locator('summary',{hasText:'Repository and code'})});
+        await repository.locator('.wb-chevron').click();
+        await expect(repository).not.toHaveAttribute('open');
+        await page.reload();
+        await expect(repository).not.toHaveAttribute('open');
+        await page.locator('#explorer summary a[href$="/sample/code"]').click();
+        await expect(page).toHaveURL(/\/sample\/code$/);
+        await expect(repository).not.toHaveAttribute('open');
+        await page.locator('#rail a[href$="/mail"]').click();
+        await expect(page).toHaveURL(/\/mail$/);
+        await expect(page.locator('#explorer')).toHaveAttribute('data-project','sample');
+        await page.locator('#project-filter').fill('knowledge');
+        await expect(page.locator('[aria-label="Other projects"] li:visible')).toHaveCount(1);
+        await page.locator('.project-switcher a[href$="/knowledge"]').click();
+        await expect(page).toHaveURL(/\/knowledge$/);
+        await expect(page.locator('#explorer')).toHaveAttribute('data-project','knowledge');
+        await page.reload();
+        await expect(page.locator('body')).not.toHaveClass(/sidebar-collapsed/);
+        await page.setViewportSize({width:1100,height:900});
+        await page.locator('[data-toggle-sidebar]').click();
+        await expect.poll(async () => (await page.locator('#rail').boundingBox()).x).toBeGreaterThanOrEqual(0);
+        await expect(page.locator('#explorer')).toBeVisible();
+        await page.locator('#rail>.railhead .close').click();
+      } else {
+        await page.locator('[data-toggle-sidebar]').click();
+        await expect.poll(async () => (await page.locator('#rail').boundingBox()).x).toBeGreaterThanOrEqual(0);
+        await expect(page.locator('#explorer')).toBeVisible();
+        await page.locator('#rail>.railhead .close').click();
       }
       await page.setViewportSize(viewport);
       // Two real page types exercise the shared selection and mutation client.
@@ -251,14 +234,14 @@ try {
       }
       await page.evaluate(() => { window.retainedList = document.getElementById('list'); });
       await page.locator('#list tbody a').click();
-      await expect(page.locator('#inspector h1')).toHaveText('Keep project navigation visible');
+      await expect(page.locator('#inspector h1')).toContainText('Keep project navigation visible');
       expect(await page.evaluate(() => window.retainedList === document.getElementById('list'))).toBe(true);
       await expect(page.locator('#list input[data-filter]')).toHaveValue('navigation');
-      const titleEdit = page.locator('#inspector details').filter({has:page.locator('summary', {hasText:'Edit Title'})});
+      const titleEdit = page.locator('#inspector h1 details');
       await titleEdit.locator('summary').click();
       await titleEdit.locator('input[name=title]').fill('Keep navigation in place');
-      await titleEdit.getByRole('button', {name:'Save title', exact:true}).click();
-      await expect(page.locator('#inspector h1')).toHaveText('Keep navigation in place');
+      await titleEdit.locator('input[name=title]').press('Enter');
+      await expect(page.locator('#inspector h1')).toContainText('Keep navigation in place');
       if (viewport.width >= 1280) {
         expect(await page.locator('#inspector').evaluate(el => el.getBoundingClientRect().width)).toBe(390);
         await page.locator('.wb-resizer').focus();
@@ -266,12 +249,12 @@ try {
         expect(await page.locator('#inspector').evaluate(el => el.getBoundingClientRect().width)).toBe(410);
       }
       await page.reload();
-      await expect(page.locator('#inspector h1')).toHaveText('Keep navigation in place');
+      await expect(page.locator('#inspector h1')).toContainText('Keep navigation in place');
       await expect(page.locator('#list input[data-filter]')).toHaveValue('navigation');
       await page.locator('[data-close-inspector]').click();
       await expect(page.locator('main.panes')).toHaveClass('panes one');
       await page.goBack();
-      await expect(page.locator('#inspector h1')).toHaveText('Keep navigation in place');
+      await expect(page.locator('#inspector h1')).toContainText('Keep navigation in place');
       await page.goForward();
       await expect(page.locator('main.panes')).toHaveClass('panes one');
       await page.goto(base+'/sample/docket');
@@ -283,7 +266,7 @@ try {
       await page.goto(base+'/people');
       await page.evaluate(() => { window.retainedList = document.getElementById('list'); });
       await page.locator('#list a').filter({hasText:/^peer$/}).click();
-      await expect(page.locator('#inspector h1')).toHaveText('peer');
+      await expect(page.locator('#inspector h1')).toContainText('peer');
       expect(await page.evaluate(() => window.retainedList === document.getElementById('list'))).toBe(true);
       await page.locator('#inspector select[name=role]').selectOption('reader');
       await page.getByRole('button', {name:'Change role', exact:true}).click();
@@ -293,11 +276,11 @@ try {
       await page.locator('[data-close-inspector]').click();
       await expect(page.locator('main.panes')).toHaveClass('panes one');
       await page.goBack();
-      await expect(page.locator('#inspector h1')).toHaveText('peer');
+      await expect(page.locator('#inspector h1')).toContainText('peer');
       await page.goForward();
       await expect(page.locator('main.panes')).toHaveClass('panes one');
       await verb(member, 'member.set_role', {email:'peer@example.test', role:'member'});
-      console.log(`Shell and master–detail browser acceptance passed at ${viewport.width}px (plus tablet collapse).`);
+      console.log(`Shell and master–detail browser acceptance passed at ${viewport.width}px (single sidebar, selection and inline edits).`);
     }
     await ctx.close();
   }

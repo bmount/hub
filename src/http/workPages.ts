@@ -119,7 +119,7 @@ ${project && !f.org ? `<select name="quest" aria-label="Quest">${option("", "Any
     return {href, selected: w.id === selected, cells: [...box,
       {className: "ref", html: esc(f.org || !project ? `${sl}#${w.number}` : `#${w.number}`)},
       {html: statusChip(KINDS[w.kind].name, w.kind)},
-      {html: `<a href="${esc(href)}">${esc(w.title)}</a>`},
+      {className: "work-title", html: `<a href="${esc(href)}" title="${esc(w.title)}">${esc(w.title)}</a>`},
       {className: "hide-s", html: esc(who)},
       {className: "hide-s", html: statusChip(STATES[w.state], w.state)},
       {className: "when hide-s", html: `<time title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</time>`}]};
@@ -198,14 +198,17 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
   const ownerChoices = d.owner && !d.members.some((m) => m.id === d.owner!.id) ? [d.owner, ...d.members] : d.members;
   const questChoices = d.parent && !d.quests.some((q) => q.id === d.parent!.id) ? [d.parent, ...d.quests] : d.quests;
   const field = (label: string, value: string, control: string) => ({label, html: value, editHtml: canWrite ? `<form method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><label>${esc(label)} ${control}</label><button type="submit">Save ${esc(label.toLowerCase())}</button></form>` : ""});
+  const inlineField = (f: ReturnType<typeof field>) => f.editHtml ? `<details class="wb-inline-edit"><summary aria-label="Change ${esc(f.label)}">${f.html}<span class="wb-pencil" aria-hidden="true">✎</span></summary>${f.editHtml}</details>` : f.html;
+  const titleField = inlineField(field("Title", esc(w.title), `<input name="title" required maxlength="200" value="${esc(w.title)}">`));
+  const stateField = inlineField(field("State", esc(STATES[w.state]), `<select name="state">${Object.entries(STATES).map(([s, label]) => option(s, label, s === w.state)).join("")}</select>`));
+  const kindField = inlineField(field("Kind", `${esc(KINDS[w.kind].name)} (${esc(KINDS[w.kind].plain)})`, `<select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, v.name, w.kind === k)).join("")}</select>`));
   const edit = inspectorSection("Fields", [
-    field("Title", esc(w.title), `<input name="title" required maxlength="200" value="${esc(w.title)}">`),
-    field("State", esc(STATES[w.state]), `<select name="state">${Object.entries(STATES).map(([s, label]) => option(s, label, s === w.state)).join("")}</select>`),
     field("Owner", esc(d.owner?.display_name ?? "Nobody"), `<select name="owner">${option("none", "Nobody", !d.owner)}${ownerChoices.map(m => option(m.email, m.display_name, d.owner?.id === m.id)).join("")}</select>`),
     field("Priority", `P${w.priority}`, `<select name="priority">${[0, 1, 2, 3].map(p => option(String(p), `P${p}`, p === w.priority)).join("")}</select>`),
-    field("Kind", esc(KINDS[w.kind].name), `<select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, v.name, w.kind === k)).join("")}</select>`),
     field("Quest", d.parent ? esc(d.parent.title) : "None", `<select name="parent">${option("0", "None", !d.parent)}${questChoices.map(q => option(String(q.number), `#${q.number} ${q.title}`, d.parent?.id === q.id)).join("")}</select>`),
     field("Details", w.body.trim() ? "Recorded below" : "None", `<textarea name="body" rows="4" maxlength="20000">${esc(w.body)}</textarea>`),
+    {label: "Project", html: `<a href="/${esc(project.slug)}/docket">${esc(project.display_name)}</a>`},
+    {label: "Filed", html: when(w.created_at) + (w.closed_at ? `, closed ${when(w.closed_at)}` : "")},
   ]);
   const under = d.children.length
     ? `<h2>Under it</h2><table><tbody>${d.children.map((c) => `<tr data-href="/${esc(project.slug)}/w/${c.number}"><td class="ref">#${c.number}</td><td class="k-${c.kind}"><span class="kd"></span>${esc(KINDS[c.kind].name)}</td><td><a href="/${esc(project.slug)}/w/${c.number}">${esc(c.title)}</a></td><td>${esc(STATES[c.state])}</td></tr>`).join("")}</tbody></table>`
@@ -222,18 +225,16 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
 <p class="lede">Recorded references, not verified access or existence. Each destination checks your access.</p>${linkForm}`;
   const activity = d.activity.length ? `<h2>Activity</h2><ul class="timeline">${d.activity.map((a) => `<li><time title="${when(a.created_at)}">${ago(a.created_at, ctx.now)}</time><span>${esc(a.who ?? "Pimwell")}: ${esc(a.summary)}</span></li>`).join("")}</ul>` : "";
   return `<a class="back" href="${esc(back)}">‹ ${esc(DOCKET.name)}</a>
-<div class="head"><span class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)} (${esc(KINDS[w.kind].plain)})</span><strong>${esc(project.slug)}#${w.number}</strong><span>${esc(STATES[w.state])}</span></div>
-<h1>${esc(w.title)}</h1>
-<dl class="meta"><dt>Owner</dt><dd>${d.owner ? esc(d.owner.display_name) : "Nobody yet"}</dd><dt>Quest</dt><dd>${d.parent ? `<a href="/${esc(project.slug)}/w/${d.parent.number}">#${d.parent.number} ${esc(d.parent.title)}</a>` : "None"}</dd>
-<dt>Project</dt><dd><a href="/${esc(project.slug)}/docket">${esc(project.display_name)}</a></dd><dt>Filed</dt><dd>${when(w.created_at)}${w.closed_at ? `, closed ${when(w.closed_at)}` : ""}</dd></dl>
-<p><a href="/usage?work=${esc(encodeURIComponent(`${project.slug}#${w.number}`))}">Recorded AI usage for this work</a></p>
-${toolbar("Item actions", controls)}
+<div class="head">${kindField}<strong>${esc(project.slug)}#${w.number}</strong>${stateField}</div>
+<h1>${titleField}</h1>
+${toolbar("Item actions", controls.replace(/^<p>|<\/p>$/g, "") + '<button type="button" class="quiet" data-close-inspector>Close</button>')}
 ${edit}
+<p><a href="/usage?work=${esc(encodeURIComponent(`${project.slug}#${w.number}`))}">Recorded AI usage for this work</a></p>
 ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
 ${sourceMail ? `<p>Source: <a href="${sourceMail}">Recorded mail</a>. Access is checked when opened.</p>` : ""}
 ${sourceMessage ? `<p>Source: <a href="${sourceMessage}">Recorded message</a>. Access is checked when opened.</p>` : ""}
 ${sourceUrl ? `<p>Source: <a href="${esc(sourceUrl)}">Recorded URL</a>. Recorded evidence, not verified access or existence.</p>` : ""}
-${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Add them under Edit (e): what, why, and how you will know it is done." : ""}</p>`}
+${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Click Details to add what, why, and how you will know it is done." : ""}</p>`}
 ${under}
 ${comments}
 ${plannedBlock("review.request", "Review")}
