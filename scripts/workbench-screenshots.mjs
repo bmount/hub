@@ -619,12 +619,12 @@ try {
         await page.reload();
         await expect(page.locator('body')).not.toHaveClass(/sidebar-collapsed/);
         await page.setViewportSize({width:1100,height:900});
-        await page.locator('[data-toggle-sidebar]').click();
+        await page.locator('.bar .menu').click();
         await expect.poll(async () => (await page.locator('#rail').boundingBox()).x).toBeGreaterThanOrEqual(0);
         await expect(page.locator('#explorer')).toBeVisible();
         await page.locator('#rail>.railhead .close').click();
       } else {
-        await page.locator('[data-toggle-sidebar]').click();
+        await page.locator('.bar .menu').click();
         await expect.poll(async () => (await page.locator('#rail').boundingBox()).x).toBeGreaterThanOrEqual(0);
         await expect(page.locator('#explorer')).toBeVisible();
         await page.locator('#rail>.railhead .close').click();
