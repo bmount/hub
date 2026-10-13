@@ -13,6 +13,68 @@ import { projectDelete, projectCreate } from "../src/verbs/project";
 import { ArtifactsRest } from "../src/code/artifactsRest";
 import { vi } from "vitest";
 import { PROJECT_DELETE_SCOPED_TABLES, PROJECT_DELETE_OTHER_TABLES } from "../src/db/projectDelete";
+import { cleanupFileObjects, FILE_ORPHAN_GRACE_MS, FILE_CLEANUP_CURSOR, FILE_CLEANUP_LIMIT } from "../src/db/fileCleanup";
+import { ulid } from "../src/ids";
+
+describe("orphan file cleanup", () => {
+  it("keeps all versions and hidden evidence; dry runs preserve storage and cursor", async () => {
+    const tenant = await seedTenant("cleanup");
+    const admin = await seedHuman("cleanup@example.com", {memberships: [{tenant_id: tenant.id, role: "admin"}]});
+    const post = (verb: string, args: object) => apiPost("cleanup.pimwell.test", verb, args, bearer(admin.token));
+    expect((await post("project.create", {slug: "files", kind: "workspace", display_name: "Files"})).status).toBe(200);
+    for (const expected_revision of [0, 1]) expect((await post("file.put", {project: "files", path: "a.txt", content_type: "text/plain", base64: btoa("evidence"), expected_revision})).status).toBe(200);
+    await env.HUB_DB.prepare("UPDATE file_revision SET deleted = 1 WHERE tenant_id = ?").bind(tenant.id).run();
+    const refs = (await env.HUB_DB.prepare("SELECT object_key FROM file_revision WHERE tenant_id = ?").bind(tenant.id).all<{object_key: string}>()).results.map(r => r.object_key);
+    const project = refs[0]!.split("/")[2]!;
+    const orphan = `project-files/${tenant.id}/${project}/${ulid()}`;
+    const deletedProject = `project-files/${tenant.id}/${ulid()}/${ulid()}`;
+    const deletedTenant = `project-files/${ulid()}/${ulid()}/${ulid()}`;
+    const young = `project-files/${tenant.id}/${project}/${ulid()}`;
+    const malformed = `project-files/${tenant.id}/${project}-sibling/${ulid()}`;
+    const git = `git-push/${tenant.id}/${project}/${ulid()}`;
+    const bucket = env.GIT_PUSH_STAGING!;
+    for (const key of [orphan, deletedProject, deletedTenant, young, malformed, git]) await bucket.put(key, "data");
+    const now = Date.now();
+    const wrapped = {...env, GIT_PUSH_STAGING: {
+      list: async (options: R2ListOptions) => {
+        expect(options.prefix).toBe("project-files/");
+        expect(options.limit).toBe(FILE_CLEANUP_LIMIT);
+        const page = await bucket.list(options);
+        return {...page, objects: page.objects.map(o => ({...o, uploaded: new Date(now - FILE_ORPHAN_GRACE_MS + (o.key === young ? 1 : -1))}))};
+      }, delete: (key: string) => bucket.delete(key),
+    } as R2Bucket};
+    expect(await cleanupFileObjects(wrapped, now)).toMatchObject({eligible: 3, deleted: 0, dry_run: true});
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM meta WHERE key = ?").bind(FILE_CLEANUP_CURSOR).first()).toBeNull();
+    expect(await bucket.head(orphan)).not.toBeNull();
+    expect(await cleanupFileObjects(wrapped, now, false)).toMatchObject({eligible: 3, deleted: 3});
+    for (const key of [orphan, deletedProject, deletedTenant]) expect(await bucket.head(key)).toBeNull();
+    for (const key of [...refs, young, malformed, git]) expect(await bucket.head(key)).not.toBeNull();
+  });
+
+  it("advances bounded pages only after success, wraps, and fails closed on D1 errors", async () => {
+    const key = `project-files/${ulid()}/${ulid()}/${ulid()}`;
+    const del = vi.fn();
+    const list = vi.fn().mockResolvedValue({objects: [{key, uploaded: new Date(0)}], truncated: true, cursor: "page2"});
+    const wrapped = {...env, GIT_PUSH_STAGING: {list, delete: del} as unknown as R2Bucket};
+    await cleanupFileObjects(wrapped, Date.now(), false);
+    expect(del).toHaveBeenCalledWith(key);
+    expect((await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(FILE_CLEANUP_CURSOR).first())).toEqual({value: "page2"});
+    list.mockResolvedValue({objects: [], truncated: false});
+    await cleanupFileObjects(wrapped, Date.now());
+    expect(list).toHaveBeenLastCalledWith({prefix: "project-files/", limit: FILE_CLEANUP_LIMIT, cursor: "page2"});
+    expect((await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(FILE_CLEANUP_CURSOR).first())).toEqual({value: "page2"});
+    await cleanupFileObjects(wrapped, Date.now(), false);
+    expect((await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?").bind(FILE_CLEANUP_CURSOR).first())).toEqual({value: ""});
+    list.mockResolvedValue({objects: [{key, uploaded: new Date(0)}], truncated: false});
+    del.mockClear();
+    const prepare = vi.fn((sql: string) => ({bind: () => ({first: async () => {
+      if (sql.includes("file_revision")) throw new Error("D1 unavailable");
+      return null;
+    }})}));
+    await expect(cleanupFileObjects({...wrapped, HUB_DB: {prepare} as unknown as D1Database}, Date.now(), false)).rejects.toThrow("D1 unavailable");
+    expect(del).not.toHaveBeenCalled();
+  });
+});
 
 describe("tenant verbs", () => {
   it("root creates, lists, archives and unarchives a tenant from the apex", async () => {

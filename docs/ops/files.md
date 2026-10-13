@@ -10,6 +10,14 @@ Limits are 25 MiB per file, 250 MiB per project **including all retained version
 
 Accepted types are UTF-8 txt/md/csv; PDF; PNG, JPEG, GIF and WebP; Microsoft Office (legacy and OpenXML); and OpenDocument text, sheets and presentations. Extension and declared type must agree. Binary container signatures are checked; text must decode strictly without NULs. This is validation, not malware scanning. HTML, SVG and executable types are not accepted. Downloads set `nosniff`, private/no-store caching and sandbox CSP. Only raster images and PDFs may be inline; every other type has `Content-Disposition: attachment` with an encoded filename.
 
+## Orphan cleanup
+
+The five-minute scheduled job scans at most 100 R2 objects per invocation under the exact `project-files/` prefix. Its durable `meta` cursor (`file_cleanup:v1:cursor`) advances only after a successful page and wraps at the end. Scanning storage rather than live projects also finds leftovers from deleted projects or tenants.
+
+Only canonical `project-files/<tenant ULID>/<project ULID>/<object ULID>` keys uploaded at least seven days ago are eligible. Upload keys are immutable and never reused. Before deleting each object, cleanup checks for **any** `file_revision.object_key` reference, without owner, current-version or soft-deletion filters. Every referenced version and hidden evidence is retained indefinitely; this is not a retention policy for recorded files. D1 errors stop the page without advancing its cursor. Malformed keys, sibling prefixes and git replay objects are never deleted by this job.
+
+`cleanupFileObjects(env, now)` defaults to dry-run: it returns bounded scan/eligibility counts and the next cursor but neither deletes nor changes the saved cursor. The scheduler explicitly enables deletion. Counts (not object keys or contents) are logged as `file orphan cleanup`. A failed page may retry already removed orphans safely.
+
 ## Upload and fetch
 
 - Web: multipart POST to `/<project>/documents/upload`, with `file`, optional folder/name `path`, `expected_revision`, and optional `item_id`/`person_id`. Cookie mutations require same origin. A missing browser MIME type is inferred from the allowed extension, then the bytes are validated normally.

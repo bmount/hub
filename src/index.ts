@@ -4,6 +4,7 @@ import { statusPage } from "./http/statusPage";
 import { boardPage } from "./http/boardPage";
 import { reviewsPage } from "./http/reviewPages";
 import { syncAll } from "./code/sync";
+import { cleanupFileObjects } from "./db/fileCleanup";
 import { codePage, filesPage } from "./http/codePages";
 import { searchPage } from "./http/searchPage";
 import { assistantChat, assistantPage } from "./http/assistantPages";
@@ -232,6 +233,7 @@ export default {
   email: handleEmail,
   // Every five minutes: push sync from the git host (src/code/sync.ts).
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(cleanupFileObjects(env, Date.now(), false).then((r) => console.log(JSON.stringify({ msg: "file orphan cleanup", ...r })), () => console.error("file orphan cleanup failed")));
     ctx.waitUntil(syncAll(env, Date.now()).then((r) => console.log(JSON.stringify({ msg: "push sync", ...r })), () => console.error("push sync failed")));
   },
 } satisfies ExportedHandler<Env>;
