@@ -158,6 +158,14 @@ app.get("/assistant/tools", (c) => playgroundPage(c.req.raw, c.env));
 app.get("/playground", (c) => c.redirect("/assistant/tools", 301));
 app.post("/playground/call", (c) => playgroundCall(c.req.raw, c.env));
 app.get("/skills/:name", (c) => skillsPage(c.req.raw, c.env, c.req.param("name")));
+app.get("/:namespace/:project/docket", (c) => docketPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`));
+app.get("/:namespace/:project/code", (c) => codePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`));
+app.get("/:namespace/:project/board", (c) => boardPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`));
+app.get("/:namespace/:project/status", (c) => statusPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`));
+app.get("/:namespace/:project/reviews", (c) => reviewsPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, null));
+app.get("/:namespace/:project/reviews/:n", (c) => reviewsPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, c.req.param("n")));
+app.get("/:namespace/:project/files", (c) => filesPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`));
+app.get("/:namespace/:project/w/:n", (c) => workItemPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, c.req.param("n")));
 app.get("/:project/docket", (c) => docketPage(c.req.raw, c.env, c.req.param("project")));
 app.get("/agent-src/:name/code", (c) => codePage(c.req.raw, c.env, `agent-src/${c.req.param("name")}`));
 app.get("/agent-src/:name/files", (c) => filesPage(c.req.raw, c.env, `agent-src/${c.req.param("name")}`));
@@ -169,6 +177,14 @@ app.get("/:project/board", (c) => boardPage(c.req.raw, c.env, c.req.param("proje
 app.get("/:project/status", (c) => statusPage(c.req.raw, c.env, c.req.param("project")));
 app.get("/:project/reviews", (c) => reviewsPage(c.req.raw, c.env, c.req.param("project"), null));
 app.get("/:project/reviews/:n", (c) => reviewsPage(c.req.raw, c.env, c.req.param("project"), c.req.param("n")));
+app.get("/:namespace/:project/documents", (c) => filePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`));
+app.get("/:namespace/:project/documents/download", (c) => filePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, "download"));
+app.post("/:namespace/:project/documents/upload", (c) => filePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, "upload"));
+app.put("/:namespace/:project/documents/upload", (c) => filePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, "upload"));
+app.get("/:namespace/:project/contacts", (c) => contactPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, null));
+app.get("/:namespace/:project/contacts/:id", (c) => contactPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, c.req.param("id")));
+app.get("/:namespace/:project/wiki", (c) => wikiPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, null));
+app.get("/:namespace/:project/wiki/:slug", (c) => wikiPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, c.req.param("slug")));
 app.get("/:project/documents", (c) => filePage(c.req.raw, c.env, c.req.param("project")));
 app.get("/:project/documents/download", (c) => filePage(c.req.raw, c.env, c.req.param("project"), "download"));
 app.post("/:project/documents/upload", (c) => filePage(c.req.raw, c.env, c.req.param("project"), "upload"));
@@ -204,6 +220,7 @@ app.post("/connect/:token", (c) => {
 app.notFound(() => notFoundPage());
 
 // Last: a project's own page, /<project>. Every named page above wins first.
+app.get("/:namespace/:project", (c) => projectPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`));
 app.get("/:project", (c) => projectPage(c.req.raw, c.env, c.req.param("project")));
 
 export default {

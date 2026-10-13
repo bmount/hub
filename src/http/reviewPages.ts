@@ -1,3 +1,4 @@
+import { projectPathSql } from "../db/projects";
 // Reviews in the workbench: the list (the organization's, or one project's) and one review in the inspector with its
 // diff, verdicts and comments. Integrating waits for Ardi's merge verb.
 import type { Env } from "../env";
@@ -26,7 +27,7 @@ export async function reviewsPage(request: Request, env: Env, slug: string | nul
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
-  if (slug && !(await ctx.db.prepare("SELECT 1 FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'").bind(ctx.tenant.id, slug).first())) return notFoundPage(extra);
+  if (slug && !(await ctx.db.prepare(`SELECT 1 FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind = 'repo'`).bind(ctx.tenant.id, slug).first())) return notFoundPage(extra);
   const rows = (await reviewListStatement(ctx, slug, true).all<{ slug: string; number: number; title: string; branch: string; base: string; status: string; author: string; updated_at: number; mine: number }>()).results;
   const base = slug ? `/${esc(slug)}/reviews` : "/reviews";
   const list = `<div class="head"><h1>Reviews</h1><span>${rows.length} open${slug ? ` in ${esc(slug)}` : ""}</span></div>

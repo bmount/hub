@@ -1,3 +1,4 @@
+import { featureProject } from "./featureProject";
 import { documentDeliveries } from "../db/documentDelivery";
 import { defineVerb, type McpInputSchema } from "./table";
 import { reqString, optString, optInt } from "./params";
@@ -16,15 +17,14 @@ export function wikiLinks(body: string): string[] {
   return [...new Set([...body.matchAll(/\[\[([a-z0-9]+(?:-[a-z0-9]+)*)\]\]/g)].map(m => m[1]!).filter(s => s.length <= 100))];
 }
 export async function wikiProject(ctx: Ctx, slug: string, writing = false) {
-  const p = await ctx.db.prepare("SELECT id, slug, kind, state FROM project WHERE tenant_id = ? AND slug = ? AND ((? IS NULL AND namespace_id IS NULL) OR id = ?)").bind(ctx.tenant!.id, slug, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first<{id: string; slug: string; kind: string; state: string}>();
-  if (!p) throw notFound("no such project");
+  const p = await featureProject(ctx, slug);
   requireProjectFeature(p, "wiki");
   if (writing && p.state !== "active") throw conflict("project is archived");
   return p;
 }
 const properties = { project: {type: "string"}, slug: {type: "string"} };
 const input = (extra: Record<string, Record<string, unknown>> = {}, required = ["project", "slug"]): McpInputSchema => ({type: "object", properties: {...properties, ...extra}, required, additionalProperties: false});
-const ref = (i: Record<string, unknown>) => ({project: reqString(i, "project", {max: 63}), slug: wikiSlug(reqString(i, "slug", {max: 100}))});
+const ref = (i: Record<string, unknown>) => ({project: reqString(i, "project", {max: 127}), slug: wikiSlug(reqString(i, "slug", {max: 100}))});
 const base = {scope: "tenant", freshProofMinutes: null} as const;
 export async function readWiki(ctx: Ctx, project: string, slug: string, revision: number | null = null) {
   const p = await wikiProject(ctx, project);
@@ -34,7 +34,7 @@ export async function readWiki(ctx: Ctx, project: string, slug: string, revision
   return {page: {...r, page_type: r.research ? "research" : "kb"}, links: JSON.parse(r.links) as string[], backlinks, deliveries: await documentDeliveries(ctx, p.id, "page", slug)};
 }
 export const wikiRead = defineVerb({ ...base, name: "wiki.read", kind: "query", minRole: "reader", summary: "Read a wiki page, its links and backlinks, optionally at a historical revision.", mcp: {scope: "read", destructive: false, title: "Read wiki page", input: input({revision: {type: "integer", minimum: 1}})}, parse: i => ({...ref(i), revision: optInt(i, "revision", {min: 1, max: 2147483647})}), run: (ctx, p) => readWiki(ctx, p.project, p.slug, p.revision) });
-export const wikiList = defineVerb({ ...base, name: "wiki.list", kind: "query", minRole: "reader", summary: "List current wiki pages alphabetically, 200 at a time; pass after for the next page.", mcp: {scope: "read", destructive: false, title: "List wiki pages", input: input({after: {type: "string"}}, ["project"])}, parse: i => ({project: reqString(i, "project", {max: 63}), after: optString(i, "after", {max: 100}) ?? ""}), run: async (ctx, v) => {
+export const wikiList = defineVerb({ ...base, name: "wiki.list", kind: "query", minRole: "reader", summary: "List current wiki pages alphabetically, 200 at a time; pass after for the next page.", mcp: {scope: "read", destructive: false, title: "List wiki pages", input: input({after: {type: "string"}}, ["project"])}, parse: i => ({project: reqString(i, "project", {max: 127}), after: optString(i, "after", {max: 100}) ?? ""}), run: async (ctx, v) => {
   const p = await wikiProject(ctx, v.project);
   const rows = (await ctx.db.prepare(`SELECT r.slug, r.title, r.revision, r.created_at, CASE WHEN r.research IS NULL THEN 'kb' ELSE 'research' END AS page_type FROM wiki_revision r WHERE r.tenant_id = ? AND r.project_id = ? AND ${currentWiki} AND r.deleted = 0 AND r.slug > ? ORDER BY r.slug LIMIT 201`).bind(ctx.tenant!.id, p.id, v.after).all<{slug: string; title: string; revision: number; created_at: number; page_type: "kb" | "research"}>()).results;
   return {pages: rows.slice(0, 200), next_cursor: rows.length > 200 ? rows[199]!.slug : null};

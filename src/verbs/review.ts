@@ -1,3 +1,4 @@
+import { projectPathSql } from "../db/projects";
 // Reviews (planned verbs built 2026-10-07): request, list, read, comment, verdict. The diff comes from repo.diff
 // (base to branch); a verdict records the commit it was given on. Integrating waits for a merge verb in Ardi.
 import { defineVerb, getVerb } from "./table";
@@ -20,9 +21,9 @@ const BRANCH_RE = /^[\w./-]{1,200}$/;
 type Review = { id: string; project_id: string; slug: string; number: number; branch: string; base: string; head_oid: string | null; title: string; summary: string; status: string; author_id: string; author: string; created_at: number; updated_at: number };
 
 export async function reviewRef(ctx: Ctx, ref: string): Promise<Review> {
-  const m = /^([a-z0-9-]+)!(\d{1,8})$/.exec(ref.trim()) ?? null;
-  const row = await ctx.db.prepare(`SELECT r.*, p.slug, i.display_name AS author FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id AND p.kind = 'repo' JOIN identity i ON i.id = r.author_id
-    WHERE r.tenant_id = ? AND ${m ? "p.slug = ? AND r.number = ?" : "r.id = ?"}`).bind(ctx.tenant!.id, ...(m ? [m[1], Number(m[2])] : [ref])).first<Review>();
+  const m = /^([a-z0-9-]+(?:\/[a-z0-9-]+)?)!(\d{1,8})$/.exec(ref.trim()) ?? null;
+  const row = await ctx.db.prepare(`SELECT r.*, ${projectPathSql()} AS slug, i.display_name AS author FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id AND p.kind = 'repo' JOIN identity i ON i.id = r.author_id
+    WHERE r.tenant_id = ? AND ${m ? `(${projectPathSql()}) = ? AND r.number = ?` : "r.id = ?"}`).bind(ctx.tenant!.id, ...(m ? [m[1], Number(m[2])] : [ref])).first<Review>();
   if (!row) throw notFound("no such review");
   return row;
 }
@@ -65,7 +66,7 @@ export const reviewRequest = defineVerb({
     if (!reviewers || reviewers.length > 10 || reviewers.some((e) => typeof e !== "string" || !e.trim() || e.length > 254)) {
       throw badRequest("reviewers must contain at most 10 email addresses");
     }
-    return { project: reqString(i, "project", { max: 63 }), branch, base, title: optString(i, "title", { max: 200 }), summary: optString(i, "summary", { max: 10_000 }) ?? "", reviewers: reviewers as string[], key: i.idempotency_key === undefined ? null : reqString(i, "idempotency_key", { max: 64 }) };
+    return { project: reqString(i, "project", { max: 127 }), branch, base, title: optString(i, "title", { max: 200 }), summary: optString(i, "summary", { max: 10_000 }) ?? "", reviewers: reviewers as string[], key: i.idempotency_key === undefined ? null : reqString(i, "idempotency_key", { max: 64 }) };
   },
   run: async (ctx, p) => {
     const pr = await repoProject(ctx, p.project);
@@ -99,25 +100,25 @@ export const reviewRequest = defineVerb({
       ...[...new Set(ids)].map((rid) => ctx.db.prepare("INSERT INTO review_reviewer (review_id, identity_id) SELECT id, ? FROM review WHERE tenant_id = ? AND id = ?").bind(rid, ctx.tenant!.id, id)),
       ...[...new Set(ids)].filter((rid) => rid !== ctx.identity!.id).map((rid) => ctx.db.prepare(`
         INSERT INTO attention (id, tenant_id, identity_id, reason, item_id, actor_id, summary, created_at, href)
-        SELECT ?, r.tenant_id, ?, 'assigned', NULL, ?, substr(? || p.slug || '!' || r.number || ': ' || r.title, 1, 300), ?,
-          '/' || p.slug || '/reviews/' || r.number
+        SELECT ?, r.tenant_id, ?, 'assigned', NULL, ?, substr(? || (${projectPathSql()}) || '!' || r.number || ': ' || r.title, 1, 300), ?,
+          '/' || (${projectPathSql()}) || '/reviews/' || r.number
         FROM review r JOIN project p ON p.id = r.project_id WHERE r.tenant_id = ? AND r.id = ?`)
         .bind(ulid(ctx.now), rid, ctx.identity!.id, `${ctx.identity!.display_name} asked you to review `, ctx.now, ctx.tenant!.id, id)),
       ctx.db.prepare(`INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
         SELECT ?, r.tenant_id, ?, ?, 'review.request', 'review', r.id,
-          'Opened review ' || p.slug || '!' || r.number || ' (' || r.branch || ' into ' || r.base || '): ' || r.title, ?
+          'Opened review ' || (${projectPathSql()}) || '!' || r.number || ' (' || r.branch || ' into ' || r.base || '): ' || r.title, ?
         FROM review r JOIN project p ON p.id = r.project_id WHERE r.tenant_id = ? AND r.id = ?`)
         .bind(ulid(ctx.now), ctx.identity!.id, ctx.session?.id ?? null, ctx.now, ctx.tenant!.id, id),
       ...(key ? [ctx.db.prepare(`INSERT INTO meta (key, value)
-        SELECT ?, json_object('fingerprint', ?, 'result', json_object('ref', p.slug || '!' || r.number,
-          'review', json_object('id', r.id, 'tenant_id', r.tenant_id, 'project_id', r.project_id, 'slug', p.slug,
+        SELECT ?, json_object('fingerprint', ?, 'result', json_object('ref', (${projectPathSql()}) || '!' || r.number,
+          'review', json_object('id', r.id, 'tenant_id', r.tenant_id, 'project_id', r.project_id, 'slug', (${projectPathSql()}),
             'number', r.number, 'branch', r.branch, 'base', r.base, 'head_oid', r.head_oid, 'title', r.title,
             'summary', r.summary, 'status', r.status, 'author_id', r.author_id, 'author', i.display_name,
             'created_at', r.created_at, 'updated_at', r.updated_at)))
         FROM review r JOIN project p ON p.id = r.project_id JOIN identity i ON i.id = r.author_id
         WHERE r.tenant_id = ? AND r.id = ?`).bind(key, fingerprint, ctx.tenant!.id, id)] : []),
       key ? ctx.db.prepare("SELECT value FROM meta WHERE key = ?").bind(key)
-        : ctx.db.prepare(`SELECT r.*, p.slug, i.display_name AS author FROM review r
+        : ctx.db.prepare(`SELECT r.*, ${projectPathSql()} AS slug, i.display_name AS author FROM review r
           JOIN project p ON p.id = r.project_id JOIN identity i ON i.id = r.author_id
           WHERE r.tenant_id = ? AND r.id = ?`).bind(ctx.tenant!.id, id),
     ]);
@@ -131,10 +132,10 @@ export const reviewRequest = defineVerb({
 type Listed = { slug: string; number: number; title: string; branch: string; base: string; status: string; author: string; updated_at: number; mine: number };
 
 export function reviewListStatement(ctx: Ctx, project: string | null, open: boolean) {
-  return ctx.db.prepare(`SELECT p.slug, r.number, r.title, r.branch, r.base, r.status, i.display_name AS author, r.updated_at,
+  return ctx.db.prepare(`SELECT ${projectPathSql()} AS slug, r.number, r.title, r.branch, r.base, r.status, i.display_name AS author, r.updated_at,
       EXISTS (SELECT 1 FROM review_reviewer x WHERE x.review_id = r.id AND x.identity_id = ? AND x.verdict IS NULL) AS mine
     FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id AND p.kind = 'repo' JOIN identity i ON i.id = r.author_id
-    WHERE r.tenant_id = ? AND (? IS NULL OR p.slug = ?) AND (? = 0 OR r.status <> 'closed') ORDER BY mine DESC, r.updated_at DESC LIMIT 100`)
+    WHERE r.tenant_id = ? AND (? IS NULL OR (${projectPathSql()}) = ?) AND (? = 0 OR r.status <> 'closed') ORDER BY mine DESC, r.updated_at DESC LIMIT 100`)
     .bind(ctx.identity!.id, ctx.tenant!.id, project, project, open ? 1 : 0);
 }
 
@@ -146,7 +147,7 @@ export const reviewList = defineVerb({
     input: { type: "object", properties: { project: { type: "string" }, closed: { type: "boolean", description: "Include closed ones" } }, additionalProperties: false },
     render: (r) => { const x = (r as { reviews: Listed[] }).reviews; return [DATA_NOTE, NOTE, "", `**Reviews** (${x.length})`, ...x.map((v) => `- **${v.slug}!${v.number}** [${v.status}]${v.mine ? " (waiting on you)" : ""} ${cleanText(v.title)} — ${v.branch} into ${v.base}, by ${cleanText(v.author)}`)].join("\n"); },
   },
-  parse: (i) => ({ project: optString(i, "project", { max: 63 }), open: !(i.closed === true || i.closed === "1") }),
+  parse: (i) => ({ project: optString(i, "project", { max: 127 }), open: !(i.closed === true || i.closed === "1") }),
   run: async (ctx, p) => {
     if (p.project) await repoProject(ctx, p.project);
     return { reviews: (await reviewListStatement(ctx, p.project, p.open).all<Listed>()).results };

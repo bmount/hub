@@ -83,6 +83,64 @@ describe("namespace and project verbs", () => {
 });
 
 describe("wiki pages", () => {
+  it("keeps duplicate namespaced project pages, MCP references and search links isolated", async () => {
+    const tenant = await seedTenant("acme");
+    const other = await seedTenant("other");
+    const admin = await seedHuman("admin@example.com", {memberships: [{tenant_id: tenant.id, role: "admin"}, {tenant_id: other.id, role: "admin"}]});
+    const host = "acme.pimwell.test";
+    const post = (verb: string, args: unknown, h = host) => apiPost(h, verb, args, bearer(admin.token));
+    for (const h of [host, "other.pimwell.test"]) {
+      for (const namespace of ["east", "west"]) {
+        expect((await post("namespace.create", {slug: namespace, display_name: namespace}, h)).status).toBe(200);
+        expect((await post("project.create", {namespace, slug: "guide", kind: "workspace", display_name: namespace + " guide"}, h)).status).toBe(200);
+        expect((await post("wiki.write", {project: namespace + "/guide", slug: "start", title: namespace + " unique", body: h + " [[target]]", expected_revision: 0, note: "new"}, h)).status).toBe(200);
+      }
+    }
+    const ctx = await buildContext(new Request("https://" + host + "/agent/mcp", {headers: bearer(admin.token)}), env);
+    ctx.playground = {scopes: ["read", "write"]};
+    for (const namespace of ["east", "west"]) {
+      const project = namespace + "/guide";
+      expect((await post("work.create", {project, kind: "snag", title: namespace + " work", body: "scoped"})).status).toBe(200);
+      const read = await callTool(ctx, "wiki_read", {project, slug: "start"});
+      expect(read.isError, JSON.stringify(read)).toBeUndefined();
+      expect(JSON.stringify(read)).toContain(namespace + " unique");
+      expect(JSON.stringify(read)).not.toContain("other.pimwell.test");
+      for (const suffix of ["", "/wiki", "/wiki/start", "/documents", "/contacts", "/docket", "/board", "/status"]) {
+        const res = await SELF.fetch("https://" + host + "/" + project + suffix, {headers: cookieHeaders(admin.token, host)});
+        expect(res.status, project + suffix).toBe(200);
+        const html = await res.text();
+        if (suffix === "" || suffix === "/wiki") {
+          expect(html).toContain("/" + project + "/wiki");
+          expect(html).not.toContain((namespace === "east" ? "west" : "east") + " unique");
+        }
+        if (suffix === "/wiki/start") {
+          expect(html).toContain("/" + project + "/wiki/target");
+          expect(html).toContain('name="project" value="' + project + '"');
+        }
+      }
+      const p = await env.HUB_DB.prepare("SELECT p.id FROM project p JOIN namespace n ON n.id = p.namespace_id WHERE p.tenant_id = ? AND n.slug = ?").bind(tenant.id, namespace).first<{id: string}>();
+      ctx.mcpProject = {id: p!.id, slug: "guide", path: project, kind: "workspace", display_name: project};
+      expect((await callTool(ctx, "wiki_read", {project, slug: "start"})).isError).toBeUndefined();
+      expect((await callTool(ctx, "wiki_read", {project: (namespace === "east" ? "west" : "east") + "/guide", slug: "start"})).isError).toBe(true);
+      const board = await callTool(ctx, "work_board", {});
+      expect(board.isError, JSON.stringify(board)).toBeUndefined();
+      expect(JSON.stringify(board)).toContain(project + "#1");
+      ctx.mcpProject = undefined;
+    }
+    expect((await post("wiki.read", {project: "guide", slug: "start"})).status).toBe(404);
+    expect((await post("wiki.read", {project: "missing/guide", slug: "start"})).status).toBe(404);
+    expect((await post("wiki.write", {project: "east/guide", slug: "start", title: "east revised", body: "changed", expected_revision: 1, note: "edit"})).status).toBe(200);
+    const west = (await (await post("wiki.history", {project: "west/guide", slug: "start"})).json()) as any;
+    expect(west.result.history).toHaveLength(1);
+    const east = (await (await post("wiki.history", {project: "east/guide", slug: "start"})).json()) as any;
+    expect(east.result.history).toHaveLength(2);
+    expect((await SELF.fetch("https://" + host + "/guide", {headers: cookieHeaders(admin.token, host)})).status).toBe(404);
+    const search = (await (await post("search.query", {q: "unique"})).json()) as any;
+    expect(search.result.wiki.map((r: any) => r.href)).toEqual(["/west/guide/wiki/start"]);
+    const projects = (await (await post("search.query", {q: "guide"})).json()) as any;
+    expect(projects.result.projects.map((r: any) => r.ref).sort()).toEqual(["east/guide", "west/guide"]);
+  });
+
   async function world() {
     const tenant = await seedTenant("acme");
     const member = await seedHuman("writer@example.com", {memberships: [{tenant_id: tenant.id, role: "member"}]});

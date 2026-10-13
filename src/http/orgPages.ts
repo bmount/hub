@@ -53,9 +53,9 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   const counts = new Map((people!.results as Array<{ kind: string; n: number }>).map((r) => [r.kind, r.n]));
   const totalOpen = [...kinds.values()].reduce((a, b) => a + b, 0);
 
-  const projectCards = proj.length ? `<div class="grid">${proj.map((p) => `<div class="card"><h3><a href="/${esc(p.slug)}">${esc(p.display_name)}</a></h3>
+  const projectCards = proj.length ? `<div class="grid">${proj.map((p) => `<div class="card"><h3><a href="/${esc(p.namespace ? `${p.namespace}/${p.slug}` : p.slug)}">${esc(p.display_name)}</a></h3>
 <p>${esc(p.kind)} · ${p.open_work} open${p.last_work ? ` · active ${esc(ago(ctx.now, p.last_work))}` : ""}</p>
-<p><a href="/${esc(p.slug)}">Open project</a> · <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code></p>${rank(ctx.role) >= rank("admin") && ctx.identity!.kind === "human" ? projectControls(p, false) : ""}</div>`).join("")}</div>`
+<p><a href="/${esc(p.namespace ? `${p.namespace}/${p.slug}` : p.slug)}">Open project</a> · <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code></p>${rank(ctx.role) >= rank("admin") && ctx.identity!.kind === "human" ? projectControls(p, false) : ""}</div>`).join("")}</div>`
     : `<p class="lede">No projects yet.</p>`;
   const kindChips = (Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("");
   const mailRows = (mail!.results as Array<{ id: string; subject: string; from_email: string; received_at: number; project: string | null }>);
@@ -95,7 +95,7 @@ export async function projectPage(request: Request, env: Env, slug: string): Pro
   const p = await ctx.db.prepare(`SELECT p.id, p.slug, p.display_name, p.kind, p.state,
       CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END AS usage_ref
     FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id
-    WHERE p.tenant_id = ? AND p.slug = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(t.id, slug)
+    WHERE p.tenant_id = ? AND (CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(t.id, slug)
     .first<{ id: string; slug: string; display_name: string; kind: string; state: string; usage_ref: string | null }>();
   if (!p) return notFoundPage(extra);
   const eventAccess = readableMailEvents(ctx);
@@ -109,26 +109,26 @@ export async function projectPage(request: Request, env: Env, slug: string): Pro
   const kinds = new Map((byKind!.results as Array<{ kind: WorkKind; n: number }>).map((r) => [r.kind, r.n]));
   const openRows = open!.results as Array<{ number: number; kind: WorkKind; title: string; state: WorkState }>;
   const features = projectFeatures(p.kind);
-  const tabs = features.map((f) => `<a class="chip" href="${f === "docket" ? `/${esc(p.slug)}/docket` : f === "repo" ? `/${esc(p.slug)}/code` : f === "wiki" ? `/${esc(p.slug)}/wiki` : f === "files" ? `/${esc(p.slug)}/documents` : f === "people" ? `/${esc(p.slug)}/contacts` : `#feature-${f}`}">${FEATURE_LABELS[f]}</a>`).join("");
+  const tabs = features.map((f) => `<a class="chip" href="${f === "docket" ? `/${esc(p.usage_ref!)}/docket` : f === "repo" ? `/${esc(p.usage_ref!)}/code` : f === "wiki" ? `/${esc(p.usage_ref!)}/wiki` : f === "files" ? `/${esc(p.usage_ref!)}/documents` : f === "people" ? `/${esc(p.usage_ref!)}/contacts` : `#feature-${f}`}">${FEATURE_LABELS[f]}</a>`).join("");
   let knowledge = "";
   if (features.includes("knowledge")) {
-    const kb = await wikiList.run(ctx, wikiList.parse({project: p.slug}));
-    const research = await researchList.run(ctx, researchList.parse({project: p.slug}));
-    knowledge = `<section id="feature-knowledge"><h2>Knowledge base</h2><p><a href="/${esc(p.slug)}/wiki">All KB pages and research</a></p><ul>${kb.pages.filter(r => r.page_type === "kb").map(r => `<li><a href="/${esc(p.slug)}/wiki/${esc(r.slug)}">${esc(r.title)}</a></li>`).join("")}</ul><h2 id="project-research">Research results</h2><ul>${research.results.map(r => `<li><a href="/${esc(p.slug)}/wiki/${esc(r.slug)}">${esc(r.topic)}</a> · ${esc(r.status)} · ${esc(r.author)}</li>`).join("")}</ul><p>First 200 pages shown. Agents file or revise results with <code>research.save</code>; filter with <code>research.list</code>.</p></section>`;
+    const kb = await wikiList.run(ctx, wikiList.parse({project: p.usage_ref!}));
+    const research = await researchList.run(ctx, researchList.parse({project: p.usage_ref!}));
+    knowledge = `<section id="feature-knowledge"><h2>Knowledge base</h2><p><a href="/${esc(p.usage_ref!)}/wiki">All KB pages and research</a></p><ul>${kb.pages.filter(r => r.page_type === "kb").map(r => `<li><a href="/${esc(p.usage_ref!)}/wiki/${esc(r.slug)}">${esc(r.title)}</a></li>`).join("")}</ul><h2 id="project-research">Research results</h2><ul>${research.results.map(r => `<li><a href="/${esc(p.usage_ref!)}/wiki/${esc(r.slug)}">${esc(r.topic)}</a> · ${esc(r.status)} · ${esc(r.author)}</li>`).join("")}</ul><p>First 200 pages shown. Agents file or revise results with <code>research.save</code>; filter with <code>research.list</code>.</p></section>`;
   }
-  const contacts = features.includes("people") ? `<section id="feature-people"><h2>People and companies</h2><p><a href="/${esc(p.slug)}/contacts">Browse workspace contacts and connection graphs</a></p><p>Contacts are separate from organization accounts and membership.</p></section>` : "";
-  const clone = features.includes("repo") ? `<p>Clone: <code>git clone https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/${esc(p.slug)}.git</code> <small>(make a git credential on <a href="https://${esc(env.HUB_DOMAIN)}/me">your account</a>)</small></p>` : "";
+  const contacts = features.includes("people") ? `<section id="feature-people"><h2>People and companies</h2><p><a href="/${esc(p.usage_ref!)}/contacts">Browse workspace contacts and connection graphs</a></p><p>Contacts are separate from organization accounts and membership.</p></section>` : "";
+  const clone = features.includes("repo") ? `<p>Clone: <code>git clone https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/${esc(p.usage_ref!)}.git</code> <small>(make a git credential on <a href="https://${esc(env.HUB_DOMAIN)}/me">your account</a>)</small></p>` : "";
   const body = `<p class="crumbs"><a href="/">${esc(t.display_name)}</a> /</p>
 <h1>${esc(p.display_name)}${p.state === "archived" ? " <small>(archived)</small>" : ""}</h1>
 <p class="lede">Send or forward anything to <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code>. It is filed here as evidence, never as instructions.</p>
 ${clone}
 ${p.state === "active" ? `<section><h2>Connect an assistant</h2><p>Copy this MCP URL into your assistant’s “Add MCP server” or connector settings:</p><p><code id="project-mcp-url">https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/p/${esc(p.usage_ref ?? p.slug)}/mcp</code> <button type="button" data-copy="#project-mcp-url">Copy URL</button></p><p>Sign in with Pimwell OAuth, or configure your agent’s existing Pimwell token as a Bearer token. Tools and calls are limited to this project; the project argument is supplied automatically.</p></section>` : ""}
 <nav class="chips" aria-label="Project features">${tabs}</nav>${knowledge}${contacts}
-${features.includes("docket") ? `<div class="chips">${(Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/${esc(p.slug)}/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("")}<a class="chip" href="/${esc(p.slug)}/docket">Docket</a></div>
+${features.includes("docket") ? `<div class="chips">${(Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/${esc(p.usage_ref!)}/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("")}<a class="chip" href="/${esc(p.usage_ref!)}/docket">Docket</a></div>
 ${p.usage_ref ? `<p><a href="/usage?project=${esc(encodeURIComponent(p.usage_ref))}">Recorded AI usage for this project</a></p>` : ""}
-<h2>Open now</h2>${openRows.length ? `<ul>${openRows.map((w) => `<li><a href="/${esc(p.slug)}/w/${w.number}">#${w.number}</a> <span class="k-${w.kind}">${esc(KINDS[w.kind].name)}</span>: ${esc(w.title)} <small>${esc(STATES[w.state])}</small></li>`).join("")}</ul>` : `<p class="lede">Nothing open. File a wish, a snag, or an errand from the Docket.</p>`}
+<h2>Open now</h2>${openRows.length ? `<ul>${openRows.map((w) => `<li><a href="/${esc(p.usage_ref!)}/w/${w.number}">#${w.number}</a> <span class="k-${w.kind}">${esc(KINDS[w.kind].name)}</span>: ${esc(w.title)} <small>${esc(STATES[w.state])}</small></li>`).join("")}</ul>` : `<p class="lede">Nothing open. File a wish, a snag, or an errand from the Docket.</p>`}
 ` : ""}
 <h2>What happened</h2>${timeline(ctx.now, events!.results as Ev[])}`;
-  return htmlResponse(page(p.display_name, body + COPY_SCRIPT, shellFor(ctx, env, "project", `${t.slug}/${p.slug}`)), 200, extra);
+  return htmlResponse(page(p.display_name, body + COPY_SCRIPT, shellFor(ctx, env, "project", p.usage_ref!)), 200, extra);
 }
 

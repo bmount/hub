@@ -1,3 +1,4 @@
+import { featureProject } from "./featureProject";
 import { requireProjectFeature } from "../projectFeatures";
 import { rank } from "../auth/context";
 import { agentByName, agentSrcAccess, agentSrcSlug } from "../code/agentSrc";
@@ -28,11 +29,9 @@ export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false)
     if (!source) throw notFound("no such repository");
     return { ...source, slug };
   }
-  const p = await ctx.db.prepare("SELECT id, slug, kind, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND (? IS NULL OR id = ?)").bind(ctx.tenant!.id, slug.trim().toLowerCase(), ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null)
-    .first<{ id: string; slug: string; kind: string; display_name: string }>();
-  if (!p) throw notFound("no such repository project");
+  const p = await featureProject(ctx, slug.trim().toLowerCase());
   requireProjectFeature(p, "repo");
-  return ctx.mcpProject ? { ...p, slug: ctx.mcpProject.path } : p;
+  return { ...p, slug: ctx.mcpProject?.path ?? slug };
 }
 
 function rev(v: string | null, fallback = "HEAD"): string {
@@ -128,7 +127,7 @@ export const repoBranches = defineVerb({
     input: { type: "object", properties: { project: { type: "string", description: "Repository project slug" } }, required: ["project"], additionalProperties: false },
     render: (r) => { const x = r as { project: string; refs: ArdiRef[] }; return [DATA_NOTE, "", `**${x.project}** (${x.refs.length} refs)`, ...x.refs.map((f) => `- ${f.name.replace(/^refs\/heads\//, "")} → \`${f.target.slice(0, 10)}\``)].join("\n"); },
   },
-  parse: (i) => ({ project: reqString(i, "project", { max: 63 }) }),
+  parse: (i) => ({ project: reqString(i, "project", { max: 127 }) }),
   run: async (ctx, p) => {
     const pr = await repoProject(ctx, p.project, true);
     return { project: pr.slug, refs: (await codeRead<{ refs: ArdiRef[] }>(ctx, "refs.list", { repo: pr.slug })).result.refs };
@@ -143,7 +142,7 @@ export const repoLog = defineVerb({
     input: { type: "object", properties: { project: { type: "string" }, ref: { type: "string", description: "Branch, tag or commit; default the main branch" }, path: { type: "string", description: "Only commits touching this path" }, limit: { type: "integer", minimum: 1, maximum: 100 }, next: { type: "string", description: "Cursor from the previous page" } }, required: ["project"], additionalProperties: false },
     render: (r) => { const x = r as { project: string; commits: ArdiCommit[]; next: string | null; who: Record<string, string> }; const w = new Map(Object.entries(x.who)); return [DATA_NOTE, NOTE, "", `**${x.project}**`, ...x.commits.map((c) => commitLine(c, w)), x.next ? `\nMore: next = ${x.next}` : ""].join("\n"); },
   },
-  parse: (i) => ({ project: reqString(i, "project", { max: 63 }), ref: optString(i, "ref", { max: 200 }), path: optString(i, "path", { max: 500 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 30, next: optString(i, "next", { max: 64 }) }),
+  parse: (i) => ({ project: reqString(i, "project", { max: 127 }), ref: optString(i, "ref", { max: 200 }), path: optString(i, "path", { max: 500 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 30, next: optString(i, "next", { max: 64 }) }),
   run: async (ctx, p) => {
     const pr = await repoProject(ctx, p.project, true);
     const r = await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: rev(p.ref), ...(p.path ? { path: p.path } : {}), limit: p.limit, ...(p.next ? { since: p.next } : {}) });
@@ -173,7 +172,7 @@ export const repoCommit = defineVerb({
         "```diff", x.files.map((f) => (f.diff ? unified(f.path, f.diff) : `${f.path}: ${f.note ?? f.kind}\n`)).join("").slice(0, 40_000).replace(/```/g, "'''"), "```"].join("\n");
     },
   },
-  parse: (i) => { const oid = reqString(i, "oid", { max: 40 }).toLowerCase(); if (!OID_RE.test(oid)) throw badRequest("oid must be a full 40-character commit id"); return { project: reqString(i, "project", { max: 63 }), oid }; },
+  parse: (i) => { const oid = reqString(i, "oid", { max: 40 }).toLowerCase(); if (!OID_RE.test(oid)) throw badRequest("oid must be a full 40-character commit id"); return { project: reqString(i, "project", { max: 127 }), oid }; },
   run: async (ctx, p) => {
     const pr = await repoProject(ctx, p.project, true);
     const c = (await codeRead<ArdiCommit & { changes: ArdiChange[] }>(ctx, "commit.show", { repo: pr.slug, oid: p.oid })).result;
@@ -195,7 +194,7 @@ export const repoFile = defineVerb({
       return [DATA_NOTE, NOTE, "", `**${x.project}/${x.path}** (${x.size} bytes)`, x.binary ? "Binary file." : x.text === null ? "Too large to show." : ["```text", (x.text ?? "").replace(/```/g, "'''").slice(0, 60_000), "```"].join("\n")].join("\n");
     },
   },
-  parse: (i) => ({ project: reqString(i, "project", { max: 63 }), path: (optString(i, "path", { max: 500 }) ?? "").replace(/^\/+|\/+$/g, ""), ref: optString(i, "ref", { max: 200 }) }),
+  parse: (i) => ({ project: reqString(i, "project", { max: 127 }), path: (optString(i, "path", { max: 500 }) ?? "").replace(/^\/+|\/+$/g, ""), ref: optString(i, "ref", { max: 200 }) }),
   run: async (ctx, p) => {
     const pr = await repoProject(ctx, p.project, true);
     const at = rev(p.ref);
@@ -220,7 +219,7 @@ export const repoDiff = defineVerb({
     input: { type: "object", properties: { project: { type: "string" }, from: { type: "string", description: "Base: branch, tag or commit" }, to: { type: "string", description: "Head: branch, tag or commit" } }, required: ["project", "from", "to"], additionalProperties: false },
     render: (r) => { const x = r as { project: string; commits: number; files: Array<{ path: string; diff: FileDiff | null; note: string | null }> }; return [DATA_NOTE, NOTE, "", `**${x.project}**: ${x.commits} commits, ${x.files.length} files`, "```diff", x.files.map((f) => (f.diff ? unified(f.path, f.diff) : `${f.path}: ${f.note}\n`)).join("").slice(0, 40_000).replace(/```/g, "'''"), "```"].join("\n"); },
   },
-  parse: (i) => ({ project: reqString(i, "project", { max: 63 }), from: reqString(i, "from", { max: 200 }), to: reqString(i, "to", { max: 200 }) }),
+  parse: (i) => ({ project: reqString(i, "project", { max: 127 }), from: reqString(i, "from", { max: 200 }), to: reqString(i, "to", { max: 200 }) }),
   run: async (ctx, p) => {
     const pr = await repoProject(ctx, p.project, true);
     const head = (await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: rev(p.to), limit: 21 })).result.commits;
@@ -296,7 +295,7 @@ export const repoSearch = defineVerb({
         ...(x.matches.length ? lines : ["", "No matches."])].join("\n");
     },
   },
-  parse: (i) => ({ project: reqString(i, "project", { max: 63 }), q: reqString(i, "q", { max: 200 }), ref: optString(i, "ref", { max: 200 }),
+  parse: (i) => ({ project: reqString(i, "project", { max: 127 }), q: reqString(i, "q", { max: 200 }), ref: optString(i, "ref", { max: 200 }),
     path: (optString(i, "path", { max: 500 }) ?? "").replace(/^\/+/, ""), regex: optBool(i, "regex") ?? false, caseSensitive: optBool(i, "case_sensitive") ?? false,
     limit: optInt(i, "limit", { min: 1, max: 200 }) ?? 50 }),
   run: async (ctx, p) => {

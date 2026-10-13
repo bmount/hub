@@ -1,9 +1,11 @@
+import { featureProject } from "./featureProject";
+import { projectPathSql } from "../db/projects";
 // Work items over every surface (overnight plan task 2): pages, /api, and MCP tools.
 import { requireProjectFeature } from "../projectFeatures";
 import { afterChange } from "../work/collab";
 import { defineVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
-import { badRequest, conflict, notFound } from "../errors";
+import { badRequest, conflict, notFound, HubError } from "../errors";
 import { recordEvent } from "../db/events";
 import { getIdentityByEmail } from "../db/identities";
 import { getMembership } from "../db/memberships";
@@ -19,19 +21,21 @@ const kindWords = Object.entries(KINDS).map(([k, v]) => `${k} (${v.plain})`).joi
 const STATE_LIST = ["open", "doing", "done", "dropped"] as const;
 
 export async function projectBySlug(ctx: Ctx, slug: string, missingIsBadRequest = false) {
-  if (ctx.mcpProject && slug.trim().toLowerCase() !== ctx.mcpProject.slug) throw notFound("no such project");
-  const p = await ctx.db.prepare("SELECT id, slug, kind, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND (? IS NULL OR id = ?)").bind(ctx.tenant!.id, slug.trim().toLowerCase(), ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null)
-    .first<{ id: string; slug: string; kind: string; display_name: string; state: string }>();
-  if (!p) throw missingIsBadRequest ? badRequest("no such project") : notFound("no such project");
+  if (ctx.mcpProject && slug.trim().toLowerCase() !== ctx.mcpProject.slug && slug.trim().toLowerCase() !== ctx.mcpProject.path) throw notFound("no such project");
+  const p = await featureProject(ctx, slug.trim().toLowerCase()).catch(e => {
+    if (missingIsBadRequest && e instanceof HubError && e.status === 404) throw badRequest("no such project");
+    throw e;
+  });
+  if (p.kind === "channel") throw missingIsBadRequest ? badRequest("no such project") : notFound("no such project");
   requireProjectFeature(p, "docket");
-  return p;
+  return { ...p, slug: ctx.mcpProject?.path ?? slug.trim().toLowerCase() };
 }
 
 /** An item by id, or by project and number ("site#12" or project + number). */
 export async function itemRef(ctx: Ctx, i: Record<string, unknown>): Promise<WorkItem> {
   const id = optString(i, "id", { max: 80 });
   if (id) {
-    const m = id.match(/^([a-z0-9-]+)#(\d+)$/);
+    const m = id.match(/^([a-z0-9-]+(?:\/[a-z0-9-]+)?)#(\d+)$/);
     if (m) {
       const p = await projectBySlug(ctx, m[1]!);
       const w = await getWorkByNumber(ctx.db, p.id, Number(m[2]));
@@ -41,14 +45,14 @@ export async function itemRef(ctx: Ctx, i: Record<string, unknown>): Promise<Wor
     const w = await getWork(ctx.db, ctx.tenant!.id, id);
     if (w) {
       if (ctx.mcpProject && w.project_id !== ctx.mcpProject.id) throw notFound("no such item");
-      const project = await ctx.db.prepare("SELECT slug, kind FROM project WHERE id = ? AND tenant_id = ? AND kind NOT IN ('channel', 'agent-src')").bind(w.project_id, ctx.tenant!.id).first<{ slug: string; kind: string }>();
+      const project = await ctx.db.prepare(`SELECT ${projectPathSql()} AS slug, p.kind FROM project p WHERE p.id = ? AND p.tenant_id = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(w.project_id, ctx.tenant!.id).first<{ slug: string; kind: string }>();
       if (!project) throw notFound("no such project");
       requireProjectFeature(project, "docket");
       return w;
     }
     throw notFound("no such item");
   }
-  const project = optString(i, "project", { max: 63 });
+  const project = optString(i, "project", { max: 127 });
   const number = optInt(i, "number", { min: 1, max: 10_000_000 });
   if (!project || !number) throw badRequest("give id, or project and number");
   const p = await projectBySlug(ctx, project);
@@ -81,7 +85,7 @@ const audit = (ctx: Ctx, w: WorkItem, kind: string, summary: string) => recordEv
 
 export const ref = (slug: string, w: WorkItem) => `${slug}#${w.number}`;
 export async function slugOf(ctx: Ctx, project_id: string): Promise<string> {
-  return (await ctx.db.prepare("SELECT slug FROM project WHERE id = ?").bind(project_id).first<{ slug: string }>())?.slug ?? "?";
+  return (await ctx.db.prepare(`SELECT ${projectPathSql()} AS slug FROM project p WHERE p.id = ?`).bind(project_id).first<{ slug: string }>())?.slug ?? "?";
 }
 const line = (slug: string, w: WorkItem) => `- **${ref(slug, w)}** ${KINDS[w.kind].name} (${KINDS[w.kind].plain}), ${STATES[w.state].toLowerCase()}: ${cleanText(w.title)}`;
 
@@ -120,7 +124,7 @@ export const workCreate = defineVerb({
     render: (r) => { const x = r as { item: WorkItem; ref: string }; return `${DATA_NOTE}\n\nFiled **${x.ref}**, a ${labelled(x.item.kind)}: ${cleanText(x.item.title)}`; },
   },
   parse: (i) => ({
-    project: reqString(i, "project", { max: 63 }), kind: kindParam(i), title: reqString(i, "title", { max: 200 }), body: optString(i, "body", { max: 20_000 }) ?? "",
+    project: reqString(i, "project", { max: 127 }), kind: kindParam(i), title: reqString(i, "title", { max: 200 }), body: optString(i, "body", { max: 20_000 }) ?? "",
     parent: optInt(i, "parent", { min: 1, max: 10_000_000 }), owner: optString(i, "owner", { max: 254 }), source_quote: optString(i, "source_quote", { max: 2000 }),
     source_kind: optString(i, "source_kind", { max: 20 }), source_ref: optString(i, "source_ref", { max: 500 }), source_at: optString(i, "source_at", { max: 40 }),
     state: optString(i, "state", { max: 20 }),
@@ -178,7 +182,7 @@ export const workList = defineVerb({
     });
     const st = (optString(i, "state", { max: 100 }) ?? "open,doing").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
     const states = st.includes("all") ? [] : st.map((s) => { if (!(STATE_LIST as readonly string[]).includes(s)) throw badRequest(`unknown state ${s}`); return s as WorkState; });
-    return { project: optString(i, "project", { max: 63 }), kinds, states, owner: optString(i, "owner", { max: 254 }), limit: optInt(i, "limit", { min: 1, max: 200 }) ?? 50 };
+    return { project: optString(i, "project", { max: 127 }), kinds, states, owner: optString(i, "owner", { max: 254 }), limit: optInt(i, "limit", { min: 1, max: 200 }) ?? 50 };
   },
   run: async (ctx, p) => {
     const project = p.project ? await projectBySlug(ctx, p.project) : null;

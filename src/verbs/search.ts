@@ -1,3 +1,4 @@
+import { projectPathSql } from "../db/projects";
 // Use existing tables so search needs no migration or separately maintained index.
 import { currentFile } from "./files";
 import { currentWiki } from "./wiki";
@@ -60,11 +61,11 @@ export function coverageText(c: SearchCoverage): string {
 
 function workHitsStatement(ctx: Ctx, ts: string[], project: string | null, limit: number) {
   const hay = "w.title || ' ' || w.body || ' ' || COALESCE(w.source_quote, '') || ' ' || COALESCE((SELECT GROUP_CONCAT(c.body, ' ') FROM work_comment c WHERE c.item_id = w.id AND c.tenant_id = w.tenant_id), '')";
-  return ctx.db.prepare(`SELECT p.slug, w.number, w.kind, w.state, w.title, w.body, w.updated_at,
+  return ctx.db.prepare(`SELECT ${projectPathSql()} AS slug, w.number, w.kind, w.state, w.title, w.body, w.updated_at,
       (${all("w.title", ts.length)}) AS in_title,
       COALESCE((SELECT GROUP_CONCAT(c.body, ' ') FROM work_comment c WHERE c.item_id = w.id AND c.tenant_id = w.tenant_id), '') AS comments
     FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id
-    WHERE w.tenant_id = ? AND (? IS NULL OR p.slug = ?) AND ${all(hay, ts.length)}
+    WHERE w.tenant_id = ? AND (? IS NULL OR (${projectPathSql()}) = ?) AND ${all(hay, ts.length)}
     ORDER BY in_title DESC, w.state IN ('done', 'dropped'), w.updated_at DESC LIMIT ?`)
     .bind(...ts.map(like), ctx.tenant!.id, project, project, ...ts.map(like), limit);
 }
@@ -136,10 +137,10 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
       AND ${all("m.subject || ' ' || m.text || ' ' || m.from_email || ' ' || " + attachments, ts.length)} ORDER BY m.received_at DESC LIMIT ?`).bind(...access.bindings, ...ts.map(like), SOURCE_LIMITS.mail),
     ctx.db.prepare(`SELECT i.display_name, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active'
       AND ${all("i.display_name || ' ' || i.email", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.people),
-    ctx.db.prepare(`SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND ${all("slug || ' ' || display_name", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.projects),
+    ctx.db.prepare(`SELECT (CASE WHEN namespace_id IS NULL THEN slug ELSE (SELECT n.slug FROM namespace n WHERE n.id = project.namespace_id AND n.tenant_id = project.tenant_id) || '/' || slug END) AS slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND ${all("slug || ' ' || display_name", ts.length)} LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.projects),
     ctx.db.prepare(`SELECT g.id, g.script_name, g.title, g.last_message, g.last_seen FROM app_error_group g WHERE g.tenant_id = ? AND ${all("g.title || ' ' || g.last_message || ' ' || g.script_name", ts.length)}
       ORDER BY g.last_seen DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.errors),
-    ctx.db.prepare(`SELECT p.slug, r.number, r.title, r.updated_at, r.summary || ' ' || COALESCE((SELECT GROUP_CONCAT(c.body, ' ') FROM review_comment c WHERE c.review_id = r.id AND c.tenant_id = r.tenant_id), '') AS text
+    ctx.db.prepare(`SELECT ${projectPathSql()} AS slug, r.number, r.title, r.updated_at, r.summary || ' ' || COALESCE((SELECT GROUP_CONCAT(c.body, ' ') FROM review_comment c WHERE c.review_id = r.id AND c.tenant_id = r.tenant_id), '') AS text
       FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ?
       AND ${all("r.title || ' ' || r.summary || ' ' || COALESCE((SELECT GROUP_CONCAT(c.body, ' ') FROM review_comment c WHERE c.review_id = r.id AND c.tenant_id = r.tenant_id), '')", ts.length)}
       ORDER BY r.updated_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.reviews),
@@ -152,9 +153,9 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
     ctx.db.prepare(`SELECT o.id, o.subject, o.text, o.to_address, o.created_at FROM outbound_mail o WHERE ${outgoingAccess.sql}
       AND ${all("o.subject || ' ' || o.text || ' ' || o.to_address || ' ' || o.from_address", ts.length)}
       ORDER BY o.created_at DESC LIMIT ?`).bind(...outgoingAccess.bindings, ...ts.map(like), SOURCE_LIMITS.outgoing),
-    ctx.db.prepare(`SELECT p.slug AS project, r.slug, r.title, r.body, r.created_at, r.research FROM wiki_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND ${currentWiki} AND r.deleted = 0 AND ${all("r.slug || ' ' || r.title || ' ' || r.body || ' ' || COALESCE((SELECT display_name FROM identity WHERE id = r.author_id), '')", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.wiki),
-    ctx.db.prepare(`SELECT p.slug AS project, r.path, r.name, r.text, r.created_at FROM file_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND ${currentFile} AND r.deleted = 0 AND ${all("r.path || ' ' || r.text", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.files),
-    ctx.db.prepare(`SELECT p.slug AS project, e.id, e.kind, e.name, e.data, e.updated_at FROM contact_entity e JOIN project p ON p.id = e.project_id AND p.tenant_id = e.tenant_id WHERE e.tenant_id = ? AND ${all("e.name || ' ' || e.data", ts.length)} ORDER BY e.updated_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.contacts),
+    ctx.db.prepare(`SELECT (${projectPathSql()}) AS project, r.slug, r.title, r.body, r.created_at, r.research FROM wiki_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND ${currentWiki} AND r.deleted = 0 AND ${all("r.slug || ' ' || r.title || ' ' || r.body || ' ' || COALESCE((SELECT display_name FROM identity WHERE id = r.author_id), '')", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.wiki),
+    ctx.db.prepare(`SELECT (${projectPathSql()}) AS project, r.path, r.name, r.text, r.created_at FROM file_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND ${currentFile} AND r.deleted = 0 AND ${all("r.path || ' ' || r.text", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.files),
+    ctx.db.prepare(`SELECT (${projectPathSql()}) AS project, e.id, e.kind, e.name, e.data, e.updated_at FROM contact_entity e JOIN project p ON p.id = e.project_id AND p.tenant_id = e.tenant_id WHERE e.tenant_id = ? AND ${all("e.name || ' ' || e.data", ts.length)} ORDER BY e.updated_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.contacts),
   ]);
   const messages = await messageHits(ctx, ts, null, SOURCE_LIMITS.messages);
   const groups: SearchGroups = {
@@ -166,7 +167,7 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
     mail: (mail!.results as Array<{ id: string; subject: string; text: string; from_email: string; received_at: number }>).map((m) => ({ kind: "Mail", ref: m.from_email, title: m.subject || "(no subject)", snippet: snippet(m.text, ts), href: `/mail/${m.id}`, at: m.received_at })),
     messages: messages.hits,
     people: (ppl!.results as Array<{ display_name: string; email: string; kind: string }>).map((x) => ({ kind: x.kind === "agent" ? "Agent" : "Person", ref: x.email, title: x.display_name, snippet: "", href: `/people/${encodeURIComponent(x.email)}`, at: 0 })),
-    projects: (proj!.results as Array<{ slug: string; display_name: string }>).map((x) => ({ kind: "Project", ref: x.slug, title: x.display_name, snippet: "", href: `/${x.slug}/docket`, at: 0 })),
+    projects: (proj!.results as Array<{ slug: string; display_name: string }>).map((x) => ({ kind: "Project", ref: x.slug, title: x.display_name, snippet: "", href: `/${x.slug}`, at: 0 })),
     errors: (errs!.results as Array<{ id: string; script_name: string; title: string; last_message: string; last_seen: number }>).map((g) => ({ kind: "Error", ref: g.script_name, title: g.title, snippet: snippet(g.last_message, ts), href: `/apps?g=${g.id}`, at: g.last_seen })),
   };
   groups.reviews = (reviews!.results as Array<{slug: string; number: number; title: string; text: string; updated_at: number}>).map(r => ({kind: 'Review', ref: `${r.slug}!${r.number}`, title: r.title, snippet: snippet(r.text, ts), href: `/${r.slug}/reviews/${r.number}`, at: r.updated_at}));

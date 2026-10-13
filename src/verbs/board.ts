@@ -1,3 +1,4 @@
+import { projectPathSql } from "../db/projects";
 // The board and bulk changes (planned verbs built 2026-10-07). The board groups work by state, shows each quest's
 // progress, and flags what has stalled. Bulk update runs work.update once per item, so every change is audited and
 // followers hear about it exactly as for a single edit.
@@ -33,16 +34,16 @@ export type Board = {
 
 export async function board(ctx: Ctx, project: string | null, actorId: string | null = null): Promise<Board> {
   if (project) {
-    const pr = await ctx.db.prepare("SELECT slug, kind FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, project).first<{ slug: string; kind: string }>();
+    const pr = await ctx.db.prepare(`SELECT ${projectPathSql()} AS slug, p.kind FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, project).first<{ slug: string; kind: string }>();
     if (pr) requireProjectFeature(pr, "docket");
   }
   // Counts and bounded examples share predicates and one D1 batch. Never infer totals
   // (especially old stalled items) from the globally newest-item sample.
-  const scope = "w.tenant_id = ? AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src') AND (? IS NULL OR p.slug = ?)";
+  const scope = `w.tenant_id = ? AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src') AND (? IS NULL OR (${projectPathSql("p", "np")}) = ?)`;
   const visible = "(w.state IN ('open', 'doing') OR (w.state = 'done' AND w.closed_at > ?))";
   const args = [ctx.tenant!.id, project, project, ctx.now - DONE_WINDOW_MS];
   const [items, quests, counts, closers, closureGaps] = await ctx.db.batch([
-    ctx.db.prepare(`SELECT p.slug, w.number, w.kind, w.state, w.title, w.updated_at, i.display_name AS owner FROM work_item w JOIN project p ON p.id = w.project_id LEFT JOIN identity i ON i.id = w.owner_id
+    ctx.db.prepare(`SELECT ${projectPathSql("p", "np")} AS slug, w.number, w.kind, w.state, w.title, w.updated_at, i.display_name AS owner FROM work_item w JOIN project p ON p.id = w.project_id LEFT JOIN namespace np ON np.id = p.namespace_id AND np.tenant_id = p.tenant_id LEFT JOIN identity i ON i.id = w.owner_id
       WHERE ${scope} AND ${visible} ORDER BY w.updated_at DESC, w.id DESC LIMIT ?`)
       .bind(...args, BOARD_ITEM_LIMIT),
     // Aggregate children once for the requested scope, not two correlated scans per
@@ -50,31 +51,31 @@ export async function board(ctx: Ctx, project: string | null, actorId: string | 
     // invalidation dependency. Keep project in the grouping/join as well as tenant.
     ctx.db.prepare(`WITH child_counts AS MATERIALIZED (
         SELECT c.parent_id, c.project_id, SUM(c.state = 'done') AS done, COUNT(*) AS total
-        FROM work_item c JOIN project cp ON cp.id = c.project_id
+        FROM work_item c JOIN project cp ON cp.id = c.project_id LEFT JOIN namespace ncp ON ncp.id = cp.namespace_id AND ncp.tenant_id = cp.tenant_id
         WHERE c.tenant_id = ? AND cp.tenant_id = c.tenant_id AND cp.kind NOT IN ('channel', 'agent-src')
-          AND (? IS NULL OR cp.slug = ?) AND c.parent_id IS NOT NULL AND c.state <> 'dropped'
+          AND (? IS NULL OR (${projectPathSql("cp", "ncp")}) = ?) AND c.parent_id IS NOT NULL AND c.state <> 'dropped'
         GROUP BY c.parent_id, c.project_id
       )
-      SELECT p.slug, q.number, q.title, q.state, COALESCE(c.done, 0) AS done, COALESCE(c.total, 0) AS total
-      FROM work_item q JOIN project p ON p.id = q.project_id
+      SELECT ${projectPathSql("p", "np")} AS slug, q.number, q.title, q.state, COALESCE(c.done, 0) AS done, COALESCE(c.total, 0) AS total
+      FROM work_item q JOIN project p ON p.id = q.project_id LEFT JOIN namespace np ON np.id = p.namespace_id AND np.tenant_id = p.tenant_id
       LEFT JOIN child_counts c ON c.parent_id = q.id AND c.project_id = q.project_id
       WHERE q.tenant_id = ? AND p.tenant_id = q.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
-        AND (? IS NULL OR p.slug = ?) AND q.kind = 'quest' AND q.state IN ('open', 'doing') ORDER BY q.number, q.id`)
+        AND (? IS NULL OR (${projectPathSql("p", "np")}) = ?) AND q.kind = 'quest' AND q.state IN ('open', 'doing') ORDER BY q.number, q.id`)
       .bind(ctx.tenant!.id, project, project, ctx.tenant!.id, project, project),
     ctx.db.prepare(`SELECT COALESCE(SUM(w.state = 'open'), 0) AS open,
         COALESCE(SUM(w.state = 'doing'), 0) AS doing, COALESCE(SUM(w.state = 'done'), 0) AS done,
         COALESCE(SUM(w.state = 'doing' AND w.updated_at < ?), 0) AS stalled
-      FROM work_item w JOIN project p ON p.id = w.project_id WHERE ${scope} AND ${visible}`)
+      FROM work_item w JOIN project p ON p.id = w.project_id LEFT JOIN namespace np ON np.id = p.namespace_id AND np.tenant_id = p.tenant_id WHERE ${scope} AND ${visible}`)
       .bind(ctx.now - STALL_MS, ...args),
     ctx.db.prepare(`SELECT e.identity_id, COALESCE(i.display_name, 'Unknown actor') AS name,
         COALESCE(i.kind, 'unknown') AS kind, COUNT(DISTINCT w.id) AS items, COUNT(*) OVER () AS total_actors
       FROM event e JOIN work_item w ON w.id = e.target_id AND w.tenant_id = e.tenant_id
-      JOIN project p ON p.id = w.project_id LEFT JOIN identity i ON i.id = e.identity_id
+      JOIN project p ON p.id = w.project_id LEFT JOIN namespace np ON np.id = p.namespace_id AND np.tenant_id = p.tenant_id LEFT JOIN identity i ON i.id = e.identity_id
       WHERE ${scope} AND e.kind = 'work.done' AND e.target_kind = 'work_item'
         AND (? IS NULL OR e.identity_id = ?)
       GROUP BY e.identity_id ORDER BY items DESC, e.identity_id LIMIT ?`)
       .bind(ctx.tenant!.id, project, project, actorId, actorId, CLOSURE_ACTOR_LIMIT),
-    ctx.db.prepare(`SELECT COUNT(*) AS unattributed FROM work_item w JOIN project p ON p.id = w.project_id
+    ctx.db.prepare(`SELECT COUNT(*) AS unattributed FROM work_item w JOIN project p ON p.id = w.project_id LEFT JOIN namespace np ON np.id = p.namespace_id AND np.tenant_id = p.tenant_id
       WHERE ${scope} AND w.state = 'done' AND NOT EXISTS (
         SELECT 1 FROM event e WHERE e.tenant_id = w.tenant_id AND e.target_id = w.id
           AND e.target_kind = 'work_item' AND e.kind = 'work.done')`)
@@ -125,7 +126,7 @@ export const workBoard = defineVerb({
         ...b.closures.actors.map((a) => `- ${cleanText(a.name)} (${cleanText(a.kind)}, ${a.identity_id}): ${a.items} distinct items`)].join("\n");
     },
   },
-  parse: (i) => ({ project: optString(i, "project", { max: 63 }), actor: optString(i, "actor", { max: 26 }) }),
+  parse: (i) => ({ project: optString(i, "project", { max: 127 }), actor: optString(i, "actor", { max: 26 }) }),
   run: async (ctx, p) => board(ctx, p.project, p.actor),
 });
 

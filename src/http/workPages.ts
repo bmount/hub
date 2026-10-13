@@ -1,3 +1,4 @@
+import { projectPathSql } from "../db/projects";
 import { projectFeatures } from "../projectFeatures";
 // The workbench's work views (2026-10-07): the Docket as the list pane, and the selected item, a new item, or an
 // overview as the inspector. Item links carry the list's filters, so opening an item rebuilds the same list beside it
@@ -49,7 +50,7 @@ async function tenantCtx(request: Request, env: Env) {
 async function projectCtx(request: Request, env: Env, slug: string) {
   const { ctx, extra, ok } = await tenantCtx(request, env);
   if (!ok) return { ctx, extra, project: null };
-  const project = await ctx.db.prepare("SELECT id, slug, kind, display_name, state FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, slug)
+  const project = await ctx.db.prepare(`SELECT p.id, ${projectPathSql()} AS slug, p.kind, p.display_name, p.state FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, slug)
     .first<Project>();
   return { ctx, extra, project: project && projectFeatures(project.kind).includes("docket") ? project : null };
 }

@@ -13,7 +13,7 @@ const str = {type: "string"};
 const strings = {type: "array", items: str, maxItems: 50};
 const linkSchema = {type: "array", maxItems: 50, items: {type: "object", properties: {kind: {type: "string", enum: ["item", "research", "file", "mail"]}, ref: str}, required: ["kind", "ref"], additionalProperties: false}};
 const schema = (extra: Record<string, Record<string, unknown>>, required = ["project"]): McpInputSchema => ({type: "object", properties: {project: str, ...extra}, required, additionalProperties: false});
-const projectRef = (i: Record<string, unknown>) => ({project: reqString(i, "project", {max: 63})});
+const projectRef = (i: Record<string, unknown>) => ({project: reqString(i, "project", {max: 127})});
 const entityRef = (i: Record<string, unknown>) => ({...projectRef(i), id: reqString(i, "id", {max: 100})});
 export type Contact = {id: string; kind: "person" | "company"; name: string; data: string; revision: number; updated_at: number};
 export type Connection = {id: string; a: string; b: string; type: string; strength: number | null; source: string; date: string};
@@ -45,7 +45,7 @@ function links(i: Record<string, unknown>): Link[] | null {
 async function visibleLink(ctx: Ctx, pid: string, l: Link): Promise<{kind: string; ref: string; title: string; href: string} | null> {
   const tid = ctx.tenant!.id;
   if (l.kind === "item") {
-    const r = await ctx.db.prepare("SELECT w.number, w.title, p.slug FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND w.project_id = ? AND w.id = ?").bind(tid, pid, l.ref).first<{number: number; title: string; slug: string}>();
+    const r = await ctx.db.prepare("SELECT w.number, w.title, CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) || '/' || p.slug END AS slug FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND w.project_id = ? AND w.id = ?").bind(tid, pid, l.ref).first<{number: number; title: string; slug: string}>();
     return r ? {...l, title: r.title, href: `/${r.slug}/w/${r.number}`} : null;
   }
   if (l.kind === "mail") {
@@ -54,10 +54,10 @@ async function visibleLink(ctx: Ctx, pid: string, l: Link): Promise<{kind: strin
     return r ? {...l, title: r.subject, href: `/mail/${encodeURIComponent(l.ref)}`} : null;
   }
   if (l.kind === "research") {
-    const r = await ctx.db.prepare(`SELECT r.title, p.slug FROM wiki_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND r.project_id = ? AND r.slug = ? AND ${currentWiki} AND r.deleted = 0 AND r.research IS NOT NULL`).bind(tid, pid, l.ref).first<{title: string; slug: string}>();
+    const r = await ctx.db.prepare(`SELECT r.title, CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) || '/' || p.slug END AS slug FROM wiki_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND r.project_id = ? AND r.slug = ? AND ${currentWiki} AND r.deleted = 0 AND r.research IS NOT NULL`).bind(tid, pid, l.ref).first<{title: string; slug: string}>();
     return r ? {...l, title: r.title, href: `/${r.slug}/wiki/${encodeURIComponent(l.ref)}`} : null;
   }
-  const r = await ctx.db.prepare(`SELECT r.name, p.slug FROM file_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND r.project_id = ? AND r.path = ? AND ${currentFile} AND r.deleted = 0`).bind(tid, pid, filePath(l.ref)).first<{name: string; slug: string}>();
+  const r = await ctx.db.prepare(`SELECT r.name, CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) || '/' || p.slug END AS slug FROM file_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND r.project_id = ? AND r.path = ? AND ${currentFile} AND r.deleted = 0`).bind(tid, pid, filePath(l.ref)).first<{name: string; slug: string}>();
   return r ? {...l, title: r.name, href: `/${r.slug}/documents?path=${encodeURIComponent(l.ref)}`} : null;
 }
 async function backlinks(ctx: Ctx, pid: string, id: string) {

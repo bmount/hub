@@ -6,6 +6,9 @@ import type { Project, State } from "./types";
 import { PROJECT_KINDS } from "../projectFeatures";
 const KINDS = new Set(PROJECT_KINDS);
 
+/** Canonical tenant-local path for a project SQL alias. */
+export const projectPathSql = (alias = "p", namespace?: string) => `CASE WHEN ${alias}.namespace_id IS NULL THEN ${alias}.slug ELSE ${namespace ? `${namespace}.slug` : `(SELECT n.slug FROM namespace n WHERE n.id = ${alias}.namespace_id AND n.tenant_id = ${alias}.tenant_id)`} || '/' || ${alias}.slug END`;
+
 /** Built-in pages on an organization's host. A project page lives at /<project>, so a project may not take these names. */
 export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
   "admin", "agent-src", "api", "apps", "archive", "assistant", "assets", "attention", "auth", "board", "c", "docket", "healthz", "inbox", "internal", "invite", "login", "logout", "m", "mail",
@@ -60,7 +63,7 @@ export function getProjectByPath(db: D1Database, tenant_id: string, namespace_sl
     return db.prepare("SELECT * FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = ? AND kind <> 'agent-src'").bind(tenant_id, slug).first<Project>();
   }
   return db.prepare(
-    "SELECT p.* FROM project p JOIN namespace n ON n.id = p.namespace_id WHERE p.tenant_id = ? AND n.slug = ? AND p.slug = ?",
+    "SELECT p.* FROM project p JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND n.slug = ? AND p.slug = ?",
   ).bind(tenant_id, namespace_slug, slug).first<Project>();
 }
 

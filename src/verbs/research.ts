@@ -41,7 +41,7 @@ export const researchSave = defineVerb({ ...base, name: "research.save", kind: "
     });
     const research: Research = {topic: reqString(i, "topic", {max: 200}), summary: reqString(i, "summary", {max: 50000}), status: reqEnum(i, "status", ["draft", "final"]), sources, people: refs(i, "people"), orgs: refs(i, "orgs"), items: refs(i, "items")};
     if (new TextEncoder().encode(JSON.stringify(research)).length > WIKI_BODY_BYTES / 2) throw badRequest("research exceeds 64 KiB");
-    return {project: reqString(i, "project", {max: 63}), slug: wikiSlug(reqString(i, "slug", {max: 100})), expected_revision, note: reqString(i, "note", {max: 500}), research};
+    return {project: reqString(i, "project", {max: 127}), slug: wikiSlug(reqString(i, "slug", {max: 100})), expected_revision, note: reqString(i, "note", {max: 500}), research};
   }, run: async (ctx, v) => {
     const p = await workspace(ctx, v.project, true);
     for (const id of v.research.people) {
@@ -60,7 +60,7 @@ export const researchSave = defineVerb({ ...base, name: "research.save", kind: "
 export const researchList = defineVerb({ ...base, name: "research.list", kind: "query", minRole: "reader", summary: "List current research pages in a workspace, with topic substring, linked person identity ID, named organization and status filters. Alphabetical, 200 per page; pass after to continue.", mcp: {scope: "read", destructive: false, title: "List research", input: schema({project: string, topic: string, person: string, org: string, status: {type: "string", enum: ["draft", "final"]}, after: string}, ["project"])}, parse: i => {
   const status = optString(i, "status");
   if (status && !["draft", "final"].includes(status)) throw badRequest("status must be draft or final");
-  return {project: reqString(i, "project", {max: 63}), topic: optString(i, "topic", {max: 200}), person: optString(i, "person", {max: 200}), org: optString(i, "org", {max: 200}), status, after: optString(i, "after", {max: 100}) ?? ""};
+  return {project: reqString(i, "project", {max: 127}), topic: optString(i, "topic", {max: 200}), person: optString(i, "person", {max: 200}), org: optString(i, "org", {max: 200}), status, after: optString(i, "after", {max: 100}) ?? ""};
 }, run: async (ctx, v) => {
   const p = await workspace(ctx, v.project);
   const clauses = ["r.tenant_id = ?", "r.project_id = ?", currentWiki, "r.deleted = 0", "r.research IS NOT NULL", "r.slug > ?"];

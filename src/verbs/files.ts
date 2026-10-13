@@ -1,3 +1,4 @@
+import { featureProject } from "./featureProject";
 import { documentDeliveries } from "../db/documentDelivery";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
@@ -52,8 +53,7 @@ export function validateFile(path: string, type: string, bytes: Uint8Array): {ty
   return {type, text};
 }
 export async function fileProject(ctx: Ctx, slug: string, writing = false) {
-  const p = await ctx.db.prepare("SELECT id, slug, kind, state FROM project WHERE tenant_id = ? AND slug = ? AND ((? IS NULL AND namespace_id IS NULL) OR id = ?)").bind(ctx.tenant!.id, slug, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first<{id: string; slug: string; kind: string; state: string}>();
-  if (!p) throw notFound("no such project");
+  const p = await featureProject(ctx, slug);
   requireProjectFeature(p, "files");
   if (writing && p.state !== "active") throw conflict("project is archived");
   return p;
@@ -112,7 +112,7 @@ export const fileMetadata = ({object_key: _key, text: _text, ...row}: FileRow) =
 const base = {scope: "tenant", freshProofMinutes: null} as const;
 const props = {project: {type: "string"}, path: {type: "string"}};
 const input = (extra: Record<string, Record<string, unknown>> = {}, required = ["project", "path"]): McpInputSchema => ({type: "object", properties: {...props, ...extra}, required, additionalProperties: false});
-const ref = (i: Record<string, unknown>) => ({project: reqString(i, "project", {max: 63}), path: filePath(reqString(i, "path", {max: 240}))});
+const ref = (i: Record<string, unknown>) => ({project: reqString(i, "project", {max: 127}), path: filePath(reqString(i, "path", {max: 240}))});
 const putProps = {content_type: {type: "string"}, expected_revision: {type: "integer", minimum: 0}, item_id: {type: "string"}, person_id: {type: "string"}};
 export function parseFileParams(i: Record<string, unknown>): FileParams {
   const expected_revision = optInt(i, "expected_revision", {min: 0, max: 2147483646});
@@ -128,7 +128,7 @@ export const filePut = defineVerb({...base, name: "file.put", kind: "command", m
   if (bytes.length > BASE64_FILE_BYTES) throw badRequest("base64 file limit is 512 KiB");
   return {v, bytes};
 }, run: (ctx, {v, bytes}) => putFile(ctx, v, bytes)});
-export const fileList = defineVerb({...base, name: "file.list", kind: "query", minRole: "reader", summary: "List current project files (200/page), with optional folder prefix and after path cursor.", mcp: {scope: "read", destructive: false, title: "List files", input: input({folder: {type: "string"}, after: {type: "string"}}, ["project"])}, parse: i => ({project: reqString(i, "project", {max: 63}), folder: optString(i, "folder", {max: 240}) ?? "", after: optString(i, "after", {max: 240}) ?? ""}), run: async (ctx, v) => {
+export const fileList = defineVerb({...base, name: "file.list", kind: "query", minRole: "reader", summary: "List current project files (200/page), with optional folder prefix and after path cursor.", mcp: {scope: "read", destructive: false, title: "List files", input: input({folder: {type: "string"}, after: {type: "string"}}, ["project"])}, parse: i => ({project: reqString(i, "project", {max: 127}), folder: optString(i, "folder", {max: 240}) ?? "", after: optString(i, "after", {max: 240}) ?? ""}), run: async (ctx, v) => {
   const p = await fileProject(ctx, v.project);
   const rows = (await ctx.db.prepare(`SELECT r.* FROM file_revision r WHERE r.tenant_id = ? AND r.project_id = ? AND ${currentFile} AND r.deleted = 0 AND r.path > ? AND ( ? = '' OR r.folder = ? OR substr(r.folder, 1, length(?) + 1) = ? || '/') ORDER BY r.path LIMIT 201`).bind(ctx.tenant!.id, p.id, v.after, v.folder, v.folder, v.folder, v.folder).all<FileRow>()).results;
   return {files: rows.slice(0,200).map(fileMetadata), next_cursor: rows.length > 200 ? rows[199]!.path : null};
