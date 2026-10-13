@@ -622,7 +622,7 @@ try {
     const ctx = await context(member, viewport);
     const page = await ctx.newPage();
     await page.goto(`${base}/c`);
-    await expect(page.getByRole('heading', { name: 'Channels', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Chat', exact: true, level: 1 })).toBeVisible();
     await noOverflow(page);
     await expect(page.locator('.chat-workspace')).not.toContainText('other-tenant-secret');
     await tabTo(page, '#channel-query');
