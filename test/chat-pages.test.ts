@@ -13,6 +13,47 @@ const postForm = (path: string, token: string, fields: Record<string, string>, o
     body: new URLSearchParams(fields).toString(),
   });
 
+describe("private chat web workspace", () => {
+  it("opens direct and group chats from same-origin forms, lists them beside channels and exchanges private messages", async () => {
+    const w = await chatWorld();
+    await channelWith(w);
+    const initial = await (await get("/c", w.lead.token)).text();
+    expect(initial).toContain('action="/api/chat.open"');
+    const key = initial.match(/name="client_id" value="([^"]+)"/)![1]!;
+    const fields = { kind: "direct", members: "@scout", client_id: key, _back: "@result" };
+    expect((await postForm("/api/chat.open", w.lead.token, fields, "https://evil.example")).status).toBe(403);
+    const opened = await postForm("/api/chat.open", w.lead.token, fields);
+    expect(opened.status).toBe(303);
+    const path = opened.headers.get("location")!;
+    const c = path.split("/").at(-1)!;
+    expect((await postForm("/api/chat.open", w.lead.token, fields)).headers.get("location")).toBe(path);
+    const posted = await postForm(path, w.lead.token, { body: "Web hello scout", after: "0" });
+    expect(posted.status).toBe(303);
+    const read = await ok(w.scout.token, "chat.read", { c });
+    await ok(w.scout.token, "chat.post", { c, body: "Agent hello back", after: read.head });
+    const visible = await (await get(path, w.lead.token)).text();
+    expect(visible).toContain("Web hello scout");
+    expect(visible).toContain("Agent hello back");
+    expect(visible).toContain("@lead, @scout (direct)");
+    expect(visible).toContain('href="/c/general"');
+    expect((await get(path, w.dev.token)).status).toBe(404);
+    expect((await get(`/m/${read.messages[0].msg_id}`, w.dev.token)).status).toBe(404);
+    expect((await get(`/m/${read.messages[0].msg_id}`, w.lead.token)).status).toBe(200);
+    expect(await (await get("/c", w.dev.token)).text()).not.toContain(c);
+    expect((await postForm(path, w.dev.token, { body: "intrusion", after: "2" })).status).toBe(404);
+    const group = await postForm("/api/chat.open", w.lead.token, { kind: "group", members: "@dev, @scout", client_id: "web-group", _back: "@result" });
+    expect(group.status).toBe(303);
+    const groupPage = await get(group.headers.get("location")!, w.dev.token);
+    expect(groupPage.status).toBe(200);
+    expect(await groupPage.text()).toContain("(group)");
+    const human = await postForm("/api/chat.open", w.lead.token, { kind: "direct", members: "@dev", client_id: "web-human", _back: "@result" });
+    const humanPath = human.headers.get("location")!;
+    expect((await postForm(humanPath, w.lead.token, { body: "Member hello", after: "0" })).status).toBe(303);
+    expect((await postForm(humanPath, w.dev.token, { body: "Member reply", after: "1" })).status).toBe(303);
+    expect(await (await get(humanPath, w.lead.token)).text()).toContain("Member reply");
+  });
+});
+
 describe("message/work navigation", () => {
   it("opens exact recorded message sources/links and deduplicates authorized work backlinks with escaping", async () => {
     const w = await chatWorld();

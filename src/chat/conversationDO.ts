@@ -97,6 +97,14 @@ export class Conversation extends DurableObject<Env> {
     this.#id = conversation_id;
   }
 
+  /** Immutable member send evidence, not mutable text, read status or permission inferred from an invitation. */
+  async hasAddressedMessage(tenant_id: string, conversation_id: string, sender: string, recipient: string, privateChat: boolean): Promise<boolean> {
+    this.#bind(tenant_id, conversation_id);
+    return this.#q(`SELECT 1 FROM artifact a JOIN msg m ON m.msg_id = a.msg_id
+      WHERE a.author_id = ? AND m.author_kind IN ('human', 'agent') AND a.kind = 'say'
+        AND (? = 1 OR EXISTS (SELECT 1 FROM json_each(a.meta_json, '$.mentions') WHERE value = ?)) LIMIT 1`, sender, privateChat ? 1 : 0, recipient).length > 0;
+  }
+
   #head(): number {
     return this.#q<{ h: number | null }>("SELECT MAX(seq) AS h FROM artifact")[0]?.h ?? 0;
   }
@@ -536,6 +544,11 @@ export class Conversation extends DurableObject<Env> {
       }
     }
     for (const m of p.mentions) targets.set(m.identity_id, { kind: m.kind, why: "mention" });
+    if (p.audience.private_members) {
+      const allowed = new Set(p.audience.private_members.map(m => m.identity_id));
+      for (const id of targets.keys()) if (!allowed.has(id)) targets.delete(id);
+      for (const member of p.audience.private_members) targets.set(member.identity_id, { kind: member.kind, why: "reply" });
+    }
     targets.delete(me.id);
     const woke: string[] = [];
     const suppressed: Suppressed[] = [];

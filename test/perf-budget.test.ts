@@ -30,6 +30,11 @@ describe("performance budget", () => {
       report.push(`${path}: ${t2.trips} trips, ${t2.statements} statements`);
       expect(t2.trips, `${path} uses ${t2.trips} D1 round trips`).toBeLessThanOrEqual(TRIP_BUDGET);
     }
+    await apiPost(HOST, "chat.open", { kind: "direct", members: ["scout"], client_id: "perf-private" }, h);
+    const privateRail = await SELF.fetch(`https://${HOST}/c`, { headers: h });
+    expect(privateRail.status).toBe(200);
+    expect(trips(privateRail.headers.get("server-timing")).trips).toBeLessThanOrEqual(TRIP_BUDGET);
+    expect(await privateRail.text()).toContain("@pat, @scout (direct)");
     console.log(report.join("\n"));
   });
 });

@@ -1,3 +1,5 @@
+import { chatCommandText } from "../chat/compact";
+import { people } from "../chat/handles";
 import { defineVerb } from "./table";
 import { optInt, optString, reqString } from "./params";
 import { rank, type Ctx } from "../auth/context";
@@ -14,16 +16,19 @@ async function controlEvent(ctx: Ctx, kind: string, target_kind: string, target_
 
 export const chatConversations = defineVerb({
   name: "chat.conversations", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "List the channels you can read, with each one's head and your read cursor.",
+  summary: "List authorized channels, direct chats and groups, with fixed private membership, heads and your read cursors.",
+  mcp: { scope: "read", destructive: false, title: "List chats", render: chatCommandText, input: { type: "object", properties: {}, additionalProperties: false } },
   parse: () => ({}),
   run: async (ctx) => {
     const v = viewerOf(ctx);
     const chans = await readableChannels(ctx.db, v, "active");
     const cursors = await inboxStub(ctx.env, v.tenant.id, v.identity.id).cursors(v.tenant.id, v.identity.id);
+    // Private participants receive handles at creation; discovery need not assign unrelated/new member handles.
+    const dir = chans.some(c => c.members) ? await people(ctx.db, v.tenant.id, false) : new Map();
     const heads = await Promise.all(chans.map((c) => conversationStub(ctx.env, v.tenant.id, c.project_id).head(v.tenant.id, c.project_id)));
     return {
       conversations: chans.map((c, i) => ({
-        channel: c.slug, display_name: c.display_name, topic: c.topic, agent_policy: c.agent_policy, head: heads[i]!, read_seq: cursors[c.project_id] ?? 0,
+        id: c.project_id, kind: c.kind ?? "channel", ...(c.members ? { members: c.members } : {}), channel: c.slug, display_name: c.members ? c.members.map(id => `@${dir.get(id)?.handle ?? "unknown"}`).join(", ") : c.display_name, topic: c.topic, agent_policy: c.agent_policy, head: heads[i]!, read_seq: cursors[c.project_id] ?? 0,
       })),
     };
   },

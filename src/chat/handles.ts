@@ -61,8 +61,8 @@ export async function ensureHandles(db: D1Database, tenant_id: string): Promise<
 export type Person = { identity_id: string; kind: "human" | "agent"; display_name: string; handle: string; operator_id: string | null; active: boolean };
 
 /** Every member of the tenant, current or former, by identity id (a tenant holds about 20 identities: spec 1). */
-export async function people(db: D1Database, tenant_id: string): Promise<Map<string, Person>> {
-  await ensureHandles(db, tenant_id);
+export async function people(db: D1Database, tenant_id: string, assignHandles = true): Promise<Map<string, Person>> {
+  if (assignHandles) await ensureHandles(db, tenant_id);
   const r = await db.prepare(
     `SELECT i.id, i.kind, i.display_name, i.operator_id, i.state AS i_state, m.state AS m_state, m.handle
        FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ?`,

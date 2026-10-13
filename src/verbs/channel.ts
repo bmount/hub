@@ -18,7 +18,12 @@ async function channelEvent(ctx: Ctx, kind: string, ch: ChannelRow, summary: str
   }, ctx.now);
 }
 
+function publicChannel(ch: ChannelRow): void {
+  if (ch.kind === "direct" || ch.kind === "group") throw forbidden("private chat membership and settings are fixed");
+}
+
 function writable(ch: ChannelRow): void {
+  publicChannel(ch);
   if (ch.state !== "active") throw conflict("channel is archived");
 }
 
@@ -51,6 +56,7 @@ export const channelSetTopic = defineVerb({
 async function agentMembership(ctx: Ctx, c: string, name: string, add: boolean) {
   const { identity } = requireHuman(ctx);
   const ch = await readableChannel(ctx, c);
+  publicChannel(ch);
   // Removal stays possible on archived channels and for archived agents, so nobody is left stuck as a member.
   if (add) writable(ch);
   const agent = await agentInTenant(ctx, name, !add);
@@ -100,6 +106,7 @@ export const channelSetAgentPolicy = defineVerb({
 
 async function setState(ctx: Ctx, c: string, state: "active" | "archived") {
   const ch = await readableChannel(ctx, c);
+  publicChannel(ch);
   if (!(await setChannelState(ctx.db, ch.tenant_id, ch.project_id, state))) throw conflict(`channel already ${state}`);
   await channelEvent(ctx, state === "archived" ? "channel.archive" : "channel.unarchive", ch, `${state === "archived" ? "Archived" : "Unarchived"} #${ch.slug}`);
   return { channel: ch.slug, state };

@@ -1,3 +1,4 @@
+import { ulid } from "../ids";
 import { sameOrigin } from "./login";
 import { ASSETS } from "../assets";
 import type { Env } from "../env";
@@ -46,7 +47,7 @@ function errorPage(e: unknown, extra: Extra): Response {
   return htmlResponse(page("Error", "<h1>Something went wrong</h1>"), 500, extra);
 }
 
-type Conversation = { channel: string; display_name: string; topic: string; head: number; read_seq: number };
+type Conversation = { kind?: "channel" | "direct" | "group"; members?: string[]; channel: string; display_name: string; topic: string; head: number; read_seq: number };
 
 async function conversations(ctx: Ctx): Promise<Conversation[]> {
   const r = await verb<{ conversations: Conversation[] }>(ctx, "chat.conversations", {});
@@ -55,7 +56,7 @@ async function conversations(ctx: Ctx): Promise<Conversation[]> {
 
 function channelLink(c: Conversation, active = ""): string {
   const unread = c.head > c.read_seq;
-  return `<li class="${unread ? "is-unread" : ""}"><a href="/c/${esc(c.channel)}"${active === c.channel ? ' aria-current="page"' : ""}>#${esc(c.channel)}${unread ? ' <span class="pill">Unread</span>' : ""}</a></li>`;
+  return `<li class="${unread ? "is-unread" : ""}"><a href="/c/${esc(c.channel)}"${active === c.channel ? ' aria-current="page"' : ""}>${c.kind === "direct" || c.kind === "group" ? `${esc(c.display_name)} (${c.kind})` : `#${esc(c.channel)}`}${unread ? ' <span class="pill">Unread</span>' : ""}</a></li>`;
 }
 
 /** Only chat.conversations supplies discovery and rail data; no unfiltered project queries. */
@@ -127,13 +128,14 @@ export async function channelsPage(request: Request, env: Env): Promise<Response
     const channels = await conversations(pc.ctx);
     const q = (new URL(request.url).searchParams.get("q") ?? "").slice(0, 100);
     const matches = channels.filter((c) => `${c.channel} ${c.display_name} ${c.topic}`.toLowerCase().includes(q.toLowerCase()));
-    const rows = matches.map((c) => `<li class="card"><h3><a href="/c/${esc(c.channel)}">#${esc(c.channel)}</a>${c.head > c.read_seq ? ' <span class="pill">Unread</span>' : ""}</h3><p>${esc(c.display_name)}</p><p>${esc(c.topic)}</p></li>`).join("");
+    const rows = matches.map((c) => `<li class="card"><h3><a href="/c/${esc(c.channel)}">${c.kind === "direct" || c.kind === "group" ? `${esc(c.display_name)} (${c.kind})` : `#${esc(c.channel)}`}</a>${c.head > c.read_seq ? ' <span class="pill">Unread</span>' : ""}</h3><p>${esc(c.display_name)}</p><p>${esc(c.topic)}</p></li>`).join("");
     const search = `<form class="filters" method="get" action="/c"><label for="channel-query">Find a channel</label><input id="channel-query" name="q" maxlength="100" value="${esc(q)}"><button type="submit">Find</button></form>`;
     const forms = rank(pc.ctx.role) >= rank("member") ? `<details class="edit"><summary>Manage channels</summary><h2>New channel</h2><p>Channels are readable by organization members. Agents need explicit access.</p><form method="post" action="/api/channel.create"><input type="hidden" name="_back" value="/c">`
       + `<label>Channel name <input name="slug" maxlength="63" placeholder="name" required></label> <button type="submit">Create</button></form>`
       + `<h2>Add an agent you operate</h2><form method="post" action="/api/channel.add_agent"><input type="hidden" name="_back" value="/c">`
       + `<label>Channel <input name="c" required></label> <label>Agent <input name="agent" required></label> <button type="submit">Add</button></form></details>` : "";
-    const content = `<h1>Channels</h1><p class="lede">Discover conversations you can read in this organization.</p>${search}<ul class="channel-directory grid">${rows || "<li>No matching active channels.</li>"}</ul>${forms}`;
+    const privateForm = rank(pc.ctx.role) >= rank("member") ? `<h2>New private chat</h2><p>Only participants can read a direct chat or group. Membership is fixed; groups have at most 20 participants, including you.</p><form method="post" action="/api/chat.open"><input type="hidden" name="_back" value="@result"><input type="hidden" name="client_id" value="${ulid()}"><label>Kind <select name="kind"><option value="direct">Direct chat</option><option value="group">Group chat</option></select></label><label>Participants <input name="members" required placeholder="@brian, @pio" maxlength="1280"></label><button type="submit">Open chat</button></form>` : "";
+    const content = `<h1>Chat</h1><p class="lede">Discover conversations you can read in this organization.</p>${search}<ul class="channel-directory grid">${rows || "<li>No matching active channels.</li>"}</ul>${privateForm}${forms}`;
     return htmlResponse(page("Chat", workspace(channels, "", content), shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {
     return errorPage(e, pc.extra);
@@ -153,7 +155,7 @@ export async function channelPage(request: Request, env: Env, slug: string, draf
     const hasUnreadMessages = current && r.messages.some((m) => m.seq > current.read_seq);
     const unreadLink = hasUnreadMessages ? ' <a class="chip" href="#unread">Jump to new messages on this page</a>' : "";
     const partial = `<p class="lede">${r.next_before !== null ? "This is a partial channel view. Older messages may also be unread. " : ""}The channel shows top-level messages; open threads to read replies. Marking the channel read acknowledges all activity through the displayed head, including activity not shown here.</p>`;
-    const body = `<header class="channel-header"><h1>#${esc(r.channel)}</h1><p class="lede">${esc(current?.topic ?? "")}</p><a class="chip" href="/c/${esc(r.channel)}">Refresh</a>${unreadLink} ${markRead(r.channel, r.head, `/c/${r.channel}`)}</header>${presencePanel(r.channel, channels)}${partial}${older}`
+    const body = `<header class="channel-header"><h1>${esc(current?.kind === "direct" || current?.kind === "group" ? `${current.display_name} (${current.kind})` : `#${r.channel}`)}</h1><p class="lede">${esc(current?.topic ?? "")}</p><a class="chip" href="/c/${esc(r.channel)}">Refresh</a>${unreadLink} ${markRead(r.channel, r.head, `/c/${r.channel}`)}</header>${presencePanel(r.channel, channels)}${partial}${older}`
       + `<div class="channel-messages">${channelMessages(r.channel, r.messages, current?.read_seq) || '<p class="lede">No messages yet. Start a conversation.</p>'}</div>`
       + (rank(pc.ctx.role) >= rank("member") ? compose(`/c/${r.channel}`, r.head, draft, notice, "Post") : '<p class="lede">You have read-only access.</p>');
     return htmlResponse(page(`#${r.channel}`, workspace(channels, r.channel, body), shellFor(pc.ctx, env, "chat")), 200, pc.extra);

@@ -25,7 +25,7 @@ export const chatRead = defineVerb({
   name: "chat.read", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
   summary: "Read a channel: newest messages, or current changes after an activity cursor at most the authorized channel head. Future cursors are refused, not an empty evidence range. Reply edits/retractions count as root activity, but replies remain collapsed; use chat_thread for original evidence. Reads do not acknowledge or prove processing.",
   mcp: {
-    scope: "read", destructive: false, title: "Read a channel", render: chatText,
+    scope: "read", destructive: false, title: "Read a channel", auditKeysOnly: true, render: chatText,
     input: schema({
       c: C, after: { type: "integer", minimum: 0, description: "Only current root/thread changes after this activity seq, at most the authorized channel head. Includes reply edits/retractions; fetch chat_thread before processing. Continue with next_after, not a guessed future cursor." },
       before: { type: "integer", minimum: 1, description: "Page back: messages numbered below this." },
@@ -51,7 +51,7 @@ export const chatThread = defineVerb({
   name: "chat.thread", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
   summary: "Read one thread in oldest current-activity order: root context plus bounded replies. Continue with next_after, not head; context never advances the reply cursor. The named message is full if included in this page. Reads do not acknowledge or prove processing.",
   mcp: {
-    scope: "read", destructive: false, title: "Read a thread", render: chatText,
+    scope: "read", destructive: false, title: "Read a thread", auditKeysOnly: true, render: chatText,
     input: schema({ c: C, msg: MSG, after: { type: "integer", minimum: 0, description: "Only replies with current activity after this seq (at most the channel head). Continue using next_after, not head or the repeated root." }, budget: BUDGET }, ["c", "msg"]),
   },
   parse: (i) => ({ c: channelParam(i), msg: msgParam(i, "msg", true), after: afterParam(i), budget: budgetParam(i) }),
@@ -268,7 +268,7 @@ export const chatMarkRead = defineVerb({
   name: "chat.mark_read", kind: "command", scope: "tenant", minRole: "reader", freshProofMinutes: null,
   summary: "Move your durable read cursor in an authorized channel forward to seq (it never moves back). Future sequences above the current channel head are refused. Explicitly mark only processed activity; reads do not move cursors.",
   mcp: {
-    scope: "write", destructive: false, title: "Mark channel activity read", render: chatCommandText,
+    scope: "write", destructive: false, title: "Mark channel activity read", auditKeysOnly: true, render: chatCommandText,
     input: schema({ c: C, seq: { type: "integer", minimum: 0, description: "Last processed activity cursor, at most the current channel head; do not skip omitted messages." } }, ["c", "seq"]),
   },
   parse: (i) => ({ c: channelParam(i), seq: optInt(i, "seq", { min: 0, max: Number.MAX_SAFE_INTEGER }) ?? 0 }),
@@ -288,7 +288,7 @@ export const refBacklinks = defineVerb({
   name: "ref.backlinks", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
   summary: "Where a commit, ticket, session, or message was discussed, in channels you can read, newest first. Keys use message syntax: site#k7q2, site@3f9a2c1, a session id, general/412.",
   mcp: {
-    scope: "read", destructive: false, title: "Where was this discussed", render: chatText,
+    scope: "read", destructive: false, title: "Where was this discussed", auditKeysOnly: true, render: chatText,
     input: schema({
       kind: { type: "string", enum: ["commit", "ticket", "session", "msg"], description: "What the key names." },
       key: { type: "string", description: "For example site#k7q2 or site@3f9a2c1." },

@@ -8,6 +8,7 @@ import { postIntentFingerprint } from "./postIntent";
 import { responseIntent } from "./responseIntent";
 import { versionIntentFingerprint } from "./versionIntent";
 import { readableChannel } from "./access";
+import { requireContact } from "./private";
 import { parseBody, parseRefText, type ParsedBody, type ParsedRef } from "./grammar";
 import { people } from "./handles";
 import { readResult } from "./present";
@@ -46,10 +47,21 @@ async function gate(ctx: Ctx, ch: ChannelRow, author: Author, retract = false): 
     if (!retract && controls.muted.includes(author.id)) throw new HubError(403, "muted", "this agent is muted");
     if (!retract && ch.agent_policy === "muted") throw new HubError(403, "muted", "this channel takes no agent posts");
   }
+  let private_members: Mention[] | undefined;
+  if (ch.kind === "direct" || ch.kind === "group") {
+    const dir = await people(ctx.db, ch.tenant_id);
+    private_members = ch.members!.flatMap(id => {
+      const person = dir.get(id);
+      return person?.active ? [{ identity_id: id, kind: person.kind }] : [];
+    });
+    if (author.kind === "agent" && !retract) {
+      for (const member of private_members) if (member.identity_id !== author.id) await requireContact(ctx, member.identity_id);
+    }
+  }
   const operators: Record<string, string> = {};
   for (const m of members) if (m.operator_id) operators[m.identity_id] = m.operator_id;
   return {
-    audience: { agent_members: members.map((m) => m.identity_id), operators, muted_agents: controls.muted, agents_enabled: controls.agents_enabled },
+    audience: { private_members, agent_members: members.map((m) => m.identity_id), operators, muted_agents: controls.muted, agents_enabled: controls.agents_enabled },
     policy: ch.agent_policy,
   };
 }
@@ -159,6 +171,8 @@ async function events(ctx: Ctx, ch: ChannelRow, author: Author, o: PostOk, kind:
 
 /** The message is committed by now: a failed event write is logged (name only, never text) and must not turn the success into a 500. */
 async function safeEvents(ctx: Ctx, ch: ChannelRow, author: Author, o: PostOk, kind: "chat.post" | "chat.edit" | "chat.retract"): Promise<void> {
+  // Organization-wide event feeds must not disclose private conversation/message identifiers.
+  if (ch.kind === "direct" || ch.kind === "group") return;
   try {
     await events(ctx, ch, author, o, kind);
   } catch (e) {

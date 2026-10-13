@@ -112,7 +112,7 @@ export const messageSearch = defineVerb({
   name: "message.search", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
   summary: "Find messages in the conversations you can read. Every word must appear; newest first.",
   mcp: {
-    scope: "read", destructive: false, title: "Search conversations",
+    scope: "read", destructive: false, title: "Search conversations", auditKeysOnly: true,
     input: { type: "object", properties: { q: { type: "string", description: "Words to find" }, c: { type: "string", description: "Limit to a channel" } }, required: ["q"], additionalProperties: false },
     render: (r) => { const x = (r as { hits: Hit[] }).hits; return [DATA_NOTE, NOTE, "", `**${x.length} messages**`, ...x.map((h) => `- ${h.ref} ${cleanText(h.title)}: ${cleanText(h.snippet)}`)].join("\n"); },
   },

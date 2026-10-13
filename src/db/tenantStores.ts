@@ -3,6 +3,7 @@ import type { Tenant } from "./types";
 import { conflict, HubError } from "../errors";
 import { ArtifactsRest, artifactNamespace } from "../code/artifactsRest";
 import { repoOwnership } from "../code/artifactPush";
+import { privateChats } from "./privateChat";
 import { conversationStub, inboxStub } from "../chat/stubs";
 
 /** Purge external stores before D1. Failures leave an archived organization retryable. */
@@ -26,6 +27,7 @@ export async function purgeTenantStores(ctx: Ctx, tenant: Tenant): Promise<void>
   }
   for (const repo of repos) if (repo.mapped) await api().deleteProject(ns, repo.slug, repoOwnership(tid, repo.id));
   const channels = (await db.prepare("SELECT project_id AS id FROM channel WHERE tenant_id = ?").bind(tid).all<{ id: string }>()).results.map(r => r.id);
+  channels.push(...(await privateChats(db, tid)).map(c => c.project_id));
   for (const id of channels) await conversationStub(ctx.env, tid, id).purge(tid, id);
   const identities = (await db.prepare("SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?")
     .bind(tid, tid).all<{ identity_id: string }>()).results;

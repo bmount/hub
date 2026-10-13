@@ -1,4 +1,5 @@
 import { ulid } from "../ids";
+import { privateChat } from "./privateChat";
 import { badRequest, conflict } from "../errors";
 import { isValidSlug } from "../tenant";
 import type { State } from "./types";
@@ -7,6 +8,7 @@ import type { AgentPolicy } from "../chat/types";
 /** A channel is a top-level project of kind `channel` plus its `channel` row (messaging spec 4.1). */
 export type ChannelRow = {
   project_id: string; tenant_id: string; slug: string; display_name: string; state: State;
+  kind?: "channel" | "direct" | "group"; members?: string[];
   topic: string; agent_policy: AgentPolicy; created_by: string; created_at: number;
 };
 
@@ -21,6 +23,7 @@ export async function createChannel(
   db: D1Database, input: { tenant_id: string; slug: string; display_name: string; topic: string; created_by: string; owner_project_id?: string }, now: number,
 ): Promise<ChannelRow> {
   const slug = input.slug.trim().toLowerCase();
+  if (/^(dm|group)-/.test(slug)) throw badRequest("name is reserved for private chats");
   if (!isValidSlug(slug)) throw badRequest("invalid channel name");
   if (input.topic.length > TOPIC_MAX) throw badRequest("topic is too long");
   const display_name = input.display_name.trim() || slug;
@@ -43,17 +46,31 @@ export async function createChannel(
   return { project_id: id, tenant_id: input.tenant_id, slug, display_name, state: "active", topic: input.topic, agent_policy: "open", created_by: input.created_by, created_at: now };
 }
 
-export function getChannelBySlug(db: D1Database, tenant_id: string, slug: string): Promise<ChannelRow | null> {
+export async function getChannelBySlug(db: D1Database, tenant_id: string, slug: string): Promise<ChannelRow | null> {
+  const privateRow = await privateChat(db, tenant_id, slug.trim().toLowerCase());
+  if (privateRow) return privateRow;
   return db.prepare(`${SELECT} WHERE p.tenant_id = ? AND p.namespace_id IS NULL AND p.slug = ?`).bind(tenant_id, slug.trim().toLowerCase()).first<ChannelRow>();
 }
 
-export function getChannelById(db: D1Database, tenant_id: string, id: string): Promise<ChannelRow | null> {
+export async function getChannelById(db: D1Database, tenant_id: string, id: string): Promise<ChannelRow | null> {
+  const privateRow = await privateChat(db, tenant_id, id);
+  if (privateRow) return privateRow;
   return db.prepare(`${SELECT} WHERE p.tenant_id = ? AND p.id = ?`).bind(tenant_id, id).first<ChannelRow>();
 }
 
-export async function listChannels(db: D1Database, tenant_id: string, state: State): Promise<ChannelRow[]> {
-  const r = await db.prepare(`${SELECT} WHERE p.tenant_id = ? AND p.state = ? ORDER BY p.slug`).bind(tenant_id, state).all<ChannelRow>();
-  return r.results;
+/** Optional viewer predicates keep private discovery participant-only and within one D1 round trip. */
+export async function listChannels(db: D1Database, tenant_id: string, state: State, viewer?: { identity_id: string; human: boolean }): Promise<ChannelRow[]> {
+  const [channels, privateRows] = await db.batch<Record<string, unknown>>([
+    db.prepare(`${SELECT} WHERE p.tenant_id = ? AND p.state = ? ${viewer && !viewer.human ? "AND EXISTS (SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = p.tenant_id AND cm.conversation_id = p.id AND cm.identity_id = ? AND cm.removed_at IS NULL)" : ""} ORDER BY p.slug`)
+      .bind(tenant_id, state, ...(viewer && !viewer.human ? [viewer.identity_id] : [])),
+    db.prepare(`SELECT value FROM meta WHERE key GLOB ? ${viewer ? `AND EXISTS (
+      SELECT 1 FROM conversation_member cm JOIN membership m ON m.tenant_id = cm.tenant_id AND m.identity_id = cm.identity_id
+      JOIN identity i ON i.id = cm.identity_id WHERE cm.tenant_id = ? AND cm.conversation_id = json_extract(meta.value, '$.project_id')
+      AND cm.identity_id = ? AND cm.removed_at IS NULL AND m.state = 'active' AND i.state = 'active'
+      AND EXISTS (SELECT 1 FROM json_each(meta.value, '$.members') WHERE value = cm.identity_id))` : ""} ORDER BY key`)
+      .bind(state === "active" ? `private_chat:v1:${tenant_id}:*` : "private_chat:none", ...(viewer ? [tenant_id, viewer.identity_id] : [])),
+  ]);
+  return [...channels!.results as ChannelRow[], ...privateRows!.results.map(r => JSON.parse(r.value as string) as ChannelRow)];
 }
 
 export async function setChannelTopic(db: D1Database, tenant_id: string, id: string, topic: string): Promise<void> {
@@ -93,7 +110,8 @@ export async function removeAgentMember(db: D1Database, tenant_id: string, conve
 export async function listAgentMembers(db: D1Database, tenant_id: string, conversation_id: string): Promise<Array<{ identity_id: string; operator_id: string | null }>> {
   const r = await db.prepare(
     `SELECT cm.identity_id, i.operator_id FROM conversation_member cm JOIN identity i ON i.id = cm.identity_id
-      WHERE cm.tenant_id = ? AND cm.conversation_id = ? AND cm.removed_at IS NULL AND i.state = 'active' ORDER BY cm.added_at, cm.identity_id`,
+      WHERE cm.tenant_id = ? AND cm.conversation_id = ? AND cm.removed_at IS NULL AND i.state = 'active' AND i.kind = 'agent'
+        AND EXISTS (SELECT 1 FROM membership m WHERE m.tenant_id = cm.tenant_id AND m.identity_id = i.id AND m.state = 'active') ORDER BY cm.added_at, cm.identity_id`,
   ).bind(tenant_id, conversation_id).all<{ identity_id: string; operator_id: string | null }>();
   return r.results;
 }

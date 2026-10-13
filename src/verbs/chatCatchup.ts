@@ -8,7 +8,7 @@ import { LIMITS } from "../chat/rules";
 export const chatCatchup = defineVerb({
   name: "chat.catchup", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
   summary: "What happened since your read cursors, across every channel you can read, within a token budget: messages for you first, then your threads, then each channel. Pass next as since to continue.",
-  mcp: {
+  mcp: { auditKeysOnly: true,
     scope: "read", destructive: false, title: "Catch up", render: chatText,
     input: {
       type: "object",

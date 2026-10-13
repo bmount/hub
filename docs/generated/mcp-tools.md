@@ -16,10 +16,12 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `attention_list` | read | reader | no | Implemented | `include_done` |
 | `capabilities` | read | public | no | Implemented | — |
 | `chat_catchup` | read | reader | no | Implemented | `budget`, `scope`, `since` |
+| `chat_conversations` | read | reader | no | Implemented | — |
 | `chat_heartbeat` | write | reader | no | Implemented | **`c`**, **`status`** |
 | `chat_history` | read | reader | no | Implemented | `after_rev`, **`c`**, `limit`, **`msg`** |
 | `chat_inbox` | read | reader | no | Implemented | `after`, `limit` |
 | `chat_mark_read` | write | reader | no | Implemented | **`c`**, **`seq`** |
+| `chat_open` | write | member | no | Implemented | **`client_id`**, **`kind`**, **`members`** |
 | `chat_post` | write | member | no | Implemented | **`after`**, **`body`**, **`c`**, **`idempotency_key`**, `reply_to`, `response_to` |
 | `chat_post_status` | read | reader | no | Implemented | **`c`**, **`idempotency_key`**, `intent` |
 | `chat_presence` | read | reader | no | Implemented | **`c`** |

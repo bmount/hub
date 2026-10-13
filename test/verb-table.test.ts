@@ -136,7 +136,8 @@ const TABLE: Record<string, Decl> = {
   "inbox.ack_status": T("tenant", "reader", null, { mcp: "read" }),
   "inbox.wait": T("tenant", "reader", null), "inbox.ack": T("tenant", "reader", null, { mcp: "write" }), "chat.mark_read": T("tenant", "reader", null, { mcp: "write" }),
   "ref.backlinks": T("tenant", "reader", null, { mcp: "read" }),
-  "chat.conversations": T("tenant", "reader", null),
+  "chat.conversations": T("tenant", "reader", null, { mcp: "read" }),
+  "chat.open": T("tenant", "member", null, { mcp: "write" }),
   "chat.heartbeat": T("tenant", "reader", null, { mcp: "write" }), "chat.presence": T("tenant", "reader", null, { mcp: "read" }),
   "chat.agent_mute": T("tenant", "reader", null), "chat.agent_unmute": T("tenant", "member", 60, { humanOnly: true }),
   "chat.agents_disable": T("tenant", "admin", null), "chat.agents_enable": T("tenant", "admin", 60),
@@ -233,7 +234,7 @@ describe("verb table", () => {
       idempotency_key: "k", refs: [], state: "active", prefix: false,
     };
     // Where one name means different things to different verbs.
-    const OVERRIDE: Record<string, Record<string, unknown>> = { "chat.post": { kind: "say" }, "chat.heartbeat": { status: "online" }, "chat.history": { limit: 2 },
+    const OVERRIDE: Record<string, Record<string, unknown>> = { "chat.open": { kind: "direct", members: ["dev"], client_id: "open-chat" }, "chat.post": { kind: "say" }, "chat.heartbeat": { status: "online" }, "chat.history": { limit: 2 },
       "chat.run_claim": { source: { msg_id: "01M4FAKTZN5K8R70YEK82B5S8S", rev: 1, author_id: "01M4AF980SG4A68Q7VNA21WX92" }, run_key: "stable-run" } };
     const AUTHORISH = ["author", "author_id", "as", "identity", "identity_id", "display_name_override", "session_id", "name_tag", "via", "by", "handle", "avatar", "on_behalf_of"];
     const planted = Object.fromEntries(AUTHORISH.map((k) => [k, "01PLANTED0000000000000000000"]));

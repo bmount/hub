@@ -17,7 +17,7 @@ describe("channels", () => {
     const forHuman = (await ok(reader.token, "chat.conversations")).conversations.map((c: { channel: string }) => c.channel);
     expect(forHuman).toEqual(["general", "ops"]);
     const forAgent = await ok(w.scout.token, "chat.conversations");
-    expect(forAgent.conversations).toEqual([{ channel: "general", display_name: "general", topic: "daily", agent_policy: "open", head: 0, read_seq: 0 }]);
+    expect(forAgent.conversations).toEqual([{ id: expect.any(String), kind: "channel", channel: "general", display_name: "general", topic: "daily", agent_policy: "open", head: 0, read_seq: 0 }]);
     expect((await ok(w.tidy.token, "chat.conversations")).conversations).toEqual([]);
     await ok(w.lead.token, "channel.remove_agent", { c: "general", agent: "scout" });
     expect((await ok(w.scout.token, "chat.conversations")).conversations).toEqual([]);

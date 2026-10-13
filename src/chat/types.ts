@@ -13,7 +13,8 @@ export type Author = { id: string; kind: "human" | "agent"; session_id: string; 
 export type Mention = { identity_id: string; kind: "human" | "agent" };
 
 /** What the Worker read from D1 for this command; the Conversation trusts it (spec 9.3: D1 is the truth). */
-export type Audience = { agent_members: string[]; operators: Record<string, string>; muted_agents: string[]; agents_enabled: boolean };
+export type Audience = {
+  private_members?: Mention[]; agent_members: string[]; operators: Record<string, string>; muted_agents: string[]; agents_enabled: boolean };
 
 /** Exact source evidence, not a grant of execution authority. */
 export type ResponseSource = { msg_id: string; rev: number; author_id: string };
