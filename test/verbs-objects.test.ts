@@ -7,10 +7,12 @@ import { buildContext } from "../src/auth/context";
 import { callTool } from "../src/mcp/tools";
 import { wikiMarkdown } from "../src/http/wikiPages";
 import type { Conversation } from "../src/chat/conversationDO";
+import type { ChatUpdate } from "../src/chat/updates";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
 import { projectDelete, projectCreate } from "../src/verbs/project";
 import { ArtifactsRest } from "../src/code/artifactsRest";
 import { vi } from "vitest";
+import { PROJECT_DELETE_SCOPED_TABLES, PROJECT_DELETE_OTHER_TABLES } from "../src/db/projectDelete";
 
 describe("tenant verbs", () => {
   it("root creates, lists, archives and unarchives a tenant from the apex", async () => {
@@ -204,6 +206,53 @@ describe("project deletion from the web", () => {
     return { tenant, blue, admin, member, bot, host, headers, post, form, get, count, project };
   }
 
+  it("covers every D1 table with a project_id column, or a reasoned exemption", async () => {
+    // Cloudflare's private _cf_ tables are inaccessible and contain platform metadata, not project content.
+    const tables = (await env.HUB_DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 4) <> '_cf_'").all<{ name: string }>()).results;
+    const covered = new Set<string>([...PROJECT_DELETE_SCOPED_TABLES, ...PROJECT_DELETE_OTHER_TABLES]);
+    const exempt: Record<string, string> = {}; // No project-bearing tables are currently exempt.
+    for (const { name } of tables) {
+      const columns = (await env.HUB_DB.prepare("SELECT name FROM pragma_table_info(?)").bind(name).all<{ name: string }>()).results;
+      if (columns.some(c => c.name === "project_id")) {
+        expect(covered.has(name) || !!exempt[name]?.trim(), `uncovered project table: ${name}`).toBe(true);
+      }
+    }
+  });
+
+  it("rolls back an impossible D1 cascade before purging conversations, inboxes, R2 or Artifacts", async () => {
+    const w = await world(), db = env.HUB_DB;
+    expect((await w.post("chat.post", { c: "gone-team", body: "Still intact" })).status).toBe(200);
+    expect((await w.post("file.put", { project: "gone", path: "safe.txt", content_type: "text/plain", base64: btoa("safe"), expected_revision: 0 })).status).toBe(200);
+    await w.post("project.archive", { slug: "gone" });
+    const ch = await db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'gone-team'").bind(w.tenant.id).first<{ id: string }>();
+    const inbox = inboxStub(env, w.tenant.id, w.admin.identity.id);
+    const before = await inbox.getUpdates(w.tenant.id, w.admin.identity.id, 0, 100, 0);
+    const objects = await env.GIT_PUSH_STAGING!.list({ prefix: `project-files/${w.tenant.id}/${w.project.id}/` });
+    // Emulate a future feature whose FK is absent from the deletion rules.
+    await db.prepare("CREATE TABLE deletion_blocker (project_id TEXT REFERENCES project(id))").run();
+    const artifacts = vi.spyOn(ArtifactsRest.prototype, "deleteProject");
+    try {
+      await db.prepare("INSERT INTO deletion_blocker VALUES (?)").bind(w.project.id).run();
+      expect((await w.post("project.delete", { slug: "gone", confirm: "gone" })).status).toBe(500);
+      expect(await w.count("project", "id", w.project.id)).toBe(1);
+      expect(await w.count("file_revision", "project_id", w.project.id)).toBe(1);
+      expect(await w.count("channel", "project_id", ch!.id)).toBe(1);
+      expect(await w.count("msg_index", "conversation_id", ch!.id)).toBe(1);
+      expect(await runInDurableObject(conversationStub(env, w.tenant.id, ch!.id), async (_, state) => ({
+        deleted: state.storage.sql.exec("SELECT key FROM meta WHERE key = 'deleted'").toArray(),
+        messages: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM artifact").one().n,
+      }))).toEqual({ deleted: [], messages: 1 });
+      expect(await inbox.getUpdates(w.tenant.id, w.admin.identity.id, 0, 100, 0)).toEqual(before);
+      expect((await env.GIT_PUSH_STAGING!.list({ prefix: `project-files/${w.tenant.id}/${w.project.id}/` })).objects).toEqual(objects.objects);
+      expect(artifacts).not.toHaveBeenCalled();
+      expect((await db.prepare("SELECT 1 FROM event WHERE kind = 'project.delete'").all()).results).toEqual([]);
+    } finally {
+      artifacts.mockRestore();
+      await db.prepare("DROP TABLE deletion_blocker").run();
+    }
+    expect((await w.post("project.delete", { slug: "gone", confirm: "gone" })).status).toBe(200);
+  });
+
   it("creates, archives and confirms deletion with web forms; purges content, channels, objects and indexes without touching siblings or other tenants", async () => {
     const w = await world(), db = env.HUB_DB;
     expect(await w.get("/")).toContain('action="/api/project.archive"');
@@ -233,6 +282,7 @@ describe("project deletion from the web", () => {
     await db.prepare(`INSERT INTO outbound_mail (id, tenant_id, from_address, to_address, subject, text, in_reply_to, sent_by, status, created_at) VALUES ('out', ?, 'acme@pimwell.test', 'sender@example.com', 'Re', 'Reply', ?, ?, 'sent', ?)`).bind(w.tenant.id, mailId, w.admin.identity.id, Date.now()).run();
     for (const [key, value] of [
       [`mail_response_recipients:v1:${w.tenant.id}:${w.project.id}`, "{}"],
+      [`mail_actions:v1:${w.tenant.id}:${mailId}`, '{"status":"complete"}'],
       [`mail_response_intent:v1:${w.tenant.id}:${mailId}:${w.admin.identity.id}`, "{}"],
       [`mail_replay:v1:${w.tenant.id}:hash`, JSON.stringify({ mail_id: mailId })],
       [`review_request:v1:${w.tenant.id}:caller:key`, JSON.stringify({ result: { review: { project_id: w.project.id } } })],
@@ -246,7 +296,24 @@ describe("project deletion from the web", () => {
     await env.GIT_PUSH_STAGING!.put(orphan, "orphan bytes");
     // Seed every project-bearing subsystem, including child tables with no project column.
     const now = Date.now();
+    const privateChats = [];
+    for (const kind of ["direct", "group"]) {
+      const opened = await w.post("chat.open", { kind, members: [w.member.identity.id], client_id: `delete-check-${kind}` });
+      expect(opened.status).toBe(200);
+      const chat = (await opened.json() as any).result;
+      privateChats.push(chat);
+      expect((await w.post("chat.post", { c: chat.channel, body: "Keep private message" })).status).toBe(200);
+    }
+    const privateSnapshot = (await db.prepare("SELECT * FROM meta WHERE key GLOB ? OR key GLOB ?").bind(`private_chat:v1:${w.tenant.id}:*`, `private_open:v1:${w.tenant.id}:*`).all()).results;
     for (const p of [w.project, keep]) {
+      for (const [id, kind] of [["person", "person"], ["company", "company"]]) {
+        await db.prepare("INSERT INTO contact_entity (tenant_id, project_id, id, kind, name, data, updated_at) VALUES (?, ?, ?, ?, ?, '{}', ?)").bind(w.tenant.id, p.id, id!, kind!, id!, now).run();
+      }
+      await db.prepare("INSERT INTO contact_connection (tenant_id, project_id, id, a, b, type, source, date) VALUES (?, ?, 'connection', 'person', 'company', 'CEO', 'test', '2026-10-13')").bind(w.tenant.id, p.id).run();
+      await db.prepare("INSERT INTO contact_link (tenant_id, project_id, entity_id, kind, ref) VALUES (?, ?, 'person', 'file', 'a.txt')").bind(w.tenant.id, p.id).run();
+      for (const mode of ["share", "dispatch"]) {
+        await db.prepare("INSERT INTO document_delivery (id, tenant_id, project_id, document_kind, document_ref, revision, recipient, sent_by, mode, status, created_at) VALUES (?, ?, ?, 'file', 'a.txt', 1, ?, ?, ?, 'sent', ?)").bind(`${mode}-${p.id}`, w.tenant.id, p.id, w.member.identity.id, w.admin.identity.id, mode, now).run();
+      }
       await db.prepare("INSERT INTO review (id, tenant_id, project_id, number, branch, base, title, status, author_id, created_at, updated_at) VALUES (?, ?, ?, 1, 'feature', 'main', 'Review', 'open', ?, ?, ?)").bind(`review-${p.id}`, w.tenant.id, p.id, w.admin.identity.id, now, now).run();
       await db.prepare("INSERT INTO review_reviewer (review_id, identity_id) VALUES (?, ?)").bind(`review-${p.id}`, w.member.identity.id).run();
       await db.prepare("INSERT INTO review_comment (id, review_id, tenant_id, author_id, body, created_at) VALUES (?, ?, ?, ?, 'private review comment', ?)").bind(`comment-${p.id}`, `review-${p.id}`, w.tenant.id, w.member.identity.id, now).run();
@@ -272,12 +339,20 @@ describe("project deletion from the web", () => {
     const res = await w.form("project.delete", { slug: "gone", confirm: "gone", _back: "@result" });
     expect(res.status, await res.clone().text()).toBe(303);
     expect(res.headers.get("location")).toBe("/archive");
-    for (const table of ["project", "work_item", "wiki_revision", "file_revision", "file_upload", "inbound_mail", "channel", "review", "app_source", "app_deploy", "app_error_group", "code_sync", "code_event", "model_call"]) {
+    for (const table of ["project", "contact_entity", "contact_connection", "contact_link", "document_delivery", "work_item", "wiki_revision", "file_revision", "file_upload", "inbound_mail", "channel", "review", "app_source", "app_deploy", "app_error_group", "code_sync", "code_event", "model_call"]) {
       expect(await w.count(table, table === "project" ? "id" : "project_id", w.project.id), table).toBe(0);
     }
     for (const table of ["work_comment", "work_link", "work_resource", "attention", "work_proposal"]) expect(await w.count(table, "item_id", item.id), table).toBe(0);
     for (const [table, column, id] of [["review_comment", "review_id", `review-${w.project.id}`], ["review_reviewer", "review_id", `review-${w.project.id}`], ["attention", "id", `attention-${w.project.id}`], ["app_event", "group_id", `group-${w.project.id}`], ["app_stat", "script_name", "script-gone"]]) expect(await w.count(table!, column!, id!), table).toBe(0);
     for (const table of ["review", "app_source", "app_deploy", "app_error_group", "code_sync", "code_event", "model_call", "file_upload"]) expect(await w.count(table, "project_id", keep.id), table).toBe(1);
+    for (const table of ["contact_entity", "document_delivery"]) expect(await w.count(table, "project_id", keep.id)).toBe(2);
+    for (const table of ["contact_connection", "contact_link"]) expect(await w.count(table, "project_id", keep.id)).toBe(1);
+    expect((await db.prepare("SELECT * FROM meta WHERE key GLOB ? OR key GLOB ?").bind(`private_chat:v1:${w.tenant.id}:*`, `private_open:v1:${w.tenant.id}:*`).all()).results).toEqual(privateSnapshot);
+    for (const chat of privateChats) {
+      expect(await w.count("conversation_member", "conversation_id", chat.id)).toBe(2);
+      expect(await w.count("msg_index", "conversation_id", chat.id)).toBe(1);
+      expect((await w.post("chat.post", { c: chat.channel, body: "Private chat still works" })).status).toBe(200);
+    }
     expect(await w.count("attention", "id", `attention-${keep.id}`)).toBe(1);
     expect(await w.count("work_dep", "prereq_id", item.id)).toBe(0);
     expect(await w.count("work_proposal_decision", "proposal_id", "proposal")).toBe(0);
@@ -296,6 +371,10 @@ describe("project deletion from the web", () => {
       try { await (instance as Conversation).notice(w.tenant.id, ch!.id, "late post", Date.now()); return "posted"; }
       catch (e) { return (e as Error).message; }
     })).toBe("conversation deleted");
+    const updates = (await inbox.getUpdates(w.tenant.id, w.admin.identity.id, 0, 100, 0) as { updates: ChatUpdate[] }).updates;
+    expect(updates.some(u => u.chat.id === ch!.id)).toBe(false);
+    for (const chat of privateChats) expect(updates.some(u => u.chat.id === chat.id)).toBe(true);
+    expect(await db.prepare("SELECT 1 FROM meta WHERE key = ?").bind(`mail_actions:v1:${w.tenant.id}:${mailId}`).first()).toBeNull();
     expect((await inbox.list(w.tenant.id, w.admin.identity.id, { after: 0, limit: 100, include_acked: true })).items.some(i => i.msg_id === mailId || i.conversation_id === ch!.id)).toBe(false);
     expect((await env.GIT_PUSH_STAGING!.list({ prefix: `project-files/${w.tenant.id}/${w.project.id}/` })).objects).toEqual([]);
     expect((await db.prepare("SELECT * FROM wiki_revision WHERE project_id IN (?, ?)").bind(keep.id, foreignProject.id).all()).results).toEqual(snapshot.results);
