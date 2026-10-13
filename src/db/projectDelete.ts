@@ -80,6 +80,7 @@ export async function deleteProject(ctx: Ctx, project: Project) {
   stmts.push(scoped(`DELETE FROM meta WHERE key IN (SELECT 'mail_actions:v1:' || ?1 || ':' || id FROM inbound_mail WHERE tenant_id = ?1 AND project_id IN (${projects}))`));
   stmts.push(scoped(`DELETE FROM meta WHERE key IN (SELECT 'mail_response_recipients:v1:' || ?1 || ':' || value FROM json_each(?2))`));
   stmts.push(scoped(`DELETE FROM meta WHERE key IN (SELECT 'project_channel:v1:' || ?1 || ':' || value FROM json_each(?2))`));
+  stmts.push(scoped(`DELETE FROM meta WHERE key IN (SELECT 'repo-provision:' || ?1 || ':' || value FROM json_each(?2))`));
   stmts.push(scoped(`DELETE FROM meta WHERE substr(key, 1, length('review_request:v1:' || ?1 || ':')) = 'review_request:v1:' || ?1 || ':' AND json_valid(value) AND json_extract(value, '$.result.review.project_id') IN (${projects})`));
   stmts.push(scoped(`DELETE FROM meta WHERE substr(key, 1, length('mail_response_intent:v1:' || ?1 || ':')) = 'mail_response_intent:v1:' || ?1 || ':' AND substr(key, length('mail_response_intent:v1:' || ?1 || ':') + 1, 26) IN (${mail})`));
   stmts.push(scoped(`DELETE FROM meta WHERE (substr(key, 1, length('mail_replay:v1:' || ?1 || ':')) = 'mail_replay:v1:' || ?1 || ':' OR substr(key, 1, length('mail_welcome:v1:' || ?1 || ':')) = 'mail_welcome:v1:' || ?1 || ':') AND json_valid(value) AND json_extract(value, '$.mail_id') IN (${mail})`));

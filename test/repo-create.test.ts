@@ -1,10 +1,12 @@
 import { env, SELF } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { projectCreate } from "../src/verbs/project";
+import type { Ctx } from "../src/auth/context";
 import { setArdiForTest } from "../src/code/ardi";
 import { apiPost, bearer, seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
-afterEach(() => setArdiForTest(null));
+afterEach(() => { setArdiForTest(null); vi.restoreAllMocks(); });
 
 const introspect = async (token: string, tenant = "acme") => (await (await SELF.fetch("https://pimwell.test/internal/introspect", {
   method: "POST", headers: { "content-type": "application/json", "x-hub-internal": "test-internal-secret" }, body: JSON.stringify({ token, tenant }),
@@ -25,6 +27,80 @@ function fakeArdi(seen: Seen[], answer: () => Response = () => Response.json({ o
 }
 
 const projects = async () => (await env.HUB_DB.prepare("SELECT slug FROM project WHERE kind != 'channel' ORDER BY slug").all<{ slug: string }>()).results.map((r) => r.slug);
+
+describe("Artifacts repository provisioning", () => {
+  async function setup() {
+    const tenant = await seedTenant("acme");
+    const human = await seedHuman("member@example.invalid", { memberships: [{ tenant_id: tenant.id, role: "member" }] });
+    const ctx: Ctx = { ip: "127.0.0.1", host: { kind: "tenant", slug: "acme" }, apiToken: null, role: "member", authKind: "bearer", staleCookie: false, db: env.HUB_DB, env: { ...env, GIT_BACKEND: "artifacts", ARDI_REPO_CREATE: "on", ARTIFACTS_ACCOUNT_ID: "0".repeat(32), ARTIFACTS_API_TOKEN: "synthetic-secret" }, tenant, identity: human.identity, session: human.session, now: Date.now() };
+    const input = { slug: "site", kind: "repo", display_name: "Site", namespace: null };
+    let owned: string | null = null, mode = "success";
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      if (init?.method === "POST") {
+        if (mode !== "refused") owned = JSON.parse(String(init.body)).description;
+        if (mode !== "success") return Response.json({ success: false, errors: [{ code: 10000, message: "synthetic-secret" }] }, { status: 503 });
+        return Response.json({ success: true, result: {} });
+      }
+      if (owned && mode === "unknown") return new Response("synthetic-secret", { status: 503 });
+      if (mode === "foreign") owned = "another tenant's repository";
+      if (!owned) return new Response("", { status: 404 });
+      return Response.json({ success: true, result: { name: "site", remote: `https://${"0".repeat(32)}.artifacts.cloudflare.net/git/acme/site.git`, description: owned, default_branch: "main" } });
+    });
+    return { ctx, input, fetch, mode(value: string) { mode = value; } };
+  }
+  it("creates an owned repo and records its mapping", async () => {
+    const s = await setup();
+    await projectCreate.run(s.ctx, s.input);
+    expect(await projects()).toEqual(["site"]);
+    expect(await env.HUB_DB.prepare("SELECT count(*) n FROM git_repository").first<number>("n")).toBe(1);
+  });
+  it("reconciles a lost create response instead of orphaning the repository", async () => {
+    const s = await setup();s.mode("lost");
+    await projectCreate.run(s.ctx, s.input);
+    expect(await projects()).toEqual(["site"]);
+    expect(s.fetch.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(1);
+  });
+  it("rolls back a confirmed refusal, exposing codes but no upstream prose", async () => {
+    const s = await setup();s.mode("refused");
+    await expect(projectCreate.run(s.ctx, s.input)).rejects.toThrow("HTTP 503; codes 10000");
+    expect(await projects()).toEqual([]);
+    expect(await env.HUB_DB.prepare("SELECT count(*) n FROM git_repository").first<number>("n")).toBe(0);
+    s.mode("success");await projectCreate.run(s.ctx, s.input);
+    expect(await projects()).toEqual(["site"]);
+  });
+  it("never adopts or overwrites a foreign storage ownership marker", async () => {
+    const s = await setup();s.mode("foreign");
+    await expect(projectCreate.run(s.ctx, s.input)).rejects.toThrow("already owned");
+    expect(await projects()).toEqual([]);
+    expect(s.fetch.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(0);
+  });
+  it("does not resume archived, deleting, or disabled pending projects", async () => {
+    const s = await setup();s.mode("unknown");
+    await expect(projectCreate.run(s.ctx, s.input)).rejects.toThrow("project retained");
+    s.mode("success");
+    s.ctx.env.ARDI_REPO_CREATE = "off";
+    await expect(projectCreate.run(s.ctx, s.input)).rejects.toThrow("disabled");
+    s.ctx.env.ARDI_REPO_CREATE = "on";
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE slug = 'site'").run();
+    await expect(projectCreate.run(s.ctx, s.input)).rejects.toThrow("archived");
+    await env.HUB_DB.prepare("UPDATE project SET state = 'active' WHERE slug = 'site'").run();
+    const id = await env.HUB_DB.prepare("SELECT id FROM project WHERE slug = 'site'").first<string>("id");
+    await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, 'deleting')").bind(`project_delete:v1:${s.ctx.tenant!.id}:${id}`).run();
+    await expect(projectCreate.run(s.ctx, s.input)).rejects.toThrow("being deleted");
+  });
+  it("retains the project ID on unknown outcomes and safely resumes the same create", async () => {
+    const s = await setup();s.mode("unknown");
+    await expect(projectCreate.run(s.ctx, s.input)).rejects.toThrow("project retained");
+    const id = await env.HUB_DB.prepare("SELECT id FROM project WHERE slug = 'site'").first<string>("id");
+    await expect(projectCreate.run(s.ctx, s.input)).rejects.toThrow();
+    expect(await env.HUB_DB.prepare("SELECT id FROM project WHERE slug = 'site'").first<string>("id")).toBe(id);
+    s.mode("success");await projectCreate.run(s.ctx, s.input);
+    expect(await env.HUB_DB.prepare("SELECT id FROM project WHERE slug = 'site'").first<string>("id")).toBe(id);
+    expect(await env.HUB_DB.prepare("SELECT count(*) n FROM meta WHERE key LIKE 'repo-provision:%'").first<number>("n")).toBe(0);
+    expect(s.fetch.mock.calls.filter(c => c[1]?.method === "POST")).toHaveLength(1);
+    await expect(projectCreate.run(s.ctx, s.input)).rejects.toThrow();
+  });
+});
 
 describe("making a repo project creates its repository", () => {
   it("as a member, with a one-shot admin credential that is revoked right after", async () => {

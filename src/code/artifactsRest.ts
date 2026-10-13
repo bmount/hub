@@ -122,13 +122,22 @@ export class ArtifactsRest {
       });
     } catch { throw new HubError(503, "unavailable", "Artifacts did not answer"); }
     if (response.status === 404) throw new HubError(404, "not_found", "repository not found");
-    if (!response.ok) throw new HubError(502, "unavailable", "Artifacts request failed");
+    if (!response.ok) throw await this.failure(response, method, path);
     return response;
+  }
+  private async failure(response: Response, method: string, path: string, data?: unknown): Promise<HubError> {
+    const payload = data ?? await response.json().catch(() => null);
+    const errors = (payload as { errors?: { code?: unknown }[] } | null)?.errors;
+    // Upstream prose can echo credentials. Only numeric codes and a validated request ID are safe evidence.
+    const codes = Array.isArray(errors) ? errors.slice(0, 5).map(e => e?.code).filter(c => typeof c === "number" && Number.isSafeInteger(c)).join(",") : "";
+    const ray = response.headers.get("cf-ray") ?? "";
+    const operation = path === "/repos" && method === "POST" ? "create repository" : method;
+    return new HubError(502, "unavailable", `Artifacts request failed (${operation}; HTTP ${response.status}${codes ? `; codes ${codes}` : ""}${/^[a-f0-9]{16,32}(?:-[A-Z]{3})?$/.test(ray) ? `; request ${ray}` : ""}). Check Artifacts availability and API token permissions.`);
   }
   async call<T>(namespace: string, path: string, body?: unknown, method = body === undefined ? "GET" : "POST"): Promise<T> {
     const response = await this.request(namespace, path, body, method);
     const data = await response.json().catch(() => null) as { success?: boolean; result?: T } | null;
-    if (data?.success !== true) throw new HubError(502, "unavailable", "Artifacts request failed");
+    if (data?.success !== true) throw await this.failure(response, method, path, data);
     return data.result as T;
   }
   async info(namespace: string, repo: string): Promise<ArtifactRepo> {

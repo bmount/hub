@@ -7,7 +7,7 @@ import { getNamespaceBySlug, listNamespaces } from "../db/namespaces";
 import { createProject, getProjectByPath, listProjects, setProjectState } from "../db/projects";
 import { recordEvent } from "../db/events";
 import { deleteProject, projectDeleteKey } from "../db/projectDelete";
-import { createRepo } from "../code/ardi";
+import { createRepo, RepoProvisioningPending } from "../code/ardi";
 import type { Ctx } from "../auth/context";
 import type { Namespace, Project, State } from "../db/types";
 
@@ -49,16 +49,27 @@ export const projectCreate = defineVerb({
   }),
   run: async (ctx, p) => {
     const ns = await resolveNamespace(ctx, p.namespace);
-    const project = await createProject(ctx.db, { tenant_id: ctx.tenant!.id, namespace_id: ns?.id ?? null, slug: p.slug, kind: p.kind, display_name: p.display_name }, ctx.now);
-    // A repo project's repository is named after it (codeRead). If the git host can't make it, there is no project.
+    const existing = await getProjectByPath(ctx.db, ctx.tenant!.id, p.namespace, p.slug);
+    const pendingKey = (id: string) => `repo-provision:${ctx.tenant!.id}:${id}`;
+    const retry = existing?.kind === "repo" && p.kind === "repo" && ctx.env.GIT_BACKEND === "artifacts"
+      && await ctx.db.prepare("SELECT 1 FROM meta WHERE key = ?").bind(pendingKey(existing.id)).first();
+    if (retry && ctx.env.ARDI_REPO_CREATE !== "on") throw conflict("repository provisioning is disabled; pending project retained");
+    if (retry && (existing!.state !== "active" || await ctx.db.prepare("SELECT 1 FROM meta WHERE key = ?").bind(projectDeleteKey(ctx.tenant!.id, existing!.id)).first())) throw conflict("pending repository project is archived or being deleted");
+    const project = retry ? existing! : await createProject(ctx.db, { tenant_id: ctx.tenant!.id, namespace_id: ns?.id ?? null, slug: p.slug, kind: p.kind, display_name: p.display_name }, ctx.now);
+    // Confirmed storage refusals roll back; ambiguous creates retain the ownership ID for a safe retry.
     if (project.kind === "repo" && ctx.env.ARDI_REPO_CREATE === "on") {
       try {
         await createRepo(ctx.env, ctx.db, { identity_id: ctx.identity!.id, tenant_id: ctx.tenant!.id, org: ctx.tenant!.slug, name: project.slug }, ctx.now);
       } catch (e) {
-        await ctx.db.prepare("DELETE FROM project WHERE id = ? AND tenant_id = ?").bind(project.id, ctx.tenant!.id).run();
+        if (retry || e instanceof RepoProvisioningPending) {
+          await ctx.db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, 'pending')").bind(pendingKey(project.id)).run();
+        } else {
+          await ctx.db.prepare("DELETE FROM project WHERE id = ? AND tenant_id = ?").bind(project.id, ctx.tenant!.id).run();
+        }
         throw e;
       }
     }
+    await ctx.db.prepare("DELETE FROM meta WHERE key = ?").bind(pendingKey(project.id)).run();
     const path = ns ? `${ns.slug}/${project.slug}` : project.slug;
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "project.create", target_kind: "project", target_id: project.id, summary: `Created project ${path}` }, ctx.now);
     const channels = project.namespace_id === null ? await ensureProjectChannels(ctx.db, project, ctx.identity!.id, ctx.now) : [];

@@ -6,6 +6,14 @@ The former Ardi source of truth is retired. Its Cloudflare Workers, Durable Obje
 
 The standard hub release configuration declares `GIT_BACKEND=artifacts`, `ARTIFACTS_ACCOUNT_ID`, `ARDI_REPO_CREATE=on`, the `GIT_PROXY` service binding to `pimwell-git`, and the `GIT_PUSH_STAGING` R2 binding to `pimwell-git-staging`. `ARTIFACTS_API_TOKEN` is a production secret and is not stored in the Wrangler file. Local Vitest runs derive a temporary Wrangler config from production, but remove only the production Git proxy binding and clear `GIT_BACKEND` so legacy forwarding fixtures stay isolated.
 
+## Repository provisioning
+
+Member-created repo projects provision an Artifacts repository with a tenant/project ownership marker before recording the `git_repository` selector. An existing storage name is accepted only if its ownership marker matches that exact project.
+
+A failed create response is reconciled by reading repository metadata: a matching repository completes the create; confirmed absence rolls the project back. If storage cannot confirm the outcome, the project ID is retained with a private `repo-provision:<tenant>:<project>` marker. Retry `project.create` with the same slug, namespace and repo kind to resume without creating a new ownership ID. Completed projects still reject duplicate creates; archived or deleting projects cannot resume. Project deletion cleans up the pending marker.
+
+Artifacts failures expose the operation, HTTP status, numeric provider error codes and a validated Cloudflare request ID when available. Provider messages, bodies and credentials are never included. Use that evidence to check provider availability and the private API token's permissions; an unknown outcome must not be treated as proof that the repository was never created.
+
 ## Legacy write fence
 
 `git_repository.legacy_write_fenced_at` is the historical per-repository legacy write fence used during the cutover. When it was set, the shared Git proxy refused new legacy `git-receive-pack` requests for that repository with 403 while fetches still drained from Ardi.

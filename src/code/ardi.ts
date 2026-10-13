@@ -80,6 +80,10 @@ export async function codeRead<T>(ctx: Ctx, verb: string, body: Record<string, u
  * create repositories, so the hub spends a one-shot session (createRepoCreateSession) on this one call. A repository that
  * already exists is fine: it is the project's.
  */
+export class RepoProvisioningPending extends HubError {
+  constructor(reason: string) { super(503, "unavailable", `${reason} Repository outcome is unknown; project retained. Retry project.create with the same slug and kind.`); }
+}
+
 export async function createRepo(env: Env, db: D1Database, input: { identity_id: string; tenant_id: string; org: string; name: string }, now: number): Promise<void> {
   if (env.GIT_BACKEND === "artifacts") {
     const project = await db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'").bind(input.tenant_id, input.name).first<{ id: string }>();
@@ -90,9 +94,22 @@ export async function createRepo(env: Env, db: D1Database, input: { identity_id:
       if (info.description !== ownership) throw new HubError(409, "conflict", "repository storage name is already owned");
     } catch (error) {
       if (!(error instanceof HubError) || error.status !== 404) throw error;
-      await api.create(namespace, input.name, ownership);
+      try {
+        await api.create(namespace, input.name, ownership);
+      } catch (failure) {
+        // A failed response can still mean storage committed the create. Never orphan its ownership marker.
+        let info;
+        try { info = await api.info(namespace, input.name); }
+        catch (check) {
+          if (check instanceof HubError && check.status === 404) throw failure;
+          throw new RepoProvisioningPending(failure instanceof HubError ? failure.message : "Artifacts did not answer.");
+        }
+        if (info.description !== ownership) throw new HubError(409, "conflict", "repository storage name is already owned");
+      }
     }
-    await db.prepare("INSERT OR IGNORE INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(input.tenant_id, project.id, now).run();
+    try {
+      await db.prepare("INSERT OR IGNORE INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(input.tenant_id, project.id, now).run();
+    } catch { throw new RepoProvisioningPending("Repository created but its local mapping could not be saved."); }
     return;
   }
   const { session, token } = await createRepoCreateSession(db, { identity_id: input.identity_id, tenant_id: input.tenant_id }, now);

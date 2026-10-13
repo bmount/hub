@@ -181,7 +181,17 @@ describe("Artifacts REST transport", () => {
   });
   it("does not include upstream error messages or credentials in errors", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ success: false, errors: [{ message: apiToken }] }, { status: 403 }));
-    await expect(configured().repoToken("acme", "site", "read")).rejects.toThrow("Artifacts request failed");
+    const error = await configured().repoToken("acme", "site", "read").catch(e => e);
+    expect(error.message).toContain("Artifacts request failed (POST; HTTP 403)");
+    expect(error.message).not.toContain(apiToken);
+  });
+  it("includes only numeric codes and validated request IDs, even in HTTP 200 failures", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ success: false, errors: [{ code: 10000, message: apiToken }, { code: apiToken }] }, { headers: { "cf-ray": "0123456789abcdef-DFW" } }));
+    const error = await configured().create("acme", "site", "owned").catch(e => e);
+    expect(error.message).toContain("create repository; HTTP 200; codes 10000; request 0123456789abcdef-DFW");
+    expect(error.message).not.toContain(apiToken);
+    vi.mocked(fetch).mockResolvedValue(Response.json({ success: false }, { status: 403, headers: { "cf-ray": apiToken } }));
+    expect((await configured().create("acme", "site", "owned").catch(e => e)).message).not.toContain(apiToken);
   });
   it("refuses a repository remote pointing elsewhere", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ success: true, result: { name: "site", remote: "https://attacker.invalid/site.git" } }));

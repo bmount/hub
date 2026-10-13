@@ -502,6 +502,8 @@ describe("project deletion from the web", () => {
     const made = await projectCreate.run(ctx, projectCreate.parse({ slug: "repo", kind: "repo", display_name: "Repo" })) as { project: { id: string } };
     await w.post("project.archive", { slug: "repo" });
     await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(w.tenant.id, made.project.id, Date.now()).run();
+    const pendingKey = `repo-provision:${w.tenant.id}:${made.project.id}`;
+    await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, 'pending')").bind(pendingKey).run();
     ctx.env = { ...env, ARTIFACTS_ACCOUNT_ID: "0".repeat(32), ARTIFACTS_API_TOKEN: "synthetic-test-token" };
     const deletion = vi.spyOn(ArtifactsRest.prototype, "deleteProject").mockRejectedValueOnce(new Error("storage outage")).mockResolvedValue(undefined);
     try {
@@ -512,6 +514,7 @@ describe("project deletion from the web", () => {
       expect(result.counts.repositories).toBe(1);
       expect(deletion).toHaveBeenLastCalledWith("acme", "repo", `Pimwell tenant ${w.tenant.id} project ${made.project.id}`);
       expect(await w.count("project", "id", made.project.id)).toBe(0);
+      expect(await env.HUB_DB.prepare("SELECT 1 FROM meta WHERE key = ?").bind(pendingKey).first()).toBeNull();
       expect((await env.HUB_DB.prepare("SELECT kind FROM event WHERE target_id = ?").bind(made.project.id).all()).results).toEqual([{ kind: "project.delete" }]);
     } finally { deletion.mockRestore(); }
   });
