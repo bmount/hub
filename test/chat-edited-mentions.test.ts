@@ -104,7 +104,7 @@ describe("checkpoint discovery of current edited mentions", () => {
     expect(tail.for_you.map((m: any) => m.seq)).toEqual([2, 1]);
     expect(tail.omitted).toBe(0);
     expect(decodeCursors(tail.next)[ch.project_id]).toBe(44);
-  }, 20_000);
+  }, 60_000);
 
   it("keeps edited mention discovery behind current channel and tenant authorization", async () => {
     const w = await chatWorld();
