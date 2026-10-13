@@ -65,6 +65,15 @@ export const WORKBENCH_JS = String.raw`
     var ins = $("#inspector"); if (ins && document.body.getAttribute("data-focus") === "inspector") ins.scrollTop = 0;
   }
 
+  function ambiguous() {
+    var note = $("#wb-ambiguous");
+    if (!note) {
+      note = document.createElement("p"); note.id = "wb-ambiguous"; note.className = "lede";
+      note.setAttribute("role", "alert"); document.body.prepend(note);
+    }
+    note.textContent = "Outcome unknown: your change may have been saved, but its response could not be displayed. Check the current page before choosing to submit again; retrying may duplicate the change.";
+  }
+
   var busy = 0;
   function go(url, opts) {
     opts = opts || {};
@@ -84,7 +93,7 @@ export const WORKBENCH_JS = String.raw`
         }
         swap(doc, res.url || url, opts.push !== false);
       });
-    }).catch(function () { if (opts.fallback) opts.fallback(); else location.href = url; }).then(function () { if (mine === busy) document.body.style.cursor = ""; });
+    }).catch(function () { if (init.method !== "GET") ambiguous(); else location.href = url; }).then(function () { if (mine === busy) document.body.style.cursor = ""; });
   }
 
   function local(a) {
@@ -150,7 +159,7 @@ export const WORKBENCH_JS = String.raw`
           if (m) { var a = document.createElement("a"); a.href = "/" + m[1] + "/w/" + m[2]; a.textContent = "Filed " + ref; note.textContent = ""; note.appendChild(a); }
           f.replaceWith(note);
         } else { note.textContent = "Not done: " + (j.detail || j.error); f.appendChild(note); if (btn) btn.disabled = false; }
-      }).catch(function () { if (btn) btn.disabled = false; f.submit(); });
+      }).catch(function () { if (btn) btn.disabled = false; ambiguous(); });
   }
   document.addEventListener("submit", function (e) {
     var f = e.target; if (e.defaultPrevented || f.getAttribute("data-reload") !== null) return;
@@ -160,11 +169,8 @@ export const WORKBENCH_JS = String.raw`
     e.preventDefault();
     // Include the button that was pressed: forms like Approve / Ask for changes carry their choice on it.
     var data = new URLSearchParams(e.submitter ? new FormData(f, e.submitter) : new FormData(f));
-    // If the fetch fails (for example the server sends a sign-in confirmation on another host), submit the form the
-    // ordinary way so the browser follows it; never turn a post into a GET of the form's address.
-    var sub = e.submitter;
-    var native = function () { f.setAttribute("data-reload", ""); if (f.requestSubmit) f.requestSubmit(sub || undefined); else f.submit(); };
-    if ((f.getAttribute("method") || "get").toLowerCase() === "post") go(u.href, { method: "POST", body: data, fallback: native });
+    // A failed response does not mean the mutation failed. Never automatically replay a POST.
+    if ((f.getAttribute("method") || "get").toLowerCase() === "post") go(u.href, { method: "POST", body: data });
     else { u.search = data.toString(); go(u.href); }
   });
   window.addEventListener("popstate", function () { go(location.href, { push: false }); });

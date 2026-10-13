@@ -113,6 +113,44 @@ async function ask(page: Page, text: string) {
   await expect.poll(() => page.locator('#ask .send').isDisabled()).toBe(false);
 }
 
+for (const mode of ["lost response", "render failure", "inline lost response", "inline invalid JSON"]) {
+  it(`does not replay an accepted workbench POST after ${mode}`, async () => {
+    const { context, page } = await open();
+    let mutations = 0;
+    try {
+      const inline = mode.startsWith("inline");
+      await page.evaluate(inline => {
+        const document = (globalThis as any).document;
+        const form = document.createElement("form");
+        form.id = "mutation-fixture"; form.method = "post"; form.action = "/mutation-fixture";
+        if (inline) form.setAttribute("data-inline", "");
+        form.innerHTML = '<input name="title" value="Keep this draft"><button type="submit" name="choice" value="approve">Save fixture</button>';
+        document.querySelector("#inspector")!.appendChild(form);
+      }, inline);
+      await context.route("**/mutation-fixture", async route => {
+        expect(route.request().method()).toBe("POST");
+        mutations++; // The server accepted the mutation before its response was lost.
+        if (mode.includes("lost response")) return route.abort("failed");
+        if (inline) return route.fulfill({ status: 200, contentType: "application/json", body: "broken JSON" });
+        return route.fulfill({ status: 200, contentType: "text/html", body: '<body class="wb"><div class="bar"><span class="me">Brian</span></div><main class="panes"><div id="inspector">Saved</div></main></body>' });
+      });
+      if (mode === "render failure") await page.evaluate(() => {
+        (globalThis as any).DOMParser.prototype.parseFromString = () => { throw new Error("Injected rendering failure"); };
+      });
+      await page.getByRole("button", { name: "Save fixture" }).click();
+      await browserExpect(page.getByRole("alert")).toContainText("Outcome unknown");
+      await browserExpect(page.getByRole("alert")).toContainText("retrying may duplicate");
+      await browserExpect(page.locator('#mutation-fixture input')).toHaveValue("Keep this draft");
+      await page.waitForTimeout(250);
+      expect(mutations).toBe(1);
+      expect(page.url()).toBe(`${BASE}/assistant`);
+      // Only an explicit second human submission may send another mutation.
+      await page.getByRole("button", { name: "Save fixture" }).click();
+      await expect.poll(() => mutations).toBe(2);
+    } finally { await context.close(); }
+  });
+}
+
 it("searches body and comment text across projects from the upper box, while retaining keyboard jumps", async () => {
   const db = await mf.getD1Database("HUB_DB"), now = Date.now();
   for (const [slug, suffix] of [["search-front", "FRONT"], ["search-back", "BACK"]]) {
