@@ -138,6 +138,9 @@ try {
   await page.getByLabel('Revision note',{exact:true}).fill('Browser image');
   await page.getByRole('button',{name:'Create page',exact:true}).click();
   await expect(page.locator('.project-image img')).toHaveCount(1);
+  const authorPopup = page.waitForEvent('popup');
+  await page.getByRole('link',{name:'Open original · revision 1'}).click();
+  await (await authorPopup).close();
   await author.close();
   for (const token of [null,outsider]) {
     const ctx = await context(token,{width:390,height:900});

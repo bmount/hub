@@ -89,7 +89,7 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
       try { localStorage.setItem(sidebarKey(), collapsed ? "collapsed" : "expanded"); } catch (e) {}
     }
     var value = e.target.closest(".wb-inline-edit summary");
-    if (value) { e.preventDefault(); var details = value.parentElement; details.open = true; var input = $("input:not([type=hidden]),select,textarea,button", details); if (input) input.focus(); else $("summary", details).focus(); }
+    if (value && !e.target.closest("a")) { e.preventDefault(); var details = value.parentElement; details.open = true; var input = $("input:not([type=hidden]),select,textarea,button", details); if (input) input.focus(); else $("summary", details).focus(); }
   });
   document.addEventListener("keydown", function (e) {
     var details = e.target.closest(".wb-inline-edit"); if (!details || !details.open) return;
