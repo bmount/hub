@@ -263,7 +263,8 @@ describe("receipt-free independently authenticated ingress", () => {
       .toEqual(["admitted", "admitted", "admitted"]);
     expect(await count("inbound_mail")).toBe(3);
     expect(await count("consent")).toBe(1);
-    expect(await count("event")).toBe(3);
+    expect(await count("event")).toBe(3); // signed To names the agent, not this redirected project
+    expect(await count("outbound_mail")).toBe(0);
     expect(w.sent).toHaveLength(1);
     expect((await page(w)).items).toHaveLength(1);
   });

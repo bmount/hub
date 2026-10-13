@@ -1,10 +1,12 @@
 import type { Attachment } from "postal-mime";
 import type { Env } from "../env";
-import type { Ctx } from "../auth/context";
+import { roleFor, rank, type Ctx } from "../auth/context";
+import { getMembership } from "../db/memberships";
 import { getIdentityById } from "../db/identities";
 import { getTenantById } from "../db/tenants";
 import { filePath, fileType, putFile } from "../verbs/files";
 import { HubError } from "../errors";
+import { ulid } from "../ids";
 import { retainAttachmentEvidence } from "./attachments";
 
 /** Only durable admitted project mail may create project files. Quarantine and agent mail never do.
@@ -12,11 +14,13 @@ import { retainAttachmentEvidence } from "./attachments";
  */
 export async function retainProjectMailFiles(env: Env, mailId: string, parts: Attachment[], now: number): Promise<void> {
   const m = await env.HUB_DB.prepare(`SELECT m.tenant_id, m.project_id, m.identity_id, p.slug FROM inbound_mail m JOIN project p ON p.id = m.project_id AND p.tenant_id = m.tenant_id
-    WHERE m.id = ? AND m.verdict = 'admitted' AND p.kind IN ('wiki', 'workspace') AND p.state = 'active' AND m.recipient_id IS NULL`).bind(mailId).first<{tenant_id: string; project_id: string; identity_id: string; slug: string}>();
+    WHERE m.id = ? AND m.verdict = 'admitted' AND m.reason IS NULL AND m.released_by IS NULL AND p.kind IN ('wiki', 'workspace') AND p.state = 'active' AND m.recipient_id IS NULL`).bind(mailId).first<{tenant_id: string; project_id: string; identity_id: string; slug: string}>();
   if (!m) return;
   const tenant = await getTenantById(env.HUB_DB, m.tenant_id), identity = await getIdentityById(env.HUB_DB, m.identity_id);
-  if (!tenant || tenant.state !== "active" || !identity) return;
-  const ctx = {env, db: env.HUB_DB, now, tenant, identity, session: null} as Ctx;
+  if (!tenant || tenant.state !== "active" || !identity || identity.kind !== "human") return;
+  const role = roleFor(identity, await getMembership(env.HUB_DB, identity.id, tenant.id));
+  if (rank(role) < rank("member")) return;
+  const ctx = {env, db: env.HUB_DB, now, tenant, identity, role, session: null, mcpProject: {id: m.project_id, slug: m.slug, path: m.slug}} as Ctx;
   const evidence = retainAttachmentEvidence(parts);
   for (let i = 0; i < parts.length; i++) {
     const a = parts[i]!, e = evidence[i]!;
@@ -43,6 +47,14 @@ export async function retainProjectMailFiles(env: Env, mailId: string, parts: At
       if (!(err instanceof HubError)) throw err; // storage outages remain retryable, not false success
       e.file_status = "not_stored"; e.file_reason = err.detail ?? err.reason;
     }
+  }
+  for (let i = 0; i < evidence.length; i++) {
+    const e = evidence[i]!;
+    const summary = `Attachment ${i + 1}: ${e.file_status === "stored" ? `filed ${e.file_path} revision ${e.file_revision}` : `not filed: ${e.file_reason ?? "unsupported attachment"}`}`.slice(0,300);
+    await env.HUB_DB.prepare(`INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
+      SELECT ?, ?, ?, NULL, 'mail.attachment', 'inbound_mail', ?, ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM event WHERE tenant_id = ? AND kind = 'mail.attachment' AND target_id = ? AND summary = ?)`)
+      .bind(ulid(now), m.tenant_id, m.identity_id, mailId, summary, now, m.tenant_id, mailId, summary).run();
   }
   await env.HUB_DB.prepare("UPDATE inbound_mail SET attachments = ? WHERE id = ? AND tenant_id = ? AND project_id = ? AND verdict = 'admitted'").bind(JSON.stringify(evidence), mailId, m.tenant_id, m.project_id).run();
 }

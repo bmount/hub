@@ -151,6 +151,41 @@ permanent agent-wake dedup, including lost-response reconciliation.
 This is limited domain-aligned DKIM coverage, **not universal DMARC**, SPF or
 ARC forwarding support. Failure/absence/unsupported formats remain unknown.
 
+## Verified project-mail actions
+
+Only mail to an active project address, admitted through **all** existing active-human
+member/root, strict aligned-DKIM, rate and atomic replay gates, can authorize actions.
+The signed outer To/Cc must name the exact addressed project mailbox: DKIM authenticates
+the author, not the delivery envelope, so redirecting signed mail sent elsewhere gains
+no action authority or summary reply. Evidence admission is unchanged.
+The handler extracts conservative top-posted new text, stopping at quoted/forwarded
+boundaries; attached messages and HTML quote containers are not instructions. Ambiguous
+or bottom-posted requests should be made on the web. Subject lines, existing contacts
+and attachments are evidence, not execution authority.
+
+A metered reasoning model proposes a bounded plan using a fixed list: work create/update,
+wiki write (notes), research save, person/company upsert, connection add, retained
+attachment filing, and authenticated document-link sharing. Every proposal must quote
+the new text exactly. Each verb runs through normal scope/access/parse checks **as the
+sender**, rechecking current authority, pinned to the addressed project. Readers cannot
+write or file attachments. Contact enrichment preserves omitted fields and unions arrays;
+revision checks still apply. Document sharing checks active same-organization human
+membership and uses the existing outbound verb, consent, sending switch, caps and contact
+window. No model-generated arbitrary outgoing body is sent.
+
+Deletes, merges, relationship removals, work state/ownership/hierarchy changes, and mail
+to outsiders are never executed from mail. Refusals link to the web for human confirmation.
+Actions and refusals are events targeting the inbound mail id. An atomic per-mail
+reservation prevents replay or concurrent execution and summary replies; pending/ambiguous
+attempts are never automatically reclaimed. Interrupted processing needs explicit
+reconciliation, not resubmission. The handler attempts one summary reply to the sender
+with results, links and refusals, instead of a separate newcomer welcome for project mail.
+Normal outbound gates still apply: disabled sending, withdrawn consent, limits or a
+transport outage can prevent delivery, and are recorded, not reported as success.
+
+Unverified, quarantined, manually released, stranger, organization and agent mail gain
+no action authority. Existing manual evidence-to-proposal tools remain proposals only.
+
 ## Scope and remaining limitations
 
 Routine receipt suppression and [one-time welcome](../mail-welcome.md) are

@@ -8,7 +8,9 @@
 //   5. Strict independently verified, aligned DKIM on original bytes, with atomic replay storage.
 //      Unknown proof is quarantined for an admin, unread by agents. No routine receipts.
 //   6. Optional one-time welcome after admission; delivery is never authentication.
-// Content is stored as evidence. Nothing in it is ever an instruction to anyone.
+// Independently admitted project mail may authorize bounded actions as its sender.
+// Quoted/forwarded content and all other mail remain evidence only.
+import { runMailActions, newSenderText } from "./actions";
 import { inboxStub } from "../chat/stubs";
 import PostalMime, { type Header } from "postal-mime";
 import type { Env } from "../env";
@@ -137,8 +139,13 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
           AND NOT EXISTS (SELECT 1 FROM consent c WHERE c.email = m.from_email)`)
         .bind(ulid(now), now, JSON.stringify({ to: message.to.trim().toLowerCase(), received_at: now }),
           result.mail_id, result.target.tenant_id, result.identity_id).run();
-      await sendNewcomerWelcome(env, { tenant_id: result.target.tenant_id, identity_id: result.identity_id,
-        mail_id: result.mail_id }, result.proof, now);
+      const source = { tenant_id: result.target.tenant_id, identity_id: result.identity_id, mail_id: result.mail_id };
+      if (result.target.project_id && !result.target.recipient_id) {
+        const ownText = await newSenderText(bytes.buffer, message.to);
+        if (ownText !== null) await runMailActions(env, source, result.proof, ownText, now);
+      } else {
+        await sendNewcomerWelcome(env, source, result.proof, now);
+      }
     } catch { console.log(JSON.stringify({ msg: "mail optional welcome unavailable" })); }
     return "admitted";
   }

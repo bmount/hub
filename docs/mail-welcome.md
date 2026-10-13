@@ -15,6 +15,12 @@ proof of a fresh SMTP delivery. Legitimate unsupported mail remains unknown.
 See [authentication](ops/mail-authentication.md) and [replay](ops/mail-replay.md).
 Explicit `login@`/`signup@` proof and substantive replies remain separate flows.
 
+Verified project-address ingress now uses the [bounded sender-action pipeline](ops/mail-authentication.md#verified-project-mail-actions)
+instead of a separate newcomer welcome: it attempts one per-message results reply,
+subject to the normal outbound gates. Organization and agent ingress retain the
+one-time welcome below. The welcome helper's cross-mailbox reservation contract
+still applies when called, but project ingress no longer invokes it.
+
 ## State and boundaries
 
 - One atomic reservation per `(tenant_id, human identity_id)`, across that

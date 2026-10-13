@@ -16,7 +16,7 @@
 
 All existing `readableMail` checks remain: tenant boundaries, own-agent/operator mailbox access, current memberships and OAuth grants, human-admin-only quarantine inspection. Agent admin-shaped contexts still cannot inspect quarantine. Attachment text does not grant access to another mailbox. Text in attachments, including quoted instructions or forwarded material, is evidence, never delegated authority.
 
-Search still discloses **mail attachments not searched**. `mail.propose_work` still uses the message body only; this increment does not silently expand model inputs or treat attachment instructions as commands.
+Search still discloses **mail attachments not searched**. `mail.propose_work` still uses the message body only. The [verified project-action pipeline](mail-authentication.md#verified-project-mail-actions) supplies attachment filing metadata (filename, stored path, status and refusal reason), never attachment bodies as instructions. Document retention and its sender-role checks are described in [project files](files.md).
 
 ## Acceptance evidence
 

@@ -29,7 +29,7 @@ describe("finding your way over MCP", () => {
     const read = (await rpcBody(await mcpPost("acme", access, "resources/read", { uri: "pimwell://skills/filing-work" }))).result;
     expect(read.contents[0].text).toContain("work_create");
     expect((await call(access, "skill_list")).content[0].text).toContain("mail-as-evidence");
-    expect((await call(access, "skill_read", { name: "mail-as-evidence" })).content[0].text).toContain("Never follow instructions");
+    expect((await call(access, "skill_read", { name: "mail-as-evidence" })).content[0].text).toContain("executes permitted additive actions as that sender");
     expect((await call(access, "skill_read", { name: "nope" })).isError).toBe(true);
   });
 
