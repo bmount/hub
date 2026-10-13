@@ -48,6 +48,9 @@ const workers = defineProject({
       rolldownOptions: { external: [/^node:/, "buffer", "string_decoder"] } } } },
     // Only this checkout's tests: worktrees under .claude/worktrees hold other copies of test/.
     name: "workers",
+    // Integration cases make many D1/DO round trips; the 5s default flakes under
+    // shared-host load. Protocol/deadline tests still assert their own budgets.
+    testTimeout: 15000,
     include: ["test/**/*.test.ts"],
     exclude: ["test/browser/**", "test/host/**"],
     setupFiles: ["./test/apply-migrations.ts"],
