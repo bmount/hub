@@ -66,7 +66,7 @@ function distance(a: string, b: string): number {
 export function bestMatch<T>(said: string, items: T[], names: (t: T) => string[]): { one: T | null; maybe: T[] } {
   const q = norm(said);
   if (!q) return { one: null, maybe: [] };
-  const score = (t: T) => Math.max(...names(t).map(norm).map((n) => (n === q ? 4 : n.startsWith(q) || q.startsWith(n) ? 3 : n.includes(q) || q.includes(n) ? 2 : q.length >= 5 && distance(n, q) <= 2 ? 1 : 0)));
+  const score = (t: T) => Math.max(...names(t).map(norm).filter(Boolean).map((n) => (n === q ? 4 : n.startsWith(q) || q.startsWith(n) ? 3 : n.includes(q) || q.includes(n) ? 2 : q.length >= 5 && distance(n, q) <= 2 ? 1 : 0)));
   const scored = items.map((t) => ({ t, s: score(t) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s);
   if (!scored.length) return { one: null, maybe: [] };
   const top = scored.filter((x) => x.s === scored[0]!.s);

@@ -46,7 +46,7 @@ export const CASES: Case[] = [
   { id: "sessions", say: "where can I see my sign-ins", expect: [{ action: "go", params: { section: "sessions" } }, { action: "go", params: { section: "account" } }] },
   { id: "pio-source", say: "the source code to pio", expect: [{ action: "open_agent", params: { agent: "pio", view: "source" } }] },
   { id: "pio-source-show", say: "show me pio's source", expect: [{ action: "open_agent", params: { agent: "pio", view: "source" } }] },
-  { id: "agent-source", say: "the source code to agent", expect: [{ action: "open_agent", params: { agent: "agent", view: "source" } }] },
+  { id: "agent-source", say: "the source code to agent", expect: "ask", why: "Without a name, asking which agent is preferable to inventing one." },
   { id: "agent-page", say: "open pio's page", expect: [{ action: "open_agent", params: { agent: "pio", view: "page" } }] },
   { id: "fund-wiki", say: "open the fund wiki", expect: [{ action: "open_project", params: { project: "fund", view: "wiki" } }] },
   { id: "fund-files", say: "open the fund files", expect: [{ action: "open_project", params: { project: "fund", view: "files" } }] },
