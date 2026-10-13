@@ -35,6 +35,9 @@ describe("wrangler configuration", () => {
     const runtime = { compatibility_date: "2026-09-01", compatibility_flags: [] };
     const fresh = { ...runtime, compatibility_flags: ["nodejs_compat"] };
     expect(compatibleRuntime(runtime, fresh, "pimwell-tail")).toBe(true);
+    // Cloudflare omits an empty flags property and inserts a new one before usage_model.
+    expect(compatibleRuntime({ compatibility_date: "2026-09-01", usage_model: "standard" },
+      { compatibility_date: "2026-09-01", compatibility_flags: ["nodejs_compat"], usage_model: "standard" }, "pimwell-tail")).toBe(true);
     expect(compatibleRuntime(runtime, fresh, "pimwell-hub")).toBe(false);
     expect(compatibleRuntime(runtime, { ...fresh, compatibility_date: "2027-01-01" }, "pimwell-tail")).toBe(false);
     expect(compatibleRuntime(runtime, { ...fresh, compatibility_flags: ["nodejs_compat", "other"] }, "pimwell-tail")).toBe(false);
