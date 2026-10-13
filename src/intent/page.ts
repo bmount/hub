@@ -49,7 +49,7 @@ export async function doPage(request: Request, env: Env, waitUntil?: (p: Promise
   let turns: Turn[] = [];
   if (q) {
     const rate = await takeRateDetail(env.RATE, "intent_identity", ctx.identity.id, ctx.now, waitUntil);
-    if (!rate.ok) out = `<div class="intent-card"><p class="say">That's a lot for one hour. Try again in a little while, or use the menu.</p></div>`;
+    if (!rate.ok) out = `<div class="wb-section intent-result"><p class="say">That's a lot for one hour. Try again in a little while, or use the menu.</p></div>`;
     else {
       turns = [...history, { who: "person", text: q }];
       try {
@@ -63,7 +63,7 @@ export async function doPage(request: Request, env: Env, waitUntil?: (p: Promise
         if (!(e instanceof HubError)) throw e;
         if (e.status === 404) return notFoundPage(extra);
         if (wantsJson) return Response.json({ error: e.reason }, { status: e.status, headers: { "cache-control": "no-store", ...extra } });
-        out = `<div class="intent-card"><p class="say">${e.status === 503 ? "This needs a model key: an admin adds one under Models and keys." : "That didn't go through. Try again."}</p></div>`;
+        out = `<div class="wb-section intent-result"><p class="say">${e.status === 503 ? "This needs a model key: an admin adds one under Models and keys." : "That didn't go through. Try again."}</p></div>`;
         turns = [];
       }
     }
@@ -96,6 +96,6 @@ async function apexDo(request: Request, env: Env, ctx: Ctx, extra: Record<string
   const named = orgs.filter((t) => [t.slug, t.display_name].some((n) => { const nw = n.toLowerCase().replace(/[^a-z0-9 -]/g, " ").split(/\s+/).filter(Boolean); return nw.length > 0 && nw.every((w) => words.includes(w)); }));
   if (named.length === 1) return new Response(null, { status: 303, headers: { location: there(named[0]!.slug), "cache-control": "no-store", ...extra } });
   const body = `<div class="intent-page"><h1>What do you want to do?</h1><p class="said">“${esc(q)}”</p>
-<div class="intent-card">${orgs.length ? `<p class="say">In which organization?</p><div class="chips">${orgs.map((t) => `<a class="chip" href="${esc(there(t.slug))}" data-reload>${esc(t.display_name)}</a>`).join("")}</div>` : `<p class="say">You don't belong to an organization yet. Ask whoever invited you to add you to one.</p>`}</div></div>`;
+<div class="wb-section intent-result">${orgs.length ? `<p class="say">In which organization?</p><div class="chips">${orgs.map((t) => `<a class="chip" href="${esc(there(t.slug))}" data-reload>${esc(t.display_name)}</a>`).join("")}</div>` : `<p class="say">You don't belong to an organization yet. Ask whoever invited you to add you to one.</p>`}</div></div>`;
   return htmlResponse(page("Do", body, shellFor(ctx, env, "home")), 200, extra);
 }

@@ -71,23 +71,23 @@ function chatDetails(slug: string, channels: Conversation[]): string {
 
 function conversationBody(ctx: Ctx, r: ReadResult, current: Conversation | undefined, draft = "", notice = "", live = true): string {
   const older = r.next_before !== null ? `<a href="/c/${esc(r.channel)}?before=${r.next_before}">Older messages</a>` : "";
-  return `<section class="channel-content" aria-label="Conversation"><h1>${esc(current?.kind === "direct" || current?.kind === "group" ? `${current.display_name} (${current.kind})` : `#${r.channel}`)}</h1>${toolbar("Conversation actions", `<a href="/c/${esc(r.channel)}">Refresh</a> ${markRead(r.channel,r.head,`/c/${r.channel}`)} ${older} ${current && r.messages.some(m => m.seq > current.read_seq) ? '<a href="#unread">Jump to new messages on this page</a>' : ""}`)}${live ? livePanel(r,current?.kind ?? "channel") : ""}<p class="lede">${r.next_before !== null ? "This is a partial channel view. " : ""}Top-level messages; open threads to read replies. Mark read includes all activity through #${r.head}, including activity not shown here.</p><div class="channel-messages" data-channel-messages>${channelMessages(r.channel,r.messages,current?.read_seq) || '<p class="lede">No messages yet.</p>'}</div>${rank(ctx.role) >= rank("member") && live ? compose(`/c/${r.channel}`,r.head,draft,notice,"Post") : rank(ctx.role) < rank("member") ? '<p class="lede">You have read-only access.</p>' : ""}</section>`;
+  return `<section class="channel-content" aria-label="Conversation"><h1>${esc(current?.kind === "direct" || current?.kind === "group" ? `${current.display_name} (${current.kind})` : `#${r.channel}`)}</h1>${toolbar("Conversation actions", `<a href="/c/${esc(r.channel)}"${r.next_before !== null ? ' title="Partial channel view; mark read includes activity not shown here"' : ""}>Refresh</a> ${markRead(r.channel,r.head,`/c/${r.channel}`)} ${older} ${current && r.messages.some(m => m.seq > current.read_seq) ? '<a href="#unread">Jump to new</a>' : ""}`)}${live ? livePanel(r,current?.kind ?? "channel") : ""}<div class="channel-messages" data-channel-messages>${channelMessages(r.channel,r.messages,current?.read_seq) || '<p class="lede">No messages yet.</p>'}</div>${rank(ctx.role) >= rank("member") && live ? compose(`/c/${r.channel}`,r.head,draft,notice,"Post") : rank(ctx.role) < rank("member") ? '<p class="lede">You have read-only access.</p>' : ""}</section>`;
 }
 
 function presencePanel(slug: string, channels: Conversation[]): string {
   // Archived channels still have readable history, but must not publish or display live presence.
   if (!channels.some((c) => c.channel === slug)) return "";
-  return `<section data-chat-presence="${esc(slug)}" aria-label="Channel presence"><h2>Presence</h2><p data-presence-connection role="status">Presence not connected. Current status is unknown.</p><p data-presence-freshness>No current presence snapshot.</p><p data-presence-sharing>No explicit heartbeat requested here. A connected live chat socket separately publishes expiring presence; these controls do not stop it.</p><button type="button" data-presence-toggle>Share presence in this channel</button><ul data-presence-list></ul><noscript>Live presence needs JavaScript; no heartbeat is published without it.</noscript></section><script defer src="${ASSETS.presence.path}"></script>`;
+  return `<section data-chat-presence="${esc(slug)}" aria-label="Channel presence"><h2>Presence</h2><span hidden data-presence-connection></span><span hidden data-presence-freshness></span><span hidden data-presence-sharing></span><button type="button" class="quiet" data-presence-toggle>Share presence in this channel</button><ul data-presence-list></ul><noscript>Presence needs JavaScript.</noscript></section><script defer src="${ASSETS.presence.path}"></script>`;
 }
 
 function livePanel(r: ReadResult, kind: string, root?: string): string {
   const chat = { id: r.conversation_id, kind: root ? "thread" : kind, ...(root ? { root } : {}) };
-  return `<section data-chat-live="${esc(JSON.stringify(chat))}" aria-label="Live chat"><p data-live-status role="status">Connecting live chat. Refresh and ordinary forms work without JavaScript.</p><ul data-live-signals></ul></section><script defer src="${ASSETS.chatLive.path}"></script>`;
+  return `<section data-chat-live="${esc(JSON.stringify(chat))}" aria-label="Live chat"><p data-live-status role="status" hidden>Connecting…</p><ul data-live-signals></ul></section><script defer src="${ASSETS.chatLive.path}"></script>`;
 }
 
 function markRead(slug: string, head: number, back: string): string {
   // Explicit POST only: loading a page (possibly paginated or truncated) does not silently clear unread state.
-  return `<form class="inline" method="post" action="/api/chat.mark_read"><input type="hidden" name="_back" value="${esc(back)}"><input type="hidden" name="c" value="${esc(slug)}"><input type="hidden" name="seq" value="${head}"><button class="quiet" type="submit">Mark channel read through #${head}</button></form>`;
+  return `<form class="inline" method="post" action="/api/chat.mark_read"><input type="hidden" name="_back" value="${esc(back)}"><input type="hidden" name="c" value="${esc(slug)}"><input type="hidden" name="seq" value="${head}"><button class="quiet" type="submit" title="Mark channel read through #${head}">Mark read</button></form>`;
 }
 
 const when = (at: number) => new Date(at).toISOString().slice(0, 16).replace("T", " ");

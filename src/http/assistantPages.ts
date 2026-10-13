@@ -3,7 +3,7 @@
 // tool directly. Same guards as before: the person's own browser session, same-origin JSON with a custom header.
 import type { Env } from "../env";
 import { ASSETS } from "../assets";
-import { esc, htmlResponse, kitList, kitTabs, toolbar, workbench } from "../html";
+import { esc, htmlResponse, kitList, toolbar, workbench } from "../html";
 import { buildContext, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -87,7 +87,8 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
 <p class="lede">I look through work, code, mail, reviews and app errors in ${esc(org)}, as you. Nothing changes unless you allow it below.</p>
 <div class="starters">${STARTERS.map(([title, ask]) => `<button type="button" class="starter" data-ask="${esc(ask)}"><b>${esc(title)}</b><span>${esc(ask)}</span></button>`).join("")}</div></div>`;
   const list = `<div class="assist">
-<div class="assist-top"><div class="chips"><a class="chip" data-chat-link href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}" aria-current="true">Chat</a><a class="chip" data-tools-link href="/assistant/tools${thread ? `?t=${esc(thread.id)}` : ""}">Tools</a><a class="chip only-s" data-conversations-link href="/assistant?list=1${thread ? `&t=${esc(thread.id)}` : ""}">Conversations</a><a class="chip" href="/assistant">+ New chat</a></div></div>
+<div class="assist-top">${toolbar("Assistant actions", `<a data-chat-link href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}" aria-current="page">Chat</a><a data-tools-link href="/assistant/tools${thread ? `?t=${esc(thread.id)}` : ""}">Tools</a><a href="/assistant">+ New chat</a>`)}</div>
+
 <div id="chatlog" class="chatlog" aria-live="polite">${log || welcome}</div>
 <form id="ask" class="composer" autocomplete="off" data-org="${esc(org)}">
 <input type="hidden" name="thread" value="${esc(thread?.id ?? "")}">
@@ -98,11 +99,11 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
 </div>
 </form></div>
 <script src="${ASSETS.assistant.path}"></script>`;
-  const inspector = `<a class="back" data-assistant-return href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}">‹ Conversation</a><h1>Assistant</h1>${toolbar("Conversations", '<a href="/assistant">New conversation</a>', kitTabs("Assistant views", [{label:"Chat",href:"/assistant",current:true},{label:"Tools",href:"/assistant/tools"}]))}<h2>Your conversations</h2>${threads.length ? kitList("Conversations", threads.map(t => ({href:`/assistant?t=${t.id}`,selected:t.id === thread?.id,html:`<a href="/assistant?t=${esc(t.id)}">${esc(t.title)}</a>${t.scopes === "write" ? " · can change things" : ""}`}))) : '<p class="lede">Your private conversations appear here.</p>'}`;
+  const inspector = `<a class="back" data-assistant-return href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}">‹ Conversation</a><h1>Assistant</h1><h2>Your conversations</h2><div class="wb-list-no-heading">${threads.length ? kitList("Conversations", threads.map(t => ({href:`/assistant?t=${t.id}`,selected:t.id === thread?.id,html:`<a href="/assistant?t=${esc(t.id)}">${esc(t.title)}</a>${t.scopes === "write" ? " · can change things" : ""}`}))) : '<p class="lede">Your private conversations appear here.</p>'}</div>`;
   const showList = new URL(request.url).searchParams.get("list") === "1";
   const shell = shellFor(ctx, env, "playground", "assistant")!;
   if (thread && shell.breadcrumb) shell.breadcrumb[shell.breadcrumb.length - 1]!.label = thread.title;
-  return htmlResponse(workbench(thread ? thread.title : "Assistant", { list: inspector, listKey: `assistant-threads:${threads.map(t => `${t.id}:${t.updated_at}`).join(",")}`, inspector: `<a class="back" href="/assistant?list=1${thread ? `&amp;t=${esc(thread.id)}` : ""}">‹ Conversations</a>${list}`, inspectorKey: `assistant:${thread?.id ?? "new"}`, stackOnPhone:true, focus: showList ? "list" : "inspector" }, shell), 200, extra);
+  return htmlResponse(workbench(thread ? thread.title : "Assistant", { list: inspector, listKey: `assistant-threads:${threads.map(t => `${t.id}:${t.updated_at}`).join(",")}`, inspector: `<a class="back" data-conversations-link href="/assistant?list=1${thread ? `&amp;t=${esc(thread.id)}` : ""}">‹ Conversations</a>${list}`, inspectorKey: `assistant:${thread?.id ?? "new"}`, stackOnPhone:true, focus: showList ? "list" : "inspector" }, shell), 200, extra);
 }
 
 export async function assistantChat(request: Request, env: Env): Promise<Response> {

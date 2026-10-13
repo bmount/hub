@@ -98,7 +98,7 @@ function setupCard(env: Env, orgs: Array<{ slug: string; name: string }>): strin
   const connect = (o: { slug: string; name: string }) => `<a href="https://${esc(o.slug)}.${esc(env.HUB_DOMAIN)}/people?connect=1" data-reload>${orgs.length > 1 ? esc(o.name) : "Connect an agent"}</a>`;
   const where = orgs.length === 0 ? "In your organization, open People and agents → Connect an agent"
     : orgs.length === 1 ? `Make a connect link: ${connect(orgs[0]!)}` : `Make a connect link in ${orgs.map(connect).join(", ")}`;
-  return `<div class="card"><h3>Set up with your agent</h3>
+  return `<div class="wb-section"><h3>Set up with your agent</h3>
 <p>For Claude Code, Codex or any agent in a terminal or on a server:</p>
 <ol>
 <li>${where}. Name the agent; you get a link that works once, for 24 hours.</li>
@@ -117,13 +117,13 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
     if (!ctx.identity) return htmlResponse(LANDING_HTML.replace("</body>", `${createForm}</body>`), 200, extra);
     const allMemberships = await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id, true);
     const memberships = allMemberships.filter((m) => m.tenant.state === "active" && m.membership.state === "active");
-    const card = (slug: string, name: string, note: string) => `<a class="card big" href="https://${esc(slug)}.${esc(env.HUB_DOMAIN)}/" data-reload><h3>${esc(name)}</h3><p>${esc(note)}</p><p><code>${esc(slug)}.${esc(env.HUB_DOMAIN)}</code></p></a>`;
+    const card = (slug: string, name: string, note: string) => `<a class="wb-section" href="https://${esc(slug)}.${esc(env.HUB_DOMAIN)}/" data-reload><h3>${esc(name)}</h3><p>${esc(note)}</p><p><code>${esc(slug)}.${esc(env.HUB_DOMAIN)}</code></p></a>`;
     let body = `<h1>Hello, ${esc(ctx.identity.display_name)}</h1>
 ${intentBox({ placeholder: "What do you want to do? Say it or type it" })}
 <p class="lede">AI can do a lot. Ask here, pick an organization below, or ask from Claude or ChatGPT over MCP.</p>
 ${setupCard(env, memberships.filter((m) => m.membership.role !== "reader" || ctx.identity!.is_root === 1).map((m) => ({ slug: m.tenant.slug, name: m.tenant.display_name })))}`;
     if (memberships.length) body += `<section aria-label="Organization chat"><h2>Chat with your team</h2><p class="chips">${memberships.map((m) => `<a class="chip" href="https://${esc(m.tenant.slug)}.${esc(env.HUB_DOMAIN)}/c" data-reload>${esc(m.tenant.display_name)} chat</a>`).join(" ")}</p></section>`;
-    body += `<h2>Your organizations</h2>` + (memberships.length ? `<div class="grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, `You are ${m.membership.role}`)).join("")}</div>` : `<p class="lede">None yet. Create an organization below, or accept an invitation.</p>`);
+    body += `<h2>Your organizations</h2>` + (memberships.length ? `<div class="wb-list">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, `You are ${m.membership.role}`)).join("")}</div>` : `<p class="lede">None yet. Create an organization below, or accept an invitation.</p>`);
     if (ctx.identity.kind === "human") {
       body += createForm;
       body += `<h2>Manage your organizations</h2>` + allMemberships.filter(m => m.membership.role === "admin" || ctx.identity!.is_root === 1).map(m => {
@@ -134,7 +134,7 @@ ${setupCard(env, memberships.filter((m) => m.membership.role !== "reader" || ctx
     if (ctx.identity.is_root === 1) {
       const mine = new Set(memberships.map((m) => m.tenant.id));
       const others = (await listTenants(env.HUB_DB, "active")).filter((t) => !mine.has(t.id));
-      if (others.length) body += `<h2>Other organizations</h2><div class="grid">${others.map((t) => card(t.slug, t.display_name, "You see this as root")).join("")}</div>`;
+      if (others.length) body += `<h2>Other organizations</h2><div class="wb-list">${others.map((t) => card(t.slug, t.display_name, "You see this as root")).join("")}</div>`;
       body += `<h2>Hub administration</h2><p><a href="/admin/orgs">Organizations</a> · <a href="/admin/models">Models and keys</a></p>`;
     }
     return htmlResponse(page("Pimwell", body, shellFor(ctx, env, "home", "apex")), 200, extra);

@@ -36,6 +36,6 @@ export async function skillsPage(request: Request, env: Env, name?: string): Pro
     return htmlResponse(page(s.title, body, shell));
   }
   const body = `<h1>Skills</h1><p class="lede">Short guides that help people and agents use Pimwell well. Agents get the same text over MCP.</p>
-<div class="grid">${SKILLS.map((s) => `<div class="card"><h3><a href="/skills/${esc(s.name)}">${esc(s.title)}</a></h3><p>${esc(s.summary)}</p></div>`).join("")}</div>`;
+<div class="wb-list">${SKILLS.map((s) => `<div class="wb-section"><h3><a href="/skills/${esc(s.name)}">${esc(s.title)}</a></h3><p>${esc(s.summary)}</p></div>`).join("")}</div>`;
   return htmlResponse(page("Skills", body, shell));
 }

@@ -182,8 +182,10 @@ describe("mail in the workbench", () => {
     expect(notice).not.toContain('href="/mail#sending"');
     expect(await env.HUB_DB.prepare("SELECT status, error FROM outbound_mail").first()).toEqual({ status: "refused", error: "sending_off" });
     const page = await (await w.get("/mail", w.ada.token)).text();
-    expect(page).toContain("Recent outgoing problems");
-    expect(page).toContain('href="/mail?addresses=1#sending"');
+    expect(page).not.toContain("Recent outgoing problems");
+    const selected = await (await w.get("/mail/M1", w.ada.token)).text();
+    expect(selected).toContain('href="/mail?addresses=1#sending"');
+    expect(selected.match(/Mail blocked — not sent/g)).toHaveLength(1);
     expect(await (await w.get("/mail?addresses=1", w.ada.token)).text()).toContain('id="sending"');
     expect(await (await w.get("/mail/M1", w.pat.token)).text()).toContain("Mail blocked — not sent");
     expect(calls).toBe(0);
@@ -219,7 +221,8 @@ describe("mail in the workbench", () => {
     expect(record).toEqual({ status: "failed", error: failure === "before" ? "pre_transport_failure" : "unknown" });
     for (const path of ["/mail", "/mail/M1", "/mail/M1"]) {
       const page = await (await w.get(path, w.pat.token)).text();
-      expect(page).toContain(failure === "before" ? 'data-delivery="failed"' : 'data-delivery="uncertain"');
+      if (path === "/mail") expect(page).not.toContain("data-delivery=");
+      else expect(page).toContain(failure === "before" ? 'data-delivery="failed"' : 'data-delivery="uncertain"');
       expect(page).not.toContain("secret-token");
     }
     expect(calls).toBe(failure === "before" ? 0 : 1);
@@ -248,9 +251,9 @@ describe("mail in the workbench", () => {
     ["untrusted-secret-diagnostic", "Sending was blocked by mail policy."],
   ])("renders a safe reason for policy code %s", async (error, reason) => {
     const w = await world();
-    await env.HUB_DB.prepare(`INSERT INTO outbound_mail (id, tenant_id, from_address, to_address, subject, text, sent_by, status, error, created_at)
-      VALUES ('POLICY', ?, 'acme.site@pimwell.test', 'pat@example.com', 'Attempt', 'body', ?, 'refused', ?, ?)`).bind(w.t.id, w.pat.identity.id, error, Date.now()).run();
-    const page = await (await w.get("/mail", w.pat.token)).text();
+    await env.HUB_DB.prepare(`INSERT INTO outbound_mail (id, tenant_id, from_address, to_address, subject, text, sent_by, in_reply_to, status, error, created_at)
+      VALUES ('POLICY', ?, 'acme.site@pimwell.test', 'pat@example.com', 'Attempt', 'body', ?, 'M1', 'refused', ?, ?)`).bind(w.t.id, w.pat.identity.id, error, Date.now()).run();
+    const page = await (await w.get("/mail/M1", w.pat.token)).text();
     expect(page).toContain(esc(reason));
     expect(page).toContain('data-delivery="blocked"');
     expect(page).not.toContain("untrusted-secret-diagnostic");

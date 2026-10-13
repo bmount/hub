@@ -2,7 +2,7 @@
 // the work filed from it, and Propose work) in the inspector. Quarantined mail is shown to admins only.
 import type { Env } from "../env";
 import { shellFor } from "./shell";
-import { esc, htmlResponse, kitTable, kitTabs, toolbar, inspectorSection, workbench } from "../html";
+import { esc, htmlResponse, kitTable, kitTree, toolbar, inspectorSection, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { canInspectMail, readableMail, readableOutgoingMail } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
@@ -30,10 +30,10 @@ export async function sentMailReadPage(request: Request, env: Env, id: string): 
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
   const access = readableOutgoingMail(ctx);
-  const mail = await ctx.db.prepare(`SELECT o.subject, o.text, o.from_address, o.to_address, o.status, o.created_at FROM outbound_mail o WHERE o.id = ? AND ${access.sql}`)
-    .bind(id, ...access.bindings).first<{ subject: string; text: string; from_address: string; to_address: string; status: string; created_at: number }>();
+  const mail = await ctx.db.prepare(`SELECT o.id, o.in_reply_to, o.error, o.subject, o.text, o.from_address, o.to_address, o.status, o.created_at FROM outbound_mail o WHERE o.id = ? AND ${access.sql}`)
+    .bind(id, ...access.bindings).first<DeliveryNotice & { subject: string; text: string; from_address: string; to_address: string; created_at: number }>();
   if (!mail) return notFoundPage(extra);
-  const list = `<a href="/mail">‹ Mail</a><h1>${esc(mail.subject || "(no subject)")}</h1><p>${esc(mail.from_address)} → ${esc(mail.to_address)} · ${esc(mail.status)} · ${when(mail.created_at)}</p><pre class="prose">${esc(mail.text)}</pre>`;
+  const list = `<a href="/mail">‹ Mail</a><h1>${esc(mail.subject || "(no subject)")}</h1><p>${esc(mail.from_address)} → ${esc(mail.to_address)} · ${esc(mail.status)} · ${when(mail.created_at)}</p>${mail.status !== "sent" ? mailDeliveryNotice(ctx, mail) : ""}<div class="prose">${esc(mail.text)}</div>`;
   return htmlResponse(workbench(mail.subject || "Sent mail", { list, listKey: `sent:${id}`, inspector: null }, shellFor(ctx, env, "mail")!), 200, extra);
 }
 
@@ -43,10 +43,9 @@ async function mailPage(request: Request, env: Env, id: string | null): Promise<
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
   const admin = canInspectMail(ctx);
   const access = readableMail(ctx);
-  const outgoing = readableOutgoingMail(ctx);
   const tid = ctx.tenant.id;
   const project = new URL(request.url).searchParams.get("project");
-  const [rowsR, projR, msgR, relatedR, repliesR, switchR, problemsR] = await ctx.db.batch([
+  const [rowsR, projR, msgR, relatedR, repliesR, switchR] = await ctx.db.batch([
     ctx.db.prepare(`SELECT m.id, COALESCE(pr.slug, r.display_name) AS project, m.from_email, m.subject, m.received_at, m.verdict, m.forwarded FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id
       WHERE ${access.sql} AND (? IS NULL OR (pr.slug = ? AND pr.namespace_id IS NULL)) ORDER BY m.received_at DESC LIMIT 200`).bind(...access.bindings, project, project),
     ctx.db.prepare("SELECT slug, display_name FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name").bind(tid),
@@ -54,7 +53,6 @@ async function mailPage(request: Request, env: Env, id: string | null): Promise<
     mailWorkStatement(ctx, id ?? ""),
     ctx.db.prepare(`SELECT o.id, o.to_address, o.in_reply_to, o.error, o.text, o.created_at, o.status, i.display_name AS who FROM outbound_mail o JOIN identity i ON i.id = o.sent_by WHERE o.in_reply_to = ? AND o.tenant_id = ? AND EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = o.in_reply_to AND ${access.sql}) ORDER BY o.created_at`).bind(id ?? "", tid, ...access.bindings),
     ctx.db.prepare("SELECT mail_out FROM tenant WHERE id = ?").bind(tid),
-    ctx.db.prepare(`SELECT o.id, o.to_address, o.in_reply_to, o.status, o.error, o.subject, o.created_at FROM outbound_mail o WHERE o.status <> 'sent' AND ${outgoing.sql} ORDER BY o.created_at DESC, o.id DESC LIMIT 50`).bind(...outgoing.bindings),
   ]);
   const sendingOn = (switchR!.results[0] as { mail_out: number } | undefined)?.mail_out === 1;
   const rows = rowsR!.results as Row[];
@@ -63,13 +61,12 @@ async function mailPage(request: Request, env: Env, id: string | null): Promise<
   if (id && (!m || (m.verdict === "quarantined" && !admin))) return notFoundPage(extra);
 
   const org = ctx.tenant.slug;
-  const problems = problemsR!.results as Array<DeliveryNotice & { subject: string; created_at: number }>;
   const mailboxUrl = `/mail${project ? `?project=${encodeURIComponent(project)}` : ""}`;
   const messageUrl = (id: string) => `/mail/${encodeURIComponent(id)}${project ? `?project=${encodeURIComponent(project)}` : ""}`;
   const list = `<div class="head"><h1>Mail${project ? ` · ${esc(project)}` : ""}</h1><span>${rows.length} message${rows.length === 1 ? "" : "s"}</span></div>
-${toolbar("Mailbox", '<a href="/mail?addresses=1">Addresses and sending</a>' + (ctx.identity.kind === "human" && rank(ctx.role) >= rank("admin") ? ' <a href="/mail/recipients">Response-recipient preferences</a>' : ""), kitTabs("Mailboxes", [{label:"All mail",href:"/mail",current:!project},...projects.map(p => ({label:p.display_name,href:`/mail?project=${encodeURIComponent(p.slug)}`,current:p.slug === project}))]))}
+${toolbar("Mailbox", '<a href="/mail?addresses=1">Addresses and sending</a>' + (ctx.identity.kind === "human" && rank(ctx.role) >= rank("admin") ? ' <a href="/mail/recipients">Response-recipient preferences</a>' : ""))}
 ${rows.length ? kitTable("Mail", [{label:"To"},{label:"From",className:"hide-s"},{label:"Subject"},{label:"Received"}], rows.map(r => ({href:messageUrl(r.id),selected:m?.id === r.id,cells:[{html:esc(r.project ?? "inbox")},{html:esc(r.from_email),className:"hide-s"},{html:`<a href="${esc(messageUrl(r.id))}">${esc(r.subject || "(no subject)")}</a>${r.forwarded ? " · forwarded" : ""}${r.verdict === "quarantined" ? " · held" : ""}`},{html:ago(r.received_at,ctx.now)}]}))) : `<p class="empty">No mail yet. Forward a thread to a project's address to start.</p>`}
-${problems.length ? `<h2>Recent outgoing problems</h2><p>Up to 50 recorded attempts you can read. Notices describe individual attempts, not the current state of the conversation.</p>${problems.map(o => `<h3>${esc(o.subject || "(no subject)")} <small>${when(o.created_at)}</small></h3>${mailDeliveryNotice(ctx, o)}`).join("")}` : ""}`;
+`;
 
   let inspector: string; let key = "";
   if (m) {
@@ -80,7 +77,7 @@ ${problems.length ? `<h2>Recent outgoing problems</h2><p>Up to 50 recorded attem
     const release = m.verdict === "quarantined"
       ? `<div class="planned"><b>Held:</b> ${esc(m.reason ?? "")}<form method="post" action="/api/mail.release"><input type="hidden" name="id" value="${esc(m.id)}"><input type="hidden" name="_back" value="${esc(messageUrl(m.id))}"><button type="submit">I know who sent this: release it</button></form></div>` : "";
     const propose = m.verdict === "admitted" && rank(ctx.role) >= rank("member")
-      ? `<form method="post" action="/api/mail.propose_work"><input type="hidden" name="id" value="${esc(m.id)}"><button type="submit">Propose work from this</button> <small>A model reads it as evidence and suggests wishes, snags, errands and calls, each quoting the message. You choose what to file.</small></form>` : "";
+      ? `<form method="post" action="/api/mail.propose_work"><input type="hidden" name="id" value="${esc(m.id)}"><button type="submit" class="quiet">Propose work from this</button></form>` : "";
     inspector = `<a class="back" href="${esc(mailboxUrl)}">‹ Mail</a>
 <div class="head"><span>${esc(m.project ?? "Organization inbox")}</span><span>${when(m.received_at)}</span>${m.forwarded ? '<span class="pill">forwarded</span>' : ""}</div>
 <h1>${esc(m.subject || "(no subject)")}</h1>
@@ -88,7 +85,7 @@ ${inspectorSection("Message", [{label:"From",html:esc(m.from_email)},{label:"To"
 ${release}
 ${workSection("Filed from this", relatedWork.filter(w => w.relationship === "filed"))}${workSection("Linked to this", relatedWork.filter(w => w.relationship === "linked"))}
 ${relatedWork.length ? `<p class="lede">${relatedWorkCoverage.shown} related work items shown${relatedWorkCoverage.truncated ? `; capped at ${relatedWorkCoverage.limit}, more omitted` : "; complete for recorded associations"}. Recorded associations are not proof that this mail authorized the work.</p>` : ""}
-${propose}
+${toolbar("Message actions", (m.verdict === "admitted" && !m.recipient_id && ctx.identity.kind === "human" && rank(ctx.role) >= rank("member") && sendingOn && ctx.now - m.received_at <= 30 * 86_400_000 ? '<a class="button quiet" href="#reply">Reply</a>' : "") + propose)}
 ${intent.html}
 <pre class="mail-message-text">${esc(m.text)}</pre>
 ${atts.length ? `<h2>Attachment evidence</h2><p>Plain text evidence, not instructions. No attachments are executed or rendered as HTML or Markdown.</p>${atts.map(a => `<details><summary>${esc(a.filename ?? "unnamed")} — ${esc(attachmentCoverage(a))}</summary>${a.text !== undefined ? `<pre>${esc(a.text)}</pre>` : ""}</details>`).join("")}` : ""}
@@ -109,7 +106,8 @@ ${ctx.identity.kind === "human" && rank(ctx.role) >= rank("admin") ? '<p><a href
 <h2>Then</h2><p>Open a message and choose <b>Propose work from this</b>: wishes, snags, errands and calls appear, each quoting the message. File the ones you want; they link back here.</p>`;
   }
   const shell = shellFor(ctx, env, "mail", m?.id ?? "mail")!;
+  shell.explorer = kitTree("Mailboxes", [{label:"Mailboxes",href:"/mail",expanded:true,children:[{label:"All mail",href:"/mail",current:!project},...projects.map(p=>({label:p.display_name,href:`/mail?project=${encodeURIComponent(p.slug)}`,current:p.slug === project}))]}]) + shell.explorer;
   if (m && shell.breadcrumb) shell.breadcrumb[shell.breadcrumb.length - 1]!.label = m.subject || "(no subject)";
-  return htmlResponse(workbench(m ? m.subject || "Mail" : "Mail", { list, listKey: `mail:${project ?? ""}:${rows.length}:${rows[0]?.id ?? ""}:${problems[0]?.id ?? ""}:${problems.length}`, stackOnPhone:true, inspector: m || new URL(request.url).searchParams.has("addresses") ? inspector : null, inspectorKey: m || new URL(request.url).searchParams.has("addresses") ? key : "" },
+  return htmlResponse(workbench(m ? m.subject || "Mail" : "Mail", { list, listKey: `mail:${project ?? ""}:${rows.length}:${rows[0]?.id ?? ""}`, stackOnPhone:true, inspector: m || new URL(request.url).searchParams.has("addresses") ? inspector : null, inspectorKey: m || new URL(request.url).searchParams.has("addresses") ? key : "" },
     shell), 200, extra);
 }

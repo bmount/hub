@@ -132,7 +132,7 @@ describe("presence browser asset", () => {
       const byteLength = new TextEncoder().encode(json).length;
       c.rawNext(json + ' '.repeat(size - byteLength), 32767, '1'); c.poll();
       for (let i = 0; i < 5; i++) await settle();
-      if (valid) expect(c.list.children[0]!.textContent).toContain('Presence is unknown');
+      if (valid) expect(c.list.children[0]!.textContent).toContain('No presence recorded');
       else { expect(c.list.children).toEqual([]); expect(c.cancelled()).toBeGreaterThan(0); }
       expect(c.calls.every(x => !x.status)).toBe(true);
     }
@@ -370,12 +370,12 @@ describe("presence browser asset", () => {
       last_seen: 1000, expires_at: 91000 };
     for (const state of ['stale', 'offline']) {
       c.snapshot({ observed_at: 91000, entries: [{ ...base, state, expires_at: state === 'offline' ? base.last_seen : base.expires_at }] }); c.poll(); await settle();
-      expect(c.list.children[0]!.textContent).toContain(' · ' + state + ' · ');
+      expect(c.list.children[0]!.textContent).toContain(' · ' + state);
       expect(c.list.children[0]!.textContent).toContain('@<b>agent</b>');
       expect(c.list.children[0]!.textContent).toContain('via-assistant');
     }
     c.snapshot({ observed_at: 91000, entries: [] }); c.poll(); await settle();
-    expect(c.list.children[0]!.textContent).toContain('Presence is unknown');
+    expect(c.list.children[0]!.textContent).toContain('No presence recorded');
     expect(c.calls.every(x => !x.status)).toBe(true);
   });
   it("releases an aborted headers/body request without waiting for ignored transport, recovers query-only and ignores late denial", async () => {
@@ -725,10 +725,10 @@ describe("presence browser asset", () => {
     const c = client(); await settle();
     expect(c.calls.map((x) => x.name)).toEqual(["/api/chat.presence"]);
     expect(c.list.children[0]!.textContent).toContain("<img src=x onerror=alert(1)>");
-    expect(c.list.children[0]!.textContent).toContain(" · online · ");
+    expect(c.list.children[0]!.textContent).toContain(" · online");
     c.state("online", 61000); c.poll(); await settle();
     c.elapsed(60000);
-    expect(c.list.children[0]!.textContent).toContain(" · stale · ");
+    expect(c.list.children[0]!.textContent).toContain(" · stale");
     expect(c.freshness.textContent).toContain("60 seconds old");
     c.elapsed(90000);
     expect(c.list.children).toEqual([]);
@@ -760,11 +760,11 @@ describe("presence browser asset", () => {
   it("bounds cached offline and empty snapshots and never presents a failed refresh as an empty current directory", async () => {
     const c = client(); await settle();
     c.state("offline"); c.poll(); await settle();
-    c.elapsed(89999); expect(c.list.children[0]!.textContent).toContain(" · offline · ");
+    c.elapsed(89999); expect(c.list.children[0]!.textContent).toContain(" · offline");
     c.elapsed(90000); expect(c.list.children).toEqual([]);
     expect(c.freshness.textContent).toBe("No current presence snapshot.");
     c.empty(); c.snapshot({ observed_at: 91000 }); c.poll(); await settle();
-    expect(c.list.children[0]!.textContent).toContain("No recent explicit heartbeats");
+    expect(c.list.children[0]!.textContent).toContain("No presence recorded");
     c.elapsed(180000); expect(c.list.children).toEqual([]);
     c.deny(); c.poll(); await settle(); c.elapsed(181000);
     expect(c.list.children).toEqual([]);
@@ -822,7 +822,7 @@ describe("presence browser asset", () => {
     const release = c.delayNext(); c.poll(); await settle();
     c.elapsed(7000); release(); await settle();
     expect(c.freshness.textContent).toContain("7 seconds old");
-    expect(c.list.children[0]!.textContent).toContain(" · stale · ");
+    expect(c.list.children[0]!.textContent).toContain(" · stale");
     const late = c.delayNext(); c.poll(); await settle();
     c.elapsed(15000); late(); await settle();
     expect(c.list.children).toEqual([]);

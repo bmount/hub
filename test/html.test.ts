@@ -37,7 +37,7 @@ describe("workbench kit", () => {
   });
 
   it("renders text-labeled state/kind chips, inline edit sections and form labels", () => {
-    expect(statusChip('Under way', 'doing')).toBe('<span class="wb-chip wb-tone-doing">Under way</span>');
+    expect(statusChip('Under way', 'doing')).toBe('<span class="wb-chip wb-state wb-tone-doing">Under way</span>');
     expect(statusChip('<Snag>', 'snag')).toContain('&lt;Snag&gt;');
     const section = inspectorSection('Details <1>', [{label: 'Title', html: 'Item', editHtml: '<form><input name="title"></form>'}]);
     expect(section).toContain('<h2>Details &lt;1&gt;</h2><dl><dt>Title</dt><dd><details class="wb-inline-edit"><summary aria-label="Change Title">Item');

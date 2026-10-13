@@ -262,7 +262,7 @@ try {
   });
   const livePage = await liveCtx.newPage();
   await livePage.goto(`${base}/c/${liveInfo.channel}`);
-  await expect(livePage.locator('[data-live-status]')).toContainText('connected');
+  await expect(livePage.locator('[data-live-status]')).toContainText('Live');
   await livePage.evaluate(() => { window.__liveDocument = document; });
   const credential = path.join(temp, 'local-agent.token');
   await writeFile(credential, agentRun, { mode: 0o600 });
@@ -329,7 +329,7 @@ try {
   const opens = socketOpens;
   liveSockets.at(-1).close(1000);
   await expect.poll(() => socketOpens).toBeGreaterThan(opens);
-  await expect(livePage.locator('[data-live-status]')).toContainText('connected');
+  await expect(livePage.locator('[data-live-status]')).toContainText('Live');
   expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === liveInfo.channel).read_seq).toBe(0);
   const resume = Math.max(0, ...frames.filter(f => !f.request_id).map(f => f.result?.next_offset || 0));
   chatClient.kill('SIGTERM'); await new Promise(resolve => chatClient.once('exit', resolve));
@@ -790,7 +790,7 @@ try {
       await expect(page.locator('.channel-message b')).toHaveCount(0);
       // Explicit same-origin form submit only; unread clears for this viewer.
       lastRead = (await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').head;
-      await page.getByRole('button', { name: /Mark channel read/ }).click();
+      await page.getByRole('button', { name: 'Mark read', exact: true }).click();
       await expect(page.locator('#unread')).toHaveCount(0);
       expect((await verb(member, 'chat.conversations', {})).conversations.find(c => c.channel === 'general').read_seq).toBe(lastRead);
       // Add another root so following viewport passes have an unread target.
@@ -907,11 +907,11 @@ try {
   for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }], ['narrow', { width: 320, height: 740 }]]) {
     const boardCtx = await context(reader, viewport), boardPage = await boardCtx.newPage();
     await boardPage.goto(`${base}/site/board`);
-    await expect(boardPage.locator('.closure-report h2')).toHaveText('Recorded closures by actor');
+    await expect(boardPage.locator('.closure-report h2')).toHaveText('Recorded closures by person');
     await expect(boardPage.getByRole('table',{name:'Recorded closures',exact:true}).locator('tbody tr')).toHaveCount(1);
     await expect(boardPage.getByRole('table',{name:'Recorded closures',exact:true}).locator('tbody td').last()).toHaveText('1');
-    await expect(boardPage.locator('.closure-report')).toContainText('including reopened items');
-    await expect(boardPage.locator('.closure-report')).toContainText('Historical prose events are not attributed');
+    await expect(boardPage.locator('#list > .lede')).toHaveAttribute('title', /including reopened items/);
+    await expect(boardPage.locator('#list > .lede')).toHaveAttribute('title', /Historical prose events are not attributed/);
     await expect(boardPage.locator('.closure-report img')).toHaveCount(0);
     await noOverflow(boardPage);
     await boardPage.locator('.closure-report').scrollIntoViewIfNeeded();
@@ -936,6 +936,9 @@ try {
   console.log('PASS reader/viewer isolation and outside-tenant/unauthenticated denials');
   }
   console.log(`${requests} local browser requests. Screenshots: ${artifacts}`);
+} catch (error) {
+  console.error(error);
+  throw error;
 } finally {
   chatClient?.kill('SIGTERM');
   await browser?.close();

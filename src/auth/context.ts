@@ -213,7 +213,7 @@ async function prefetch(db: D1Database, slug: string | null, tokenHash: string, 
 /** Preferences select only tenant-authorized projects; they never grant access. */
 function explorerStatement(db: D1Database, slug: string | null, live: string, tokenHash: string, now: number, request: Request): D1PreparedStatement {
   let path = "", requested = "", remembered = "";
-  try { const url = new URL(request.url); path = decodeURIComponent(url.pathname.split("/")[1] ?? ""); requested = url.searchParams.get("project") ?? ""; } catch { /* invalid URL component */ }
+  try { const url = new URL(request.url); path = decodeURIComponent(url.pathname.split("/")[1] ?? ""); requested = url.searchParams.get("project") ?? url.searchParams.get("work")?.split("#")[0] ?? ""; } catch { /* invalid URL component */ }
   try { remembered = decodeURIComponent(/(?:^|;\s*)pmw_project=([^;]*)/.exec(request.headers.get("cookie") ?? "")?.[1] ?? ""); } catch { /* invalid preference */ }
   return db.prepare(`WITH target AS MATERIALIZED (SELECT id FROM tenant WHERE slug = ?),
     actor AS MATERIALIZED (${live}),

@@ -33,7 +33,7 @@ describe("board and bulk changes", () => {
     expect(b.stalled).toBe(1);
     const page = await (await SELF.fetch(`https://${HOST}/site/board`, { headers: w.h })).text();
     expect(page).toContain("1 of 2 done");
-    expect(page).toContain('<span class="pill">stalled</span>');
+    expect(page).toContain(" · stalled");
   });
 
   it("changes many items at once, each recorded, and reports what it couldn't change", async () => {

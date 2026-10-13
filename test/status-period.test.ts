@@ -121,7 +121,7 @@ describe("truthful project period status", () => {
     expect(api.status).toBe(200);
     expect((await api.json() as { result: Status }).result.totals).toEqual(s.totals);
     const html = await (await SELF.fetch(`https://${HOST}/site/status`, { headers: w.headers })).text();
-    expect(html).toContain('Filed <span class="pill">110</span>');
+    expect(html).toContain('Filed <span class="wb-count">110</span>');
     expect(html).toContain("Showing 50 of 110 recorded examples; truncated.");
     expect(html).toContain("Showing 20 of 23 recorded examples; truncated.");
     expect(html).toContain("900 lifetime occurrences");
@@ -180,7 +180,7 @@ describe("truthful project period status", () => {
     expect(s.commits.count).toBe(0);
     expect(s.coverage).toMatchObject({ telemetry: { registered_sources: 5, active_sources: 3, active_never_received: 1, active_received_in_period: 1, oldest_active_last_received_at: w.since - DAY, latest_active_last_received_at: w.now }, latest_recorded_commit_at: w.since - DAY });
     const html = await (await SELF.fetch(`https://${HOST}/site/status`, { headers: w.headers })).text();
-    expect(html).toContain("No matching records observed.");
+    expect(html).toContain("Filed: none");
     expect(html).toContain("Telemetry last-received times do not prove continuous coverage");
     expect(html).toContain("1 active never received");
     expect(html).toContain("Git sync: backfill");

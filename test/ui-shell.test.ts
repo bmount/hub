@@ -29,7 +29,8 @@ describe("the signed-in shell", () => {
       expect(html.slice(html.indexOf('<aside id="rail"'), html.indexOf('<aside id="explorer"')), path).toMatch(new RegExp(`aria-current="page">${label}(?:<span class="wb-count">\\d+</span>)?</a>`));
       expect(html, path).toContain('class="wb-breadcrumb" aria-label="Breadcrumb"');
       expect(html, path).toContain('aria-label="Project explorer"');
-      expect(hasTip(html), path).toBe(true);
+      expect(hasTip(html), path).toBe(path === "/");
+      expect(html.slice(html.indexOf('<footer class="status"')), path).not.toContain('class="tip"');
     }
   });
 

@@ -41,7 +41,7 @@ describe("status from records", () => {
     expect(s.commits).toMatchObject({ count: 1, by: [{ who: "ada" }] });
     expect(s.deploys.length).toBe(1);
     const page = await (await SELF.fetch(`https://${HOST}/site/status`, { headers: cookieHeaders(w.sam.token, HOST) })).text();
-    expect(page).toContain("Built from the record only");
+    expect(page).toContain("Recorded evidence only");
     expect(page).toContain('<span class="pill">stalled</span>');
     expect((await w.sam_("project.status", { project: "site", since: "tomorrow" })).status).toBe(400);
   });

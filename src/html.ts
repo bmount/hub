@@ -44,7 +44,7 @@ export function kitTree(label: string, nodes: TreeNode[]): string {
 
 export type ChipTone = "open" | "doing" | "done" | "dropped" | "blocked" | "wish" | "snag" | "errand" | "quest" | "call" | "spark";
 export function statusChip(label: string, tone: ChipTone): string {
-  return `<span class="wb-chip wb-tone-${esc(tone)}">${esc(label)}</span>`;
+  return `<span class="wb-chip${["open","doing","done","dropped","blocked"].includes(tone) ? " wb-state" : ""} wb-tone-${esc(tone)}">${esc(label)}</span>`;
 }
 
 export function inspectorSection(heading: string, rows: { label: string; html: string; editHtml?: string }[], actionsHtml = ""): string {
@@ -102,7 +102,7 @@ ${shell.planned?.length ? `<h4>Coming</h4><ul>${shell.planned.map(railLink).join
 ${org ? `<form class="jump" action="/search" method="get" role="search"><input name="q" placeholder="Search all projects…" maxlength="200" autocomplete="off" aria-label="Search all projects"><kbd>⌘K</kbd></form>` : `<span class="jump"></span>`}
 ${org && shell.canFile ? `<a class="button file" href="/new" title="File work (c)">+ File</a>` : ""}<a class="me" href="${esc(shell.me.href)}">${esc(shell.me.email)}${shell.me.role ? ` (${esc(shell.me.role)})` : ""}</a></header>`;
   const tabs = shell.tabs?.length ? `<nav class="tabs" aria-label="Sections">${shell.tabs.map((t) => `<a href="${esc(t.href)}"${t.active ? ' aria-current="page"' : ""}>${esc(t.label)}${typeof t.count === "number" && t.count > 0 ? `<span class="n">${t.count}</span>` : ""}</a>`).join("")}<a href="#rail">More</a></nav>` : "";
-  const status = `<footer class="status"><span id="perf"></span><span class="tip">${esc(shell.tip)}</span><span class="keys hide-s"><kbd>⌘K</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>e</kbd> edit · <kbd>c</kbd> file · <kbd>/</kbd> filter</span><a href="${esc(shell.brandHref)}privacy">Privacy</a><a href="${esc(shell.brandHref)}terms">Terms</a></footer>`;
+  const status = `<footer class="status"><span id="perf"></span><span id="connection-state" role="status"></span><span class="keys hide-s"><kbd>⌘K</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>e</kbd> edit · <kbd>c</kbd> file · <kbd>/</kbd> filter</span><a href="${esc(shell.brandHref)}privacy">Privacy</a><a href="${esc(shell.brandHref)}terms">Terms</a></footer>`;
   return `${head(title)}
 <body class="wb" data-focus="${focus}">
 ${bar}
@@ -155,14 +155,6 @@ export function htmlResponse(body: string, status = 200, headers: HeadersInit = 
   h.set("content-security-policy", HTML_CSP);
   h.set("x-frame-options", "DENY");
   return new Response(body, { status, headers: h });
-}
-
-/** Getting someone started: connect an agent (members and up) and invite a person (admins), as one matching pair. */
-export function onramp(opts: { connect: boolean; invite: boolean }): string {
-  const a: string[] = [];
-  if (opts.connect) a.push(`<a href="/people?connect=1"><b>Connect an agent</b><span>Claude Code, Codex or any agent: one link to paste to it</span></a>`);
-  if (opts.invite) a.push(`<a href="/people?invite=1"><b>Invite a person</b><span>A link to send them; they sign in with Google or email</span></a>`);
-  return a.length ? `<div class="onramp">${a.join("")}</div>` : "";
 }
 
 /**

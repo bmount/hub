@@ -158,7 +158,7 @@ export const WORKBENCH_JS = String.raw`
     }
     var crumb = $(".bar .wb-breadcrumb"), ncrumb = doc.querySelector(".bar .wb-breadcrumb"); if (crumb && ncrumb) crumb.replaceWith(ncrumb);
     var tabs = $(".tabs"), ntabs = doc.querySelector(".tabs"); if (tabs && ntabs) tabs.innerHTML = ntabs.innerHTML;
-    var tip = $(".status .tip"), ntip = doc.querySelector(".status .tip"); if (tip && ntip) tip.textContent = ntip.textContent;
+    var connection = $("#connection-state"); if (connection && !document.querySelector("[data-chat-live]")) connection.replaceChildren();
     document.body.setAttribute("data-focus", doc.body.getAttribute("data-focus") || "list");
     document.title = doc.title;
     if (push) history.pushState({ wb: 1 }, "", url); else history.replaceState({ wb: 1 }, "", url);
@@ -350,6 +350,18 @@ export const WORKBENCH_JS = String.raw`
     // A failed response does not mean the mutation failed. Never automatically replay a POST.
     if ((f.getAttribute("method") || "get").toLowerCase() === "post") go(u.href, { method: "POST", body: data });
     else { u.search = data.toString(); go(u.href); }
+  });
+  var filterTimer;
+  document.addEventListener("input", function (e) {
+    var f = e.target.form;
+    if (f && f.closest(".wb-filters") && (f.getAttribute("method") || "get").toLowerCase() === "get" && e.target.matches("input:not([data-filter]):not([type=hidden])")) {
+      clearTimeout(filterTimer); filterTimer = setTimeout(function () { if (f.isConnected) f.requestSubmit(); }, 400);
+    }
+  });
+  document.addEventListener("change", function (e) {
+    clearTimeout(filterTimer);
+    var f = e.target.form;
+    if (f && f.closest(".wb-filters,.filters") && (f.getAttribute("method") || "get").toLowerCase() === "get" && !e.target.matches("[data-filter]")) f.requestSubmit();
   });
   window.addEventListener("popstate", function () { go(location.href, { push: false }); });
 

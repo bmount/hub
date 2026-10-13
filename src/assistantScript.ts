@@ -46,7 +46,6 @@ export const ASSISTANT_JS = String.raw`
     f.closest(".pane").setAttribute("data-key", "assistant:" + id);
     f.closest(".assist").querySelector("[data-chat-link]").href = url;
     f.closest(".assist").querySelector("[data-tools-link]").href = "/assistant/tools?t=" + encodeURIComponent(id);
-    f.closest(".assist").querySelector("[data-conversations-link]").href = url + "&list=1";
     var back = document.querySelector("#inspector .back"); if (back) back.href = url + "&list=1";
     var returning = document.querySelector("[data-assistant-return]"); if (returning) returning.href = url;
     history.replaceState(history.state, "", url);

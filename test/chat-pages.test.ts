@@ -265,11 +265,11 @@ describe("chat pages", () => {
     await ok(w.lead.token, "chat.post", { c: "general", reply_to: first.seq, body: "new reply" });
     const html = await (await get("/c/general", w.dev.token)).text();
     expect(html.match(/id="unread"/g)).toHaveLength(1);
-    expect(html).toContain('href="#unread">Jump to new messages on this page');
+    expect(html).toContain('href="#unread">Jump to new');
     expect(html.indexOf("already read")).toBeLessThan(html.indexOf('id="unread"'));
     expect(html.indexOf('id="unread"')).toBeLessThan(html.indexOf("new root"));
     expect(html).toContain('href="/c/general/t/1?after=1">New thread activity');
-    expect(html).toContain("open threads to read replies");
+    expect(html).not.toContain("open threads to read replies");
     const thread = await (await get("/c/general/t/1?after=1", w.dev.token)).text();
     expect(thread).toContain('aria-labelledby="thread-original"');
     expect(thread).toContain('aria-labelledby="thread-replies"');
@@ -297,8 +297,8 @@ describe("chat pages", () => {
     expect(edited).not.toContain('id="unread"');
     for (let i = 0; i < 50; i++) await ok(i % 2 ? w.dev.token : w.lead.token, "chat.post", { c: "general", body: `long message ${i} ${"x".repeat(1000)}` });
     const partial = await (await get("/c/general", w.dev.token)).text();
-    expect(partial).toContain("This is a partial channel view");
-    expect(partial).toContain("including activity not shown here");
+    expect(partial).toContain("Partial channel view");
+    expect(partial).toContain("includes activity not shown here");
     const older = await (await get("/c/general?before=2", w.dev.token)).text();
     expect(older).toContain("updated body");
     expect(older).not.toContain('id="unread"');

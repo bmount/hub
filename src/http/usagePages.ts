@@ -61,7 +61,7 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
   const range = [7, 30, 90].map((x) => `<a class="chip" href="${esc(`/usage?days=${x}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}${filterQs}`)}"${x === days ? ' aria-current="true"' : ""}>${x} days</a>`).join("");
   const filter = `<form class="filters" method="get" action="/usage"><input type="hidden" name="days" value="${days}">${whoParam ? `<input type="hidden" name="who" value="${esc(whoParam)}">` : ""}
 <label>Project <input name="project" maxlength="127" value="${esc(selectedProject?.ref ?? "")}" placeholder="project or namespace/project"></label>
-<label>Work item <input name="work" maxlength="80" value="${esc(selectedWork?.ref ?? "")}" placeholder="project#number"></label><button type="submit" class="quiet">Filter</button>
+<label>Work item <input name="work" maxlength="80" value="${esc(selectedWork?.ref ?? "")}" placeholder="project#number"></label><noscript><button type="submit" class="quiet">Apply filters</button></noscript>
 ${selectedWork ? `<a href="${esc(`/usage?days=${days}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}${projectQs}`)}">Clear work filter</a>` : ""}
 ${selectedProject ? `<a href="${esc(`/usage?days=${days}${whoParam ? `&who=${encodeURIComponent(whoParam)}` : ""}${workQs}`)}">Clear project filter</a>` : ""}</form>`;
   const list = `<div class="head"><h1>AI usage</h1><span>${admin ? `everyone in ${esc(ctx.tenant.display_name)}` : "yours"}</span></div>

@@ -200,7 +200,8 @@ describe("addressed mailbox access", () => {
       expect(page).not.toContain("OUT-FOREIGN-FAIL");
       expect(page).not.toContain("secret-transport-diagnostic");
       if (viewer !== w.b) expect(page).not.toContain("OUT-B-PAGE-");
-      if (viewer === w.ordinary || viewer === w.reader) expect(page).toContain("OUT-SHARED-FAIL");
+      expect(page).not.toContain("Recent outgoing problems");
+      expect(page).not.toContain("OUT-SHARED-FAIL");
     }
     const agentCtx = await buildContext(new Request(`https://${HOST}/mail`, { headers: w.a.headers }), env);
     const elevated = readableOutgoingMail({ ...agentCtx, role: "admin" });
@@ -212,7 +213,7 @@ describe("addressed mailbox access", () => {
     }
     await env.HUB_DB.prepare("UPDATE identity SET operator_id = ? WHERE id = ?").bind(w.ordinary.identity.id, w.a.agent.identity.id).run();
     expect(await (await SELF.fetch(`https://${HOST}/mail`, { headers: w.pat.headers })).text()).not.toContain("OUT-A-FAIL");
-    expect(await (await SELF.fetch(`https://${HOST}/mail`, { headers: w.ordinary.headers })).text()).toContain("OUT-A-FAIL");
+    expect(await (await SELF.fetch(`https://${HOST}/mail`, { headers: w.ordinary.headers })).text()).not.toContain("OUT-A-FAIL");
     await env.HUB_DB.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ? AND tenant_id = ?").bind(w.ordinary.identity.id, w.t.id).run();
     expect((await SELF.fetch(`https://${HOST}/mail`, { headers: w.ordinary.headers })).status).toBe(404);
   });

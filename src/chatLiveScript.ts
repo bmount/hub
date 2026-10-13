@@ -4,7 +4,9 @@ export const CHAT_LIVE_JS = String.raw`(() => {
   const panel = document.querySelector('[data-chat-live]');
   if (!panel) return;
   const chat = JSON.parse(panel.dataset.chatLive);
-  const status = panel.querySelector('[data-live-status]');
+  const connection = document.querySelector('#connection-state');
+  if (connection) { connection.replaceChildren(panel.querySelector('[data-live-status]')); connection.firstChild.hidden = false; }
+  const status = document.querySelector('[data-live-status]');
   const signals = panel.querySelector('[data-live-signals]');
   const pane = panel.closest('.pane') || document;
   const form = pane.querySelector('.channel-compose');
@@ -49,7 +51,7 @@ export const CHAT_LIVE_JS = String.raw`(() => {
     if (closed) return;
     const url = new URL('/chat/v1/ws', location.origin); url.protocol = 'wss:'; url.searchParams.set('offset', offset);
     ws = new WebSocket(url);
-    ws.onopen = () => { lastSeen = Date.now(); status.textContent = 'Live messages, typing and presence connected. Connection publishes presence; it does not mark messages read.'; };
+    ws.onopen = () => { lastSeen = Date.now(); status.textContent = 'Live'; };
     ws.onmessage = event => {
       lastSeen = Date.now();
       let frame; try { frame = JSON.parse(event.data); } catch { return; }
@@ -63,7 +65,7 @@ export const CHAT_LIVE_JS = String.raw`(() => {
       }
       if (!frame.ok) {
         if (frame.error && ['offset_expired', 'invalid_offset'].includes(frame.error.code)) {
-          status.textContent = 'Live cursor expired. Refresh this page to resynchronize.'; stop(false);
+          status.textContent = 'Expired · Refresh'; stop(false);
         }
         return;
       }
@@ -83,7 +85,7 @@ export const CHAT_LIVE_JS = String.raw`(() => {
     ws.onclose = () => {
       transient.clear(); renderSignals();
       if (pending) { clearTimeout(sendTimeout); pending = null; form.querySelector('button[type="submit"]').disabled = false; status.textContent = 'Send outcome unknown. Draft kept; reconcile before resending.'; }
-      else if (!closed) status.textContent = 'Live connection lost. Reconnecting; Refresh and ordinary forms remain available.';
+      else if (!closed) status.textContent = 'Reconnecting…';
       if (!closed) reconnect = setTimeout(connect, 2000 + Math.random() * 3000);
     };
     ws.onerror = () => ws.close();

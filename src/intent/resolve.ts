@@ -76,7 +76,7 @@ export function bestMatch<T>(said: string, items: T[], names: (t: T) => string[]
 type Project = { slug: string; name: string };
 type Person = { id: string; name: string; email: string; kind: string; operator_id: string | null }; 
 const option = (v: string, label: string, sel: boolean) => `<option value="${esc(v)}"${sel ? " selected" : ""}>${esc(label)}</option>`;
-const card = (say: string, body: string) => ({ kind: "card" as const, html: `<div class="intent-card">${say ? `<p class="say">${esc(say)}</p>` : ""}${body}</div>` });
+const card = (say: string, body: string) => ({ kind: "card" as const, html: `<div class="wb-section intent-result">${say ? `<p class="say">${esc(say)}</p>` : ""}${body}</div>` });
 const field = (label: string, input: string) => `<label class="f"><span>${esc(label)}</span>${input}</label>`;
 
 export async function resolve(ctx: Ctx, intent: Intent): Promise<Outcome> {

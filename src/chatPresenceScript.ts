@@ -51,12 +51,13 @@ export const CHAT_PRESENCE_JS = String.raw`(() => {
       const li = document.createElement('li');
       const expired = elapsed >= Math.max(0, entry.expires_at - observedAt);
       const state = expired && (entry.state === 'online' || entry.state === 'away') ? 'stale' : entry.state;
-      li.textContent = '@' + entry.handle + ' · ' + entry.kind + (entry.via_assistant ? ' via-assistant' : '') + ' · ' + state + ' · last heartbeat ' + new Date(entry.last_seen).toISOString();
+      li.textContent = '@' + entry.handle + ' · ' + entry.kind + (entry.via_assistant ? ' via-assistant' : '') + ' · ' + state;
+      li.title = 'Last seen ' + new Date(entry.last_seen).toISOString();
       list.append(li);
     }
     if (!entries.length) {
       const li = document.createElement('li');
-      li.textContent = 'No recent explicit heartbeats. Presence is unknown.';
+      li.textContent = 'No presence recorded';
       list.append(li);
     }
   }

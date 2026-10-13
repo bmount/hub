@@ -45,10 +45,10 @@ describe("exact board totals and bounded examples", () => {
     expect(res.status).toBe(200);
     expect((await res.json() as { result: ExactBoard }).result.totals).toEqual(b.totals);
     const html = await (await SELF.fetch(`https://${HOST}/site/board`, { headers: w.headers })).text();
-    expect(html).toContain('Under way <span class="pill">45</span>');
-    expect(html).toContain('Open <span class="pill">510</span>');
-    expect(html).toContain("Showing 60 of 510"); expect(html).toContain("Showing 0 of 45");
-    expect(html).toContain("No examples in the latest-item sample"); expect(html).not.toContain('None.</p>');
+    expect(html).toContain('Under way <span class="wb-count">45</span>');
+    expect(html).toContain('Open <span class="wb-count">510</span>');
+    expect(html).toContain("60 sampled of 510"); expect(html).toContain("0 sampled of 45");
+    expect(html).toContain("Recorded totals"); expect(html).not.toContain('None.</p>');
   });
 
   it("uses strict done/stall boundaries and reports empty and complete samples truthfully", async () => {

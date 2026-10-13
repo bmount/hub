@@ -64,19 +64,20 @@ function readinessHtml(r: ReadinessView, compact = false): string {
 }
 
 function dependencyInspector(g: Awaited<ReturnType<typeof graphContext>>, w: WorkItem, writable: boolean, keep: string, back: string): string {
-  const form = (verb: string, id: string, controls: string, label: string, destination = keep) => `<form method="post" action="/api/${verb}">${id ? `<input type="hidden" name="id" value="${esc(id)}">` : ""}<input type="hidden" name="_back" value="${destination}">${controls}<button type="submit">${esc(label)}</button></form>`;
+  const form = (verb: string, id: string, controls: string, label: string, destination = keep) => `<form method="post" action="/api/${verb}">${id ? `<input type="hidden" name="id" value="${esc(id)}">` : ""}<input type="hidden" name="_back" value="${destination}">${controls}<button type="submit" class="quiet">${esc(label)}</button></form>`;
   const refs = (direction: "up" | "down") => {
     const edges = g.g.edges.filter(e => direction === "up" ? e.dependent_id === w.id : e.prereq_id === w.id);
-    return edges.length ? kitList(direction === "up" ? "Waits on" : "Waiting on it", edges.map(e => {
+    const title = direction === "up" ? "Waits on" : "Waiting on it";
+    const add = writable ? `<details class="wb-add-dependency"><summary>+ Add</summary>${direction === "up" ? form("work.depend", w.id, `<label>Item <input name="on" required placeholder="project#number" maxlength="80"></label>`, "Add") : form("work.depend", "", `<label>Item <input name="id" required placeholder="project#number" maxlength="80"></label><input type="hidden" name="on" value="${esc(w.id)}">`, "Add")}</details>` : "";
+    return (edges.length ? `<h3>${title}</h3>` + kitList(title, edges.map(e => {
       const id = direction === "up" ? e.prereq_id : e.dependent_id;
       const n = g.byId.get(id)!;
       const href = `/${n.ref.split("#")[0]}/w/${n.ref.split("#")[1]}`;
       return {html: `<a href="${esc(href)}">${esc(n.ref)} ${esc(n.title)}</a> ${readinessHtml(g.readinessOf(id))}${writable ? form("work.depend", direction === "up" ? w.id : id, `<input type="hidden" name="remove" value="${esc(direction === "up" ? id : w.id)}">`, "Remove dependency") : ""}`};
-    })) : `<p class="lede">None.</p>`;
+    })) : `<p class="lede">${title}: none</p>`) + add;
   };
   const resources = g.g.resources.filter(r => r.item_id === w.id).map(r => `${r.name}${r.mode === "shared" ? ":shared" : ""}`).join(", ");
-  return `<h2>Dependencies and resources</h2>${readinessHtml(g.readinessOf(w.id))}<h3>Waits on</h3>${refs("up")}<h3>Waiting on it</h3>${refs("down")}
-${writable ? form("work.depend", w.id, `<label>Add prerequisite <input name="on" required placeholder="project#number" maxlength="80"></label>`, "Add dependency") + form("work.depend", "", `<label>Dependent item <input name="id" required placeholder="project#number" maxlength="80"></label><input type="hidden" name="on" value="${esc(w.id)}">`, "Add dependent") : ""}
+  return `<h2>Dependencies and resources</h2>${readinessHtml(g.readinessOf(w.id))}${refs("up")}${refs("down")}
 ${inspectorSection("Resources", [{label: "Needs", html: esc(resources || "None"), editHtml: writable ? form("work.resources", w.id, `<label>Resources <input name="resources" value="${esc(resources)}" placeholder="prod-db, replica:shared"></label>`, "Save resources") : ""}])}
 ${writable ? `<details><summary>Delete item</summary><p>Delete permanently, including comments, links and dependencies. Use Let it go for real work that will not happen.</p>${form("work.delete", w.id, `<label>Type ${esc(g.refOf(w.id))} to confirm <input name="confirm" required autocomplete="off" maxlength="80"></label>`, "Delete permanently", esc(back))}</details>` : ""}`;
 }
@@ -161,7 +162,7 @@ function docketList(ctx: Ctx, project: Project | null, items: WorkItem[], member
 <select name="closed" aria-label="State">${option("", "Open", !f.closed)}${option("1", "Finished", f.closed)}</select>
 <select name="owner" aria-label="Owner">${option("", "Anyone", f.owner === null)}${option("me", "Me", f.owner === "me")}${ownerKnown ? "" : option(f.owner!, f.owner!, true)}${members.map((m) => option(m.email, `${m.display_name}${m.kind === "agent" ? " (agent)" : ""}`, f.owner === m.email)).join("")}</select>
 ${project && !f.org ? `<select name="quest" aria-label="Quest">${option("", "Any quest", f.quest === null)}${quests.map((q) => option(String(q.number), `#${q.number} ${q.title}`, f.quest === q.number)).join("")}</select>` : ""}
-<button type="submit" class="quiet">Show</button><input data-filter name="filter" placeholder="Filter these (/)" aria-label="Filter the list" size="16"></form>`;
+<noscript><button type="submit" class="quiet">Apply filters</button></noscript><input data-filter name="filter" placeholder="Filter these (/)" aria-label="Filter the list" size="16"></form>`;
   const itemQs = qs(f, {}, true);
   const canBulk = rank(ctx.role) >= rank("member") && items.length > 0;
   const rows = items.map((w) => {
@@ -249,8 +250,8 @@ async function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, 
   const controls = canWrite ? `<p>${w.state !== "doing" ? `<form class="inline" method="post" action="/api/work.claim"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><button type="submit">I'm on it</button></form> ` : ""}${w.state !== "done" ? action("done", "Done") : ""} ${w.state !== "dropped" ? action("dropped", "Let it go") : ""} ${(w.state === "done" || w.state === "dropped") ? action("open", "Reopen") : ""} ${follow}</p>` : `<p>${follow}</p>`;
   const comments = `<h2>Comments${d.comments.length ? ` <span class="pill">${d.comments.length}</span>` : ""}</h2>
 ${d.comments.length ? kitList("comments", d.comments.map((c)=>({html:`<time title="${when(c.created_at)}">${ago(c.created_at, ctx.now)}</time> · <span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ""}<div class="prose" style="margin-top:2px">${esc(c.body)}</div></span>`}))) : `<p class="lede">No comments yet.</p>`}
-${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
-<label style="display:block"><textarea data-voice name="body" rows="3" required maxlength="10000" style="display:block;width:100%" placeholder="Comment. @handle mentions someone."></textarea></label><button type="submit">Comment</button></form>` : ""}`;
+${canWrite ? `<form class="wb-comment" method="post" action="/api/work.comment"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
+<textarea aria-label="Comment" data-voice data-enter-submits name="body" rows="1" required maxlength="10000" placeholder="Comment…"></textarea><button type="submit" class="quiet" aria-label="Send comment">↑</button></form>` : ""}`;
   const ownerChoices = d.owner && !d.members.some((m) => m.id === d.owner!.id) ? [d.owner, ...d.members] : d.members;
   const questChoices = d.parent && !d.quests.some((q) => q.id === d.parent!.id) ? [d.parent, ...d.quests] : d.quests;
   const field = (label: string, value: string, control: string) => ({label, html: value, editHtml: canWrite ? `<form method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><label>${esc(label)} ${control}</label><button type="submit">Save ${esc(label.toLowerCase())}</button></form>` : ""});
@@ -262,7 +263,6 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
     field("Owner", esc(d.owner?.display_name ?? "Nobody"), `<select name="owner">${option("none", "Nobody", !d.owner)}${ownerChoices.map(m => option(m.email, m.display_name, d.owner?.id === m.id)).join("")}</select>`),
     field("Priority", `P${w.priority}`, `<select name="priority">${[0, 1, 2, 3].map(p => option(String(p), `P${p}`, p === w.priority)).join("")}</select>`),
     field("Quest", d.parent ? esc(d.parent.title) : "None", `<select name="parent">${option("0", "None", !d.parent)}${questChoices.map(q => option(String(q.number), `#${q.number} ${q.title}`, d.parent?.id === q.id)).join("")}</select>`),
-    field("Details", w.body.trim() ? "Recorded below" : "None", `<textarea name="body" rows="4" maxlength="20000">${esc(w.body)}</textarea>`),
     {label: "Project", html: `<a href="/${esc(project.slug)}/docket">${esc(project.display_name)}</a>`},
     {label: "Filed", html: when(w.created_at) + (w.closed_at ? `, closed ${when(w.closed_at)}` : "")},
   ]);
@@ -285,12 +285,13 @@ ${canWrite ? `<form method="post" action="/api/work.comment"><input type="hidden
 <h1>${titleField}</h1>
 ${toolbar("Item actions", controls.replace(/^<p>|<\/p>$/g, "") + '<button type="button" class="quiet" data-close-inspector>Close</button>')}
 ${edit}
+${inlineField(field("Body", w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : '<p class="lede">Add a description</p>', `<textarea name="body" rows="4" maxlength="20000">${esc(w.body)}</textarea>`))}
 <p><a href="/usage?work=${esc(encodeURIComponent(`${project.slug}#${w.number}`))}">Recorded AI usage for this work</a></p>
 ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
 ${sourceMail ? `<p>Source: <a href="${sourceMail}">Recorded mail</a>. Access is checked when opened.</p>` : ""}
 ${sourceMessage ? `<p>Source: <a href="${sourceMessage}">Recorded message</a>. Access is checked when opened.</p>` : ""}
 ${sourceUrl ? `<p>Source: <a href="${esc(sourceUrl)}">Recorded URL</a>. Recorded evidence, not verified access or existence.</p>` : ""}
-${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Click Details to add what, why, and how you will know it is done." : ""}</p>`}
+
 ${dependencyInspector(graph, w, canWrite, keep, back)}
 ${under}
 ${comments}

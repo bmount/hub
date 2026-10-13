@@ -195,9 +195,9 @@ describe("explicit expiring channel presence", () => {
     for (const path of ["/c/general", "/c/general/t/1"]) {
       const html = await (await SELF.fetch(`https://${HOST}${path}`, { headers: cookieHeaders(w.dev.token, HOST) })).text();
       expect(html).toContain('data-chat-presence="general"');
-      expect(html).toContain("A connected live chat socket separately publishes expiring presence; these controls do not stop it.");
+      expect(html).toContain("Share presence in this channel");
       expect(html).toContain(`<script defer src="${ASSETS.chatLive.path}"></script>`);
-      expect(html).toContain("Current status is unknown.");
+      expect(html).toContain("data-presence-list");
       expect(html).toContain(`<script defer src="${ASSETS.presence.path}"></script>`);
     }
     const html = await (await SELF.fetch(`https://${HOST}/c`, { headers: cookieHeaders(w.dev.token, HOST) })).text();

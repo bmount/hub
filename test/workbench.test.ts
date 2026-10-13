@@ -24,6 +24,32 @@ async function world() {
 const attr = (html: string, id: string) => /data-key="([^"]*)"/.exec(html.slice(html.indexOf(`id="${id}"`)))?.[1];
 
 describe("the workbench", () => {
+  it("keeps navigation on signed-in views without retired components", async () => {
+    const w = await world();
+    await apiPost(HOST, "project.create", {slug:"notes",kind:"workspace",display_name:"Notes"}, w.h);
+    for (const path of ["/", "/site", "/site/docket", "/site/w/1", "/site/board", "/site/status", "/site/graph", "/site/frontier", "/notes", "/notes/wiki", "/notes/documents", "/notes/contacts", "/attention", "/mail", "/c", "/assistant", "/assistant/tools", "/people", "/apps", "/situations", "/usage", "/search?q=Checkout", "/new?project=site", "/archive", "/skills"]) {
+      const response = await w.get(path);
+      expect(response.status, path).toBe(200);
+      const html = await response.text();
+      expect(html, path).toContain('aria-label="Breadcrumb"');
+      expect(html, path).toContain('id="rail"');
+      expect(html, path).toContain('id="org-places"');
+      expect(html, path).toContain('id="explorer"');
+      for (const classes of html.matchAll(/class="([^"]*)"/g)) {
+        expect(classes[1]!.split(/\s+/).filter(c => ["card","grid","onramp","intent-card","bars"].includes(c)), path).toEqual([]);
+      }
+    }
+    const item = await (await w.get("/site/w/1")).text();
+    expect(item).not.toContain("Recorded below");
+    expect(item).toContain('class="wb-comment"');
+    expect(item).toContain('class="wb-add-dependency"');
+    const board = await (await w.get("/site/board")).text();
+    expect(board).toContain('class="wb-board-columns"');
+    expect(board).toContain('<select name="actor">');
+    expect(board).not.toContain("Actor identity ID <input");
+    expect(await (await w.get("/notes/documents?upload=1")).text()).toContain('<select name="person_id">');
+  });
+
   it("selects attention work in place with filters, actions and explicit acknowledgement preserved", async () => {
     const w = await world();
     const item = await env.HUB_DB.prepare("SELECT id FROM work_item WHERE tenant_id = ? AND number = 1").bind(w.t.id).first<{id:string}>();
@@ -32,6 +58,7 @@ describe("the workbench", () => {
     expect(list).toContain('aria-label="Needs me"');
     expect(list).toContain('data-href="/attention?done=1&amp;work=site%231"');
     const selected = await (await w.get("/attention?done=1&work=site%231")).text();
+    expect(selected).toContain('data-project="site"');
     expect(selected).toContain('aria-selected="true"');
     expect(selected).toContain('class="back" href="/attention?done=1"');
     const inspector = selected.slice(selected.indexOf('id="inspector"'));

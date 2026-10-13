@@ -47,7 +47,7 @@ export async function playgroundPage(request: Request, env: Env): Promise<Respon
   const tools = toolsFor({ ...ctx, playground: { scopes: SCOPE_SETS[set]! } }).map(v => toolDefinition(v));
   const example = (schema: { properties?: Record<string, unknown>; required?: string[] }) =>
     JSON.stringify(Object.fromEntries((schema.required ?? []).map((k) => [k, ""])), null, 2);
-  const cards = tools.map((t) => `<details class="card"><summary><strong>${esc(t.name)}</strong> <small>${esc((t.description ?? "").split("\n")[0]!)}</small></summary>
+  const cards = tools.map((t) => `<details class="wb-section"><summary><strong>${esc(t.name)}</strong> <small>${esc((t.description ?? "").split("\n")[0]!)}</small></summary>
 <form class="pg" data-tool="${esc(t.name)}" data-scopes="${set}"><label>Arguments (JSON)<br><textarea name="args" rows="4" cols="60" spellcheck="false">${esc(example(t.inputSchema as never))}</textarea></label><br><button type="submit">Run</button></form>
 <details><summary><small>Input schema</small></summary><pre>${esc(JSON.stringify(t.inputSchema, null, 2))}</pre></details>
 <div class="out" hidden></div></details>`).join("");

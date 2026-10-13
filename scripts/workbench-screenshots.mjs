@@ -144,7 +144,7 @@ try {
   await db.prepare("INSERT INTO app_error_group (id,tenant_id,project_id,script_name,fingerprint,kind,title,last_message,count,first_seen,last_seen) VALUES (?,?,?,'sample-worker','synthetic-error','exception','Workbench request failed','Synthetic exception for design evidence',3,?,?)").bind('synthetic-error',tenant,sampleId,now,now).run();
   await db.prepare("INSERT INTO situation (id,tenant_id,identity_id,thread_id,title,question,report,created_at) VALUES (?,?,?,?,'Investigate the workbench','Why did the workbench request fail?','Synthetic report: inspect the recorded error group.',?)").bind('synthetic-situation',tenant,viewerId,assistantId,now).run();
   browser = await chromium.launch({headless: true});
-  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', person:'/people/dev%40example.test', agent:'/people/acme.build%40pimwell.test', connect:'/people?connect=1', invite:'/people?invite=1', appGroup:'/apps?g=synthetic-error', situations:'/situations', situation:'/situations?s=synthetic-situation', usagePerson:'/usage?days=30&who=dev%40example.test', mailSettings:'/mail?addresses=1', mailRecipients:'/mail/recipients', account:'https://pimwell.test/me', sessions:'https://pimwell.test/me/sessions', models:'https://pimwell.test/admin/models', orgs:'https://pimwell.test/admin/orgs', adminApps:'https://pimwell.test/admin/apps', newWork:'/new?project=sample', search:'/search?q=workbench'};
+  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', person:'/people/dev%40example.test', agent:'/people/acme.build%40pimwell.test', connect:'/people?connect=1', invite:'/people?invite=1', appGroup:'/apps?g=synthetic-error', situations:'/situations', situation:'/situations?s=synthetic-situation', usagePerson:'/usage?days=30&who=dev%40example.test', mailSettings:'/mail?addresses=1', mailRecipients:'/mail/recipients', account:'https://pimwell.test/me', sessions:'https://pimwell.test/me/sessions', models:'https://pimwell.test/admin/models', orgs:'https://pimwell.test/admin/orgs', adminApps:'https://pimwell.test/admin/apps', newProject:'/projects/new', intent:'/do', chatDirectory:'/c', chatInbox:'/inbox', assistantNew:'/assistant', contactNew:'/knowledge/contacts?new=1', upload:'/knowledge/documents?upload=1', wikiNew:'/knowledge/wiki?new=1', skill:'/skills/start-here', skills:'/skills', tools:'/assistant/tools', archive:'/archive', organizations:'https://pimwell.test/', newWork:'/new?project=sample', search:'/search?q=workbench'};
   const phase = process.env.WORKBENCH_PHASE || 'before';
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
@@ -187,10 +187,13 @@ try {
       await page.screenshot({path:path.join(artifacts,`${phase}-${name}-${label}.png`),fullPage:false});
       manifest.push({phase,name,route,viewport,file:`${phase}-${name}-${label}.png`});
       if (phase === 'after') {
+        await expect(page.locator('.card,.grid,.onramp,.intent-card,.bars')).toHaveCount(0);
+        await expect(page.locator('#rail #org-places')).toHaveCount(1);
+        await expect(page.locator('#rail #explorer')).toHaveCount(1);
         await expect(page.locator('.bar .wb-breadcrumb')).toBeVisible();
         if (!route.startsWith('https:')) {
         await expect(page.locator('#explorer')).toHaveCount(1);
-        await expect(page.locator('#explorer > .wb-tree')).toHaveCount(1);
+        expect(await page.locator('#explorer .wb-tree').count()).toBeGreaterThanOrEqual(1);
         await expect(page.locator('#rail #explorer')).toHaveCount(1);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
         const visibleNavigation = await page.evaluate(() => ['rail','explorer'].map(id => {const r=document.getElementById(id).getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth;}));
@@ -429,8 +432,9 @@ try {
           expect(inspectorBox.y).toBeGreaterThan(listBox.y);
         }
         const add = page.locator('#inspector form[action="/api/work.depend"]').filter({has:page.locator('input[name="on"]:not([type="hidden"])')});
+        await page.locator('#inspector .wb-add-dependency').first().locator('summary').click();
         await add.locator('input[name="on"]').fill('sample#1');
-        await add.getByRole('button', {name:'Add dependency', exact:true}).click();
+        await add.getByRole('button', {name:'Add', exact:true}).click();
         await expect(page.locator('#list tr').filter({hasText:'sample#2 '})).toContainText('blocked: waits on sample#1');
         await page.screenshot({path:path.join(artifacts,`${phase}-dependency-blocked-${label}.png`),fullPage:false});
         manifest.push({phase,name:'dependency-blocked',route:'/sample/graph?work=sample%232',viewport,file:`${phase}-dependency-blocked-${label}.png`});
@@ -522,6 +526,12 @@ try {
       await page.setViewportSize(viewport);
       // Two real page types exercise the shared selection and mutation client.
       await page.goto(base+'/sample/docket?kind=wish');
+      await expect(page.getByRole('button', {name:'Show',exact:true})).toHaveCount(0);
+      await page.locator('select[name="closed"]').selectOption('1');
+      await expect(page).toHaveURL(/closed=1/);
+      await page.locator('select[name="closed"]').selectOption('');
+      await expect(page.locator('#list')).toContainText('Keep project navigation visible');
+      await page.goto(base+'/sample/docket?kind=wish');
       await expect(page.locator('main.panes')).toHaveClass('panes one');
       await page.locator('#list input[data-filter]').fill('navigation');
       await expect(page).toHaveURL(/filter=navigation/);
@@ -569,6 +579,12 @@ try {
       await page.keyboard.press('Escape');
       await expect(page.locator('main.panes')).toHaveClass('panes one');
       await verb(member, 'work.update', {id:'sample#2', title:'Keep project navigation visible'});
+      await page.goto(base+'/sample/w/2');
+      const composer = page.locator('.wb-comment textarea');
+      const compactHeight = await composer.evaluate(el=>el.getBoundingClientRect().height);
+      await composer.focus();
+      expect(await composer.evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThan(compactHeight);
+      await expect(page.locator('#inspector')).not.toContainText('Recorded below');
       await page.goto(base+'/people');
       await page.evaluate(() => { window.retainedList = document.getElementById('list'); });
       await page.locator('#list a').filter({hasText:/^peer$/}).click();

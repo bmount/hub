@@ -53,8 +53,8 @@ describe("recorded work closure attribution", () => {
     expect(api.status).toBe(200);
     expect((await api.json() as { result: typeof b }).result.closures).toEqual(b.closures);
     const html = await (await SELF.fetch(`https://${HOST}/site/board`, { headers: rh })).text();
-    expect(html).toContain("Recorded closures by actor"); expect(html).toContain('<th scope="col">Items</th>');
-    expect(html).toContain("structured closure record: 1"); expect(html).toContain(w.a.agent.identity.id);
+    expect(html).toContain("Recorded closures by person"); expect(html).toContain('<th scope="col">Items</th>');
+    expect(html).toContain("Unrecorded closures: 1"); expect(html).toContain(w.a.agent.identity.id);
     expect((await apiPost(HOST, "work.update", { id: item.id, state: "done" }, rh)).status).toBe(403);
     expect((await SELF.fetch(`https://${HOST}/site/board`)).status).toBe(404);
   });
@@ -142,7 +142,7 @@ describe("recorded work closure attribution", () => {
     const html = await (await SELF.fetch(`https://${HOST}/site/board?actor=${w.a.agent.identity.id}`, { headers: rh })).text();
     expect(html).toContain(`value="${w.a.agent.identity.id}"`);
     expect(html).toContain('href="/site/board">Clear filter');
-    expect(html).toContain("whole selected scope, independent of actor filter");
+    expect(html).toContain("across the whole scope");
     const foreign = await seedHuman("SECRET-DIRECTORY@example.com");
     const other = await seedTenant("other");
     const project = await createProject(env.HUB_DB, { tenant_id: other.id, namespace_id: null, slug: "site", kind: "tracker", display_name: "Other" }, w.now);
@@ -152,7 +152,7 @@ describe("recorded work closure attribution", () => {
     expect(workBoard.mcp!.render!(empty)).not.toContain("SECRET-DIRECTORY");
     const payload = '<img src=x onerror="x">';
     const safe = await (await SELF.fetch(`https://${HOST}/board?actor=${encodeURIComponent(payload)}`, { headers: rh })).text();
-    expect(safe).not.toContain(payload); expect(safe).toContain("&lt;img");
+    expect(safe).not.toContain(payload); expect(safe).not.toContain("&lt;img");
     for (const actor of ["x".repeat(27), 42]) {
       expect((await apiPost(HOST, "work.board", { actor }, rh)).status).toBe(400);
     }
