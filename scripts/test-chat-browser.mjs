@@ -454,7 +454,9 @@ try {
     expect(presenceCalls.slice(deniedStart).map(c => c.name)).toEqual(['/api/chat.presence']);
     const deniedRecovery = page.waitForResponse(res => new URL(res.url()).pathname === '/api/chat.presence');
     await page.locator('[data-presence-toggle]').click();
-    await (await deniedRecovery).finished();
+    // The state assertion below verifies application, not a routed response's
+    // network-finished event (which can remain pending under the paused clock).
+    await deniedRecovery;
     await expect(page.locator('[data-presence-toggle]')).toHaveText('Stop sharing presence');
     expect(presenceCalls.slice(deniedStart).filter(c => c.name.endsWith('heartbeat'))).toHaveLength(1);
     // Model an abort-ignoring transport after a real Worker-accepted write. Keep
