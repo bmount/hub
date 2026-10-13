@@ -25,8 +25,10 @@ describe("the signed-in shell", () => {
       const res = await w.get(path);
       expect(res.status, path).toBe(200);
       const html = await res.text();
-      expect(html, path).toContain('<nav aria-label="Primary">');
-      expect(html, path).toContain(`aria-current="page">${label}</a>`);
+      expect(html, path).toContain('<nav class="wb-tree" aria-label="Primary">');
+      expect(html.slice(html.indexOf('<aside id="rail"'), html.indexOf('<aside id="explorer"')), path).toMatch(new RegExp(`aria-current="page">${label}(?:<span class="wb-count">\\d+</span>)?</a>`));
+      expect(html, path).toContain('class="wb-breadcrumb" aria-label="Breadcrumb"');
+      expect(html, path).toContain('aria-label="Project explorer"');
       expect(hasTip(html), path).toBe(true);
     }
   });
@@ -76,7 +78,7 @@ describe("the signed-in shell", () => {
     const w = await world();
     const login = await (await SELF.fetch("https://pimwell.test/login")).text();
     expect(login).toContain('class="plain"');
-    expect(login).not.toContain('<nav aria-label="Primary">');
+    expect(login).not.toContain('aria-label="Primary"');
     const apex = await (await w.get("/", w.pat.token, "pimwell.test")).text();
     expect(apex).toContain("Your organizations");
     expect(apex).toContain("https://acme.pimwell.test/");

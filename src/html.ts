@@ -68,6 +68,7 @@ export type RailLink = { href: string; label: string; active: boolean; count?: n
 export type Shell = {
   brandHref: string; org: { name: string; href: string } | null; nav: RailLink[]; me: { name: string; email: string; role: string | null; href: string }; tip: string;
   projects?: RailLink[]; planned?: RailLink[]; tabs?: RailLink[]; canFile?: boolean;
+  breadcrumb?: KitLink[]; explorer?: string; projectPath?: string; inProject?: boolean; preferenceKey?: string;
 };
 
 /** Two panes: a list and an inspector. Keys tell the script which pane changed, so the other keeps its place. */
@@ -85,18 +86,19 @@ const head = (title: string) => `<!doctype html>
 </head>`;
 
 const railLink = (l: RailLink) =>
-  `<li><a href="${esc(l.href)}"${l.active ? ' aria-current="page"' : ""}>${esc(l.label)}</a>${l.planned ? '<span class="pill">planned</span>' : ""}${typeof l.count === "number" && l.count > 0 ? `<span class="n">${l.count}</span>` : ""}</li>`;
+  `<li><a href="${esc(l.href)}"${l.active ? ' aria-current="page"' : ""}>${esc(l.label)}</a>${l.planned ? '<span class="pill">planned</span>' : ""}${typeof l.count === "number" ? `<span class="n">${l.count}</span>` : ""}</li>`;
 
 /** Log out: a real POST to this host, then a page that does not need a session. */
 export const logout = (back: string) => `<form class="inline" method="post" action="/api/session.end" data-reload><input type="hidden" name="_back" value="${esc(back)}"><button type="submit" class="link">Log out</button></form>`;
 
 function frame(title: string, main: string, shell: Shell, focus: "list" | "inspector"): string {
   const org = shell.org !== null;
-  const rail = `<aside id="rail" class="rail"><div class="railhead"><b>${esc(org ? shell.org!.name : "Pimwell")}</b><a class="close" href="#" aria-label="Close menu">✕ Close</a></div><nav aria-label="Primary"><ul>${shell.nav.map(railLink).join("")}</ul>
+  const rail = `<aside id="rail" class="rail"><div class="railhead"><b>${esc(org ? shell.org!.name : "Pimwell")}</b><a class="close" href="#" aria-label="Close menu">✕ Close</a></div>${kitTree("Primary", shell.nav.map(l => ({href: l.href, label: l.label, current: l.active, count: l.count ?? undefined})))}
 ${shell.projects?.length ? `<h4>Projects</h4><ul>${shell.projects.map(railLink).join("")}</ul>` : ""}
-${shell.planned?.length ? `<h4>Coming</h4><ul>${shell.planned.map(railLink).join("")}</ul>` : ""}</nav>
+${shell.planned?.length ? `<h4>Coming</h4><ul>${shell.planned.map(railLink).join("")}</ul>` : ""}
 <h4>Your account</h4><ul><li><a href="${esc(shell.me.href)}">${esc(shell.me.name)}</a></li><li class="account-details">${esc(shell.me.email)}${shell.me.role ? `<span>Role: ${esc(shell.me.role)}</span>` : ""}</li><li>${logout(org ? "/signed-out" : "/")}</li></ul></aside>`;
-  const bar = `<header class="bar"><a class="menu" href="#rail" aria-label="Menu"><span aria-hidden="true">☰</span><span class="ml">Menu</span></a><a class="brand" href="${esc(shell.brandHref)}">Pimwell</a>${org ? `<a class="org" href="${esc(shell.org!.href)}">${esc(shell.org!.name)}</a>` : ""}
+  const explorer = `<aside id="explorer" class="explorer" aria-label="Project explorer" data-project="${esc(shell.projectPath ?? "")}" data-in-project="${shell.inProject ? "1" : "0"}" data-preference="${esc(shell.preferenceKey ?? "")}"><div class="railhead"><b>Project explorer</b><a class="close" href="#" aria-label="Close project explorer">✕ Close</a></div>${shell.explorer ?? '<p>Open an organization to explore its projects.</p>'}</aside>`;
+  const bar = `<header class="bar"><a class="menu" href="#rail" aria-label="Menu"><span aria-hidden="true">☰</span><span class="ml">Menu</span></a><a class="explorer-toggle" href="#explorer">Project</a>${breadcrumb(shell.breadcrumb ?? [{label: shell.org?.name ?? "Pimwell", href: shell.org?.href ?? shell.brandHref}, {label: title, href: "#", current: true}])}
 ${org ? `<form class="jump" action="/search" method="get" role="search"><input name="q" placeholder="Search all projects…" maxlength="200" autocomplete="off" aria-label="Search all projects"><kbd>⌘K</kbd></form>` : `<span class="jump"></span>`}
 ${org && shell.canFile ? `<a class="button file" href="/new" title="File work (c)">+ File</a>` : ""}<a class="me" href="${esc(shell.me.href)}">${esc(shell.me.email)}${shell.me.role ? ` (${esc(shell.me.role)})` : ""}</a></header>`;
   const tabs = shell.tabs?.length ? `<nav class="tabs" aria-label="Sections">${shell.tabs.map((t) => `<a href="${esc(t.href)}"${t.active ? ' aria-current="page"' : ""}>${esc(t.label)}${typeof t.count === "number" && t.count > 0 ? `<span class="n">${t.count}</span>` : ""}</a>`).join("")}<a href="#rail">More</a></nav>` : "";
@@ -105,6 +107,7 @@ ${org && shell.canFile ? `<a class="button file" href="/new" title="File work (c
 <body class="wb" data-focus="${focus}">
 ${bar}
 ${rail}
+${explorer}
 <a class="scrim" href="#" aria-hidden="true" tabindex="-1"></a>
 ${main}
 ${status}

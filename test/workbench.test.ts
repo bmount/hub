@@ -4,7 +4,8 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { WORKBENCH_JS } from "../src/workbenchScript";
 import { createProject } from "../src/db/projects";
-import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
+import { addAgentMember, createChannel } from "../src/db/chat";
+import { apiPost, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
 
@@ -62,12 +63,98 @@ describe("the workbench", () => {
     const res = await w.get("/docket");
     const html = await res.text();
     expect(html).toContain('<body class="wb"');
-    expect(html).toMatch(/aria-current="page">Docket<\/a><span class="n">3<\/span>/);
-    expect(html).toMatch(/>Mine<\/a><span class="n">1<\/span>/);
-    expect(html).toMatch(/href="\/site">Site<\/a><span class="n">3<\/span>/);
+    expect(html).toMatch(/aria-current="page">Docket<span class="wb-count">3<\/span><\/a>/);
+    expect(html).toMatch(/>Mine<span class="wb-count">1<\/span><\/a>/);
+    expect(html).toContain('id="explorer"');
+    expect(html).toContain('<summary>Docket<span class="wb-count">3</span></summary>');
+    expect(html).toContain('aria-label="Project switcher"');
+    expect(html).toContain('class="bar"');
+    expect(html).toContain('aria-label="Breadcrumb"');
     expect(html).toContain('<span class="pill">planned</span>');
     expect(html).toContain('<nav class="tabs" aria-label="Sections">');
     expect(res.headers.get("server-timing")).toMatch(/db;desc="2 round trips/);
+  });
+
+  it("frames bearer-session page requests without exposing channels to non-participant agents", async () => {
+    const w = await world(), agent = await seedAgent(w.t, w.pat.identity);
+    const project = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'site'").bind(w.t.id).first<{id: string}>();
+    const ch = await createChannel(env.HUB_DB, {tenant_id: w.t.id, slug: "restricted-room", display_name: "Restricted room", topic: "", created_by: w.pat.identity.id, owner_project_id: project!.id}, Date.now());
+    const read = async (token: string) => (await SELF.fetch(`https://${HOST}/site/docket`, {headers: {authorization: `Bearer ${token}`}})).text();
+    expect(await read(w.pat.token)).toContain('href="/c/restricted-room"');
+    const before = await read(agent.token);
+    expect(before).toContain('data-project="site" data-in-project="1"');
+    expect(before).toContain('Docket<span class="wb-count">3</span>');
+    expect(before).not.toContain("Restricted room");
+    await addAgentMember(env.HUB_DB, {conversation_id: ch.project_id, tenant_id: w.t.id, identity_id: agent.agent.identity.id, added_by: w.pat.identity.id}, Date.now());
+    expect(await read(agent.token)).toContain('href="/c/restricted-room"');
+  });
+
+  it("chooses the project from the URL before an identity-bound preference and retains it on organization places", async () => {
+    const w = await world();
+    await createProject(env.HUB_DB, {tenant_id: w.t.id, namespace_id: null, slug: "notes", kind: "workspace", display_name: "Notes"}, Date.now());
+    const cookie = `${w.h.cookie}; pmw_project=${encodeURIComponent(`${w.pat.identity.id}:notes`)}`;
+    for (const path of ["/mail", "/attention", "/c", "/people", "/apps", "/search?q=hello"]) {
+      const res = await w.get(path, {cookie});
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain('data-project="notes" data-in-project="0"');
+      expect(html).toContain('aria-label="Project resources"');
+      expect(html).toContain('acme.notes@pimwell.test');
+      expect(html).toContain('https://acme.pimwell.test/p/notes/mcp');
+    }
+    const html = await (await w.get("/site/w/1", {cookie})).text();
+    expect(html).toContain('data-project="site" data-in-project="1"');
+    const bar = html.slice(html.indexOf('<header class="bar">'), html.indexOf('</header>'));
+    expect(bar).toMatch(/ACME.*Site.*Docket.*#1/s);
+    const foreign = await seedTenant("other");
+    await createProject(env.HUB_DB, {tenant_id: foreign.id, namespace_id: null, slug: "secret", kind: "wiki", display_name: "Secret project"}, Date.now());
+    for (const preference of [`${w.pat.identity.id}:secret`, "other-person:site", `${w.pat.identity.id}:missing`, "%invalid"]) {
+      const page = await (await w.get("/mail", {cookie: `${w.h.cookie}; pmw_project=${encodeURIComponent(preference)}`})).text();
+      expect(page).toContain('data-project="notes"');
+      expect(page).not.toContain("Secret project");
+    }
+  });
+
+  it("renders kind-specific resources and current counts rather than revisions or private mail", async () => {
+    const w = await world();
+    await apiPost(HOST, "project.create", {slug: "notes", kind: "workspace", display_name: "Notes"}, w.h);
+    await apiPost(HOST, "wiki.write", {project: "notes", slug: "guide", title: "Guide", body: "First", note: "Create", expected_revision: 0}, w.h);
+    await apiPost(HOST, "wiki.write", {project: "notes", slug: "guide", title: "Guide", body: "Second", note: "Revise", expected_revision: 1}, w.h);
+    await apiPost(HOST, "research.save", {project: "notes", slug: "findings", topic: "Findings", summary: "Evidence", status: "draft", sources: [], note: "Save", expected_revision: 0}, w.h);
+    await apiPost(HOST, "person.upsert", {project: "notes", name: "Alex"}, w.h);
+    await apiPost(HOST, "channel.create", {slug: "notes-chat", project: "notes"}, w.h);
+    for (const revision of [0, 1]) {
+      const uploaded = await apiPost(HOST, "file.put", {project: "notes", path: "guide.txt", content_type: "text/plain", expected_revision: revision, base64: btoa(`Version ${revision + 1}`)}, w.h);
+      expect(uploaded.status).toBe(200);
+    }
+    const notes = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'notes'").bind(w.t.id).first<{id: string}>();
+    for (const [id, recipient, verdict] of [["shared", null, "admitted"], ["private", w.pat.identity.id, "admitted"], ["held", null, "quarantined"]] as const) {
+      await env.HUB_DB.prepare(`INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, received_at, size, verdict, text, attachments, forwarded)
+        VALUES (?, ?, ?, ?, ?, 'sender@example.com', 'acme.notes@pimwell.test', ?, ?, 1, ?, '', '[]', 0)`).bind(id, w.t.id, notes!.id, recipient, w.pat.identity.id, id, Date.now(), verdict).run();
+    }
+    const html = await (await w.get("/notes/wiki/guide")).text();
+    const explorer = html.slice(html.indexOf('id="explorer"'), html.indexOf('<a class="scrim"'));
+    expect(explorer).toContain('Wiki<span class="wb-count">2</span>');
+    expect(explorer).toContain('Research<span class="wb-count">1</span>');
+    expect(explorer).toContain('Contacts and graph<span class="wb-count">1</span>');
+    expect(explorer).toContain('Files<span class="wb-count">1</span>');
+    expect(explorer).toContain('Mail<span class="wb-count">1</span>');
+    expect(explorer).toContain('Channels<span class="wb-count">2</span>');
+    expect(explorer).toContain('href="/c/notes-team"');
+    expect(explorer).not.toContain('href="/c/notes-chat"');
+    expect(explorer).not.toContain("Repository and code");
+    const repo = await (await w.get("/site/docket")).text();
+    expect(repo).toContain("Repository and code");
+    expect(repo.slice(repo.indexOf('id="explorer"'), repo.indexOf('<a class="scrim"'))).not.toContain("Wiki");
+    await env.HUB_DB.prepare("UPDATE wiki_revision SET deleted = 1 WHERE project_id = ? AND slug = 'guide' AND revision = 2").bind(notes!.id).run();
+    await env.HUB_DB.prepare("UPDATE file_revision SET deleted = 1 WHERE project_id = ? AND revision = 2").bind(notes!.id).run();
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(notes!.id).run();
+    const changed = await (await w.get("/notes/wiki")).text();
+    expect(changed).toContain('data-project="notes" data-in-project="1"');
+    expect(changed).toContain('Wiki<span class="wb-count">1</span>');
+    expect(changed).toContain('Files<span class="wb-count">0</span>');
+    const mail = await (await w.get("/mail?project=notes")).text();
+    expect(mail).toContain('Mail · notes');
   });
 
   it("reloads instead of retaining panes when enhanced navigation sees a different account or role", () => {

@@ -5,7 +5,7 @@ import { projectFeatures } from "../projectFeatures";
 import { attentionQuery } from "../verbs/collab";
 import type { Env } from "../env";
 import { safeExternalUrl } from "../security/urls";
-import { breadcrumb, emptyState, esc, htmlResponse, inspectorSection, kitTable, kitTabs, statusChip, toolbar, workbench } from "../html";
+import { emptyState, esc, htmlResponse, inspectorSection, kitTable, kitTabs, statusChip, toolbar, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -138,8 +138,7 @@ ${project && !f.org ? `<label>Quest <select name="quest">${option("", "Any", f.q
 <select name="state"><option value="">state…</option><option value="open">Open</option><option value="doing">Under way</option><option value="done">Done</option><option value="dropped">Let go</option></select>
 <select name="owner"><option value="">owner…</option><option value="me">Me</option><option value="none">Nobody</option>${members.map((m) => option(m.email, m.display_name, false)).join("")}</select>
 <button type="submit" class="quiet">Apply</button></form>` : "";
-  return `${breadcrumb([{label: ctx.tenant!.display_name, href: "/"}, ...(project && !f.org ? [{label: project.display_name, href: `/${project.slug}`}] : []), {label: DOCKET.name, href: base, current: true}])}
-<div class="head"><h1>${esc(DOCKET.name)}</h1><span>${items.length} ${f.closed ? "finished" : "open"} in ${where}</span></div>
+  return `<div class="head"><h1>${esc(DOCKET.name)}</h1><span>${items.length} ${f.closed ? "finished" : "open"} in ${where}</span></div>
 ${toolbar("Docket actions and filters", `${scope}${rank(ctx.role) >= rank("member") ? ` <a class="button" href="/new${project ? `?project=${esc(project.slug)}` : ""}">+ File</a>` : ""}`, filterForm)}
 ${kinds}${quick}${bulk}
 ${items.length ? kitTable("Docket", [...(canBulk ? [{label: "Select", className: "hide-s"}] : []), {label: "Reference"}, {label: "Kind"}, {label: "Title"}, {label: "Owner", className: "hide-s"}, {label: "State", className: "hide-s"}, {label: "Updated", className: "hide-s"}], rows) : emptyState("No work here", empty.replace(/<[^>]*>/g, ""), {label: filtered ? "Show everything open" : "File work", href: filtered ? base : "/new"})}`;

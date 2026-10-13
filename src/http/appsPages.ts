@@ -26,6 +26,7 @@ export async function appsPage(request: Request, env: Env): Promise<Response> {
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
   const params = new URL(request.url).searchParams;
+  const project = params.get("project");
   const gid = params.get("g") ?? "";
   const did = params.get("d");
   if (did !== null && (!did || did.length > 40 || params.has("g"))) return notFoundPage(extra);
@@ -37,7 +38,7 @@ export async function appsPage(request: Request, env: Env): Promise<Response> {
     ctx.db.prepare("SELECT e.at, e.method, e.path, e.status, e.ray FROM app_event e JOIN app_error_group g ON g.id = e.group_id AND g.tenant_id = e.tenant_id WHERE g.id = ? AND g.tenant_id = ? ORDER BY e.at DESC LIMIT 20").bind(gid, ctx.tenant.id),
     ctx.db.prepare("SELECT d.id, d.tag, d.version_id, d.message, d.seen_at FROM app_deploy d JOIN app_error_group g ON g.script_name = d.script_name AND g.tenant_id = d.tenant_id AND g.project_id = d.project_id WHERE g.id = ? AND g.tenant_id = ? ORDER BY d.seen_at DESC LIMIT 5").bind(gid, ctx.tenant.id),
     traceWorkStatement(ctx, gid),
-    deploysStatement(ctx),
+    deploysStatement(ctx, project),
     ...(did !== null ? [deployStatement(ctx, did)] : []),
   ]);
   const apps = appsR!.results as App[];
@@ -48,7 +49,7 @@ export async function appsPage(request: Request, env: Env): Promise<Response> {
   const selected = (selectedDeployR?.results[0] as DeployRow | undefined) ?? null;
   if (did !== null && !selected) return notFoundPage(extra);
   const { deploys: recordedDeploys, coverage } = deployListResults(allDeploysR!.results as DeployRow[]);
-  const deployList = `<h2>Recorded deploys</h2><p class="lede">${coverage.shown} shown${coverage.truncated ? "; capped at 50, more omitted" : "; complete for recorded deploys in scope"}. Observed or reported metadata, not proof of live rollout.</p>
+  const deployList = `<h2 id="deploys">Recorded deploys${project ? ` · ${esc(project)}` : ""}</h2><p class="lede">${coverage.shown} shown${coverage.truncated ? "; capped at 50, more omitted" : "; complete for recorded deploys in scope"}. Observed or reported metadata, not proof of live rollout.</p>
 ${recordedDeploys.length ? `<table><tbody>${recordedDeploys.map(d => `<tr data-href="/apps?d=${esc(encodeURIComponent(d.id))}"${d.id === did ? ' aria-selected="true"' : ""}><td>${esc(d.project)}</td><td><a href="/apps?d=${esc(encodeURIComponent(d.id))}">${esc(d.script_name)}</a><div class="lede">${esc(d.tag ?? d.version_id)}</div></td><td>${ago(d.seen_at, ctx.now)}</td></tr>`).join("")}</tbody></table>` : `<p class="lede">No deploy records in this scope.</p>`}`;
   const list = `<div class="head"><h1>Apps</h1><span>${apps.length} reporting</span></div>
 <p class="lede">Errors grouped by cause, deploys, and AI usage from the apps that report here. To add one, ask your agent to set up Pimwell (the onboard skill).</p>
@@ -83,7 +84,7 @@ ${work.length ? `<table><tbody>${work.map(w => `<tr><td class="ref">${esc(w.ref)
 ${d.message ? `<h2>Recorded message</h2><pre>${esc(d.message)}</pre>` : `<p class="lede">No message recorded.</p>`}`;
     inspectorKey = `deploy:${d.id}:${await sha256Hex(JSON.stringify([selected, work, workCoverage]))}`;
   }
-  return htmlResponse(workbench(selected ? selected.script_name : g ? g.title : "Apps", { list, listKey: `apps:${apps.length}:${groups.length}:${await sha256Hex(JSON.stringify(recordedDeploys))}:${coverage.truncated}`, inspector, inspectorKey }, shellFor(ctx, env, "apps", "apps")!), 200, extra);
+  return htmlResponse(workbench(selected ? selected.script_name : g ? g.title : "Apps", { list, listKey: `apps:${project ?? ""}:${apps.length}:${groups.length}:${await sha256Hex(JSON.stringify(recordedDeploys))}:${coverage.truncated}`, inspector, inspectorKey }, shellFor(ctx, env, "apps", "apps")!), 200, extra);
 }
 
 /** Root approves (or disables) app registrations: mapping an account-wide script name to an organization. */

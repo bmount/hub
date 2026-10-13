@@ -45,9 +45,10 @@ async function mailPage(request: Request, env: Env, id: string | null): Promise<
   const access = readableMail(ctx);
   const outgoing = readableOutgoingMail(ctx);
   const tid = ctx.tenant.id;
+  const project = new URL(request.url).searchParams.get("project");
   const [rowsR, projR, msgR, relatedR, repliesR, switchR, problemsR] = await ctx.db.batch([
     ctx.db.prepare(`SELECT m.id, COALESCE(pr.slug, r.display_name) AS project, m.from_email, m.subject, m.received_at, m.verdict, m.forwarded FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id
-      WHERE ${access.sql} ORDER BY m.received_at DESC LIMIT 200`).bind(...access.bindings),
+      WHERE ${access.sql} AND (? IS NULL OR (pr.slug = ? AND pr.namespace_id IS NULL)) ORDER BY m.received_at DESC LIMIT 200`).bind(...access.bindings, project, project),
     ctx.db.prepare("SELECT slug, display_name FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name").bind(tid),
     ctx.db.prepare(`SELECT m.*, COALESCE(pr.slug, 'agent ' || r.display_name) AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id WHERE m.id = ? AND ${access.sql}`).bind(id ?? "", ...access.bindings),
     mailWorkStatement(ctx, id ?? ""),
@@ -63,7 +64,7 @@ async function mailPage(request: Request, env: Env, id: string | null): Promise<
 
   const org = ctx.tenant.slug;
   const problems = problemsR!.results as Array<DeliveryNotice & { subject: string; created_at: number }>;
-  const list = `<div class="head"><h1>Mail</h1><span>${rows.length} message${rows.length === 1 ? "" : "s"}</span></div>
+  const list = `<div class="head"><h1>Mail${project ? ` · ${esc(project)}` : ""}</h1><span>${rows.length} message${rows.length === 1 ? "" : "s"}</span></div>
 ${rows.length ? `<table><thead><tr><th>To</th><th>From</th><th>Subject</th><th>Received</th></tr></thead><tbody>${rows.map((r) => {
     const href = `/mail/${esc(r.id)}`;
     return `<tr data-href="${href}"${m?.id === r.id ? ' aria-selected="true"' : ""}><td class="ref">${esc(r.project ?? "inbox")}</td><td class="hide-s">${esc(r.from_email)}</td><td><a href="${href}">${esc(r.subject || "(no subject)")}</a>${r.forwarded ? ' <span class="pill">forwarded</span>' : ""}${r.verdict === "quarantined" ? ' <span class="pill">held</span>' : ""}</td><td class="when" title="${when(r.received_at)}">${ago(r.received_at, ctx.now)}</td></tr>`;
@@ -108,6 +109,6 @@ ${projects.map((p) => `<tr><td><code>${esc(org)}.${esc(p.slug)}@${esc(env.HUB_DO
 ${ctx.identity.kind === "human" && rank(ctx.role) >= rank("admin") ? '<p><a href="/mail/recipients">Set response-recipient preferences</a> — preferences only; no automatic scheduling or guaranteed reply.</p>' : ""}
 <h2>Then</h2><p>Open a message and choose <b>Propose work from this</b>: wishes, snags, errands and calls appear, each quoting the message. File the ones you want; they link back here.</p>${toggle}`;
   }
-  return htmlResponse(workbench(m ? m.subject || "Mail" : "Mail", { list, listKey: `mail:${rows.length}:${rows[0]?.id ?? ""}:${problems[0]?.id ?? ""}:${problems.length}`, inspector, inspectorKey: key },
+  return htmlResponse(workbench(m ? m.subject || "Mail" : "Mail", { list, listKey: `mail:${project ?? ""}:${rows.length}:${rows[0]?.id ?? ""}:${problems[0]?.id ?? ""}:${problems.length}`, inspector, inspectorKey: key },
     shellFor(ctx, env, "mail", m?.id ?? "mail")!), 200, extra);
 }

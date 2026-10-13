@@ -81,7 +81,7 @@ describe("comments, following, and what needs me", () => {
     await w.as(w.pat)("work.create", { project: "site", kind: "snag", title: "One", owner: "sam@example.com" });
     await w.as(w.pat)("work.comment", { id: "site#1", body: "Context here" });
     const docket = await (await SELF.fetch(`https://${HOST}/docket`, { headers: cookieHeaders(w.sam.token, HOST) })).text();
-    expect(docket).toMatch(/>Needs me<\/a><span class="n">2<\/span>/);
+    expect(docket).toMatch(/>Needs me<span class="wb-count">2<\/span><\/a>/);
     const item = await (await SELF.fetch(`https://${HOST}/site/w/1`, { headers: cookieHeaders(w.sam.token, HOST) })).text();
     expect(item).toContain("Context here");
     expect(item).toContain('action="/api/work.comment"');

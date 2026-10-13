@@ -10,6 +10,7 @@
     "sync:upstream": "node scripts/sync-upstream.ts",
     "docs:mcp": "vitest run test/mcp-reference.test.ts --update",
     "test:browser:chat": "node scripts/test-chat-browser.mjs",
+    "test:browser:workbench": "WORKBENCH_PHASE=after node scripts/workbench-screenshots.mjs",
     "typecheck": "tsc --noEmit",
     "migrate:local": "wrangler d1 migrations apply HUB_DB --local",
     "migrate:remote": "scripts/cf/with-deploy-token.sh wrangler d1 migrations apply HUB_DB --remote",

@@ -118,9 +118,18 @@ try {
       await page.locator('main').waitFor();
       await page.screenshot({path:path.join(artifacts,`${phase}-${name}-${label}.png`),fullPage:false});
       manifest.push({phase,name,route,viewport,file:`${phase}-${name}-${label}.png`});
+      if (phase === 'after') {
+        await expect(page.locator('.bar .wb-breadcrumb')).toBeVisible();
+        await expect(page.locator('#explorer')).toHaveCount(1);
+        await expect(page.locator('#explorer .wb-tree')).toHaveCount(1);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
+        const visibleNavigation = await page.evaluate(() => ['rail','explorer'].map(id => {const r=document.getElementById(id).getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth;}));
+        expect(visibleNavigation).toEqual(viewport.width >= 1280 ? [true,true] : [false,false]);
+        if (viewport.width < 760) await expect(page.locator('.tabs')).toBeVisible();
+      }
       if (phase === 'after' && name === 'docket') {
         await expect(page.locator('.wb-table tbody tr')).toHaveCount(4);
-        await expect(page.locator('.wb-breadcrumb')).toContainText('Sample project');
+        await expect(page.locator('.bar .wb-breadcrumb')).toContainText('Sample project');
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         const row = page.locator('.wb-table tbody tr').filter({hasText:'Keep project navigation visible'});
         await row.locator('a').click();
@@ -134,6 +143,82 @@ try {
         manifest.push({phase,name:'docket-dark',route,viewport,file:`${phase}-docket-dark-${label}.png`});
         await page.emulateMedia({colorScheme:'light'});
       }
+    }
+    if (phase === 'after') {
+      await page.goto(base+'/sample/docket');
+      if (viewport.width < 1280) await page.locator('.explorer-toggle').click();
+      if (viewport.width < 760) {
+        await expect.poll(async () => (await page.locator('#explorer').boundingBox()).x).toBeGreaterThanOrEqual(0);
+        const file = `${phase}-explorer-${label}.png`;
+        await page.screenshot({path:path.join(artifacts,file),fullPage:false});
+        manifest.push({phase,name:'explorer',route:'/sample/docket',viewport,file});
+      }
+      const repository = page.locator('#explorer details').filter({has: page.locator('summary', {hasText:'Repository and code'})});
+      await repository.locator('summary').click();
+      await expect(repository).not.toHaveAttribute('open');
+      await page.evaluate(() => {
+        window.shellNodes = ['rail','explorer'].map(id => document.getElementById(id));
+        return window.shellNodes.map(el => {el.style.maxHeight='160px'; el.scrollTop=48; return el.scrollTop;});
+      });
+      if (viewport.width < 1280) await page.locator('#explorer .close').click();
+      const before = await page.evaluate(() => window.shellNodes.map(el => el.scrollTop));
+      await page.locator('#list a').filter({hasText:'Keep project navigation visible'}).click();
+      await expect(page).toHaveURL(/\/sample\/w\/2$/);
+      await expect(page.locator('.bar .wb-breadcrumb')).toContainText('Docket');
+      await expect(page.locator('.bar .wb-breadcrumb')).toContainText('#2');
+      const after = await page.evaluate(() => window.shellNodes.map(el => ({same:el === document.getElementById(el.id),top:el.scrollTop})));
+      expect(after).toEqual(before.map(top => ({same:true,top})));
+      await expect(repository).not.toHaveAttribute('open');
+      await page.evaluate(() => window.shellNodes.forEach(el => el.style.maxHeight=''));
+      if (viewport.width < 1280) await page.locator('.menu').click();
+      await page.locator('#rail a[href="/mail"]').click();
+      await expect(page).toHaveURL(/\/mail$/);
+      await expect(page.locator('#explorer')).toHaveAttribute('data-project','sample');
+      await expect(page.locator('.bar .wb-breadcrumb')).toContainText('Mail');
+      await page.reload();
+      await expect(page.locator('#explorer')).toHaveAttribute('data-project','sample');
+      await expect(repository).not.toHaveAttribute('open');
+      if (viewport.width < 1280) await page.locator('.explorer-toggle').click();
+      await page.locator('#project-filter').fill('knowledge');
+      await expect(page.locator('.project-switcher li:visible')).toHaveCount(1);
+      await page.locator('.project-switcher a[href="/knowledge"]').click();
+      await expect(page).toHaveURL(/\/knowledge$/);
+      await expect(page.locator('#explorer')).toHaveAttribute('data-project','knowledge');
+      if (viewport.width < 1280) await page.locator('.explorer-toggle').click();
+      await page.locator('#explorer a[href="/knowledge#project-research"]').click();
+      await expect(page).toHaveURL(/\/knowledge#project-research$/);
+      await expect(page.locator('#project-research')).toBeInViewport();
+      await page.goBack();
+      await expect(page).toHaveURL(/\/knowledge$/);
+      await expect(page.locator('.bar [data-fragment]')).toHaveCount(0);
+      if (viewport.width < 1280) await page.locator('.explorer-toggle').click();
+      await page.locator('#explorer a[href="/knowledge/documents"]').click();
+      await expect(page).toHaveURL(/\/knowledge\/documents$/);
+      await expect(page.locator('.bar .wb-breadcrumb')).toContainText('Files');
+      await page.goBack();
+      await expect(page).toHaveURL(/\/knowledge$/);
+      await expect(page.locator('.bar .wb-breadcrumb')).not.toContainText('Files');
+      await page.goBack();
+      await expect(page).toHaveURL(/\/mail$/);
+      await expect(page.locator('#explorer')).toHaveAttribute('data-project','knowledge');
+      await page.goBack();
+      await expect(page).toHaveURL(/\/sample\/w\/2$/);
+      await expect(page.locator('#explorer')).toHaveAttribute('data-project','sample');
+      if (viewport.width >= 1280) {
+        await page.setViewportSize({width:1100,height:900});
+        await expect(page.locator('.menu')).toBeVisible();
+        await expect(page.locator('.explorer-toggle')).toBeVisible();
+        await page.locator('.explorer-toggle').click();
+        await expect(page.locator('#explorer')).toHaveClass(/open/);
+        if (label === '1440') {
+          await expect.poll(async () => (await page.locator('#explorer').boundingBox()).x).toBeGreaterThanOrEqual(0);
+          const file = `${phase}-explorer-1100.png`;
+          await page.screenshot({path:path.join(artifacts,file),fullPage:false});
+          manifest.push({phase,name:'explorer',route:'/sample/w/2',viewport:{width:1100,height:900},file});
+        }
+        await page.locator('#explorer .close').click();
+      }
+      console.log(`Shell browser acceptance passed at ${viewport.width}px (plus tablet collapse).`);
     }
     await ctx.close();
   }

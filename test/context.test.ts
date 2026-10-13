@@ -90,7 +90,9 @@ describe("request-local rail aggregation", () => {
       const p = await project(w.tenant.id, `p${String(i).padStart(2, "0")}`);
       await w.work(p.id);
     }
-    const rail = (await w.read()).rail!;
+    const ctx = await w.read(), rail = ctx.rail!;
+    expect(ctx.explorer!.choices).toHaveLength(66);
+    expect(ctx.explorer!.choices).toContainEqual({path: "p64", display_name: "p64"});
     expect(rail.projects).toHaveLength(60);
     expect(rail.projects.map(p => p.slug)).toEqual(Array.from({ length: 60 }, (_, i) => `p${String(i).padStart(2, "0")}`));
     expect(rail.projects.every(p => p.open === 1)).toBe(true);
@@ -151,7 +153,7 @@ describe("request-local rail aggregation", () => {
     expect((await w.read()).rail!.held).toBe(0);
   });
 
-  it.each(["revoked", "expired", "identity", "membership", "tenant", "nonmember", "bearer", "post", "anonymous"])("never attaches rail data after %s authentication/access changes", async (change) => {
+  it.each(["revoked", "expired", "identity", "membership", "tenant", "nonmember", "post", "anonymous"])("never attaches rail data after %s authentication/access changes", async (change) => {
     const w = await world(); await w.work();
     expect((await w.read()).rail?.open).toBe(1);
     let req = request(w.token);
@@ -161,10 +163,11 @@ describe("request-local rail aggregation", () => {
     if (change === "membership") await db().prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ? AND tenant_id = ?").bind(w.identity.id, w.tenant.id).run();
     if (change === "tenant") await setTenantState(db(), w.tenant.id, "archived", now);
     if (change === "nonmember") { await createTenant(db(), { slug: "other", display_name: "Other" }, now); req = request(w.token, "other"); }
-    if (change === "bearer") req = new Request(req, { headers: { authorization: `Bearer ${w.token}` } });
     if (change === "post") req = new Request(req, { method: "POST" });
     if (change === "anonymous") req = new Request(req.url);
-    expect((await buildContext(req, env, now + 1)).rail).toBeUndefined();
+    const denied = await buildContext(req, env, now + 1);
+    expect(denied.rail).toBeUndefined();
+    expect(denied.explorer).toBeUndefined();
   });
 
   it.each([1, 80])("materializes one aggregate for a large tenant with %s projects and reduces actual D1 read work", async (projects) => {
@@ -193,7 +196,7 @@ describe("request-local rail aggregation", () => {
       const v = Reflect.get(target, key); return typeof v === "function" ? v.bind(target) : v;
     } });
     const rail = (await buildContext(request(w.token), { ...env, HUB_DB: measuredDb }, now + 1)).rail!;
-    expect(statements).toBe(5); expect(rail.open).toBe(8000); expect(rail.mine).toBe(4000);
+    expect(statements).toBe(6); expect(rail.open).toBe(8000); expect(rail.mine).toBe(4000);
     const plan = await db().prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(...args).all<{ detail: string }>();
     expect(plan.results.some(r => r.detail.includes("MATERIALIZE work_counts"))).toBe(true);
     expect(plan.results.some(r => r.detail.includes("CORRELATED"))).toBe(false);

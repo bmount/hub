@@ -45,6 +45,16 @@ export type Ctx = {
   bearerToken?: string;
   /** The workbench rail's numbers, read in the same batch as the sign-in lookup (no extra round trip). Page views only. */
   rail?: RailData;
+  /** Authorized project navigation, loaded in the sign-in batch for page requests. */
+  explorer?: ExplorerData;
+  pageUrl?: string;
+};
+
+export type ExplorerData = {
+  path: string; display_name: string; kind: string; inProject: boolean;
+  choices: Array<{ path: string; display_name: string }>;
+  channels: Array<{ slug: string; display_name: string; count: number }>;
+  open: number; reviews: number; deploys: number; wiki: number; research: number; files: number; contacts: number; mail: number;
 };
 
 export type RailData = {
@@ -119,8 +129,9 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
   // tenant, session, identity and membership rows come back in a single batch. Every check below still runs on them.
   const sessionToken = bearer && bearer.startsWith("pms_") ? bearer : !bearer && cookieToken ? cookieToken : null;
   // Page views on an organization's host also read the rail's numbers in that batch.
-  const wantRail = host.kind === "tenant" && request.method === "GET" && cookieToken !== null && !bearer;
-  const pre = sessionToken ? await prefetch(db, host.kind === "tenant" ? host.slug : null, await sha256Hex(sessionToken), now, wantRail) : null;
+  const pageBearer = bearer?.startsWith("pms_") && !/^\/(api|mcp|agent|p)\b/.test(new URL(request.url).pathname);
+  const wantRail = host.kind === "tenant" && request.method === "GET" && ((cookieToken !== null && !bearer) || !!pageBearer);
+  const pre = sessionToken ? await prefetch(db, host.kind === "tenant" ? host.slug : null, await sha256Hex(sessionToken), now, wantRail, request) : null;
 
   let tenant: Tenant | null = null;
   if (host.kind === "tenant") {
@@ -171,28 +182,68 @@ export async function buildContext(request: Request, env: Env, now: number = Dat
   }
 
   const ctx: Ctx = { env, db, now, ip, waitUntil, host, tenant, identity, session, apiToken, role, authKind, staleCookie };
+  ctx.pageUrl = request.url;
   if (pre?.rail && role && tenant) ctx.rail = pre.rail;
+  if (pre?.explorer && role && tenant) ctx.explorer = pre.explorer;
   if (authKind === "bearer" && bearer && session?.kind === "agent_run") ctx.bearerToken = bearer;
   noteCtx(request, ctx);
   return ctx;
 }
 
-type Prefetched = { tenant: Tenant | null; session: Session | null; identity: Identity | null; membership: Membership | null; rail: RailData | null };
+type Prefetched = { tenant: Tenant | null; session: Session | null; identity: Identity | null; membership: Membership | null; rail: RailData | null; explorer: ExplorerData | null };
 
 /** The rows buildContext needs for a session token, in one batch. Same predicates as the single-row getters. */
-async function prefetch(db: D1Database, slug: string | null, tokenHash: string, now: number, wantRail = false): Promise<Prefetched> {
+async function prefetch(db: D1Database, slug: string | null, tokenHash: string, now: number, wantRail = false, request?: Request): Promise<Prefetched> {
   const live = "SELECT identity_id FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?";
-  const [t, s, i, m, rc] = await db.batch([
+  const [t, s, i, m, rc, ec] = await db.batch([
     db.prepare("SELECT * FROM tenant WHERE slug = ?").bind(slug),
     db.prepare("SELECT * FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?").bind(tokenHash, now),
     db.prepare(`SELECT * FROM identity WHERE id = (${live})`).bind(tokenHash, now),
     db.prepare(`SELECT * FROM membership WHERE identity_id = (${live}) AND tenant_id = (SELECT id FROM tenant WHERE slug = ?)`).bind(tokenHash, now, slug),
-    ...(wantRail ? [railStatement(db, slug, live, tokenHash, now)] : []),
+    ...(wantRail ? [railStatement(db, slug, live, tokenHash, now), explorerStatement(db, slug, live, tokenHash, now, request!)] : []),
   ]);
   const one = <T>(r: D1Result<unknown> | undefined): T | null => ((r?.results[0] as T | undefined) ?? null);
   const counts = one<Omit<RailData, "projects"> & { projects: string }>(rc);
   const rail: RailData | null = wantRail && counts ? { ...counts, projects: JSON.parse(counts.projects) } : null;
-  return { tenant: one<Tenant>(t), session: one<Session>(s), identity: one<Identity>(i), membership: one<Membership>(m), rail };
+  const row = one<Omit<ExplorerData, "choices" | "channels" | "inProject"> & { choices: string; channels: string; inProject: number }>(ec);
+  const explorer = row ? { ...row, choices: JSON.parse(row.choices), channels: JSON.parse(row.channels), inProject: !!row.inProject } : null;
+  return { tenant: one<Tenant>(t), session: one<Session>(s), identity: one<Identity>(i), membership: one<Membership>(m), rail, explorer };
+}
+
+/** Preferences select only tenant-authorized projects; they never grant access. */
+function explorerStatement(db: D1Database, slug: string | null, live: string, tokenHash: string, now: number, request: Request): D1PreparedStatement {
+  let path = "", remembered = "";
+  try { path = decodeURIComponent(new URL(request.url).pathname.split("/")[1] ?? ""); } catch { /* invalid URL component */ }
+  try { remembered = decodeURIComponent(/(?:^|;\s*)pmw_project=([^;]*)/.exec(request.headers.get("cookie") ?? "")?.[1] ?? ""); } catch { /* invalid preference */ }
+  return db.prepare(`WITH target AS MATERIALIZED (SELECT id FROM tenant WHERE slug = ?),
+    actor AS MATERIALIZED (${live}),
+    choices AS MATERIALIZED (
+      SELECT p.*, p.slug AS path FROM project p
+      WHERE p.tenant_id = (SELECT id FROM target) AND p.kind NOT IN ('channel', 'agent-src') AND p.namespace_id IS NULL
+    ), selected AS MATERIALIZED (
+      SELECT *, path = ? AS inProject FROM choices
+      ORDER BY CASE WHEN path = ? THEN 0 WHEN (SELECT identity_id FROM actor) || ':' || path = ? THEN 1 ELSE 2 END,
+        state <> 'active', display_name, path LIMIT 1
+    ), channels AS MATERIALIZED (
+      SELECT c.slug, c.display_name, (SELECT COUNT(*) FROM msg_index m WHERE m.tenant_id = c.tenant_id AND m.conversation_id = c.id AND m.state = 'live' AND m.rev = (SELECT MAX(h.rev) FROM msg_index h WHERE h.tenant_id = m.tenant_id AND h.conversation_id = m.conversation_id AND h.msg_id = m.msg_id)) AS count
+      FROM project c JOIN channel ch ON ch.project_id = c.id AND ch.tenant_id = c.tenant_id
+      JOIN meta ON meta.key = 'project_channel:v1:' || c.tenant_id || ':' || c.id
+      WHERE c.tenant_id = (SELECT id FROM target) AND c.state = 'active' AND meta.value = (SELECT id FROM selected)
+        AND ((SELECT kind FROM identity WHERE id = (SELECT identity_id FROM actor)) = 'human'
+          OR EXISTS (SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = c.tenant_id AND cm.conversation_id = c.id AND cm.identity_id = (SELECT identity_id FROM actor) AND cm.removed_at IS NULL))
+      ORDER BY c.slug
+    ) SELECT p.path, p.display_name, p.kind, p.inProject,
+      (SELECT json_group_array(json_object('path', path, 'display_name', display_name)) FROM (SELECT path, display_name FROM choices WHERE state = 'active' OR path = p.path ORDER BY display_name, path)) AS choices,
+      (SELECT json_group_array(json_object('slug', slug, 'display_name', display_name, 'count', count)) FROM channels) AS channels,
+      (SELECT COUNT(*) FROM work_item w WHERE w.tenant_id = p.tenant_id AND w.project_id = p.id AND w.state IN ('open','doing')) AS open,
+      (SELECT COUNT(*) FROM review r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id AND r.status IN ('open','approved','changes')) AS reviews,
+      (SELECT COUNT(*) FROM app_deploy r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id) AS deploys,
+      (SELECT COUNT(*) FROM wiki_revision r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id AND r.deleted = 0 AND r.revision = (SELECT MAX(h.revision) FROM wiki_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.slug = r.slug)) AS wiki,
+      (SELECT COUNT(*) FROM wiki_revision r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id AND r.deleted = 0 AND r.research IS NOT NULL AND r.revision = (SELECT MAX(h.revision) FROM wiki_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.slug = r.slug)) AS research,
+      (SELECT COUNT(*) FROM file_revision r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id AND r.deleted = 0 AND r.revision = (SELECT MAX(h.revision) FROM file_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.path = r.path)) AS files,
+      (SELECT COUNT(*) FROM contact_entity r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id) AS contacts,
+      (SELECT COUNT(*) FROM inbound_mail r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id AND r.recipient_id IS NULL AND r.verdict = 'admitted') AS mail
+    FROM selected p`).bind(slug, tokenHash, now, path, path, remembered);
 }
 
 /** One request-local aggregate serves both project badges and uncapped work totals. */

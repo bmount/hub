@@ -2,7 +2,8 @@
 import type { Env } from "../env";
 import type { Ctx } from "../auth/context";
 import { rank } from "../auth/context";
-import type { Shell } from "../html";
+import { esc, kitTree, type Shell, type KitLink, type TreeNode } from "../html";
+import { projectFeatures } from "../projectFeatures";
 
 export type Section = "home" | "situations" | "reviews" | "apps" | "usage" | "attention" | "docket" | "mine" | "mail" | "chat" | "people" | "admin" | "account" | "hub" | "project" | "playground" | "planned" | "new";
 
@@ -46,7 +47,6 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
       link("/usage", "AI usage", "usage"),
       ...(rank(ctx.role) >= rank("admin") ? [link("/admin/agents", "Admin", "admin")] : []),
     ];
-    const projects = (r?.projects ?? []).map((p) => ({ href: `/${p.slug}`, label: p.display_name, active: active !== "home" && key === p.slug, count: p.open }));
     const planned = PLANNED_LINKS.map((l) => ({ href: l.href, label: l.label, active: active === "planned" && key === l.key, planned: true }));
     const tabs = [
       { href: "/docket", label: "Docket", active: active === "docket" || active === "project", count: r?.open },
@@ -56,7 +56,9 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
       { href: "/assistant", label: "Assistant", active: active === "playground" },
     ];
     return {
-      brandHref: hub, org: { name: ctx.tenant.display_name, href: "/" }, me, tip: tipFor(key), nav, projects, planned, tabs,
+      brandHref: hub, org: { name: ctx.tenant.display_name, href: "/" }, me, tip: tipFor(key), nav, planned, tabs,
+      breadcrumb: locationLinks(ctx, nav), explorer: projectExplorer(ctx, env),
+      projectPath: ctx.explorer?.path, inProject: ctx.explorer?.inProject, preferenceKey: ctx.identity.id,
       canFile: rank(ctx.role) >= rank("member"),
     };
   }
@@ -66,7 +68,53 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
     { href: "/me/sessions", label: "Sessions", section: "hub" },
     ...(ctx.identity.is_root === 1 ? [{ href: "/admin/orgs", label: "Hub admin", section: "admin" }, { href: "/admin/apps", label: "Apps to approve", section: "apps" }] : []),
   ];
-  return { brandHref: hub, org: null, me, tip: tipFor(key), nav: nav.map((n) => ({ href: n.href, label: n.label, active: n.section === active })) };
+  return { brandHref: hub, org: null, me, tip: tipFor(key), breadcrumb: [{label: "Pimwell", href: "/"}, {label: key === "sessions" ? "Sessions" : nav.find(n => n.section === active)?.label ?? active, href: new URL(ctx.pageUrl ?? hub).pathname, current: true}], nav: nav.map((n) => ({ href: n.href, label: n.label, active: n.section === active })) };
+}
+
+const VIEW_LABELS: Record<string, string> = { docket: "Docket", w: "Docket", board: "Board", status: "Status", code: "Repository and code", files: "Code files", reviews: "Reviews", wiki: "Wiki", documents: "Files", contacts: "Contacts and graph", c: "Chat", mail: "Mail", attention: "Needs me", people: "People and agents", assistant: "Assistant", apps: "Apps", usage: "AI usage", admin: "Admin", search: "Search", new: "File work", archive: "Archive", planned: "Coming" };
+
+function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
+  const url = new URL(ctx.pageUrl ?? "https://pimwell.com/"), segments = url.pathname.split("/").filter(Boolean);
+  const links: KitLink[] = [{ label: ctx.tenant!.display_name, href: "/" }];
+  const p = ctx.explorer;
+  let view: string | undefined;
+  if (p?.inProject) {
+    const base = `/${encodeURIComponent(p.path)}`;
+    links.push({label: p.display_name, href: base});
+    view = segments[1];
+    if (view) links.push({label: VIEW_LABELS[view] ?? view, href: `${base}/${view === "w" ? "docket" : view}`});
+    if (segments.length > 2) links.push({label: (view === "w" ? "#" : "") + decodeURIComponent(segments.slice(2).join("/")), href: url.pathname + url.search});
+  } else {
+    view = segments[0];
+    const label = view ? VIEW_LABELS[view] ?? nav.find(n => n.active)?.label ?? view : "Home";
+    links.push({label, href: view ? `/${view}` : "/"});
+    if (segments.length > 1) links.push({label: decodeURIComponent(segments.slice(1).join("/")), href: url.pathname + url.search});
+  }
+  const selected = ["f", "c", "path", "g", "d", "thread"].map(k => url.searchParams.get(k)).find(Boolean);
+  if (selected) links.push({label: selected, href: url.pathname + url.search});
+  links[links.length - 1]!.current = true;
+  return links;
+}
+
+function projectExplorer(ctx: Ctx, env: Env): string {
+  const p = ctx.explorer;
+  if (!p) return `<h2>Projects</h2><p>No active projects.</p><a href="/projects/new">New project</a>`;
+  const base = `/${encodeURIComponent(p.path)}`, features = projectFeatures(p.kind), nodes: TreeNode[] = [];
+  const url = new URL(ctx.pageUrl ?? "https://pimwell.com/"), pathname = url.pathname;
+  const node = (label: string, href: string, count?: number): TreeNode => ({label, href, count, current: pathname === href.split("#")[0] && (!href.includes("#") || url.hash === href.slice(href.indexOf("#")))});
+  if (features.includes("docket")) nodes.push({...node("Docket", `${base}/docket`, p.open), expanded: true, children: [node("Board", `${base}/board`, p.open), node("Status", `${base}/status`, p.open)]});
+  if (features.includes("repo")) nodes.push({...node("Repository and code", `${base}/code`), expanded: true, children: [node("Code files", `${base}/files`), node("Reviews", `${base}/reviews`, p.reviews), node("Deploys", `/apps?project=${encodeURIComponent(p.path)}#deploys`, p.deploys)]});
+  if (features.includes("wiki")) nodes.push(node("Wiki", `${base}/wiki`, p.wiki));
+  if (features.includes("knowledge")) nodes.push({...node("Knowledge base and research", `${base}#feature-knowledge`, p.wiki), expanded: true, children: [node("Knowledge base", `${base}#feature-knowledge`, p.wiki - p.research), node("Research", `${base}#project-research`, p.research)]});
+  if (features.includes("files")) nodes.push(node("Files", `${base}/documents`, p.files));
+  if (features.includes("people")) nodes.push(node("Contacts and graph", `${base}/contacts`, p.contacts));
+  nodes.push({...node("Channels", "/c", p.channels.length), expanded: true, children: p.channels.map(c => node(c.display_name, `/c/${encodeURIComponent(c.slug)}`, c.count))});
+  const address = `${ctx.tenant!.slug}.${p.path.replace("/", ".")}@${env.HUB_DOMAIN}`;
+  const endpoint = `https://${ctx.tenant!.slug}.${env.HUB_DOMAIN}/p/${p.path}/mcp`;
+  nodes.push(node("Mail", `/mail?project=${encodeURIComponent(p.path)}`, p.mail));
+  return `<label for="project-filter">Project</label><input id="project-filter" type="search" placeholder="Find a project…" aria-label="Find a project" autocomplete="off"><nav class="project-switcher" aria-label="Project switcher"><details><summary>${esc(p.display_name)}</summary><ul>${p.choices.map(c => `<li><a href="/${esc(encodeURIComponent(c.path))}"${c.path === p.path ? ' aria-current="page"' : ""}>${esc(c.display_name)} <small>${esc(c.path)}</small></a></li>`).join("")}</ul></details></nav>
+    <a class="project-overview" href="${esc(base)}">Project overview</a>${kitTree("Project resources", nodes)}
+    <section class="project-endpoints"><h2>Mail address</h2><a href="mailto:${esc(address)}">${esc(address)}</a><h2>MCP endpoint</h2><code id="explorer-mcp">${esc(endpoint)}</code><button type="button" data-copy="#explorer-mcp">Copy MCP URL</button></section>`;
 }
 
 /** Areas still being built, kept in plain view (src/verbs/planned.ts). */
