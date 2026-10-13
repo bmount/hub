@@ -72,7 +72,7 @@ describe("project-filtered recorded AI usage", () => {
     expect(adminPage).toContain('href="/usage?days=7&amp;who=pat%40example.com&amp;project=site">Clear work filter');
     expect(adminPage).toContain('href="/usage?days=7&amp;who=pat%40example.com&amp;work=site%231">Clear project filter');
     const overview = await (await SELF.fetch(`https://${HOST}/site`, { headers: w.pat })).text();
-    expect(overview).toContain('<a href="/usage?project=site">Recorded AI usage for this project</a>');
+    expect(overview).toContain('<a href="/usage?project=site">AI usage</a>');
   });
 
   it("resolves namespace paths independently, keeps archived history and distinguishes pane scopes", async () => {

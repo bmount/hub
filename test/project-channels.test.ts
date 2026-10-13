@@ -37,13 +37,13 @@ describe("project kinds", () => {
       expect(form.status).toBe(303);
       expect(form.headers.get("location")).toBe(`/${kind}-form`);
       const html = await (await SELF.fetch(`https://${HOST}/${kind}`, { headers: cookieHeaders(h.token, HOST) })).text();
-      const tabs = html.match(/<nav class="chips" aria-label="Project features">([\s\S]*?)<\/nav>/)![1]!;
+      const tabs = html.match(/<table class="wb-table" aria-label="Project contents">([\s\S]*?)<\/table>/)![1]!;
       expect(tabs).toContain("Wiki pages");
       expect(tabs).toContain("Files");
       expect(tabs).not.toContain("Repository");
-      expect(tabs.includes("Docket")).toBe(kind === "workspace");
-      expect(tabs.includes("Knowledge base")).toBe(kind === "workspace");
-      expect(tabs.includes("People")).toBe(kind === "workspace");
+      expect(tabs.includes("Open Wishes")).toBe(kind === "workspace");
+      expect(tabs.includes("Research")).toBe(kind === "workspace");
+      expect(tabs.includes("Contacts")).toBe(kind === "workspace");
       const repo = await callTool(ctx, "repo_branches", { project: kind });
       expect(repo.isError).toBe(true);
       expect(JSON.stringify(repo)).toContain("does not support Repository");
@@ -200,7 +200,9 @@ describe("workspace research", () => {
     expect(list).toMatchObject({results: [expect.objectContaining({sources: w.input.sources, people: w.input.people, items: w.input.items, author_id: w.h.identity.id, revision: 1})]});
     for (const filter of [{topic: "absent"}, {org: "absent"}, {person: "absent"}, {status: "final"}, {after: "zzzz"}]) expect((await callTool(w.ctx, "research_list", {project: "lab", ...filter})).structuredContent).toMatchObject({results: []});
     const home = await (await SELF.fetch(`https://${HOST}/lab`, {headers: w.headers})).text();
-    expect(home).toContain("Research results"); expect(home).toContain("Needle topic");
+    expect(home).toContain('href="/lab?resource=research"');
+    const researchPane = await (await SELF.fetch(`https://${HOST}/lab?resource=research`, {headers: w.headers})).text();
+    expect(researchPane).toContain("Needle topic");
     const page = await (await SELF.fetch(`https://${HOST}/lab/wiki/findings`, {headers: w.headers})).text();
     expect(page).toContain("First source"); expect(page).toContain("Second source"); expect(page).toContain('href="/lab/w/1"'); expect(page).not.toContain('action="/api/wiki.write"');
     expect((await callTool(w.ctx, "search_query", {q: "quotedneedle"})).structuredContent).toMatchObject({wiki: [expect.objectContaining({ref: "lab/findings"})]});

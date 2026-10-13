@@ -44,23 +44,29 @@ describe("the signed-in shell", () => {
     expect(await (await w.get("/", w.lead.token)).text()).toContain('href="/admin/agents">Admin');
   });
 
-  it("gives the organization a deep home: projects, open work by kind, what happened lately", async () => {
+  it("gives the organization a compact home: projects, open work, needs and latest activity", async () => {
     const w = await world();
     const html = await (await w.get("/")).text();
     expect(html).toContain('href="/site"');
-    expect(html).toContain("Snags 1");
-    expect(html).toContain("Wishes 1");
-    expect(html).toContain("Filed site#1");
-    expect(html).toContain("acme@pimwell.test");
+    expect(html).toContain('href="/?project=site"');
+    expect(html).toContain('aria-label="Projects"');
+    expect(html).toContain("Open work");
+    expect(html).toContain("Last activity");
+    expect(html).toContain("<td>2</td>");
+    expect(html).toContain("Nothing needs you right now.");
   });
 
-  it("gives each project a page: open work and one timeline of what happened", async () => {
+  it("gives each project compact resource counts and selected work", async () => {
     const w = await world();
     const html = await (await w.get("/site")).text();
     expect(html).toContain("acme.site@pimwell.test");
     expect(html).toContain("git clone https://acme.pimwell.test/site.git");
-    expect(html).toContain("Checkout fails");
-    expect(html).toContain("Filed site#2");
+    expect(html).toContain('href="/site?resource=snag"');
+    expect(html).toContain("Open Snags");
+    expect(html).toContain("Open Wishes");
+    const selected = await (await w.get("/site?resource=snag")).text();
+    expect(selected).toContain("Checkout fails");
+    expect(selected).toContain('href="/site/w/1"');
     expect((await w.get("/nosuch")).status).toBe(404);
   });
 

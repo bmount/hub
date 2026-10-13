@@ -106,8 +106,16 @@ try {
   await verb(member, 'review.request', {project:'sample',branch:'topic',title:'Keep navigation visible',summary:'Synthetic review of the workbench.',reviewers:['peer@example.test']});
   const sampleId = await db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'sample'").bind(tenant).first('id');
   await db.prepare("INSERT INTO app_deploy (id,tenant_id,project_id,script_name,version_id,tag,message,seen_at) VALUES (?,?,?,?,?,?,?,?)").bind('synthetic-deploy',tenant,sampleId,'sample-worker','b'.repeat(40),'workbench','Synthetic deploy record; not a live rollout.',now).run();
+  if (process.env.WORKBENCH_PAGES) {
+    for (let n=1;n<=10;n++) await verb(member, 'project.create', {slug:'team-'+n,kind:n%2 ? 'tracker' : 'wiki',display_name:'Team '+n});
+    const viewer = await db.prepare("SELECT id FROM identity WHERE email = 'dev@example.test'").first('id');
+    const work = await db.prepare("SELECT id FROM work_item WHERE project_id = ? AND number = 2").bind(sampleId).first('id');
+    for (let n=1;n<=5;n++) await db.prepare("INSERT INTO attention (id,tenant_id,identity_id,reason,item_id,summary,created_at) VALUES (?,?,?,'comment',?,?,?)").bind(id(),tenant,viewer,work,'Review navigation change '+n,now+n).run();
+    await verb(member, 'research.save', {project:'knowledge',slug:'findings',expected_revision:0,topic:'Workbench findings',summary:'Synthetic research fixture.',status:'draft',sources:[],note:'Fixture'});
+    await verb(member, 'file.put', {project:'knowledge',path:'notes.txt',content_type:'text/plain',expected_revision:0,base64:Buffer.from('Synthetic file fixture.').toString('base64')});
+  }
   browser = await chromium.launch({headless: true});
-  const pages = {home:'/', docket:'/sample/docket', item:'/sample/w/2', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', files:'/knowledge/documents', contacts:'/knowledge/contacts', graph:`/knowledge/contacts/${contact.entity.id}`, mail:'/mail', chat:'/c/general', assistant:'/assistant', people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
+  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', files:'/knowledge/documents', contacts:'/knowledge/contacts', graph:`/knowledge/contacts/${contact.entity.id}`, mail:'/mail', chat:'/c/general', assistant:'/assistant', people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
   const phase = process.env.WORKBENCH_PHASE || 'before';
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
@@ -140,7 +148,7 @@ try {
       await route.fulfill({status:res.status,headers:{...Object.fromEntries(res.headers),'x-local-final-url':finalURL},body:Buffer.from(await res.arrayBuffer())});
     });
     const page = await ctx.newPage();
-    for (const [name, route] of Object.entries(pages)) {
+    for (const [name, route] of Object.entries(pages).filter(([name]) => !process.env.WORKBENCH_PAGES || process.env.WORKBENCH_PAGES.split(',').includes(name))) {
       const response = await page.goto(base+route);
       expect(response.status(), name).toBe(200);
       await page.locator('main').waitFor();
@@ -155,6 +163,63 @@ try {
         const visibleNavigation = await page.evaluate(() => ['rail','explorer'].map(id => {const r=document.getElementById(id).getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth;}));
         expect(visibleNavigation).toEqual(viewport.width >= 1280 ? [true,true] : [false,false]);
         if (viewport.width < 760) await expect(page.locator('.tabs')).toBeVisible();
+      }
+      if (phase === 'after' && ['home','overview','workspace'].includes(name)) {
+        await expect(page.locator('#list .card, #list .grid, #list .onramp')).toHaveCount(0);
+        await expect(page.locator('#list .wb-toolbar')).toHaveCount(1);
+        if (viewport.width === 1440) {
+          expect(await page.locator('#list').evaluate(el => el.scrollHeight <= el.clientHeight), name+' fits without scrolling').toBe(true);
+        }
+        await page.evaluate(() => { window.overviewList = document.getElementById('list'); });
+        const link = page.locator('#list tr[data-href] a').first();
+        await link.click();
+        await expect(page.locator('#inspector h1')).toBeVisible();
+        expect(await page.evaluate(() => window.overviewList === document.getElementById('list')),name+' retains working pane').toBe(true);
+        const selectedURL = page.url();
+        await page.reload();
+        expect(page.url()).toBe(selectedURL);
+        await expect(page.locator('#inspector h1')).toBeVisible();
+        await page.screenshot({path:path.join(artifacts,`${phase}-${name}-selected-${label}.png`),fullPage:false});
+        manifest.push({phase,name:name+'-selected',route:new URL(selectedURL).pathname+new URL(selectedURL).search,viewport,file:`${phase}-${name}-selected-${label}.png`});
+        await page.locator('[data-close-inspector]').click();
+        await expect(page.locator('main.panes')).toHaveClass(/one/);
+        await page.goBack();
+        await expect(page.locator('#inspector h1')).toBeVisible();
+        await page.goForward();
+        await expect(page.locator('main.panes')).toHaveClass(/one/);
+        if (name === 'workspace') {
+          await page.locator('#list a').filter({hasText:'New page',exact:true}).click();
+          await expect(page.locator('#inspector form')).toHaveAttribute('action','/api/wiki.write');
+          await page.locator('#inspector input[name=slug]').fill('browser-page');
+          await page.locator('#inspector input[name=title]').fill('Browser created page');
+          await page.locator('#inspector input[name=note]').fill('Acceptance');
+          if (label === '1440') {
+            await page.getByRole('button',{name:'Create page',exact:true}).click();
+            await expect(page).toHaveURL(/\/knowledge\/wiki\/browser-page$/);
+            await expect(page.locator('#list')).toContainText('Browser created page');
+          }
+          await page.goto(base+'/knowledge?resource=upload');
+          await expect(page.locator('#inspector form')).toHaveAttribute('data-reload','');
+          if (label === '1440') {
+            await page.locator('#inspector input[type=file]').setInputFiles({name:'browser.txt',mimeType:'text/plain',buffer:Buffer.from('Browser uploaded file')});
+            const uploaded = page.waitForResponse(r => r.url().endsWith('/knowledge/documents/upload'));
+            await page.getByRole('button',{name:'Upload',exact:true}).click();
+            // Native form redirects are followed in-process by this local bridge.
+            expect((await uploaded).headers()['x-local-final-url']).toBe(base+'/knowledge/documents');
+            await expect(page.locator('#list')).toContainText('browser.txt');
+          }
+          await page.goto(base+'/knowledge?resource=share');
+          await expect(page.locator('#inspector')).toContainText('Only workspace members');
+        }
+        if (name === 'home' && label === '1440' && process.env.WORKBENCH_PAGES) {
+          await page.goto(base+'/');
+          await page.evaluate(() => { window.homeList = document.getElementById('list'); });
+          await page.locator('#list table[aria-label="Needs me"] a').first().click();
+          await expect(page.locator('#inspector h1')).toContainText('Keep project navigation visible');
+          expect(await page.evaluate(() => window.homeList === document.getElementById('list'))).toBe(true);
+          await page.locator('[data-close-inspector]').click();
+          await expect(page.locator('#list')).toContainText('Nothing needs you right now.');
+        }
       }
       if (phase === 'after' && ['board','status','code','reviews','codeFiles','deploys'].includes(name)) {
         await expect(page.locator('#list .wb-toolbar')).toHaveCount(1);
@@ -197,7 +262,7 @@ try {
         await page.emulateMedia({colorScheme:'light'});
       }
     }
-    if (phase === 'after') {
+    if (phase === 'after' && !process.env.WORKBENCH_PAGES) {
       await page.goto(base+'/sample/docket');
       if (viewport.width >= 1280) {
         expect(await page.locator('#list').evaluate(el => el.clientWidth)).toBeGreaterThanOrEqual(900);

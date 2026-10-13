@@ -105,12 +105,12 @@ describe("wiki pages", () => {
       expect(read.isError, JSON.stringify(read)).toBeUndefined();
       expect(JSON.stringify(read)).toContain(namespace + " unique");
       expect(JSON.stringify(read)).not.toContain("other.pimwell.test");
-      for (const suffix of ["", "/wiki", "/wiki/start", "/documents", "/contacts", "/docket", "/board", "/status"]) {
+      for (const suffix of ["", "?resource=wiki", "/wiki", "/wiki/start", "/documents", "/contacts", "/docket", "/board", "/status"]) {
         const res = await SELF.fetch("https://" + host + "/" + project + suffix, {headers: cookieHeaders(admin.token, host)});
         expect(res.status, project + suffix).toBe(200);
         const html = await res.text();
-        if (suffix === "" || suffix === "/wiki") {
-          expect(html).toContain("/" + project + "/wiki");
+        if (suffix === "" || suffix === "?resource=wiki" || suffix === "/wiki") {
+          expect(html).toContain("/" + project + (suffix === "" ? "?resource=wiki" : "/wiki"));
           expect(html).not.toContain((namespace === "east" ? "west" : "east") + " unique");
         }
         if (suffix === "/wiki/start") {
@@ -313,9 +313,9 @@ describe("project deletion from the web", () => {
 
   it("creates, archives and confirms deletion with web forms; purges content, channels, objects and indexes without touching siblings or other tenants", async () => {
     const w = await world(), db = env.HUB_DB;
-    expect(await w.get("/")).toContain('action="/api/project.archive"');
+    expect(await w.get("/gone")).toContain('action="/api/project.archive"');
     expect(await w.get("/projects/new")).toContain('action="/api/project.create"');
-    expect(await w.get("/", w.member.token)).not.toContain('action="/api/project.archive"');
+    expect(await w.get("/gone", w.member.token)).not.toContain('action="/api/project.archive"');
     const other = await w.post("project.create", { slug: "keep", kind: "workspace", display_name: "Keep" });
     const keep = (await other.json() as any).result.project;
     const foreign = await seedHuman("foreign@example.com", { memberships: [{ tenant_id: w.blue.id, role: "admin" }] });

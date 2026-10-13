@@ -1,29 +1,24 @@
-// An organization's home, its people and agents, and each project's own page (overnight plan task 4).
-// Every page reads in one D1 batch: one round trip, whatever it shows.
 import { projectControls } from "./projectControls";
-import { PROJECT_KINDS, projectFeatures, FEATURE_LABELS } from "../projectFeatures";
+import { PROJECT_KINDS, projectFeatures } from "../projectFeatures";
 import type { Env } from "../env";
-import { COPY_SCRIPT, esc, htmlResponse, onramp, page } from "../html";
-import { intentBox } from "../intent/page";
+import { COPY_SCRIPT, esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
-import { readableMail, readableMailEvents } from "../auth/mailAccess";
+import { readableMailEvents } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
-import { KINDS, STATES, type WorkKind, type WorkState } from "../work/names";
+import { KINDS, type WorkKind } from "../work/names";
+import { projectPathSql } from "../db/projects";
+import { HubError } from "../errors";
+import { selectedWorkInspector } from "./workPages";
 
-const ago = (now: number, t: number) => {
+const ago = (now: number, t: number | null) => {
+  if (!t) return "—";
   const m = Math.round((now - t) / 60000);
   if (m < 1) return "just now"; if (m < 60) return `${m} min ago`;
   const h = Math.round(m / 60); if (h < 36) return `${h} h ago`;
   return new Date(t).toISOString().slice(0, 10);
 };
-
-type Ev = { kind: string; summary: string; created_at: number; who: string | null; who_kind: string | null };
-function timeline(now: number, rows: Ev[]): string {
-  if (!rows.length) return `<p class="lede">Nothing yet. The first thing that happens here will show up in this list.</p>`;
-  return `<ol class="timeline">${rows.map((e) => `<li><time>${esc(ago(now, e.created_at))}</time><span>${e.who ? `<strong>${esc(e.who)}</strong>${e.who_kind === "agent" ? " <small>(agent)</small>" : ""}: ` : ""}${esc(e.summary)}</span></li>`).join("")}</ol>`;
-}
 
 async function orgCtx(request: Request, env: Env): Promise<{ ctx: Ctx; extra: Record<string, string> } | Response> {
   const ctx = await buildContext(request, env);
@@ -32,43 +27,52 @@ async function orgCtx(request: Request, env: Env): Promise<{ ctx: Ctx; extra: Re
   return { ctx, extra };
 }
 
-const EVENTS_SQL = `SELECT e.kind, e.summary, e.created_at, i.display_name AS who, i.kind AS who_kind FROM event e LEFT JOIN identity i ON i.id = e.identity_id`;
+type Project = { id: string; slug: string; namespace: string | null; display_name: string; kind: string; state: string; path: string };
+type Resource = { key: string; label: string; href: string; n: number; at: number | null };
+type Entry = { id: string; summary: string; created_at: number; slug: string | null; number: number | null; href: string | null };
 
 export async function orgHomePage(request: Request, env: Env): Promise<Response> {
   const oc = await orgCtx(request, env);
   if (oc instanceof Response) return oc;
   const { ctx, extra } = oc;
-  const t = ctx.tenant!;
-  const access = readableMail(ctx), eventAccess = readableMailEvents(ctx);
-  const [projects, byKind, events, mail, people] = await ctx.db.batch([
-    ctx.db.prepare(`SELECT p.slug, p.display_name, p.kind, (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) AS namespace, (SELECT COUNT(*) FROM work_item w WHERE w.project_id = p.id AND w.state IN ('open','doing')) AS open_work,
-      (SELECT MAX(w.updated_at) FROM work_item w WHERE w.project_id = p.id) AS last_work FROM project p WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind NOT IN ('channel', 'agent-src') ORDER BY p.slug`).bind(t.id),
-    ctx.db.prepare("SELECT kind, COUNT(*) AS n FROM work_item WHERE tenant_id = ? AND state IN ('open','doing') GROUP BY kind").bind(t.id),
-    ctx.db.prepare(`${EVENTS_SQL} WHERE e.tenant_id = ? AND ${eventAccess.sql} ORDER BY e.created_at DESC LIMIT 12`).bind(t.id, ...eventAccess.bindings),
-    ctx.db.prepare(`SELECT m.id, m.subject, m.from_email, m.received_at, pr.slug AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id WHERE ${access.sql} AND m.verdict = 'admitted' ORDER BY m.received_at DESC LIMIT 5`).bind(...access.bindings),
-    ctx.db.prepare("SELECT i.kind, COUNT(*) AS n FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' GROUP BY i.kind").bind(t.id),
+  const t = ctx.tenant!, eventAccess = readableMailEvents(ctx);
+  const [projects, needs] = await ctx.db.batch([
+    ctx.db.prepare(`SELECT p.*, ${projectPathSql()} AS path, (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) AS namespace,
+      (SELECT COUNT(*) FROM work_item w WHERE w.project_id = p.id AND w.state IN ('open','doing')) AS open_work,
+      (SELECT COUNT(*) FROM attention a LEFT JOIN work_item w ON w.id = a.item_id WHERE a.tenant_id = p.tenant_id AND a.identity_id = ? AND a.done_at IS NULL AND (w.project_id = p.id OR (a.item_id IS NULL AND a.href LIKE '/' || (${projectPathSql()}) || '/reviews/%'))) AS needs,
+      MAX(p.created_at, COALESCE((SELECT MAX(w.updated_at) FROM work_item w WHERE w.project_id = p.id),0),
+        COALESCE((SELECT MAX(e.created_at) FROM event e WHERE e.tenant_id = p.tenant_id AND ((e.target_kind = 'project' AND e.target_id = p.id) OR (e.target_kind = 'inbound_mail' AND e.target_id IN (SELECT id FROM inbound_mail WHERE tenant_id = p.tenant_id AND project_id = p.id)) OR (e.target_kind = 'outbound_mail' AND e.target_id IN (SELECT o.id FROM outbound_mail o JOIN inbound_mail m ON m.id = o.in_reply_to AND m.tenant_id = o.tenant_id WHERE o.tenant_id = p.tenant_id AND m.project_id = p.id))) AND ${eventAccess.sql}),0),
+        COALESCE((SELECT MAX(created_at) FROM wiki_revision WHERE project_id = p.id),0),
+        COALESCE((SELECT MAX(created_at) FROM file_revision WHERE project_id = p.id),0),
+        COALESCE((SELECT MAX(updated_at) FROM contact_entity WHERE project_id = p.id),0),
+        COALESCE((SELECT MAX(updated_at) FROM review WHERE project_id = p.id),0),
+        COALESCE((SELECT MAX(seen_at) FROM app_deploy WHERE project_id = p.id),0),
+        COALESCE((SELECT MAX(last_seen) FROM app_error_group WHERE project_id = p.id),0),
+        COALESCE((SELECT MAX(mi.created_at) FROM msg_index mi JOIN channel c ON c.project_id = mi.conversation_id AND c.tenant_id = mi.tenant_id JOIN meta owner ON owner.key = 'project_channel:v1:' || c.tenant_id || ':' || c.project_id AND owner.value = p.id WHERE mi.tenant_id = p.tenant_id ${ctx.identity!.kind === "human" ? "" : "AND EXISTS (SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = mi.tenant_id AND cm.conversation_id = mi.conversation_id AND cm.identity_id = ? AND cm.removed_at IS NULL)"}),0)) AS last_activity
+      FROM project p WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind NOT IN ('channel','agent-src') ORDER BY path`).bind(ctx.identity!.id, ...eventAccess.bindings, ...(ctx.identity!.kind === "human" ? [] : [ctx.identity!.id]), t.id),
+    ctx.db.prepare(`SELECT a.id, a.summary, a.created_at, ${projectPathSql()} AS slug, w.number, a.href FROM attention a LEFT JOIN work_item w ON w.id = a.item_id LEFT JOIN project p ON p.id = w.project_id AND p.tenant_id = a.tenant_id WHERE a.tenant_id = ? AND a.identity_id = ? AND a.done_at IS NULL ORDER BY a.created_at DESC LIMIT 6`).bind(t.id,ctx.identity!.id),
   ]);
-  const proj = (projects!.results as Array<{ slug: string; namespace: string | null; display_name: string; kind: string; open_work: number; last_work: number | null }>);
-  const kinds = new Map((byKind!.results as Array<{ kind: WorkKind; n: number }>).map((r) => [r.kind, r.n]));
-  const counts = new Map((people!.results as Array<{ kind: string; n: number }>).map((r) => [r.kind, r.n]));
-  const totalOpen = [...kinds.values()].reduce((a, b) => a + b, 0);
-
-  const projectCards = proj.length ? `<div class="grid">${proj.map((p) => `<div class="card"><h3><a href="/${esc(p.namespace ? `${p.namespace}/${p.slug}` : p.slug)}">${esc(p.display_name)}</a></h3>
-<p>${esc(p.kind)} · ${p.open_work} open${p.last_work ? ` · active ${esc(ago(ctx.now, p.last_work))}` : ""}</p>
-<p><a href="/${esc(p.namespace ? `${p.namespace}/${p.slug}` : p.slug)}">Open project</a> · <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code></p>${rank(ctx.role) >= rank("admin") && ctx.identity!.kind === "human" ? projectControls(p, false) : ""}</div>`).join("")}</div>`
-    : `<p class="lede">No projects yet.</p>`;
-  const kindChips = (Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("");
-  const mailRows = (mail!.results as Array<{ id: string; subject: string; from_email: string; received_at: number; project: string | null }>);
-  const body = `<h1>${esc(t.display_name)}</h1>
-<p class="lede">You are ${esc(ctx.role!)} · ${counts.get("human") ?? 0} people and ${counts.get("agent") ?? 0} agents · ${totalOpen} things open · send anything to <code>${esc(t.slug)}@${esc(env.HUB_DOMAIN)}</code></p>
-${intentBox()}
-${onramp({ connect: rank(ctx.role) >= rank("member"), invite: rank(ctx.role) >= rank("admin") })}
-<h2>Projects</h2>${rank(ctx.role) >= rank("member") ? `<p><a href="/projects/new">New project</a></p>` : ""}${projectCards}
-<h2>Open work</h2><div class="chips">${kindChips}</div>
-<h2>Lately</h2>${timeline(ctx.now, events!.results as Ev[])}
-<h2>Mail</h2>${mailRows.length ? `<ul>${mailRows.map((m) => `<li><a href="/mail/${esc(m.id)}">${esc(m.subject || "(no subject)")}</a> <small>from ${esc(m.from_email)} to ${esc(m.project ?? "the inbox")}, ${esc(ago(ctx.now, m.received_at))}</small></li>`).join("")}</ul>` : `<p class="lede">No mail yet. Forward a thread to any project's address and it lands here.</p>`}
-<p><a href="/archive">Archive</a></p>`;
-  return htmlResponse(page(t.display_name, body, shellFor(ctx, env, "home", t.slug)), 200, extra);
+  const rows = projects!.results as Array<Project & { open_work: number; needs: number; last_activity: number }>;
+  const entries = needs!.results as Entry[];
+  const url = new URL(request.url);
+  const selected = url.searchParams.get("project");
+  if (selected !== null && url.searchParams.has("work")) return notFoundPage(extra);
+  const work = await selectedWorkInspector(ctx,env,url,null).catch(error => {
+    if (error instanceof HubError && error.status === 404) return null;
+    throw error;
+  });
+  if (!work) return notFoundPage(extra);
+  const chosen = selected === null ? null : rows.find(p => p.path === selected);
+  if (selected !== null && !chosen) return notFoundPage(extra);
+  const actions = `${rank(ctx.role) >= rank("member") ? '<a href="/projects/new">New project</a><a href="/people?connect=1">Connect an agent</a>' : ""}${rank(ctx.role) >= rank("admin") ? '<a href="/people?invite=1">Invite a person</a>' : ""}${rank(ctx.role) >= rank("member") ? '<a href="/new">File</a>' : ""}<a href="/archive">Archive</a>`;
+  const list = `<div class="head"><h1>${esc(t.display_name)}</h1><span>${rows.length} projects</span></div>${toolbar("Home actions", actions)}
+<h2>Projects</h2>${kitTable("Projects", [{label:"Project"},{label:"Kind"},{label:"Open work"},{label:"Needs me"},{label:"Last activity"}], rows.map(p => {
+    const href = `/?project=${encodeURIComponent(p.path)}`;
+    return {href, selected: p.path === selected, cells: [{html:`<a href="${esc(href)}">${esc(p.display_name)}</a> <small>${esc(p.path)}</small>`},{html:esc(p.kind)},{html:String(p.open_work)},{html:String(p.needs)},{html:esc(ago(ctx.now,p.last_activity))}]};
+  }))}
+<h2><a href="/attention">Needs me</a></h2>${entries.length ? kitTable("Needs me",[{label:"Waiting"},{label:"When"}],entries.slice(0,5).map(e => ({href:e.slug ? `/?work=${encodeURIComponent(`${e.slug}#${e.number}`)}` : e.href ?? "/attention",cells:[{html:`<a href="${esc(e.slug ? `/?work=${encodeURIComponent(`${e.slug}#${e.number}`)}` : e.href ?? "/attention")}">${esc(e.summary)}</a>`},{html:esc(ago(ctx.now,e.created_at))}]}))) : '<p class="empty">Nothing needs you right now.</p>'}${entries.length > 5 ? '<a href="/attention">All Needs me →</a>' : ""}`;
+  const overview = chosen ? await projectOverview(ctx, env, chosen, null) : null;
+  return htmlResponse(workbench(t.display_name, {list, listKey:`home:${rows.map(p => `${p.path}:${p.open_work}:${p.needs}:${p.last_activity}`).join(",")}:${entries.map(e => e.id).join(",")}`, inspector:overview ? `<a class="back" href="/">‹ Home</a>${overview.list}<p><a href="/${esc(chosen!.path)}">Open project workspace →</a></p>` : work.html, inspectorKey:chosen ? `home:${chosen.path}` : work.key}, shellFor(ctx,env,"home",t.slug)!),200,extra);
 }
 
 export async function newProjectPage(request: Request, env: Env): Promise<Response> {
@@ -84,51 +88,86 @@ export async function newProjectPage(request: Request, env: Env): Promise<Respon
 <button>Create project</button></form>`, shellFor(ctx, env, "home")), 200, extra);
 }
 
-import { wikiList } from "../verbs/wiki";
-import { researchList } from "../verbs/research";
+async function projectOverview(ctx: Ctx, env: Env, p: Project, selected: string | null) {
+  const features = projectFeatures(p.kind), base = `/${p.path}`, t = ctx.tenant!;
+  // Current revisions, not history, count as resources. Channel ownership is the existing metadata link.
+  const [work, wiki, files, contacts, reviews, channels, errors, deploy] = await ctx.db.batch([
+    ctx.db.prepare("SELECT kind, COUNT(*) AS n, MAX(updated_at) AS at FROM work_item WHERE project_id = ? AND state IN ('open','doing') GROUP BY kind").bind(p.id),
+    ctx.db.prepare(`SELECT CASE WHEN research IS NULL THEN 'wiki' ELSE 'research' END AS kind, SUM(CASE WHEN deleted = 0 THEN 1 ELSE 0 END) AS n, MAX(created_at) AS at FROM wiki_revision r WHERE tenant_id = ? AND project_id = ? AND revision = (SELECT MAX(revision) FROM wiki_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.slug = r.slug) GROUP BY kind`).bind(t.id,p.id),
+    ctx.db.prepare(`SELECT COALESCE(SUM(CASE WHEN deleted = 0 THEN 1 ELSE 0 END),0) AS n, MAX(created_at) AS at FROM file_revision r WHERE tenant_id = ? AND project_id = ? AND revision = (SELECT MAX(revision) FROM file_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.path = r.path)`).bind(t.id,p.id),
+    ctx.db.prepare("SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM contact_entity WHERE tenant_id = ? AND project_id = ?").bind(t.id,p.id),
+    ctx.db.prepare("SELECT COUNT(*) AS n, MAX(updated_at) AS at FROM review WHERE tenant_id = ? AND project_id = ? AND status <> 'closed'").bind(t.id,p.id),
+    ctx.db.prepare(`SELECT cp.slug, cp.display_name, COALESCE((SELECT MAX(created_at) FROM msg_index WHERE tenant_id = cp.tenant_id AND conversation_id = cp.id),c.created_at) AS at FROM channel c JOIN project cp ON cp.id = c.project_id JOIN meta owner ON owner.key = 'project_channel:v1:' || cp.tenant_id || ':' || cp.id AND owner.value = ? WHERE cp.tenant_id = ? AND cp.state = 'active' ${ctx.identity!.kind === "human" ? "" : "AND EXISTS (SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = cp.tenant_id AND cm.conversation_id = cp.id AND cm.identity_id = ? AND cm.removed_at IS NULL)"} ORDER BY cp.slug`).bind(p.id,t.id,...(ctx.identity!.kind === "human" ? [] : [ctx.identity!.id])),
+    ctx.db.prepare("SELECT COUNT(*) AS n, MAX(last_seen) AS at FROM app_error_group WHERE tenant_id = ? AND project_id = ?").bind(t.id,p.id),
+    ctx.db.prepare("SELECT id, COALESCE(tag,version_id) AS version, seen_at AS at FROM app_deploy WHERE tenant_id = ? AND project_id = ? ORDER BY seen_at DESC LIMIT 1").bind(t.id,p.id),
+  ]);
+  const resources: Resource[] = [];
+  const add = (key: string, label: string, href: string, result: D1Result | undefined, kind?: string) => {
+    const rows = result!.results as Array<{kind?: string; n: number; at: number | null}>;
+    const r = kind ? rows.find(r => r.kind === kind) : rows[0];
+    resources.push({key,label,href,n:r?.n ?? 0,at:r?.at ?? null});
+  };
+  if (features.includes("docket")) for (const k of Object.keys(KINDS) as WorkKind[]) add(k, `Open ${KINDS[k].plural}`, `${base}/docket?kind=${k}`,work,k);
+  if (features.includes("repo")) add("reviews","Open reviews",`${base}/reviews`,reviews);
+  if (features.includes("wiki")) add("wiki","Wiki pages",`${base}/wiki`,wiki,"wiki");
+  if (features.includes("knowledge")) add("research","Research",`${base}/wiki`,wiki,"research");
+  if (features.includes("files")) add("files","Files",`${base}/documents`,files);
+  if (features.includes("people")) add("contacts","Contacts",`${base}/contacts`,contacts);
+  const channelRows = channels!.results as Array<{slug: string; display_name: string; at: number}>;
+  resources.push({key:"channels",label:"Channels",href:"/c",n:channelRows.length,at:channelRows.length ? Math.max(...channelRows.map(c=>c.at)) : null});
+  add("errors","App errors","/apps",errors);
+  const last = deploy!.results[0] as {id: string; version: string; at: number} | undefined;
+  resources.push({key:"deploy",label:"Last deploy",href:last ? `/apps?project=${encodeURIComponent(p.path)}&d=${encodeURIComponent(last.id)}` : `/apps?project=${encodeURIComponent(p.path)}`,n:last ? 1 : 0,at:last?.at ?? null});
+  const writable = p.state === "active" && rank(ctx.role) >= rank("member");
+  const select = (key: string) => `${base}?resource=${encodeURIComponent(key)}`;
+  const actions = `${features.includes("repo") ? `<a href="${esc(base)}/code">Code</a>` : ""}${writable && features.includes("docket") ? `<a href="/new?project=${esc(encodeURIComponent(p.path))}">File</a>` : ""}${writable && features.includes("wiki") ? `<a href="${esc(select("new-page"))}">New page</a>` : ""}${writable && features.includes("files") ? `<a href="${esc(select("upload"))}">Upload</a>` : ""}${writable && features.includes("people") ? `<a href="${esc(select("add-contact"))}">Add contact</a>` : ""}${writable && features.includes("wiki") ? `<a href="${esc(select("share"))}">Share</a>` : ""}${writable && rank(ctx.role) >= rank("admin") && ctx.identity!.kind === "human" ? projectControls(p,false) : ""}`;
+  const list = `<div class="overview"><div class="head"><h1>${esc(p.display_name)}</h1>${p.state === "archived" ? '<span>Archived</span>' : ""}</div>
+${kitTable("Project contents",[{label:"Resource"},{label:"Count"},{label:"Latest activity"}],resources.map(r=>({href:select(r.key),selected:selected === r.key,cells:[{html:`<a href="${esc(select(r.key))}">${esc(r.label)}</a>`},{html:r.key === "deploy" && last ? `<code title="${esc(last.version)}">${esc(last.version.slice(0,12))}</code>` : String(r.n)},{html:esc(ago(ctx.now,r.at))}]})))}
+${inspectorSection("Identity",[{label:"Kind",html:esc(p.kind)},{label:"Mail",html:`<code>${esc(t.slug)}.${esc(p.path.replace("/", "."))}@${esc(env.HUB_DOMAIN)}</code>`},{label:"MCP",html:`<code id="project-mcp-url">https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/p/${esc(p.path)}/mcp</code> <button type="button" data-copy="#project-mcp-url">Copy URL</button>`}, ...(features.includes("repo") ? [{label:"Clone",html:`<code>git clone https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/${esc(p.path)}.git</code>`}] : [])])}
+${toolbar("Project actions",actions + `<a href="/usage?project=${esc(encodeURIComponent(p.path))}">AI usage</a>`)}</div>`;
+  const resource = resources.find(r=>r.key === selected);
+  const actionAllowed = writable && (selected === "new-page" && features.includes("wiki") || selected === "upload" && features.includes("files") || selected === "add-contact" && features.includes("people") || selected === "share" && features.includes("wiki"));
+  if (selected !== null && !resource && !actionAllowed) return null;
+  let inspector: string | null = null;
+  if (selected !== null) {
+    inspector = `<a class="back" href="${esc(base)}">‹ ${esc(p.display_name)}</a><h1>${esc(resource?.label ?? ({"new-page":"New page",upload:"Upload","add-contact":"Add contact",share:"Share"}[selected] ?? selected))}</h1>`;
+    const hidden = `<input type="hidden" name="project" value="${esc(p.path)}"><input type="hidden" name="_back" value="@result">`;
+    if (selected === "new-page") inspector += `<form method="post" action="/api/wiki.write">${hidden}<input type="hidden" name="expected_revision" value="0"><label>Slug <input name="slug" required maxlength="100" pattern="[a-z0-9]+(-[a-z0-9]+)*"></label><label>Title <input name="title" required maxlength="200"></label><label>Markdown <textarea name="body" rows="8"></textarea></label><label>Revision note <input name="note" required maxlength="500"></label><button>Create page</button></form>`;
+    else if (selected === "upload") inspector += `<form method="post" data-reload enctype="multipart/form-data" action="${esc(base)}/documents/upload"><label>File <input type="file" name="file" required></label><label>Folder/name (blank uses filename) <input name="path" maxlength="240"></label><label>Current revision (0 for new) <input name="expected_revision" type="number" min="0" value="0" required></label><button>Upload</button></form>`;
+    else if (selected === "add-contact") inspector += `<form method="post" action="/api/person.upsert">${hidden}<label>Name <input name="name" required maxlength="200"></label><label>Notes <textarea name="notes" rows="6"></textarea></label><button>Create contact</button></form>`;
+    else if (selected === "share") inspector += `<p>Select a document, then use its Share by mail action. Only workspace members can receive it.</p><p><a href="${esc(select("wiki"))}">Pages</a> · <a href="${esc(select("files"))}">Files</a></p>`;
+    else inspector += await resourceInspector(ctx,p,selected,resource,channelRows,last);
+  }
+  return {list,inspector};
+}
+
+async function resourceInspector(ctx: Ctx, p: Project, key: string, resource: Resource | undefined, channels: Array<{slug: string; display_name: string; at: number}>, last: {id: string; version: string; at: number} | undefined) {
+  const base = `/${p.path}`, tid = ctx.tenant!.id;
+  let rows: Array<{title: string; href: string; at: number}> = [];
+  if (key === "channels") rows = channels.map(c=>({title:c.display_name,href:`/c/${c.slug}`,at:c.at}));
+  else if (key === "deploy") rows = last ? [{title:last.version,href:resource!.href,at:last.at}] : [];
+  else {
+    let sql: string, bindings: (string | number)[] = [tid,p.id];
+    if (key in KINDS) { sql = "SELECT title, number AS ref, updated_at AS at FROM work_item WHERE tenant_id = ? AND project_id = ? AND state IN ('open','doing') AND kind = ? ORDER BY updated_at DESC LIMIT 21"; bindings.push(key); }
+    else if (["wiki","research"].includes(key)) { sql = `SELECT title, slug AS ref, created_at AS at FROM wiki_revision r WHERE tenant_id = ? AND project_id = ? AND deleted = 0 AND revision = (SELECT MAX(revision) FROM wiki_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.slug = r.slug) ${key === "research" ? "AND research IS NOT NULL" : "AND research IS NULL"} ORDER BY created_at DESC LIMIT 21`; }
+    else if (key === "files") sql = `SELECT path AS title, path AS ref, created_at AS at FROM file_revision r WHERE tenant_id = ? AND project_id = ? AND deleted = 0 AND revision = (SELECT MAX(revision) FROM file_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.path = r.path) ORDER BY created_at DESC LIMIT 21`;
+    else if (key === "contacts") sql = "SELECT name AS title, id AS ref, updated_at AS at FROM contact_entity WHERE tenant_id = ? AND project_id = ? ORDER BY updated_at DESC LIMIT 21";
+    else if (key === "reviews") sql = "SELECT title, number AS ref, updated_at AS at FROM review WHERE tenant_id = ? AND project_id = ? AND status <> 'closed' ORDER BY updated_at DESC LIMIT 21";
+    else sql = "SELECT title, id AS ref, last_seen AS at FROM app_error_group WHERE tenant_id = ? AND project_id = ? ORDER BY last_seen DESC LIMIT 21";
+    const result = await ctx.db.prepare(sql).bind(...bindings).all<{title: string; ref: string | number; at: number}>();
+    rows = result.results.map(r=>({title:r.title,at:r.at,href:key in KINDS ? `${base}/w/${r.ref}` : ["wiki","research"].includes(key) ? `${base}/wiki/${encodeURIComponent(r.ref)}` : key === "files" ? `${base}/documents?path=${encodeURIComponent(r.ref)}` : key === "contacts" ? `${base}/contacts/${encodeURIComponent(r.ref)}` : key === "reviews" ? `${base}/reviews/${r.ref}` : `/apps?g=${encodeURIComponent(r.ref)}`}));
+  }
+  return `${rows.length ? kitTable("Resource entries",[{label:"Name"},{label:"Updated"}],rows.slice(0,20).map(r=>({href:r.href,cells:[{html:`<a href="${esc(r.href)}">${esc(r.title)}</a>`},{html:esc(ago(ctx.now,r.at))}]}))) : '<p class="empty">Nothing here yet.</p>'}${resource ? `<p><a href="${esc(resource.href)}">Open ${esc(resource.label)} →</a>${rows.length > 20 ? " · First 20 shown" : ""}</p>` : ""}`;
+}
 
 export async function projectPage(request: Request, env: Env, slug: string): Promise<Response> {
   const oc = await orgCtx(request, env);
   if (oc instanceof Response) return oc;
-  const { ctx, extra } = oc;
-  const t = ctx.tenant!;
-  const p = await ctx.db.prepare(`SELECT p.id, p.slug, p.display_name, p.kind, p.state,
-      CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END AS usage_ref
-    FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id
-    WHERE p.tenant_id = ? AND (CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(t.id, slug)
-    .first<{ id: string; slug: string; display_name: string; kind: string; state: string; usage_ref: string | null }>();
+  const {ctx,extra} = oc;
+  const p = await ctx.db.prepare(`SELECT p.*, n.slug AS namespace, ${projectPathSql("p","n")} AS path FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND (${projectPathSql("p","n")}) = ? AND p.kind NOT IN ('channel','agent-src')`).bind(ctx.tenant!.id,slug).first<Project>();
   if (!p) return notFoundPage(extra);
-  const eventAccess = readableMailEvents(ctx);
-  const [byKind, events, open] = await ctx.db.batch([
-    ctx.db.prepare("SELECT kind, COUNT(*) AS n FROM work_item WHERE project_id = ? AND state IN ('open','doing') GROUP BY kind").bind(p.id),
-    ctx.db.prepare(`${EVENTS_SQL} WHERE e.tenant_id = ? AND ((e.target_kind = 'project' AND e.target_id = ?)
-      OR (e.target_kind = 'work_item' AND e.target_id IN (SELECT id FROM work_item WHERE project_id = ?))
-      OR (e.target_kind = 'inbound_mail' AND e.target_id IN (SELECT id FROM inbound_mail WHERE project_id = ?))) AND ${eventAccess.sql} ORDER BY e.created_at DESC LIMIT 40`).bind(t.id, p.id, p.id, p.id, ...eventAccess.bindings),
-    ctx.db.prepare("SELECT number, kind, title, state FROM work_item WHERE project_id = ? AND state IN ('open','doing') ORDER BY CASE kind WHEN 'quest' THEN 0 ELSE 1 END, updated_at DESC LIMIT 12").bind(p.id),
-  ]);
-  const kinds = new Map((byKind!.results as Array<{ kind: WorkKind; n: number }>).map((r) => [r.kind, r.n]));
-  const openRows = open!.results as Array<{ number: number; kind: WorkKind; title: string; state: WorkState }>;
-  const features = projectFeatures(p.kind);
-  const tabs = features.map((f) => `<a class="chip" href="${f === "docket" ? `/${esc(p.usage_ref!)}/docket` : f === "repo" ? `/${esc(p.usage_ref!)}/code` : f === "wiki" ? `/${esc(p.usage_ref!)}/wiki` : f === "files" ? `/${esc(p.usage_ref!)}/documents` : f === "people" ? `/${esc(p.usage_ref!)}/contacts` : `#feature-${f}`}">${FEATURE_LABELS[f]}</a>`).join("");
-  let knowledge = "";
-  if (features.includes("knowledge")) {
-    const kb = await wikiList.run(ctx, wikiList.parse({project: p.usage_ref!}));
-    const research = await researchList.run(ctx, researchList.parse({project: p.usage_ref!}));
-    knowledge = `<section id="feature-knowledge"><h2>Knowledge base</h2><p><a href="/${esc(p.usage_ref!)}/wiki">All KB pages and research</a></p><ul>${kb.pages.filter(r => r.page_type === "kb").map(r => `<li><a href="/${esc(p.usage_ref!)}/wiki/${esc(r.slug)}">${esc(r.title)}</a></li>`).join("")}</ul><h2 id="project-research">Research results</h2><ul>${research.results.map(r => `<li><a href="/${esc(p.usage_ref!)}/wiki/${esc(r.slug)}">${esc(r.topic)}</a> · ${esc(r.status)} · ${esc(r.author)}</li>`).join("")}</ul><p>First 200 pages shown. Agents file or revise results with <code>research.save</code>; filter with <code>research.list</code>.</p></section>`;
-  }
-  const contacts = features.includes("people") ? `<section id="feature-people"><h2>People and companies</h2><p><a href="/${esc(p.usage_ref!)}/contacts">Browse workspace contacts and connection graphs</a></p><p>Contacts are separate from organization accounts and membership.</p></section>` : "";
-  const clone = features.includes("repo") ? `<p>Clone: <code>git clone https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/${esc(p.usage_ref!)}.git</code> <small>(make a git credential on <a href="https://${esc(env.HUB_DOMAIN)}/me">your account</a>)</small></p>` : "";
-  const body = `<p class="crumbs"><a href="/">${esc(t.display_name)}</a> /</p>
-<h1>${esc(p.display_name)}${p.state === "archived" ? " <small>(archived)</small>" : ""}</h1>
-<p class="lede">Send or forward anything to <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code>. It is filed here as evidence, never as instructions.</p>
-${clone}
-${p.state === "active" ? `<section><h2>Connect an assistant</h2><p>Copy this MCP URL into your assistant’s “Add MCP server” or connector settings:</p><p><code id="project-mcp-url">https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/p/${esc(p.usage_ref ?? p.slug)}/mcp</code> <button type="button" data-copy="#project-mcp-url">Copy URL</button></p><p>Sign in with Pimwell OAuth, or configure your agent’s existing Pimwell token as a Bearer token. Tools and calls are limited to this project; the project argument is supplied automatically.</p></section>` : ""}
-<nav class="chips" aria-label="Project features">${tabs}</nav>${knowledge}${contacts}
-${features.includes("docket") ? `<div class="chips">${(Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/${esc(p.usage_ref!)}/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("")}<a class="chip" href="/${esc(p.usage_ref!)}/docket">Docket</a></div>
-${p.usage_ref ? `<p><a href="/usage?project=${esc(encodeURIComponent(p.usage_ref))}">Recorded AI usage for this project</a></p>` : ""}
-<h2>Open now</h2>${openRows.length ? `<ul>${openRows.map((w) => `<li><a href="/${esc(p.usage_ref!)}/w/${w.number}">#${w.number}</a> <span class="k-${w.kind}">${esc(KINDS[w.kind].name)}</span>: ${esc(w.title)} <small>${esc(STATES[w.state])}</small></li>`).join("")}</ul>` : `<p class="lede">Nothing open. File a wish, a snag, or an errand from the Docket.</p>`}
-` : ""}
-<h2>What happened</h2>${timeline(ctx.now, events!.results as Ev[])}`;
-  return htmlResponse(page(p.display_name, body + COPY_SCRIPT, shellFor(ctx, env, "project", p.usage_ref!)), 200, extra);
+  const selected = new URL(request.url).searchParams.get("resource");
+  const overview = await projectOverview(ctx,env,p,selected);
+  if (!overview) return notFoundPage(extra);
+  return htmlResponse(workbench(p.display_name,{list:overview.list + COPY_SCRIPT,listKey:`overview:${p.path}`,inspector:overview.inspector,inspectorKey:selected ? `overview:${p.path}:${selected}` : ""},shellFor(ctx,env,"project",p.path)!),200,extra);
 }
-

@@ -109,7 +109,7 @@ function projectExplorer(ctx: Ctx, env: Env): string {
   if (features.includes("docket")) nodes.push({...node("Docket", `${base}/docket`, p.open), expanded: true, children: [node("Board", `${base}/board`, p.open), node("Status", `${base}/status`, p.open)]});
   if (features.includes("repo")) nodes.push({...node("Repository and code", `${base}/code`), expanded: true, children: [node("Code files", `${base}/files`), node("Reviews", `${base}/reviews`, p.reviews), node("Deploys", `/apps?project=${encodeURIComponent(p.path)}#deploys`, p.deploys)]});
   if (features.includes("wiki")) nodes.push(node("Wiki", `${base}/wiki`, p.wiki));
-  if (features.includes("knowledge")) nodes.push({...node("Knowledge base and research", `${base}#feature-knowledge`, p.wiki), expanded: true, children: [node("Knowledge base", `${base}#feature-knowledge`, p.wiki - p.research), node("Research", `${base}#project-research`, p.research)]});
+  if (features.includes("knowledge")) nodes.push({...node("Knowledge base and research", `${base}?resource=wiki`, p.wiki), expanded: true, children: [node("Knowledge base", `${base}?resource=wiki`, p.wiki - p.research), node("Research", `${base}?resource=research`, p.research)]});
   if (features.includes("files")) nodes.push(node("Files", `${base}/documents`, p.files));
   if (features.includes("people")) nodes.push(node("Contacts and graph", `${base}/contacts`, p.contacts));
   nodes.push({...node("Channels", "/c", p.channels.length), expanded: true, children: p.channels.map(c => node(c.display_name, `/c/${encodeURIComponent(c.slug)}`, c.count))});
