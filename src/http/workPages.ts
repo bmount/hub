@@ -1,3 +1,6 @@
+import { graphStatements, graphFrom } from "../work/graphEdit";
+import { graphContext, viewGraph, describeReadiness, type ReadinessView, type View } from "../work/graphView";
+import { workGraph, workFrontier } from "../verbs/graph";
 import { projectPathSql } from "../db/projects";
 import { projectFeatures } from "../projectFeatures";
 // The workbench's work views (2026-10-07): the Docket as the list pane, and the selected item, a new item, or an
@@ -56,6 +59,55 @@ async function projectCtx(request: Request, env: Env, slug: string) {
   return { ctx, extra, project: project && projectFeatures(project.kind).includes("docket") ? project : null };
 }
 
+function readinessHtml(r: ReadinessView, compact = false): string {
+  return `<span class="wb-readiness${compact ? " wb-readiness-compact" : ""}" title="${esc(describeReadiness(r))}">${statusChip(describeReadiness(r), r.status === "ready" ? "open" : r.status === "claimed" ? "doing" : r.status === "closed" ? "done" : "blocked")}</span>`;
+}
+
+function dependencyInspector(g: Awaited<ReturnType<typeof graphContext>>, w: WorkItem, writable: boolean, keep: string, back: string): string {
+  const form = (verb: string, id: string, controls: string, label: string, destination = keep) => `<form method="post" action="/api/${verb}">${id ? `<input type="hidden" name="id" value="${esc(id)}">` : ""}<input type="hidden" name="_back" value="${destination}">${controls}<button type="submit">${esc(label)}</button></form>`;
+  const refs = (direction: "up" | "down") => {
+    const edges = g.g.edges.filter(e => direction === "up" ? e.dependent_id === w.id : e.prereq_id === w.id);
+    return edges.length ? kitList(direction === "up" ? "Waits on" : "Waiting on it", edges.map(e => {
+      const id = direction === "up" ? e.prereq_id : e.dependent_id;
+      const n = g.byId.get(id)!;
+      const href = `/${n.ref.split("#")[0]}/w/${n.ref.split("#")[1]}`;
+      return {html: `<a href="${esc(href)}">${esc(n.ref)} ${esc(n.title)}</a> ${readinessHtml(g.readinessOf(id))}${writable ? form("work.depend", direction === "up" ? w.id : id, `<input type="hidden" name="remove" value="${esc(direction === "up" ? id : w.id)}">`, "Remove dependency") : ""}`};
+    })) : `<p class="lede">None.</p>`;
+  };
+  const resources = g.g.resources.filter(r => r.item_id === w.id).map(r => `${r.name}${r.mode === "shared" ? ":shared" : ""}`).join(", ");
+  return `<h2>Dependencies and resources</h2>${readinessHtml(g.readinessOf(w.id))}<h3>Waits on</h3>${refs("up")}<h3>Waiting on it</h3>${refs("down")}
+${writable ? form("work.depend", w.id, `<label>Add prerequisite <input name="on" required placeholder="project#number" maxlength="80"></label>`, "Add dependency") + form("work.depend", "", `<label>Dependent item <input name="id" required placeholder="project#number" maxlength="80"></label><input type="hidden" name="on" value="${esc(w.id)}">`, "Add dependent") : ""}
+${inspectorSection("Resources", [{label: "Needs", html: esc(resources || "None"), editHtml: writable ? form("work.resources", w.id, `<label>Resources <input name="resources" value="${esc(resources)}" placeholder="prod-db, replica:shared"></label>`, "Save resources") : ""}])}
+${writable ? `<details><summary>Delete item</summary><p>Delete permanently, including comments, links and dependencies. Use Let it go for real work that will not happen.</p>${form("work.delete", w.id, `<label>Type ${esc(g.refOf(w.id))} to confirm <input name="confirm" required autocomplete="off" maxlength="80"></label>`, "Delete permanently", esc(back))}</details>` : ""}`;
+}
+
+/** Server-rendered graph and frontier reuse the query verbs and the shared inspector. */
+export async function dependencyPage(request: Request, env: Env, slug: string, view: "graph" | "frontier"): Promise<Response> {
+  const {ctx, extra, project} = await projectCtx(request, env, slug);
+  if (!project) return notFoundPage(extra);
+  const url = new URL(request.url);
+  const href = (ref: string) => { const u = new URL(url); u.searchParams.set("work", ref); return u.pathname + u.search; };
+  const row = (v: View) => ({href: href(v.ref), selected: url.searchParams.get("work") === v.ref, cells: [{html: `<a href="${esc(href(v.ref))}">${esc(v.ref)} ${esc(v.title)}</a>`}, {html: `P${v.priority}`}, {html: readinessHtml(v.readiness)}]});
+  const table = (label: string, items: View[]) => items.length ? kitTable(label, [{label: "Item"}, {label: "Priority"}, {label: "Readiness"}], items.map(row)) : `<p class="lede">No ${esc(label.toLowerCase())}.</p>`;
+  let content: string;
+  if (view === "graph") {
+    const result = await workGraph.run(ctx, workGraph.parse({project: slug}));
+    if (!("items" in result)) throw new HubError(500, "internal");
+    const levels = new Map<string, number>();
+    for (const n of result.items) levels.set(n.ref, Math.max(0, ...result.edges.filter(e => e.dependent === n.ref).map(e => (levels.get(e.prerequisite) ?? 0) + 1)));
+    const layers = [...new Set(levels.values())].sort((a,b) => a-b);
+    content = `<p class="lede">Prerequisites first; each later stage waits on earlier work. External prerequisites are included.</p><div class="wb-dependency-graph">${layers.map(level => `<section aria-label="Dependency stage ${level + 1}"><h2>Stage ${level + 1}</h2>${kitList(`Dependency stage ${level + 1}`, result.items.filter(n => levels.get(n.ref) === level).map(n => ({href: href(n.ref), selected: url.searchParams.get("work") === n.ref, html: `<a href="${esc(href(n.ref))}">${esc(n.ref)} ${esc(n.title)}</a> P${n.priority}<br>${readinessHtml(n.readiness)}<div class="lede">Waits on: ${result.edges.filter(e => e.dependent === n.ref).map(e => `<a href="${esc(href(e.prerequisite))}">${esc(e.prerequisite)}</a>`).join(", ") || "nothing"}</div>`})))}</section>`).join("")}</div>${!result.items.length ? '<p class="lede">No open items. File work from + File.</p>' : ""}`;
+  } else {
+    const result = await workFrontier.run(ctx, workFrontier.parse({project: slug, limit: 100}));
+    content = `<p aria-label="Readiness counts">Ready ${result.counts.ready} · Blocked ${result.counts.blocked} · Claimed ${result.counts.claimed} · Waiting for a resource ${result.counts.conflict}</p><h2>Ready now</h2><p class="lede">Ranked by priority, critical chain, downstream work, estimate and age. Showing ${result.ready.length} of ${result.counts.ready}.</p>${result.ready.length ? kitTable("Ready now", [{label:"Item"},{label:"Priority"},{label:"Readiness"},{label:"Chain"},{label:"Downstream"}], result.ready.map(v => { const r = row(v); r.cells.push({html:`${v.critical}h`}, {html:String(v.downstream)}); return r; })) : '<p class="lede">No executable work can start now.</p>'}<h2>Stuck behind dropped items</h2>${table("Stuck items", result.stuck)}`;
+  }
+  let selected;
+  try { selected = await selectedWorkInspector(ctx, env, url, null); } catch (e) { if (e instanceof HubError && e.status === 404) return notFoundPage(extra); throw e; }
+  const label = view === "graph" ? "Dependency graph" : "Execution frontier";
+  const list = `<h1>${label}</h1>${toolbar("Work views", kitTabs("Work views", ["docket", "graph", "frontier"].map(v => ({label: v === "docket" ? "Docket" : v === "graph" ? "Graph" : "Frontier", href: `/${slug}/${v}${url.searchParams.has("filter") ? `?filter=${encodeURIComponent(url.searchParams.get("filter")!)}` : ""}`, current: v === view}))), '<form method="get"><input data-filter name="filter" aria-label="Filter the list" placeholder="Filter these (/)" size="16"></form>')}${content}`;
+  return htmlResponse(workbench(label, {list, listKey: `${view}:${slug}`, stackOnPhone: true, inspector: selected.html, inspectorKey: selected.key}, shellFor(ctx, env, "project", slug)!), 200, extra);
+}
+
 // ---------- Filters ----------
 
 type Filters = { kind: WorkKind | null; closed: boolean; owner: string | null; quest: number | null; org: boolean };
@@ -98,7 +150,7 @@ const option = (value: string, label: string, selected: boolean) => `<option val
 
 // ---------- The list pane ----------
 
-function docketList(ctx: Ctx, project: Project | null, items: WorkItem[], members: Member[], quests: Quest[], slugs: Map<string, string>, f: Filters, selected: string | null = null): string {
+function docketList(ctx: Ctx, project: Project | null, items: WorkItem[], members: Member[], quests: Quest[], slugs: Map<string, string>, f: Filters, selected: string | null = null, readiness = new Map<string, ReadinessView>()): string {
   const base = f.org || !project ? "/docket" : `/${project.slug}/docket`;
   const to = (change: Partial<Filters>) => { const q = qs(f, change); return `${base}${q ? `?${q}` : ""}`; };
   const names = new Map(members.map((m) => [m.id, m.display_name]));
@@ -119,8 +171,10 @@ ${project && !f.org ? `<select name="quest" aria-label="Quest">${option("", "Any
     const box = canBulk ? [{className: "hide-s", html: `<input type="checkbox" name="ids" value="${esc(`${sl}#${w.number}`)}" form="bulk" aria-label="Select ${esc(`${sl}#${w.number}`)}">`}] : [];
     return {href, selected: w.id === selected, cells: [...box,
       {className: "ref", html: esc(f.org || !project ? `${sl}#${w.number}` : `#${w.number}`)},
-      {html: statusChip(KINDS[w.kind].name, w.kind)},
+      {className: "hide-s", html: statusChip(KINDS[w.kind].name, w.kind)},
       {className: "work-title", html: `<a href="${esc(href)}" title="${esc(w.title)}">${esc(w.title)}</a>`},
+      {className: "wb-priority", html: `P${w.priority}`},
+      {html: readinessHtml(readiness.get(w.id) ?? {status: "closed"}, true)},
       {className: "hide-s", html: esc(who)},
       {className: "hide-s", html: statusChip(STATES[w.state], w.state)},
       {className: "when hide-s", html: `<time title="${when(w.updated_at)}">${ago(w.updated_at, ctx.now)}</time>`}]};
@@ -140,7 +194,7 @@ ${project && !f.org ? `<select name="quest" aria-label="Quest">${option("", "Any
   return `<div class="head"><h1>${esc(DOCKET.name)}</h1><span>${items.length} ${f.closed ? "finished" : "open"} in ${where}</span></div>
 ${toolbar("Docket actions and filters", kinds, filterForm)}
 ${bulk}
-${items.length ? kitTable("Docket", [...(canBulk ? [{label: "Select", className: "hide-s"}] : []), {label: "Reference"}, {label: "Kind"}, {label: "Title"}, {label: "Owner", className: "hide-s"}, {label: "State", className: "hide-s"}, {label: "Updated", className: "hide-s"}], rows) : emptyState("No work here", empty.replace(/<[^>]*>/g, ""), {label: filtered ? "Show everything open" : "File work", href: filtered ? base : "/new"})}`;
+${items.length ? kitTable("Docket", [...(canBulk ? [{label: "Select", className: "hide-s"}] : []), {label: "Reference"}, {label: "Kind", className: "hide-s"}, {label: "Title"}, {label: "Priority"}, {label: "Readiness"}, {label: "Owner", className: "hide-s"}, {label: "State", className: "hide-s"}, {label: "Updated", className: "hide-s"}], rows) : emptyState("No work here", empty.replace(/<[^>]*>/g, ""), {label: filtered ? "Show everything open" : "File work", href: filtered ? base : "/new"})}`;
 }
 
 // ---------- Inspector panes ----------
@@ -179,8 +233,9 @@ function workLinkHtml(l: WorkLink): string {
   return `<li>${esc(l.target_kind)}: ${target}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`;
 }
 
-function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string, selectedUrl?: string): string {
-  const canWrite = rank(ctx.role) >= rank("member");
+async function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string, selectedUrl?: string, suppliedGraph?: Awaited<ReturnType<typeof graphContext>>): Promise<string> {
+  const canWrite = rank(ctx.role) >= rank("member") && project.state === "active";
+  const graph = suppliedGraph ?? await graphContext(ctx);
   const sourceMail = w.source_kind === "mail" ? mailEvidenceHref(w.source_ref) : null;
   const sourceMessage = w.source_kind === "message" ? messageEvidenceHref(w.source_ref) : null;
   const sourceUrl = w.source_kind === "url" && w.source_ref ? safeExternalUrl(w.source_ref) : null;
@@ -236,6 +291,7 @@ ${sourceMail ? `<p>Source: <a href="${sourceMail}">Recorded mail</a>. Access is 
 ${sourceMessage ? `<p>Source: <a href="${sourceMessage}">Recorded message</a>. Access is checked when opened.</p>` : ""}
 ${sourceUrl ? `<p>Source: <a href="${esc(sourceUrl)}">Recorded URL</a>. Recorded evidence, not verified access or existence.</p>` : ""}
 ${w.body.trim() ? `<div class="prose">${esc(w.body)}</div>` : `<p class="lede">No details yet.${canWrite ? " Click Details to add what, why, and how you will know it is done." : ""}</p>`}
+${dependencyInspector(graph, w, canWrite, keep, back)}
 ${under}
 ${comments}
 ${plannedBlock("review.request", "Review")}
@@ -264,7 +320,7 @@ export async function selectedWorkInspector(ctx: Ctx, env: Env, url: URL, scope:
     ctx.db.prepare("UPDATE attention SET done_at = ? WHERE identity_id = ? AND item_id = ? AND done_at IS NULL").bind(ctx.now, ctx.identity!.id, w.id),
   ]);
   const back = new URL(url); back.searchParams.delete("work");
-  return { html: itemInspector(ctx, env, project, w, {
+  return { html: await itemInspector(ctx, env, project, w, {
     members: members!.results as Member[], quests: (quests!.results as Quest[]).filter(q => q.id !== w.id),
     links: links!.results as WorkLink[], children: children!.results as WorkItem[], owner: owner!.results[0] as Member ?? null,
     parent: parent!.results[0] as Quest ?? null, activity: activity!.results as Activity[], comments: comments!.results as Comment[], following: following!.results.length > 0,
@@ -302,24 +358,27 @@ async function listAndInspect(request: Request, env: Env, slug: string | null, n
       ctx.db.prepare("UPDATE attention SET done_at = ? WHERE identity_id = ? AND item_id = ? AND done_at IS NULL").bind(ctx.now, ctx.identity!.id, w.id),
     );
   }
+  const graphOffset = stmts.length;
+  stmts.push(...graphStatements(ctx.db, ctx.tenant!.id));
   const r = await ctx.db.batch(stmts);
   const items = r[0]!.results as WorkItem[];
   const members = r[1]!.results as Member[];
   const slugs = new Map((r[2]!.results as Array<{ id: string; slug: string }>).map((x) => [x.id, x.slug]));
   const quests = questFor ? (r[3]!.results as Quest[]) : [];
-  const listHtml = docketList(ctx, project, items, members, quests, slugs, f, w?.id ?? null);
+  const graph = viewGraph(graphFrom(r.slice(graphOffset)), ctx.now);
+  const listHtml = docketList(ctx, project, items, members, quests, slugs, f, w?.id ?? null, new Map(items.map(w => [w.id, graph.readinessOf(w.id)])));
   const listBase = f.org || !project ? "/docket" : `/${project.slug}/docket`;
   const q = qs(f);
   const back = `${listBase}${q ? `?${q}` : ""}`;
   let inspector: string | null; let key: string;
   if (w && project) {
     const o = questFor ? 4 : 3;
-    inspector = itemInspector(ctx, env, project, w, {
+    inspector = await itemInspector(ctx, env, project, w, {
       links: r[o]!.results as WorkLink[], children: r[o + 1]!.results as WorkItem[],
       owner: (r[o + 2]!.results[0] as Member | undefined) ?? null, parent: (r[o + 3]!.results[0] as Quest | undefined) ?? null,
       members, quests: quests.filter((x) => x.id !== w.id), activity: r[o + 4]!.results as Activity[],
       comments: r[o + 5]!.results as Comment[], following: r[o + 6]!.results.length > 0,
-    }, `${back}`);
+    }, `${back}`, undefined, graph);
     key = `w:${w.id}:${w.updated_at}:${(r[(questFor ? 4 : 3) + 5]!.results as Comment[]).length}`;
   } else {
     inspector = null;
@@ -327,7 +386,7 @@ async function listAndInspect(request: Request, env: Env, slug: string | null, n
   }
   const section = f.owner === "me" && !w ? "mine" : "docket";
   const title = w && project ? `${project.slug}#${w.number} ${w.title}` : project && !f.org ? `${DOCKET.name}: ${project.display_name}` : DOCKET.name;
-  return htmlResponse(workbench(title, { list: listHtml, listKey: listKey(f, project), inspector, inspectorKey: key }, shellFor(ctx, env, section, project && !f.org ? project.slug : section)!), 200, extra);
+  return htmlResponse(workbench(title, { list: listHtml, listKey: listKey(f, project), stackOnPhone: true, inspector, inspectorKey: key }, shellFor(ctx, env, section, project && !f.org ? project.slug : section)!), 200, extra);
 }
 
 export const docketPage = (request: Request, env: Env, slug: string) => listAndInspect(request, env, slug, null);

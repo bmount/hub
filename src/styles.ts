@@ -12,7 +12,7 @@ export const COMPONENTS_CSS = `
 .wb-filters{min-width:0}.wb-filters .filters{margin:0}
 .wb-count{margin-left:var(--space-2);color:var(--muted);font-variant-numeric:tabular-nums}
 .wb-table-wrap{max-width:100%;overflow-x:auto}.wb-table{width:100%;border-collapse:collapse}
-.wb-table th,.wb-table td{height:var(--row-h);padding:3px var(--space-2);border-bottom:var(--separator) solid var(--line)}
+.wb-table th{white-space:nowrap}.wb-table th,.wb-table td{height:var(--row-h);padding:3px var(--space-2);border-bottom:var(--separator) solid var(--line)}
 .pane{overflow-wrap:anywhere}
 .wb-code .wb-table{font-family:var(--mono)}.wb-code .wb-table td{padding:0 var(--space-2);height:auto;white-space:pre-wrap;overflow-wrap:anywhere}.wb-code code{font-size:var(--fs-sm);background:none;padding:0}.wb-code .ln{color:var(--faint);width:1%;white-space:nowrap!important;text-align:right;user-select:none}.wb-code .ins{background:var(--add-bg)}.wb-code .dl{background:var(--del-bg)}.wb-code .hunk{background:var(--sunk);color:var(--muted)}
 .wb-table tr[aria-selected=true]{background:var(--accent-soft)}
@@ -22,7 +22,7 @@ export const COMPONENTS_CSS = `
 .wb-tree a,.wb-tree summary{min-height:var(--row-h);padding:var(--space-1) var(--space-2);color:var(--ink);text-decoration:none;overflow-wrap:anywhere}
 .wb-tree a{display:block}.wb-tree summary{cursor:pointer}.wb-tree a[aria-current]{background:var(--accent-soft);color:var(--accent)}
 .wb-chip{display:inline-flex;align-items:center;gap:var(--space-1);font-size:var(--fs-sm);white-space:nowrap;border:var(--separator) solid var(--line);border-radius:var(--r-xs);padding:0 var(--space-1)}
-.wb-chip:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.wb-readiness .wb-chip{max-width:100%;white-space:normal;overflow-wrap:anywhere}.wb-readiness{display:inline-block;max-width:260px}.wb-readiness-compact{width:160px;max-width:160px;vertical-align:middle}.wb-readiness-compact .wb-chip:before{display:inline-block;margin-right:var(--space-1)}.wb-readiness-compact .wb-chip{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.wb-priority{white-space:nowrap}@media(max-width:760px){.wb-readiness-compact{width:110px;max-width:110px}}.wb-dependency-graph{display:flex;flex-direction:column;gap:var(--space-2)}.wb-dependency-graph section{border-left:3px solid var(--line);padding-left:var(--space-2)}.wb-dependency-graph h2{margin:var(--space-1) 0}.wb-dependency-graph .wb-chip{white-space:normal}.wb-chip:before{flex-shrink:0;content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .wb-tone-open{color:var(--state-open)}.wb-tone-doing{color:var(--state-doing)}.wb-tone-done{color:var(--state-done)}.wb-tone-dropped{color:var(--state-dropped)}.wb-tone-blocked{color:var(--state-blocked)}
 .wb-tone-wish{color:var(--wish)}.wb-tone-snag{color:var(--snag)}.wb-tone-errand{color:var(--errand)}.wb-tone-quest{color:var(--quest)}.wb-tone-call{color:var(--call)}.wb-tone-spark{color:var(--spark)}
 .overview .wb-actions{flex-wrap:wrap!important}.overview .wb-actions form{margin:0}.overview .wb-section dl{grid-template-columns:80px minmax(0,1fr)}
@@ -222,6 +222,7 @@ input,select,textarea{font-size:16px;min-height:var(--tap);padding:8px 10px}
 .rail h4{font-size:14px;margin:16px 12px 4px}
 .panes{grid-template-columns:minmax(0,1fr)}.wb-resizer{display:none}body[data-focus=inspector] #list{display:none}body[data-focus=list] #inspector{display:none}
 .panes:not(.one) #list{border-right:0}.pane{padding:12px 14px 28px}
+body .panes.wb-stacked:not(.one){grid-template-rows:minmax(0,2fr) minmax(0,3fr)}body .panes.wb-stacked:not(.one) #list,body .panes.wb-stacked:not(.one) #inspector{display:block}body .panes.wb-stacked:not(.one) #list{border-bottom:var(--separator) solid var(--line)}
 .pane .back{display:inline-flex;align-items:center;min-height:var(--tap);font-size:var(--fs);font-weight:600;margin-bottom:6px;text-decoration:none}
 th,td{padding:12px 10px}th{font-size:14px}td.ref,td.when{font-size:15px}
 .chip{padding:8px 14px;font-size:15px}.chips{gap:8px}

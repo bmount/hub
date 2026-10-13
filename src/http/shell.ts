@@ -71,7 +71,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
   return { brandHref: hub, org: null, me, tip: tipFor(key), breadcrumb: [{label: "Pimwell", href: "/"}, {label: key === "sessions" ? "Sessions" : nav.find(n => n.section === active)?.label ?? active, href: new URL(ctx.pageUrl ?? hub).pathname, current: true}], nav: nav.map((n) => ({ href: n.href, label: n.label, active: n.section === active })) };
 }
 
-const VIEW_LABELS: Record<string, string> = { docket: "Docket", w: "Docket", board: "Board", status: "Status", code: "Repository and code", files: "Code files", reviews: "Reviews", wiki: "Wiki", documents: "Files", contacts: "Contacts and graph", c: "Chat", mail: "Mail", attention: "Needs me", people: "People and agents", assistant: "Assistant", apps: "Apps", usage: "AI usage", admin: "Admin", search: "Search", new: "File work", archive: "Archive", planned: "Coming" };
+const VIEW_LABELS: Record<string, string> = { docket: "Docket", graph: "Dependency graph", frontier: "Execution frontier", w: "Docket", board: "Board", status: "Status", code: "Repository and code", files: "Code files", reviews: "Reviews", wiki: "Wiki", documents: "Files", contacts: "Contacts and graph", c: "Chat", mail: "Mail", attention: "Needs me", people: "People and agents", assistant: "Assistant", apps: "Apps", usage: "AI usage", admin: "Admin", search: "Search", new: "File work", archive: "Archive", planned: "Coming" };
 
 function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
   const url = new URL(ctx.pageUrl ?? "https://pimwell.com/"), segments = url.pathname.split("/").filter(Boolean);
@@ -106,7 +106,7 @@ function projectExplorer(ctx: Ctx, env: Env): string {
   const base = `/${encodeURIComponent(p.path)}`, features = projectFeatures(p.kind), nodes: TreeNode[] = [];
   const url = new URL(ctx.pageUrl ?? "https://pimwell.com/"), pathname = url.pathname;
   const node = (label: string, href: string, count?: number): TreeNode => ({label, href, count, current: pathname === href.split("#")[0] && (!href.includes("#") || url.hash === href.slice(href.indexOf("#")))});
-  if (features.includes("docket")) nodes.push({...node("Docket", `${base}/docket`, p.open), expanded: true, children: [node("Board", `${base}/board`, p.open), node("Status", `${base}/status`, p.open)]});
+  if (features.includes("docket")) nodes.push({...node("Docket", `${base}/docket`, p.open), expanded: true, children: [node("Graph", `${base}/graph`), node("Frontier", `${base}/frontier`), node("Board", `${base}/board`, p.open), node("Status", `${base}/status`, p.open)]});
   if (features.includes("repo")) nodes.push({...node("Repository and code", `${base}/code`), expanded: true, children: [node("Code files", `${base}/files`), node("Reviews", `${base}/reviews`, p.reviews), node("Deploys", `/apps?project=${encodeURIComponent(p.path)}#deploys`, p.deploys)]});
   if (features.includes("wiki")) nodes.push(node("Wiki", `${base}/wiki`, p.wiki));
   if (features.includes("knowledge")) nodes.push({...node("Knowledge base and research", `${base}?resource=wiki`, p.wiki), expanded: true, children: [node("Knowledge base", `${base}?resource=wiki`, p.wiki - p.research), node("Research", `${base}?resource=research`, p.research)]});

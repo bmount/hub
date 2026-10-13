@@ -72,7 +72,7 @@ export type Shell = {
 };
 
 /** Two panes: a list and an inspector. Keys tell the script which pane changed, so the other keeps its place. */
-export type Panes = { list: string; listKey: string; inspector: string | null; inspectorKey?: string; focus?: "list" | "inspector" };
+export type Panes = { list: string; listKey: string; inspector: string | null; inspectorKey?: string; stackOnPhone?: boolean; focus?: "list" | "inspector" };
 
 
 
@@ -120,7 +120,7 @@ ${tabs}
 /** A two-pane workbench page. Without an inspector the list takes the whole width. */
 export function workbench(title: string, p: Panes, shell: Shell): string {
   const two = p.inspector !== null && (Boolean(p.inspectorKey) || p.focus === "inspector");
-  const main = `<main class="panes${two ? "" : " one"}">
+  const main = `<main class="panes${two ? "" : " one"}${two && p.stackOnPhone ? " wb-stacked" : ""}">
 <section id="list" class="pane" data-key="${esc(p.listKey)}">${p.list}</section>
 <div class="wb-resizer" role="separator" aria-label="Inspector width" aria-orientation="vertical" tabindex="0"></div>
 <section id="inspector" class="pane" data-key="${esc(p.inspectorKey ?? "")}">${two && !p.inspector?.includes('data-close-inspector') ? '<button type="button" class="quiet wb-close" data-close-inspector aria-label="Close inspector">Close · Esc</button>' : ""}${two ? p.inspector : ""}</section>

@@ -29,6 +29,63 @@ async function world() {
 }
 
 describe("work item editing", () => {
+  it("renders readiness, dependency stages and ranked frontier using the shared inspector and verbs", async () => {
+    const w = await world();
+    const prerequisite = await w.create({kind: "errand", title: "Prepare <unsafe>", priority: 1});
+    const dependent = await w.create({kind: "wish", title: "Ship dependent", priority: 0});
+    let docket = await (await w.get("/site/docket")).text();
+    expect(docket).toContain('scope="col">Readiness');
+    expect(docket).toContain('scope="col">Priority');
+    expect(docket).toContain("ready");
+    const selected = `/site/graph?work=site%23${dependent.number}&filter=Ship`;
+    let graph = await (await w.get(selected)).text();
+    expect(graph).toContain('aria-selected="true"');
+    expect(graph).toContain('action="/api/work.depend"');
+    expect(graph).toContain('name="_back" value="' + selected.replace(/&/g, "&amp;") + '"');
+    expect(graph).toContain("Prepare &lt;unsafe&gt;");
+    expect(graph).not.toContain("Prepare <unsafe>");
+    expect((await w.form("work.depend", {id: dependent.id, on: `site#${prerequisite.number}`, _back: selected})).status).toBe(303);
+    graph = await (await w.get(selected)).text();
+    expect(graph).toContain("Stage 2");
+    expect(graph).toContain(`blocked: waits on site#${prerequisite.number}`);
+    const frontier = await (await w.get("/site/frontier")).text();
+    expect(frontier).toContain("Ready 1 · Blocked 1 · Claimed 0");
+    expect(frontier).not.toContain("Ship dependent");
+    const inspector = await (await w.get(`/site/frontier?work=site%23${dependent.number}`)).text();
+    expect(inspector).toContain("Ship dependent");
+    expect(inspector).toContain('action="/api/work.resources"');
+    expect(inspector).toContain('action="/api/work.delete"');
+    for (const view of ["graph", "frontier"]) {
+      const reader = await (await w.get(`/site/${view}?work=site%23${dependent.number}`, w.rae.token)).text();
+      for (const verb of ["depend", "resources", "delete"]) expect(reader).not.toContain(`action="/api/work.${verb}"`);
+      expect((await w.get(`/site/${view}?work=missing%231`)).status).toBe(404);
+      const foreign = await seedTenant(`outside-${view}`);
+      const outsider = await seedHuman(`${view}@foreign.test`, {memberships:[{tenant_id:foreign.id,role:"member"}]});
+      expect((await w.get(`/site/${view}`, outsider.token)).status).toBe(404);
+    }
+    await w.form("work.update", {id: prerequisite.id, state: "dropped"});
+    const stuck = await (await w.get("/site/frontier")).text();
+    expect(stuck).toContain("Ship dependent");
+    expect(stuck).toContain("Stuck behind dropped items");
+    expect((await w.form("work.delete", {id: prerequisite.id, confirm: "wrong"})).status).toBe(400);
+    expect((await w.form("work.delete", {id: prerequisite.id, confirm: `site#${prerequisite.number}`, _back: "/site/graph"})).status).toBe(303);
+    docket = await (await w.get("/site/docket")).text();
+    expect(docket).not.toContain("blocked: waits on");
+    expect((await w.get(`/site/w/${prerequisite.number}`)).status).toBe(404);
+  });
+
+  it("shows claims and resource conflicts on Docket and counts them in Frontier", async () => {
+    const w = await world();
+    const holder = await w.create({kind:"errand",title:"Holder"});
+    const waiter = await w.create({kind:"snag",title:"Waiter"});
+    for (const item of [holder, waiter]) expect((await w.form("work.resources", {id:item.id,resources:"prod-db"})).status).toBe(303);
+    expect((await w.form("work.claim", {id:holder.id})).status).toBe(303);
+    const docket = await (await w.get("/site/docket")).text();
+    expect(docket).toContain("claimed by pat@example.com");
+    expect(docket).toContain(`waiting for a resource held by site#${holder.number}`);
+    const frontier = await (await w.get("/site/frontier")).text();
+    expect(frontier).toContain("Ready 0 · Blocked 0 · Claimed 1 · Waiting for a resource 1");
+  });
   it("selects Board and Status work in the shared inspector without losing scope or filter state", async () => {
     const w = await world();
     const item = await w.create({ kind: "snag", title: '<script>unsafe</script>' });

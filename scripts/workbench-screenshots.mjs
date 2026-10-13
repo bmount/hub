@@ -115,7 +115,7 @@ try {
     await verb(member, 'file.put', {project:'knowledge',path:'notes.txt',content_type:'text/plain',expected_revision:0,base64:Buffer.from('Synthetic file fixture.').toString('base64')});
   }
   browser = await chromium.launch({headless: true});
-  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', files:'/knowledge/documents', contacts:'/knowledge/contacts', graph:`/knowledge/contacts/${contact.entity.id}`, mail:'/mail', chat:'/c/general', assistant:'/assistant', people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
+  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', files:'/knowledge/documents', contacts:'/knowledge/contacts', graph:`/knowledge/contacts/${contact.entity.id}`, mail:'/mail', chat:'/c/general', assistant:'/assistant', people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', search:'/search?q=workbench'};
   const phase = process.env.WORKBENCH_PHASE || 'before';
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
@@ -244,6 +244,35 @@ try {
           await page.goBack();
           await expect(page.locator('#inspector')).toBeVisible();
         }
+      }
+      if (phase === 'after' && name === 'workGraph') {
+        await page.locator('#list a').filter({hasText:'sample#2 '}).click();
+        await expect(page).toHaveURL(/\/sample\/graph\?work=sample%232$/);
+        await expect(page.locator('#inspector')).toContainText('Dependencies and resources');
+        if (viewport.width >= 1280) {
+          const listBox = await page.locator('#list').boundingBox(), inspectorBox = await page.locator('#inspector').boundingBox();
+          expect(inspectorBox.x).toBeGreaterThan(listBox.x);
+        } else {
+          const listBox = await page.locator('#list').boundingBox(), inspectorBox = await page.locator('#inspector').boundingBox();
+          expect(inspectorBox.y).toBeGreaterThan(listBox.y);
+        }
+        const add = page.locator('#inspector form[action="/api/work.depend"]').filter({has:page.locator('input[name="on"]:not([type="hidden"])')});
+        await add.locator('input[name="on"]').fill('sample#1');
+        await add.getByRole('button', {name:'Add dependency', exact:true}).click();
+        await expect(page.locator('#list tr').filter({hasText:'sample#2 '})).toContainText('blocked: waits on sample#1');
+        await page.screenshot({path:path.join(artifacts,`${phase}-dependency-blocked-${label}.png`),fullPage:false});
+        manifest.push({phase,name:'dependency-blocked',route:'/sample/graph?work=sample%232',viewport,file:`${phase}-dependency-blocked-${label}.png`});
+        await page.reload();
+        await expect(page.locator('#list tr[aria-selected="true"]')).toContainText('sample#2');
+        await page.goto(base+'/sample/frontier');
+        await expect(page.locator('#list [aria-label="Readiness counts"]')).toContainText('Blocked 1');
+        await expect(page.locator('#list')).not.toContainText('Keep project navigation visible');
+        await page.goto(base+'/sample/graph?work=sample%232');
+        await page.locator('#inspector form[action="/api/work.depend"]').filter({has:page.locator('input[name="remove"]')}).getByRole('button', {name:'Remove dependency'}).click();
+        await expect(page.locator('#list tr').filter({hasText:'sample#2 '})).toContainText('ready');
+        await page.goto(base+'/sample/frontier');
+        await expect(page.locator('#list')).toContainText('Keep project navigation visible');
+        await page.goto(base+'/sample/docket');
       }
       if (phase === 'after' && name === 'docket') {
         await expect(page.locator('.wb-table tbody tr')).toHaveCount(4);
