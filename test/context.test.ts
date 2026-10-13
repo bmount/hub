@@ -34,6 +34,20 @@ describe("buildContext", () => {
     expect(ctx.staleCookie).toBe(false);
   });
 
+  it("uses an authorized URL project before preferences without treating organization places as project routes", async () => {
+    const s = await seed();
+    for (const slug of ["site","notes"]) await createProject(db(),{tenant_id:s.tenant.id,namespace_id:null,slug,kind:"repo",display_name:slug},now);
+    const other = await createTenant(db(),{slug:"other",display_name:"Other"},now);
+    await createProject(db(),{tenant_id:other.id,namespace_id:null,slug:"secret",kind:"repo",display_name:"Secret"},now);
+    const read = (path: string) => buildContext(new Request(`https://acme.pimwell.test${path}`,{headers:{cookie:`${COOKIE_NAME}=${s.token}; pmw_project=${encodeURIComponent(s.identity.id + ":notes")}`}}),env,now+1);
+    for (const path of ["/new?project=site","/apps?project=site","/mail?project=site","/usage?project=site"]) {
+      expect((await read(path)).explorer).toMatchObject({path:"site",inProject:false});
+    }
+    expect((await read("/notes/wiki?project=site")).explorer).toMatchObject({path:"notes",inProject:true});
+    expect((await read("/mail?project=secret")).explorer?.path).toBe("notes");
+    expect((await read("/new?project=missing")).explorer?.choices.map(p=>p.path)).toEqual(["notes","site"]);
+  });
+
   it("prefers a bearer session token and reports no role off-tenant", async () => {
     const s = await seed();
     const req = new Request("https://pimwell.test/", { headers: { authorization: `Bearer ${s.token}`, cookie: `${COOKIE_NAME}=pms_stale` } });

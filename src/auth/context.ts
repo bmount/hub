@@ -212,8 +212,8 @@ async function prefetch(db: D1Database, slug: string | null, tokenHash: string, 
 
 /** Preferences select only tenant-authorized projects; they never grant access. */
 function explorerStatement(db: D1Database, slug: string | null, live: string, tokenHash: string, now: number, request: Request): D1PreparedStatement {
-  let path = "", remembered = "";
-  try { path = decodeURIComponent(new URL(request.url).pathname.split("/")[1] ?? ""); } catch { /* invalid URL component */ }
+  let path = "", requested = "", remembered = "";
+  try { const url = new URL(request.url); path = decodeURIComponent(url.pathname.split("/")[1] ?? ""); requested = url.searchParams.get("project") ?? ""; } catch { /* invalid URL component */ }
   try { remembered = decodeURIComponent(/(?:^|;\s*)pmw_project=([^;]*)/.exec(request.headers.get("cookie") ?? "")?.[1] ?? ""); } catch { /* invalid preference */ }
   return db.prepare(`WITH target AS MATERIALIZED (SELECT id FROM tenant WHERE slug = ?),
     actor AS MATERIALIZED (${live}),
@@ -222,7 +222,7 @@ function explorerStatement(db: D1Database, slug: string | null, live: string, to
       WHERE p.tenant_id = (SELECT id FROM target) AND p.kind NOT IN ('channel', 'agent-src') AND p.namespace_id IS NULL
     ), selected AS MATERIALIZED (
       SELECT *, path = ? AS inProject FROM choices
-      ORDER BY CASE WHEN path = ? THEN 0 WHEN (SELECT identity_id FROM actor) || ':' || path = ? THEN 1 ELSE 2 END,
+      ORDER BY CASE WHEN path = ? THEN 0 WHEN path = ? THEN 1 WHEN (SELECT identity_id FROM actor) || ':' || path = ? THEN 2 ELSE 3 END,
         state <> 'active', display_name, path LIMIT 1
     ), channels AS MATERIALIZED (
       SELECT c.slug, c.display_name, (SELECT COUNT(*) FROM msg_index m WHERE m.tenant_id = c.tenant_id AND m.conversation_id = c.id AND m.state = 'live' AND m.rev = (SELECT MAX(h.rev) FROM msg_index h WHERE h.tenant_id = m.tenant_id AND h.conversation_id = m.conversation_id AND h.msg_id = m.msg_id)) AS count
@@ -243,7 +243,7 @@ function explorerStatement(db: D1Database, slug: string | null, live: string, to
       (SELECT COUNT(*) FROM file_revision r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id AND r.deleted = 0 AND r.revision = (SELECT MAX(h.revision) FROM file_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.path = r.path)) AS files,
       (SELECT COUNT(*) FROM contact_entity r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id) AS contacts,
       (SELECT COUNT(*) FROM inbound_mail r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id AND r.recipient_id IS NULL AND r.verdict = 'admitted') AS mail
-    FROM selected p`).bind(slug, tokenHash, now, path, path, remembered);
+    FROM selected p`).bind(slug, tokenHash, now, path, path, requested, remembered);
 }
 
 /** One request-local aggregate serves both project badges and uncapped work totals. */

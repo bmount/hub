@@ -174,7 +174,7 @@ body.wb{height:100vh;height:100dvh;display:grid;grid-template-columns:var(--rail
 .jump li[aria-selected=true] a,.jump li a:hover{background:var(--accent-soft)}
 .jump ul{max-height:min(70vh,520px);overflow:auto;overscroll-behavior:contain}.jump li.group{padding:8px 8px 2px;font-size:var(--fs-xs);font-weight:650;color:var(--faint)}.jump li.group:first-child{padding-top:2px}
 .rail{grid-area:rail;overflow:auto;background:var(--sunk);border-right:1px solid var(--line);padding:8px 6px 16px;font-size:var(--fs-md)}
-.rail ul{list-style:none;margin:0 0 6px;padding:0}.rail li{display:flex;align-items:center;border-radius:var(--r-sm)}
+.rail ul{list-style:none;margin:0 0 6px;padding:0}.rail li{display:flex;align-items:center;border-radius:var(--r-sm)}.rail li[hidden]{display:none}
 .rail li a{flex:1;padding:3px 8px;color:var(--ink);text-decoration:none;border-radius:var(--r-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rail li.account-details{display:block;padding:3px 8px;color:var(--muted);font-size:var(--fs-sm);overflow-wrap:anywhere}.account-details span{display:block}
 .rail li:hover{background:var(--line)}.rail li a[aria-current]{font-weight:700}.rail li:has(a[aria-current]){background:var(--panel);box-shadow:inset 2px 0 0 var(--accent)}

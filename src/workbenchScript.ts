@@ -88,7 +88,7 @@ export const WORKBENCH_JS = String.raw`
       try { localStorage.setItem(sidebarKey(), collapsed ? "collapsed" : "expanded"); } catch (e) {}
     }
     var value = e.target.closest(".wb-inline-edit summary");
-    if (value) { e.preventDefault(); var details = value.parentElement; details.open = true; var input = $("input:not([type=hidden]),select,textarea", details); if (input) input.focus(); }
+    if (value) { e.preventDefault(); var details = value.parentElement; details.open = true; var input = $("input:not([type=hidden]),select,textarea,button", details); if (input) input.focus(); else $("summary", details).focus(); }
   });
   document.addEventListener("keydown", function (e) {
     var details = e.target.closest(".wb-inline-edit"); if (!details || !details.open) return;
@@ -100,9 +100,8 @@ export const WORKBENCH_JS = String.raw`
   addEventListener("pagehide", function () { saveExplorer($("#explorer")); });
   document.addEventListener("input", function (e) {
     if (e.target.id !== "project-filter") return;
-    var query = e.target.value.toLowerCase(), chooser = $(".project-switcher");
+    var query = e.target.value.toLowerCase(), chooser = $('[aria-label="Other projects"]', $("#explorer"));
     if (!chooser) return;
-    $("details", chooser).open = true;
     $$("li", chooser).forEach(function (li) { li.hidden = li.textContent.toLowerCase().indexOf(query) < 0; });
   });
 
