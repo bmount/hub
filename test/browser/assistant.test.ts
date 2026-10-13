@@ -113,7 +113,7 @@ async function ask(page: Page, text: string) {
   await expect.poll(() => page.locator('#ask .send').isDisabled()).toBe(false);
 }
 
-for (const mode of ["lost response", "render failure", "inline lost response", "inline invalid JSON"]) {
+for (const mode of ["lost response", "render failure", "inline lost response", "inline invalid JSON", "stalled response", "inline stalled response"]) {
   it(`does not replay an accepted workbench POST after ${mode}`, async () => {
     const { context, page } = await open();
     let mutations = 0;
@@ -130,6 +130,7 @@ for (const mode of ["lost response", "render failure", "inline lost response", "
       await context.route("**/mutation-fixture", async route => {
         expect(route.request().method()).toBe("POST");
         mutations++; // The server accepted the mutation before its response was lost.
+        if (mode.includes('stalled')) return;
         if (mode.includes("lost response")) return route.abort("failed");
         if (inline) return route.fulfill({ status: 200, contentType: "application/json", body: "broken JSON" });
         return route.fulfill({ status: 200, contentType: "text/html", body: '<body class="wb"><div class="bar"><span class="me">Brian</span></div><main class="panes"><div id="inspector">Saved</div></main></body>' });
@@ -137,7 +138,9 @@ for (const mode of ["lost response", "render failure", "inline lost response", "
       if (mode === "render failure") await page.evaluate(() => {
         (globalThis as any).DOMParser.prototype.parseFromString = () => { throw new Error("Injected rendering failure"); };
       });
+      if (mode.includes('stalled')) await page.clock.install();
       await page.getByRole("button", { name: "Save fixture" }).click();
+      if (mode.includes('stalled')) { await expect.poll(() => mutations).toBe(1); await page.clock.runFor(15100); }
       await browserExpect(page.getByRole("alert")).toContainText("Outcome unknown");
       await browserExpect(page.getByRole("alert")).toContainText("retrying may duplicate");
       for (const width of [1280, 390]) {
@@ -264,24 +267,51 @@ it("keeps a serial transcript, model context, navigation and reload history", as
   } finally { await context.close(); }
 });
 
-it("does not overwrite navigation when a pending answer arrives after leaving Chat", async () => {
+it("aborts a pending answer when leaving Chat without overwriting navigation or replaying",  async () => {
   inputs.length = 0;
   holdModel = true;
   const { context, page } = await open();
   try {
     await page.locator("#ask textarea").fill("Answer while away");
-    const response = page.waitForResponse(`${BASE}/assistant/chat`);
+    const aborted: string[] = [];
+    page.on("requestfailed", request => { aborted.push(request.url()); });
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect.poll(() => held.length).toBe(1);
     await page.locator("#rail a[href='/docket']").click();
     await page.waitForURL(`${BASE}/docket`);
+    await expect.poll(() => aborted.includes(`${BASE}/assistant/chat`)).toBe(true);
     releaseModel();
-    const result = await (await response).json() as { thread: string };
-    await page.waitForLoadState("networkidle");
+    const db = await mf.getD1Database("HUB_DB");
+    await expect.poll(() => db.prepare("SELECT count(*) AS n FROM assistant_message WHERE text = 'Answer to Answer while away'").first("n")).toBe(1);
+    const thread = await db.prepare("SELECT thread_id FROM assistant_message WHERE text = 'Answer to Answer while away'").first<string>("thread_id");
     expect(page.url()).toBe(`${BASE}/docket`);
-    await page.goto(`${BASE}/assistant?t=${result.thread}`);
+    await page.goto(`${BASE}/assistant?t=${thread}`);
     expect(await page.locator("#chatlog .msg").allTextContents()).toEqual(["Answer while away", "PAnswer to Answer while away"]);
   } finally { releaseModel(); await context.close(); }
+});
+
+it.each(["headers", "body"])("clears a stalled Assistant's thinking state after its budget (%s)", async phase => {
+  const { context, page } = await open(undefined, async context => {
+    await context.addInitScript((phase: string) => {
+      const w = globalThis as any, original = w.fetch;
+      w.fetch = (url: string, init: unknown) => {
+        if (!String(url).endsWith('/assistant/chat')) return original(url, init);
+        w.stalledAssistant = true;
+        return phase === 'headers' ? new Promise(() => {}) : Promise.resolve(new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{')); } }), { headers: { 'content-type': 'application/json' } }));
+      };
+    }, phase);
+  });
+  try {
+    await page.clock.install();
+    await page.locator('#ask textarea').fill('Synthetic timeout');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (globalThis as any).stalledAssistant)).toBe(true);
+    await browserExpect(page.locator('.thinking')).toBeVisible();
+    await page.clock.runFor(60100);
+    await browserExpect(page.locator('.thinking')).toHaveCount(0);
+    await browserExpect(page.locator('#chatlog .err')).toContainText('Actions may have completed');
+    await browserExpect(page.locator('#ask .send')).toBeEnabled();
+  } finally { await context.close(); }
 });
 
 it("keeps the created conversation after an error without replaying the failed turn", async () => {

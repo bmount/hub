@@ -74,16 +74,86 @@ export const WORKBENCH_JS = String.raw`
     note.textContent = "Outcome unknown: your change may have been saved, but its response could not be displayed. Check the current page before choosing to submit again; retrying may duplicate the change.";
   }
 
-  var busy = 0;
+  function pathTemplate(url) {
+    var p = new URL(url, location.href).pathname;
+    if (/^\/(docket|people|apps|jump|search|assistant|do|new|attention)$/.test(p) || p === "/") return p;
+    if (/^\/api\//.test(p)) return "/api/:verb";
+    if (/^\/voice\//.test(p)) return "/voice/:operation";
+    if (/^\/c\//.test(p)) return "/c/:channel";
+    if (/^\/[^/]+\/w\/\d+$/.test(p)) return "/:project/w/:number";
+    if (/^\/[^/]+\/docket$/.test(p)) return "/:project/docket";
+    if (/^\/[^/]+$/.test(p)) return "/:project";
+    return "/other";
+  }
+  var reports = 0;
+  function report(url, duration, phase, result, status) {
+    if (++reports > 30) return;
+    var controller = new AbortController(), timer = setTimeout(function () { controller.abort(); }, 3000);
+    // Telemetry is independent of navigation, never recursively instrumented, and contains only fixed labels.
+    fetch("/client/slow", { method: "POST", credentials: "same-origin", signal: controller.signal,
+      headers: { "content-type": "application/json", "x-pimwell-client": "1" },
+      body: JSON.stringify({ path: pathTemplate(url), duration: Math.min(3600000, Math.round(duration)), phase: phase, result: result, status: status || null })
+    }).catch(function () {}).finally(function () { clearTimeout(timer); });
+  }
+  function request(url, init, read) {
+    init = init || {};
+    var controller = init.controller || new AbortController(); delete init.controller;
+    init.signal = controller.signal;
+    var started = performance.now(), phase = "headers", status = null, timedOut = false, rejectWait;
+    var stop = new Promise(function (_, reject) { rejectWait = reject; });
+    function aborted() { rejectWait(new Error("Request aborted")); }
+    controller.signal.addEventListener("abort", aborted, { once: true });
+    var timer = setTimeout(function () { timedOut = true; controller.abort(); }, 15000);
+    function check() {
+      if (performance.now() - started >= 15000) { timedOut = true; controller.abort(); }
+      if (controller.signal.aborted) throw new Error("Request aborted");
+    }
+    var operation = fetch(url, init).then(function (res) {
+      check(); status = res.status; phase = "body";
+      return read(res, function (next) { check(); phase = next; });
+    }).then(function (value) { check(); return value; });
+    return Promise.race([operation, stop]).then(function (value) {
+      var duration = performance.now() - started;
+      if (duration > 3000 || status >= 400) report(url, duration, phase, status >= 400 ? "failure" : "slow", status);
+      return value;
+    }, function (error) {
+      if (timedOut || !controller.signal.aborted) report(url, performance.now() - started, phase, timedOut ? "timeout" : "failure", status);
+      throw error;
+    }).finally(function () { clearTimeout(timer); controller.signal.removeEventListener("abort", aborted); });
+  }
+  function navigationNotice(url, failed) {
+    var note = $("#wb-navigation");
+    if (!note) { note = document.createElement("p"); note.id = "wb-navigation"; note.className = "lede"; note.setAttribute("role", "status"); document.body.prepend(note); }
+    note.textContent = failed ? "Could not load this page. " : "Taking longer than usual. ";
+    var retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Retry";
+    retry.onclick = function () { go(url); }; note.appendChild(retry);
+  }
+  try {
+    var entry = performance.getEntriesByType("navigation")[0];
+    if (entry && entry.duration > 3000) report(location.href, entry.duration, "navigation", "slow", entry.responseStatus);
+    else window.addEventListener("load", function () { setTimeout(function () { var n = performance.getEntriesByType("navigation")[0]; if (n && n.duration > 3000) report(location.href, n.duration, "navigation", "slow", n.responseStatus); }, 0); }, { once: true });
+  } catch (e) {}
+
+  var busy = 0, activeNavigation = null;
   function go(url, opts) {
     opts = opts || {};
     var init = { method: opts.method || "GET", credentials: "same-origin", headers: { "x-workbench": "1" } };
     if (opts.body) { init.body = opts.body; init.headers["content-type"] = "application/x-www-form-urlencoded"; }
-    var mine = ++busy; document.body.style.cursor = "progress";
-    return fetch(url, init).then(function (res) {
+    var mine = ++busy;
+    clearTimeout(timer); if (searchController) { searchController.abort(); searchController = null; }
+    if (activeNavigation) activeNavigation.abort();
+    var controller = new AbortController(); activeNavigation = controller; init.controller = controller;
+    var oldNotice = $("#wb-navigation"); if (oldNotice) oldNotice.remove();
+    document.body.style.cursor = "progress";
+    var started = performance.now(), phase = "headers", status = null;
+    var slowTimer = setTimeout(function () { if (mine === busy && init.method === "GET") navigationNotice(url, false); }, 3000);
+    var spinnerTimer = setTimeout(function () { if (mine === busy) report(url, performance.now() - started, "spinner", "slow", status); }, 10000);
+    return request(url, init, function (res, changePhase) {
+      status = res.status; phase = "body";
       timing(res.headers.get("server-timing"));
       return res.text().then(function (html) {
-        if (mine !== busy) return;
+        if (mine !== busy || controller.signal.aborted) return;
+        phase = "render"; changePhase("render");
         var doc = new DOMParser().parseFromString(html, "text/html");
         if (!doc.body || !doc.body.classList.contains("wb")) {
           if (init.method === "GET") { location.href = url; return; }
@@ -93,7 +163,12 @@ export const WORKBENCH_JS = String.raw`
         }
         swap(doc, res.url || url, opts.push !== false);
       });
-    }).catch(function () { if (init.method !== "GET") ambiguous(); else location.href = url; }).then(function () { if (mine === busy) document.body.style.cursor = ""; });
+    }).then(function () { if (mine === busy) { var note = $("#wb-navigation"); if (note) note.remove(); } })
+      .catch(function () { if (init.method !== "GET") ambiguous(); else if (mine === busy) navigationNotice(url, true); })
+      .finally(function () {
+        clearTimeout(slowTimer); clearTimeout(spinnerTimer);
+        if (mine === busy) { document.body.style.cursor = ""; activeNavigation = null; }
+      });
   }
 
   function local(a) {
@@ -149,8 +224,7 @@ export const WORKBENCH_JS = String.raw`
   function inline(f) {
     var body = {}; new FormData(f).forEach(function (v, k) { if (k.charAt(0) !== "_") body[k] = v; });
     var btn = f.querySelector("button[type=submit]"); if (btn) btn.disabled = true;
-    fetch(f.getAttribute("action"), { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) })
-      .then(function (r) { return r.json(); })
+    request(f.getAttribute("action"), { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) }, function (r) { return r.json(); })
       .then(function (j) {
         var note = document.createElement("p"); note.className = "lede";
         if (j.ok) {
@@ -178,7 +252,7 @@ export const WORKBENCH_JS = String.raw`
   // Jump palette. Focus opens likely places at once (recent picks from this browser, then the record's suggestions:
   // sections, your open work, active projects), so most jumps are one tap. Typing narrows them instantly, word by
   // word, and the full search fills in behind.
-  var jump = $(".jump input"), list = null, picks = [], at = -1, timer = 0, sugg = null, suggAt = 0;
+  var jump = $(".jump input"), list = null, picks = [], at = -1, timer = 0, sugg = null, suggAt = 0, suggPending = null, searchController = null;
   var RECENT = "pimwell.jump.recent." + location.host + "." + ($(".bar .me") || {}).textContent;
   function recent() { try { return JSON.parse(localStorage.getItem(RECENT) || "[]"); } catch (e) { return []; } }
   function remember(it) {
@@ -210,22 +284,25 @@ export const WORKBENCH_JS = String.raw`
   }
   function loadSuggestions() {
     if (sugg && Date.now() - suggAt < 60000) return Promise.resolve();
-    return fetch("/jump?suggest=1", { headers: { accept: "application/json" }, credentials: "same-origin" })
-      .then(function (r) { return r.json(); }).then(function (j) { sugg = j.results || []; suggAt = Date.now(); }).catch(function () {});
+    if (suggPending) return suggPending;
+    suggPending = request("/jump?suggest=1", { headers: { accept: "application/json" }, credentials: "same-origin" }, function (r) { return r.json(); }).then(function (j) { sugg = j.results || []; suggAt = Date.now(); }).catch(function () {}).finally(function () { suggPending = null; });
+    return suggPending;
   }
   function openEmpty() { render(base()); loadSuggestions().then(function () { if (document.activeElement === jump && !jump.value.trim()) render(base()); }); }
   if (jump) {
     jump.addEventListener("focus", function () { if (!jump.value.trim()) openEmpty(); });
     jump.addEventListener("input", function () {
-      clearTimeout(timer); var q = jump.value.trim();
+      clearTimeout(timer); if (searchController) { searchController.abort(); searchController = null; }
+      var q = jump.value.trim();
       if (!q) { openEmpty(); return; }
       var local = matches(q).map(function (x) { return { label: x.label, hint: x.hint, href: x.href }; });
       local.unshift({ label: "Search all projects for “" + q + "”", hint: "Enter to search · arrows to jump", href: "/search?q=" + encodeURIComponent(q), group: "Search" });
       render(local);
       timer = setTimeout(function () {
+        searchController = new AbortController();
+        var controller = searchController;
         Promise.all(["/search?format=json&q=", "/jump?q="].map(function (url) {
-          return fetch(url + encodeURIComponent(q), { headers: { accept: "application/json" }, credentials: "same-origin" })
-            .then(function (r) { return r.ok ? r.json() : { results: [] }; });
+          return request(url + encodeURIComponent(q), { controller: controller, headers: { accept: "application/json" }, credentials: "same-origin" }, function (r) { return r.json(); });
         })).then(function (responses) {
           if (jump.value.trim() !== q || document.activeElement !== jump) return;
           var seen = {};
@@ -245,7 +322,7 @@ export const WORKBENCH_JS = String.raw`
         else { var q = jump.value.trim(); if (q) choose({ label: q, href: "/search?q=" + encodeURIComponent(q) }); }
       }
     });
-    jump.addEventListener("blur", function () { setTimeout(closeJump, 150); });
+    jump.addEventListener("blur", function () { clearTimeout(timer); if (searchController) { searchController.abort(); searchController = null; } setTimeout(closeJump, 150); });
   }
 
   // Voice: a mic beside every message box marked data-voice. Hold it to talk and let go to stop, or tap once to
@@ -277,8 +354,7 @@ export const WORKBENCH_JS = String.raw`
     function say(t, cls) { st.textContent = t; st.className = "voicestate" + (cls ? " " + cls : ""); }
     function post(url, body, headers) {
       headers = headers || {}; headers["x-pimwell-voice"] = "1";
-      return fetch(url, { method: "POST", credentials: "same-origin", headers: headers, body: body })
-        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }, function () { return { ok: false, j: {} }; }); });
+      return request(url, { method: "POST", credentials: "same-origin", headers: headers, body: body }, function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }, function () { return { ok: false, j: {} }; }); });
     }
     function meter(me) {
       if (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) return;

@@ -113,7 +113,7 @@ table.diff tr.hunk td{color:var(--muted);background:var(--sunk)}.add{color:var(-
 .plain{background:var(--bg)}.plain main{max-width:40rem;margin:0 auto;padding:40px 16px}.plain .top{padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
 .plain .brand,.bar .brand{font-weight:800;color:var(--ink);text-decoration:none}.plain footer{max-width:40rem;margin:0 auto;padding:16px;color:var(--muted);font-size:var(--fs-sm)}
 body.wb{height:100vh;height:100dvh;display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);grid-template-rows:var(--bar-h) minmax(0,1fr) var(--status-h);grid-template-areas:"bar bar" "rail main" "status status";overflow:hidden}
-#wb-ambiguous{position:fixed;top:calc(var(--bar-h) + 8px);left:12px;right:12px;z-index:40;margin:0 auto;padding:12px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
+#wb-navigation,#wb-ambiguous{position:fixed;top:calc(var(--bar-h) + 8px);left:12px;right:12px;z-index:40;margin:0 auto;padding:12px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
 .bar{grid-area:bar;display:flex;align-items:center;gap:10px;padding:0 10px;background:var(--panel);border-bottom:1px solid var(--line);min-width:0}
 .bar .org{color:var(--muted);text-decoration:none;font-weight:600;white-space:nowrap}.bar .org:before{content:"/";margin-right:8px;color:var(--line)}
 .bar .menu{display:none;text-decoration:none;color:var(--ink);font-size:18px}.bar .me{color:var(--muted);text-decoration:none;font-size:var(--fs-sm);white-space:nowrap}

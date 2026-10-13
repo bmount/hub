@@ -1,7 +1,13 @@
 export const ASSISTANT_JS = String.raw`
 (function () {
   var f = document.getElementById("ask"), log = document.getElementById("chatlog"); if (!f || f.dataset.ready) return; f.dataset.ready = "1";
-  var pending = false;
+  var pending = false, active = null;
+  function detached(e) {
+    if (!e.detail.contains(f)) return;
+    if (active) active.abort();
+    document.removeEventListener("wb:before-replace", detached);
+  }
+  document.addEventListener("wb:before-replace", detached);
   var coarse = window.matchMedia && matchMedia("(pointer:coarse)").matches;
   var esc = function (s) { return s.replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
   function fmt(text) {
@@ -52,16 +58,20 @@ export const ASSISTANT_JS = String.raw`
     var w = add("assistant", '<div class="thinking"><i></i><i></i><i></i> Looking through ' + esc(f.dataset.org) + "…</div>");
     var btn = f.querySelector(".send"); btn.disabled = true;
     var fail = function (why) { w.innerHTML = '<p class="err">Not done: ' + esc(why) + '</p><button type="button" class="quiet" data-retry="' + esc(t) + '">Try again</button>'; };
-    fetch("/assistant/chat", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", "x-pimwell-playground": "1" },
+    var controller = new AbortController(), started = performance.now(); active = controller;
+    var timer = setTimeout(function () { controller.abort(); }, 60000);
+    var stopped = new Promise(function (_, reject) { controller.signal.addEventListener("abort", function () { reject(new Error("Assistant request stopped")); }, { once: true }); });
+    Promise.race([stopped, fetch("/assistant/chat", { method: "POST", credentials: "same-origin", signal: controller.signal, headers: { "content-type": "application/json", "x-pimwell-playground": "1" },
       body: JSON.stringify({ thread: f.thread.value || null, text: t, scopes: f.scopes.value }) })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })])
       .then(function (x) {
+        if (controller.signal.aborted || performance.now() - started >= 60000) { controller.abort(); throw new Error("Assistant response overdue"); }
         bindThread(x.j.thread, t);
         if (!x.ok) { fail(x.j.reason || x.j.error || "something went wrong"); return; }
         w.innerHTML = fmt(x.j.reply) + steps(x.j.steps); w.scrollIntoView({ block: "end", behavior: "smooth" });
       })
-      .catch(function () { fail("the connection dropped"); })
-      .then(function () { pending = false; btn.disabled = false; if (!coarse) f.text.focus(); });
+      .catch(function () { fail("the response did not arrive. Actions may have completed; check before trying again"); })
+      .finally(function () { clearTimeout(timer); active = null; pending = false; btn.disabled = false; if (!coarse && f.isConnected) f.text.focus(); });
   }
   f.addEventListener("submit", function (e) {
     e.preventDefault(); if (pending) return;

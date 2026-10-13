@@ -1,3 +1,4 @@
+import { clientSlow } from "./http/clientSlow";
 import { situationsPage } from "./http/situationPage";
 import { statusPage } from "./http/statusPage";
 import { boardPage } from "./http/boardPage";
@@ -93,6 +94,7 @@ app.use("*", async (c, next) => {
 /** Hono types its execution context separately from workers-types; at runtime it is the Worker's own. */
 const workerCtx = (c: unknown): ExecutionContext => c as ExecutionContext;
 
+app.post("/client/slow", (c) => clientSlow(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.get("/healthz", (c) => c.text("ok"));
 // What an agent reads when its person says "set up pimwell.com" (skill: onboard). Public: it holds no secrets.
 app.get("/setup", (c) => new Response(setupPage(c.env.HUB_DOMAIN), { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" } }));

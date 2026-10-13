@@ -22,6 +22,41 @@ async function world() {
 const attr = (html: string, id: string) => /data-key="([^"]*)"/.exec(html.slice(html.indexOf(`id="${id}"`)))?.[1];
 
 describe("the workbench", () => {
+  it("groups bounded, content-free browser reports as slow and isolates tenant sources", async () => {
+    const w = await world();
+    const project = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'site'").bind(w.t.id).first<{ id: string }>();
+    await env.HUB_DB.prepare("INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_at) VALUES ('client-source', ?, ?, 'pimwell-hub', 'active', ?)").bind(w.t.id, project!.id, Date.now()).run();
+    const payload = { path: "/:project/w/:number", duration: 15001, phase: "body", result: "timeout", status: 200 };
+    const send = (body: unknown = payload, headers: Record<string, string> = {}) => SELF.fetch(`https://${HOST}/client/slow`, { method: "POST", headers: { ...w.h, origin: `https://${HOST}`, "content-type": "application/json", "x-pimwell-client": "1", ...headers }, body: JSON.stringify(body) });
+    expect((await send()).status).toBe(204);
+    expect((await send({ ...payload, duration: 16000 })).status).toBe(204);
+    const listed = await apiPost(HOST, "trace.list", {}, w.h);
+    const groups = ((await listed.json()) as { result: { groups: Array<{ id: string; kind: string; count: number }> } }).result.groups;
+    expect(groups).toHaveLength(1); expect(groups[0]).toMatchObject({ kind: "slow", count: 2 });
+    const read = await apiPost(HOST, "trace.read", { id: groups[0]!.id }, w.h);
+    expect(((await read.json()) as { result: { group: { kind: string } } }).result.group.kind).toBe("slow");
+    expect(await (await w.get(`/apps?g=${groups[0]!.id}`)).text()).toContain("duration=16000ms phase=body status=200");
+    for (const body of [{ ...payload, path: "/private-secret?q=mail" }, { ...payload, content: "secret" }, { ...payload, duration: -1 }, { ...payload, duration: 1.5 }, { ...payload, status: 999 }, { ...payload, phase: "secret" }, { ...payload, result: "secret" }, "x".repeat(1100), null]) expect((await send(body)).status).toBe(400);
+    expect((await send(payload, { origin: "https://evil.test" })).status).toBe(403);
+    expect((await send(payload, { "x-pimwell-client": "" })).status).toBe(403);
+    expect((await send(payload, { cookie: "" })).status).toBe(403);
+    const foreign = await seedTenant("other");
+    const outsider = await seedHuman("outsider@example.com", { memberships: [{ tenant_id: foreign.id, role: "member" }] });
+    const response = await SELF.fetch("https://other.pimwell.test/client/slow", { method: "POST", headers: { ...cookieHeaders(outsider.token, "other.pimwell.test"), origin: "https://other.pimwell.test", "x-pimwell-client": "1" }, body: JSON.stringify(payload) });
+    expect(response.status).toBe(204);
+    expect(await env.HUB_DB.prepare("SELECT count(*) AS n FROM app_event").first()).toEqual({ n: 2 });
+  });
+
+  it("caps browser-report examples and rate-limits each signed-in identity", async () => {
+    const w = await world();
+    await env.HUB_DB.prepare("INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_at) SELECT 'bounded-source', ?, id, 'pimwell-hub', 'active', ? FROM project WHERE tenant_id = ? AND slug = 'site'").bind(w.t.id, Date.now(), w.t.id).run();
+    const send = () => SELF.fetch(`https://${HOST}/client/slow`, { method: "POST", headers: { ...w.h, origin: `https://${HOST}`, "x-pimwell-client": "1" }, body: JSON.stringify({ path: "/people", duration: 15000, phase: "headers", result: "timeout", status: null }) });
+    for (let i = 0; i < 60; i++) expect((await send()).status).toBe(204);
+    expect((await send()).status).toBe(429);
+    expect(await env.HUB_DB.prepare("SELECT count(*) AS n FROM app_event").first()).toEqual({ n: 50 });
+    expect(await env.HUB_DB.prepare("SELECT count FROM app_error_group").first()).toEqual({ count: 60 });
+  });
+
   it("shows the rail with live counts on every page, read in the sign-in batch", async () => {
     const w = await world();
     const res = await w.get("/docket");

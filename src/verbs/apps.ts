@@ -114,7 +114,7 @@ export const traceList = defineVerb({
   },
   parse: (i) => ({ project: optString(i, "project", { max: 63 }), days: optInt(i, "days", { min: 1, max: 30 }) ?? 7 }),
   run: async (ctx, p) => ({
-    groups: (await ctx.db.prepare(`SELECT g.id, pr.slug AS project, g.script_name, g.kind, g.title, g.count, g.first_seen, g.last_seen, g.last_version, ${errorOriginColumns()},
+    groups: (await ctx.db.prepare(`SELECT g.id, pr.slug AS project, g.script_name, COALESCE(g.client_kind, g.kind) AS kind, g.title, g.count, g.first_seen, g.last_seen, g.last_version, ${errorOriginColumns()},
         CASE WHEN wp.id IS NULL THEN NULL ELSE wp.slug || '#' || w.number END AS work_ref
       FROM app_error_group g JOIN project pr ON pr.id = g.project_id AND pr.tenant_id = g.tenant_id AND pr.kind NOT IN ('channel', 'agent-src')
       LEFT JOIN work_item w ON w.id = g.work_item_id AND w.tenant_id = g.tenant_id

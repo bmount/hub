@@ -21,6 +21,12 @@ allowed for existing layouts; Google Fonts stylesheet and font origins remain al
 OAuth consent adds only the validated client's redirect origin to `form-action`, preserving approval redirects.
 CSP is defense in depth, not a replacement for escaping, URL validation or access checks.
 
+## Navigation budgets and browser telemetry
+
+Workbench requests have a 15-second whole-request deadline (headers and body), abort on timeout, and cannot leave the progress cursor set. A newer navigation aborts its predecessor. Jump suggestions coalesce their base-list request and cancel obsolete query requests on typing, blur or navigation. GET navigation shows a notice after three seconds and an explicit Retry after failure; mutations are never replayed automatically and an interrupted POST warns that its outcome is unknown. The Assistant has a separate 60-second budget and cancels when its pane is removed. Presence already has an eight-second deadline and pane cleanup. Pages are `no-store`; assets are content-hashed and immutable. There is no service worker.
+
+The workbench sends slow (>3 seconds) navigations/requests, failures/timeouts, and a cursor still busy after ten seconds to `/client/slow`. Reports contain only allowlisted path templates, duration, phase, result and status: no actual paths, query keys/values, response bodies, error text or identity fields. Delivery itself times out after three seconds and is not instrumented. Each page sends at most 30 reports; the endpoint accepts at most 60 per identity/minute, requires a same-origin browser session and bounds the body to 1 KiB. Reports join only the current tenant's active `pimwell-hub` app source (unregistered tenants are ignored), with at most 50 examples per group. `trace_list`, `trace_read` and Apps expose them as `kind: slow`. An additive `client_kind` column extends the original group-kind constraint without rewriting existing data. Browser reports do not infer a deploy version from the server's latest release, since an open tab may still use older assets.
+
 ## The variables
 
 - **Type:** `--font`, and the sizes `--fs`, `--fs-md`, `--fs-sm`, `--fs-xs` and `--fs-h1`.

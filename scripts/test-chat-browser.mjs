@@ -705,6 +705,84 @@ try {
   await workCtx.close();
   console.log('PASS same-title refresh/stale draft and explicit two-pane list retention');
 
+  // Workbench navigation acceptance uses real pages and the same disposable Worker.
+  // Controlled delivery latency models a throttled network through the local route bridge.
+  await db.prepare("INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_at) SELECT ?, ?, id, 'pimwell-hub', 'active', ? FROM project WHERE tenant_id = ? AND slug = 'site'").bind(id(), tenant, now, tenant).run();
+  for (const [label, viewport] of [['desktop', { width: 1440, height: 1000 }], ['mobile', { width: 390, height: 844 }]]) {
+    const navCtx = await context(member, viewport), navPage = await navCtx.newPage();
+    const telemetry = [], aborted = [], held = [];
+    navPage.on('request', req => { if (new URL(req.url()).pathname === '/client/slow') telemetry.push(JSON.parse(req.postData())); });
+    navPage.on('requestfailed', req => { aborted.push(req.url()); });
+    await navPage.addInitScript(() => {
+      const original = window.fetch;
+      window.fetch = function (url, init) {
+        if (String(url).includes('body-stall=1')) return original(url, init).then(r => { window.__bodyStalled = true; return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('<html>')); } }), { status: r.status, headers: r.headers }); });
+        return original(url, init);
+      };
+    });
+    await navPage.goto(`${base}/site/docket`);
+    for (const destination of ['/docket', '/people', '/apps']) {
+      await navPage.evaluate(path => { const a = document.createElement('a'); a.href = path; document.body.append(a); a.click(); a.remove(); }, destination);
+      await expect(navPage).toHaveURL(`${base}${destination}`);
+      await expect(navPage.locator('body')).toHaveCSS('cursor', 'auto');
+    }
+    const click = path => navPage.evaluate(p => { const a = document.createElement('a'); a.href = p; document.body.append(a); a.click(); a.remove(); }, path);
+    await navPage.route('**/people?throttled=1', async route => {
+      await new Promise(resolve => setTimeout(resolve, 3500));
+      const req = route.request(), res = await mf.dispatchFetch(req.url(), { headers: { ...await req.allHeaders(), 'x-local-browser-host': host } });
+      await route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) });
+    });
+    await click('/people?throttled=1');
+    await expect(navPage.locator('#wb-navigation')).toContainText('Taking longer', { timeout: 5000 });
+    await expect(navPage).toHaveURL(`${base}/people?throttled=1`);
+    await expect(navPage.locator('body')).toHaveCSS('cursor', 'auto');
+    await expect(navPage.locator('#wb-navigation')).toHaveCount(0);
+    expect(telemetry.some(x => x.path === '/people' && x.result === 'slow' && x.duration >= 3000)).toBe(true);
+
+    await navPage.clock.install();
+    await navPage.route('**/people?stall=1', route => { held.push(route); });
+    await click('/people?stall=1');
+    await expect(navPage.locator('body')).toHaveCSS('cursor', 'progress');
+    await navPage.clock.runFor(3100);
+    await expect(navPage.locator('#wb-navigation')).toContainText('Taking longer');
+    await navPage.clock.runFor(7000);
+    await expect.poll(() => telemetry.some(x => x.phase === 'spinner')).toBe(true);
+    await navPage.clock.runFor(5100);
+    await expect(navPage.locator('body')).toHaveCSS('cursor', 'auto');
+    await expect(navPage.locator('#wb-navigation')).toContainText('Could not load');
+    await expect(navPage.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
+    await expect.poll(() => telemetry.some(x => x.phase === 'headers' && x.result === 'timeout')).toBe(true);
+    await expect.poll(() => aborted.some(x => x.includes('stall=1'))).toBe(true);
+    await navPage.unroute('**/people?stall=1');
+    for (const route of held.splice(0)) await route.abort().catch(() => {});
+    await navPage.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect(navPage).toHaveURL(`${base}/people?stall=1`);
+    await expect(navPage.locator('#wb-navigation')).toHaveCount(0);
+
+    await click('/people?body-stall=1');
+    await expect.poll(() => navPage.evaluate(() => window.__bodyStalled)).toBe(true);
+    await navPage.clock.runFor(15200);
+    await expect(navPage.locator('body')).toHaveCSS('cursor', 'auto');
+    await expect.poll(() => telemetry.some(x => x.phase === 'body' && x.result === 'timeout')).toBe(true);
+    // A new navigation cancels the earlier fetch, without late redirects or stale notices.
+    await navPage.route('**/people?older=1', route => { held.push(route); });
+    await click('/people?older=1');
+    await expect.poll(() => held.length).toBe(1);
+    await click('/apps');
+    await expect(navPage).toHaveURL(`${base}/apps`);
+    await expect(navPage.locator('body')).toHaveCSS('cursor', 'auto');
+    await expect(navPage.locator('#wb-navigation')).toHaveCount(0);
+    await expect.poll(() => aborted.some(x => x.includes('older=1'))).toBe(true);
+    for (const route of held.splice(0)) await route.abort().catch(() => {});
+    expect(telemetry.every(x => Object.keys(x).sort().join(',') === 'duration,path,phase,result,status')).toBe(true);
+    await noOverflow(navPage);
+    await navCtx.close();
+    console.log(`PASS ${label}: Docket/people/apps, throttled navigation, stalled headers/body, retry, supersession and private telemetry`);
+  }
+  const slowGroups = (await verb(member, 'trace.list', {})).groups.filter(g => g.kind === 'slow');
+  expect(slowGroups.length).toBeGreaterThan(0);
+  console.log(`PASS browser reports visible in trace.list as slow (${slowGroups.length} groups)`);
+
   // Recorded closers are historical actors, not assignees or presence. Exercise
   // the actual board/API with only synthetic local work and browser sessions.
   const closedWork = await verb(member, 'work.create', { project: 'site', kind: 'snag', title: 'Closure evidence', owner: 'peer@example.test' });
