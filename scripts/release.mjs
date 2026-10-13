@@ -52,11 +52,19 @@ git('fetch', '-q', 'origin');
 if (git('rev-parse', 'origin/main') !== commit) fail('main moved during the tests; nothing was released. Release the new main.');
 if (git('status', '--porcelain')) fail('the tests changed the checkout; nothing was released');
 
-async function api(worker, path) {
-  const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${worker}${path}`, { headers: { authorization: `Bearer ${token}` } });
-  const j = await r.json().catch(() => null);
-  if (!r.ok || !j?.success) fail(`Cloudflare refused ${worker}${path} (HTTP ${r.status})`);
-  return j.result;
+async function api(worker, path, { newlyUploaded = false } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/${worker}${path}`, { headers: { authorization: `Bearer ${token}` } });
+    const j = await r.json().catch(() => null);
+    // A successful upload can precede visibility in the version-read API. Retry
+    // only this read, never an upload/deployment or an authorization refusal.
+    if (newlyUploaded && r.status === 404 && attempt < 5) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      continue;
+    }
+    if (!r.ok || !j?.success) fail(`Cloudflare refused ${worker}${path} (HTTP ${r.status})`);
+    return j.result;
+  }
 }
 
 // Check and upload every Worker before deploying any, so a refusal leaves production untouched.
@@ -70,7 +78,7 @@ for (const { name, config } of WORKERS) {
   const upload = run('npx', ['wrangler', 'versions', 'upload', '-c', config, '--keep-vars', '--tag', commit, '--message', `release ${short}`], { log: `upload-${name}.log`, failure: 'upload failed; nothing was deployed' });
   const version = /Worker Version ID:\s*([0-9a-f-]{36})/.exec(upload)?.[1];
   if (!version) fail(`${name} upload outcome unknown; nothing was deployed; see ${join(dir, `upload-${name}.log`)}`);
-  const fresh = await api(name, `/versions/${version}`);
+  const fresh = await api(name, `/versions/${version}`, { newlyUploaded: true });
   if (bindings(old) !== bindings(fresh)) fail(`${name} bindings changed: version ${version} is uploaded but nothing was deployed; deploy by hand after review`);
   if (JSON.stringify(old.resources.script_runtime) !== JSON.stringify(fresh.resources.script_runtime)) fail(`${name} runtime or migrations changed: version ${version} is uploaded but nothing was deployed; deploy by hand after review`);
   targets.push({ worker: name, version, rollback_version: rollback, before_deployment: before.id, deployment: null });
