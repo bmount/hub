@@ -2,6 +2,9 @@ import { rank } from "../auth/context";
 import { listVerbs, type VerbDef } from "../verbs/table";
 import type { Role } from "../db/types";
 
+// Narrow content-management exception: wiki deletion still requires the current admin role.
+const adminContentVerb = (v: VerbDef<unknown, unknown>) => v.name === "wiki.delete" && v.scope === "tenant" && v.kind === "command" && v.minRole === "admin";
+
 /** MCP spec 8.3: credential and access management never reaches an assistant. */
 export const MCP_BANNED_PREFIXES = ["token.", "agent.", "session.", "invite.", "consent.", "membership.", "oauth.", "login.", "bootstrap"];
 
@@ -16,7 +19,7 @@ export function toolName(verb: string): string {
 export function mcpViolations(v: VerbDef<unknown, unknown>): string[] {
   if (!v.mcp) return [];
   const out: string[] = [];
-  if (v.minRole === "admin" || v.minRole === "root") out.push("role above member");
+  if ((v.minRole === "admin" || v.minRole === "root") && !adminContentVerb(v)) out.push("role above member");
   if (v.scope === "hub") out.push("hub scope");
   if (v.freshProofMinutes !== null) out.push("fresh proof");
   if (MCP_BANNED_PREFIXES.some((p) => v.name === p || v.name.startsWith(p))) out.push("credential or access verb");
@@ -29,11 +32,11 @@ export function mcpViolations(v: VerbDef<unknown, unknown>): string[] {
   return out;
 }
 
-/** MCP spec 8.1: exposed, scope granted, within the human's current role, and never above member. */
+/** Exposed, scope granted, within the current role; only wiki.delete may require admin. */
 export function verbAllowed(v: VerbDef<unknown, unknown>, role: Role | null, scopes: readonly string[]): boolean {
   if (!v.mcp || mcpViolations(v).length > 0 || !scopes.includes(v.mcp.scope)) return false;
   if (v.minRole === "public") return true;
-  return rank(role) >= rank(v.minRole) && rank(v.minRole) <= rank("member");
+  return rank(role) >= rank(v.minRole) && (rank(v.minRole) <= rank("member") || adminContentVerb(v));
 }
 
 export function exposedVerbs(role: Role | null, scopes: readonly string[]): VerbDef<unknown, unknown>[] {

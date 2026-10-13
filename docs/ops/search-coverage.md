@@ -14,6 +14,7 @@ Search includes:
 - Readable inbound mail and stored extracted attachment text.
 - Readable outgoing mail, including recorded unsuccessful attempts.
 - Current, non-retracted chat messages in active and archived channels.
+- Current, non-deleted wiki page slugs, titles and bodies (not historical revisions).
 - Review titles, summaries and comments.
 - Situation questions, reports and outcomes.
 - The caller's own assistant conversation titles and messages.
@@ -29,7 +30,7 @@ Message hits open their exact permalink. Outgoing hits open a permission-checked
 
 All effective words must match. Queries use the first six whitespace-separated words of at least two characters. `%`, `_` and backslashes are literal, not search wildcards. Excerpts show text around a match.
 
-Results are bounded: 20 work items, 15 each for mail, chat, reviews, situations, assistant conversations and outgoing mail, and 10 each for people, projects and app errors. Chat searches up to 40 readable channels and returns up to 10 matches from each. Search scope and limits are available beneath the search form; hitting a cap is not an exact total.
+Results are bounded: 20 each for work items and wiki pages, 15 each for mail, chat, reviews, situations, assistant conversations and outgoing mail, and 10 each for people, projects and app errors. Chat searches up to 40 readable channels and returns up to 10 matches from each. Search scope and limits are available beneath the search form; hitting a cap is not an exact total.
 
 Binary/unextracted attachments and raw telemetry logs are not indexed. Repository files are searched separately, below. Attachment matches cover stored extracts, which may themselves be truncated. Total matches and ingestion freshness are not claimed. A failed source fails the request rather than pretending to have no matches.
 

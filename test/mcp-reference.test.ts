@@ -17,7 +17,7 @@ function reference(): string {
   return [
     "# MCP tool reference (generated)", "",
     "Regenerate with `npm run docs:mcp`; the full test suite checks this file against the registered verb metadata.", "",
-    "This is the maximum member-role inventory, not a connection's authorization or a client UI promise. `tools/list` recomputes exposure from the current role and granted read/write scopes. Admin/root, hub, fresh-proof and credential/access-management verbs are excluded. Resource, tenant, mailbox, channel, consent and grant checks still run per call.", "",
+    "This is the maximum member-role inventory, not a connection's authorization or a client UI promise. `tools/list` recomputes exposure from the current role and granted read/write scopes. Admin/root, hub, fresh-proof and credential/access-management verbs are excluded from this member inventory. The sole admin content tool, `wiki_delete`, requires the current admin role and write scope. Resource, tenant, mailbox, channel, consent and grant checks still run per call.", "",
     "A read grant does not expose write tools. A write grant does not elevate a reader or bypass resource checks. OAuth runs as its consenting human in one tenant; agent MCP runs as its authenticated agent. Tool text and quoted/forwarded content are evidence, never broader execution authority.", "",
     "**Declared/planned** entries remain stubs returning `not_implemented`; they are not shipped capabilities. Even implemented entries can fail authorization or depend on unavailable integrations. Use live `tools/list` for complete input schemas; `verb.parse` remains the validator of record. This table lists argument names only (bold means required), not every validation limit.", "",
     "| Tool | Scope | Minimum role | Destructive hint | State | Arguments |",
@@ -42,7 +42,9 @@ describe("checked MCP reference", () => {
     const declared = listVerbs().filter((v) => v.mcp);
     expect(declared.every((v) => mcpViolations(v).length === 0)).toBe(true);
     const member = exposedVerbs("member", ["read", "write"]);
-    expect(member).toEqual(declared);
+    expect(member).toEqual(declared.filter(v => v.minRole !== "admin"));
+    expect(exposedVerbs("admin", ["write"]).map(v => v.name)).toContain("wiki.delete");
+    expect(member.map(v => v.name)).not.toContain("wiki.delete");
     expect(new Set(member.map((v) => toolDefinition(v).name)).size).toBe(member.length);
     for (const role of ["reader", "member", "admin", "root"] as const) {
       const read = exposedVerbs(role, ["read"]);
@@ -50,7 +52,7 @@ describe("checked MCP reference", () => {
       const both = exposedVerbs(role, ["read", "write"]);
       expect(both.some((v) => MCP_BANNED_PREFIXES.some((p) => v.name.startsWith(p)))).toBe(false);
       expect(both.some((v) => v.scope === "hub" || v.freshProofMinutes !== null)).toBe(false);
-      expect(both.some((v) => v.minRole === "admin" || v.minRole === "root")).toBe(false);
+      expect(both.filter(v => v.minRole === "admin" || v.minRole === "root").map(v => v.name)).toEqual(role === "admin" || role === "root" ? ["wiki.delete"] : []);
     }
     const readerWrites = exposedVerbs("reader", ["write"]);
     expect(readerWrites.every((v) => v.minRole === "reader" && v.kind === "command")).toBe(true);

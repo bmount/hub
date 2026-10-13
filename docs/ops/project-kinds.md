@@ -9,7 +9,7 @@
 | wiki | Wiki pages, files |
 | workspace | Docket, wiki pages, knowledge base, files, people |
 
-Wiki pages, knowledge, project files and project people are upcoming features. Their tabs currently point to clearly marked coming-soon sections, not repository files or organization membership. The repository's source-file browser is part of the repository feature.
+Wiki tabs open the page list, editor and revision history; see [wiki pages](wiki.md). Knowledge, project files and project people remain upcoming features, with clearly marked coming-soon sections rather than repository files or organization membership. The repository's source-file browser is part of the repository feature.
 
 Members can create projects over `project_create`, `/api/project.create`, or the kind picker at `/projects/new`. Project navigation opens the project overview so non-Docket kinds remain reachable. Explicit Docket and repository operations reject projects without the required capability; hidden channel and agent-source projects remain excluded from ordinary project resolution. Archiving remains admin-only.
 

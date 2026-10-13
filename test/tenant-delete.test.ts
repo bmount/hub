@@ -14,6 +14,10 @@ async function world() {
   const person = await seedHuman("person@example.com", { memberships: [{ tenant_id: old.id, role: "member" }, { tenant_id: keep.id, role: "member" }] });
   const bot = await seedAgent(old, person.identity, "bot");
   await createProject(env.HUB_DB, { tenant_id: old.id, namespace_id: null, slug: "repo", kind: "repo", display_name: "Repo" }, Date.now());
+  for (const t of [old, keep]) {
+    const wiki = await createProject(env.HUB_DB, {tenant_id: t.id, namespace_id: null, slug: "guide", kind: "wiki", display_name: "Guide"}, Date.now());
+    await env.HUB_DB.prepare("INSERT INTO wiki_revision (tenant_id, project_id, slug, revision, title, body, links, note, author_id, created_at) VALUES (?, ?, 'start', 1, 'Start', 'Body', '[]', 'Create', ?, ?)").bind(t.id, wiki.id, person.identity.id, Date.now()).run();
+  }
   await recordEvent(env.HUB_DB, { tenant_id: old.id, identity_id: person.identity.id, session_id: person.session.id, kind: "x", target_kind: "x", target_id: "x", summary: "old" }, Date.now());
   // An event elsewhere that points at the agent and at its session: it must survive with the links cleared.
   await recordEvent(env.HUB_DB, { tenant_id: keep.id, identity_id: bot.agent.identity.id, session_id: bot.session.id, kind: "x", target_kind: "x", target_id: "x", summary: "keep" }, Date.now());
@@ -44,13 +48,14 @@ describe("tenant.delete", () => {
       .bind(`review_request:v1:${t.id}:caller:key`, JSON.stringify({ result: "private snapshot" })).run();
     const res = await apiPost(HOST, "tenant.delete", { slug: "oldorg", confirm: "OldOrg" }, w.h);
     expect(res.status).toBe(200);
-    for (const t of ["tenant WHERE id", "membership WHERE tenant_id", "project WHERE tenant_id", "session WHERE tenant_id", "api_token WHERE tenant_id", "event WHERE tenant_id"]) {
+    for (const t of ["tenant WHERE id", "membership WHERE tenant_id", "project WHERE tenant_id", "session WHERE tenant_id", "api_token WHERE tenant_id", "event WHERE tenant_id", "wiki_revision WHERE tenant_id"]) {
       expect(await count(`SELECT COUNT(*) AS n FROM ${t} = ?`, w.old.id), t).toBe(0);
     }
     expect(await count("SELECT COUNT(*) AS n FROM meta WHERE key GLOB ?", `review_request:v1:${w.old.id}:*`)).toBe(0);
     expect(await count("SELECT COUNT(*) AS n FROM meta WHERE key GLOB ?", `review_request:v1:${w.keep.id}:*`)).toBe(1);
     expect(await count("SELECT COUNT(*) AS n FROM identity WHERE id = ?", w.bot.agent.identity.id)).toBe(0);
     expect(await count("SELECT COUNT(*) AS n FROM identity WHERE id = ?", w.person.identity.id)).toBe(1);
+    expect(await count("SELECT COUNT(*) AS n FROM wiki_revision WHERE tenant_id = ?", w.keep.id)).toBe(1);
     expect(await count("SELECT COUNT(*) AS n FROM membership WHERE tenant_id = ?", w.keep.id)).toBe(1);
     const kept = await env.HUB_DB.prepare("SELECT identity_id, session_id FROM event WHERE tenant_id = ? AND summary = 'keep'").bind(w.keep.id).first();
     expect(kept).toEqual({ identity_id: null, session_id: null });

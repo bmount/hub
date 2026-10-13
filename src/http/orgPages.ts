@@ -105,8 +105,8 @@ export async function projectPage(request: Request, env: Env, slug: string): Pro
   const kinds = new Map((byKind!.results as Array<{ kind: WorkKind; n: number }>).map((r) => [r.kind, r.n]));
   const openRows = open!.results as Array<{ number: number; kind: WorkKind; title: string; state: WorkState }>;
   const features = projectFeatures(p.kind);
-  const tabs = features.map((f) => `<a class="chip" href="${f === "docket" ? `/${esc(p.slug)}/docket` : f === "repo" ? `/${esc(p.slug)}/code` : `#feature-${f}`}">${FEATURE_LABELS[f]}</a>`).join("");
-  const pending = features.filter((f) => f !== "docket" && f !== "repo").map((f) => `<section id="feature-${f}"><h2>${FEATURE_LABELS[f]}</h2><p class="lede">Coming soon.</p></section>`).join("");
+  const tabs = features.map((f) => `<a class="chip" href="${f === "docket" ? `/${esc(p.slug)}/docket` : f === "repo" ? `/${esc(p.slug)}/code` : f === "wiki" ? `/${esc(p.slug)}/wiki` : `#feature-${f}`}">${FEATURE_LABELS[f]}</a>`).join("");
+  const pending = features.filter((f) => f !== "docket" && f !== "repo" && f !== "wiki").map((f) => `<section id="feature-${f}"><h2>${FEATURE_LABELS[f]}</h2><p class="lede">Coming soon.</p></section>`).join("");
   const clone = features.includes("repo") ? `<p>Clone: <code>git clone https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/${esc(p.slug)}.git</code> <small>(make a git credential on <a href="https://${esc(env.HUB_DOMAIN)}/me">your account</a>)</small></p>` : "";
   const body = `<p class="crumbs"><a href="/">${esc(t.display_name)}</a> /</p>
 <h1>${esc(p.display_name)}${p.state === "archived" ? " <small>(archived)</small>" : ""}</h1>

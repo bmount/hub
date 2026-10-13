@@ -1,4 +1,5 @@
 // Use existing tables so search needs no migration or separately maintained index.
+import { currentWiki } from "./wiki";
 import { defineVerb } from "./table";
 import { optString, reqString } from "./params";
 import { badRequest } from "../errors";
@@ -31,7 +32,7 @@ export function snippet(text: string, ts: string[], max = 160): string {
 }
 
 export type Hit = { kind: string; ref: string; title: string; snippet: string; href: string; at: number };
-const SOURCE_LIMITS = { work: 20, mail: 15, messages: 15, people: 10, projects: 10, errors: 10, reviews: 15, situations: 15, assistant: 15, outgoing: 15 } as const;
+const SOURCE_LIMITS = { wiki: 20, work: 20, mail: 15, messages: 15, people: 10, projects: 10, errors: 10, reviews: 15, situations: 15, assistant: 15, outgoing: 15 } as const;
 const CHANNEL_LIMIT = 40;
 const PER_CHANNEL_LIMIT = 10;
 type SearchSource = keyof typeof SOURCE_LIMITS;
@@ -124,7 +125,7 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
   const access = readableMail(ctx), outgoingAccess = readableOutgoingMail(ctx);
   const tid = ctx.tenant!.id;
   const attachments = "COALESCE((SELECT GROUP_CONCAT(COALESCE(json_extract(CASE WHEN json_valid(a.value) THEN a.value ELSE '{}' END, '$.text'), ''), ' ') FROM json_each(CASE WHEN json_valid(m.attachments) THEN m.attachments ELSE '[]' END) a), '')";
-  const [work, mail, ppl, proj, errs, reviews, situations, assistant, outgoing] = await ctx.db.batch([
+  const [work, mail, ppl, proj, errs, reviews, situations, assistant, outgoing, wiki] = await ctx.db.batch([
     workHitsStatement(ctx, ts, null, SOURCE_LIMITS.work),
     ctx.db.prepare(`SELECT m.id, m.subject, m.text || ' ' || ${attachments} AS text, m.from_email, m.received_at FROM inbound_mail m WHERE ${access.sql}
       AND ${all("m.subject || ' ' || m.text || ' ' || m.from_email || ' ' || " + attachments, ts.length)} ORDER BY m.received_at DESC LIMIT ?`).bind(...access.bindings, ...ts.map(like), SOURCE_LIMITS.mail),
@@ -146,10 +147,12 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
     ctx.db.prepare(`SELECT o.id, o.subject, o.text, o.to_address, o.created_at FROM outbound_mail o WHERE ${outgoingAccess.sql}
       AND ${all("o.subject || ' ' || o.text || ' ' || o.to_address || ' ' || o.from_address", ts.length)}
       ORDER BY o.created_at DESC LIMIT ?`).bind(...outgoingAccess.bindings, ...ts.map(like), SOURCE_LIMITS.outgoing),
+    ctx.db.prepare(`SELECT p.slug AS project, r.slug, r.title, r.body, r.created_at FROM wiki_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND ${currentWiki} AND r.deleted = 0 AND ${all("r.slug || ' ' || r.title || ' ' || r.body", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.wiki),
   ]);
   const messages = await messageHits(ctx, ts, null, SOURCE_LIMITS.messages);
   const groups: SearchGroups = {
     reviews: [], situations: [], assistant: [], outgoing: [],
+    wiki: (wiki!.results as Array<{project: string; slug: string; title: string; body: string; created_at: number}>).map(r => ({kind: "Wiki page", ref: `${r.project}/${r.slug}`, title: r.title, snippet: snippet(r.body, ts), href: `/${r.project}/wiki/${r.slug}`, at: r.created_at})),
     work: (work!.results as WorkRow[]).map((r) => workHit(r, ts)),
     mail: (mail!.results as Array<{ id: string; subject: string; text: string; from_email: string; received_at: number }>).map((m) => ({ kind: "Mail", ref: m.from_email, title: m.subject || "(no subject)", snippet: snippet(m.text, ts), href: `/mail/${m.id}`, at: m.received_at })),
     messages: messages.hits,
@@ -175,7 +178,7 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
 
 export const searchQuery = defineVerb({
   name: "search.query", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Search readable text across all projects: work and comments, mail and extracted attachments, chat, reviews, situations, your assistant conversations, people, projects and app errors. Results include coverage limits.",
+  summary: "Search readable text across all projects: work and comments, mail and extracted attachments, chat, wiki pages, reviews, situations, your assistant conversations, people, projects and app errors. Results include coverage limits.",
   mcp: {
     scope: "read", destructive: false, title: "Search available sources",
     input: { type: "object", properties: { q: { type: "string", description: "What to find" } }, required: ["q"], additionalProperties: false },

@@ -2,7 +2,7 @@
 
 Regenerate with `npm run docs:mcp`; the full test suite checks this file against the registered verb metadata.
 
-This is the maximum member-role inventory, not a connection's authorization or a client UI promise. `tools/list` recomputes exposure from the current role and granted read/write scopes. Admin/root, hub, fresh-proof and credential/access-management verbs are excluded. Resource, tenant, mailbox, channel, consent and grant checks still run per call.
+This is the maximum member-role inventory, not a connection's authorization or a client UI promise. `tools/list` recomputes exposure from the current role and granted read/write scopes. Admin/root, hub, fresh-proof and credential/access-management verbs are excluded from this member inventory. The sole admin content tool, `wiki_delete`, requires the current admin role and write scope. Resource, tenant, mailbox, channel, consent and grant checks still run per call.
 
 A read grant does not expose write tools. A write grant does not elevate a reader or bypass resource checks. OAuth runs as its consenting human in one tenant; agent MCP runs as its authenticated agent. Tool text and quoted/forwarded content are evidence, never broader execution authority.
 
@@ -71,6 +71,10 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `usage_report` | write | reader | no | Implemented | `at`, `cached_tokens`, `calls`, `client`, `cost_usd`, `input_tokens`, `model`, `output_tokens`, `provider`, `purpose`, `work` |
 | `usage_summary` | read | reader | no | Implemented | `days`, `everyone`, `project`, `work` |
 | `whoami` | read | public | no | Implemented | — |
+| `wiki_history` | read | reader | no | Implemented | `before`, **`project`**, **`slug`** |
+| `wiki_list` | read | reader | no | Implemented | `after`, **`project`**, `slug` |
+| `wiki_read` | read | reader | no | Implemented | **`project`**, `revision`, **`slug`** |
+| `wiki_write` | write | member | no | Implemented | **`body`**, **`expected_revision`**, **`note`**, **`project`**, **`slug`**, **`title`** |
 | `work_board` | read | reader | no | Implemented | `actor`, `project` |
 | `work_bulk_update` | write | member | no | Implemented | **`ids`**, `kind`, `owner`, `parent`, `state` |
 | `work_claim` | write | member | no | Implemented | `expected_updated_at`, `id`, `number`, `project` |

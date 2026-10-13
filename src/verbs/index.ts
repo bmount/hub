@@ -1,3 +1,4 @@
+import { wikiVerbs } from "./wiki";
 import { situationList, situationOpen, situationResolve } from "./situation";
 import { projectStatusVerb } from "./status";
 import { reviewAi } from "./reviewAi";
@@ -47,7 +48,7 @@ import { chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable, ch
 
 export function registerAllVerbs(): void {
   registerVerbs([
-    bootstrap, whoami,
+    bootstrap, whoami, ...wikiVerbs,
     tenantCreate, tenantArchive, tenantUnarchive, tenantList, tenantDelete,
     mailList, mailRead, mailRelease, mailProposeWork, mailResponseRecipients, mailSetResponseRecipients, mailResponseIntent, mailSetResponseIntent,
     workCreate, workList, workRead, workUpdate, workClaim, workLink,

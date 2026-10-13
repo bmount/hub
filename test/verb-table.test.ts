@@ -14,6 +14,11 @@ type Decl = { scope: string; minRole: string; fresh: number | null; longLived?: 
 const T = (scope: string, minRole: string, fresh: number | null, flags: Partial<Decl> = {}): Decl => ({ scope, minRole, fresh, ...flags });
 
 const TABLE: Record<string, Decl> = {
+  "wiki.list": T("tenant", "reader", null, { mcp: "read" }),
+  "wiki.read": T("tenant", "reader", null, { mcp: "read" }),
+  "wiki.history": T("tenant", "reader", null, { mcp: "read" }),
+  "wiki.write": T("tenant", "member", null, { mcp: "write" }),
+  "wiki.delete": T("tenant", "admin", null, { mcp: "write" }),
   bootstrap: T("hub", "public", null),
   whoami: T("public", "public", null, { longLived: true, mcp: "read" }),
   "tenant.create": T("hub", "root", 60), "tenant.archive": T("hub", "root", 60), "tenant.unarchive": T("hub", "root", 60), "tenant.list": T("hub", "root", null),
