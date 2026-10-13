@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { setModelFetchForTest } from "../src/models/providers";
 import { addCredential } from "../src/models/store";
 import { createProject } from "../src/db/projects";
+import { bestMatch } from "../src/intent/resolve";
 import { parseIntent } from "../src/intent/catalog";
 import { bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
@@ -32,6 +33,9 @@ async function setup(role: "admin" | "member" = "admin") {
 const doIt = (h: Record<string, string>, q: string, extra = "") => SELF.fetch(`https://${HOST}/do?q=${encodeURIComponent(q)}${extra}`, { headers: h, redirect: "manual" });
 
 describe("intent", () => {
+  it("never matches an empty alias to an unrelated name", () => {
+    expect(bestMatch("pio", [{ name: "Brian", alias: "" }], x => [x.name, x.alias])).toEqual({ one: null, maybe: [] });
+  });
   it("never shows the model any organization data, and matches the project name afterwards", async () => {
     const { h } = await setup();
     reply = '{"action":"open_project","params":{"project":"sky ledger"},"say":"Opening it."}';
