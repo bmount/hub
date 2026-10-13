@@ -19,6 +19,7 @@ Search includes:
 - Situation questions, reports and outcomes.
 - The caller's own assistant conversation titles and messages.
 - People, project names and app error titles/messages.
+- Workspace contact people and companies: names, emails, phones, title/domain, stage/sector, notes and tags. Backlink metadata and connection sources are not searched.
 
 Tenant boundaries apply before matching and limiting results. Mail uses the shared `readableMail` and `readableOutgoingMail` predicates. Agents search only channels they can read. Assistant conversations require the caller's exact identity and tenant; being an administrator does not grant access to another person's private assistant conversations. Search does not expand any permissions.
 
@@ -30,7 +31,7 @@ Message hits open their exact permalink. Outgoing hits open a permission-checked
 
 All effective words must match. Queries use the first six whitespace-separated words of at least two characters. `%`, `_` and backslashes are literal, not search wildcards. Excerpts show text around a match.
 
-Results are bounded: 20 each for work items and wiki pages, 15 each for mail, chat, reviews, situations, assistant conversations and outgoing mail, and 10 each for people, projects and app errors. Chat searches up to 40 readable channels and returns up to 10 matches from each. Search scope and limits are available beneath the search form; hitting a cap is not an exact total.
+Results are bounded: 20 each for work items, wiki pages, project files and workspace contacts, 15 each for mail, chat, reviews, situations, assistant conversations and outgoing mail, and 10 each for people, projects and app errors. Chat searches up to 40 readable channels and returns up to 10 matches from each. Search scope and limits are available beneath the search form; hitting a cap is not an exact total.
 
 Binary/unextracted attachments and raw telemetry logs are not indexed. Repository files are searched separately, below. Attachment matches cover stored extracts, which may themselves be truncated. Total matches and ingestion freshness are not claimed. A failed source fails the request rather than pretending to have no matches.
 

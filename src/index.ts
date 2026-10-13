@@ -29,6 +29,7 @@ import { mailRecipientsPage } from "./http/mailRecipientsPage";
 import { attentionPage, docketPage, jumpPage, newWorkPage, orgDocketPage, plannedPage, workItemPage } from "./http/workPages";
 import { filePage } from "./http/filePages";
 import { wikiPage } from "./http/wikiPages";
+import { contactPage } from "./http/contactPages";
 import { newProjectPage, projectPage } from "./http/orgPages";
 import { peoplePage } from "./http/peoplePages";
 import { skillsPage } from "./http/skillsPages";
@@ -168,6 +169,8 @@ app.get("/:project/documents", (c) => filePage(c.req.raw, c.env, c.req.param("pr
 app.get("/:project/documents/download", (c) => filePage(c.req.raw, c.env, c.req.param("project"), "download"));
 app.post("/:project/documents/upload", (c) => filePage(c.req.raw, c.env, c.req.param("project"), "upload"));
 app.put("/:project/documents/upload", (c) => filePage(c.req.raw, c.env, c.req.param("project"), "upload"));
+app.get("/:project/contacts", (c) => contactPage(c.req.raw, c.env, c.req.param("project"), null));
+app.get("/:project/contacts/:id", (c) => contactPage(c.req.raw, c.env, c.req.param("project"), c.req.param("id")));
 app.get("/:project/wiki", (c) => wikiPage(c.req.raw, c.env, c.req.param("project"), null));
 app.get("/:project/wiki/:slug", (c) => wikiPage(c.req.raw, c.env, c.req.param("project"), c.req.param("slug")));
 app.get("/:project/files", (c) => filesPage(c.req.raw, c.env, c.req.param("project")));

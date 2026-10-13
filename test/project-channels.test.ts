@@ -2,6 +2,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Buffer } from "node:buffer";
+import { ASSETS } from "../src/assets";
 import { createProject } from "../src/db/projects";
 import { buildContext } from "../src/auth/context";
 import { filePath, validateFile, putFile, PROJECT_FILE_BYTES, FILE_BYTES, FILE_TEXT_BYTES, BASE64_FILE_BYTES } from "../src/verbs/files";
@@ -223,6 +224,123 @@ describe("workspace research", () => {
     expect((await callTool(w.ctx, "research_list", {project: "guide"})).isError).toBe(true);
     await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE tenant_id = ? AND slug = 'lab'").bind(w.t.id).run();
     expect((await callTool(w.ctx, "research_save", {...w.input, expected_revision: 1})).isError).toBe(true);
+  });
+});
+
+describe("workspace contacts", () => {
+  async function world() {
+    registerAllVerbs();
+    const t = await seedTenant("acme");
+    const h = await seedHuman("pat@example.com", {memberships: [{tenant_id: t.id, role: "member"}]});
+    const p = await createProject(env.HUB_DB, {tenant_id: t.id, namespace_id: null, slug: "fund", kind: "workspace", display_name: "Fund"}, Date.now());
+    const {grant} = await seedGrant(t, h);
+    const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read", "write"], {now: Date.now(), ip: "203.0.113.1"});
+    const call = async (name: string, input: Record<string, unknown>) => {
+      const r = await callTool(ctx, name, {project: "fund", ...input});
+      expect(r.isError, JSON.stringify(r)).toBeUndefined();
+      return r.structuredContent as {entity: {id: string; revision: number}; connection: {id: string}};
+    };
+    return {t, h, p, ctx, call, headers: cookieHeaders(h.token, HOST)};
+  }
+  it("creates people/companies and typed edges over MCP, finds shortest 2-hop intros and renders an escaped interactive graph", async () => {
+    const w = await world();
+    const a = (await w.call("person_upsert", {name: "Contactneedle <script>alert(1)</script>", emails: ["founder@example.com"], phones: ["+1 555 0100"], title: "Founder", tags: ["portfolio"], notes: "Researchneedle"})).entity;
+    const b = (await w.call("person_upsert", {name: "Introducer"})).entity;
+    const c = (await w.call("company_upsert", {name: "Companyneedle", domain: "example.com", stage: "seed", sector: "health", tags: ["portfolio"]})).entity;
+    const orphan = (await w.call("person_upsert", {name: "Disconnected"})).entity;
+    await w.call("connection_add", {a: a.id, b: b.id, type: "knows", strength: 0.8, source: "Research note", date: "2026-10-13"});
+    const edge = (await w.call("connection_add", {a: b.id, b: c.id, type: "founder"})).connection;
+    expect((await callTool(w.ctx, "graph_path", {project: "fund", from: a.id, to: c.id})).structuredContent).toMatchObject({found: true, hops: 2, nodes: [{id: a.id}, {id: b.id}, {id: c.id}], connections: [{type: "knows"}, {type: "founder"}]});
+    expect((await callTool(w.ctx, "graph_path", {project: "fund", from: c.id, to: a.id})).structuredContent).toMatchObject({found: true, hops: 2});
+    expect((await callTool(w.ctx, "graph_path", {project: "fund", from: a.id, to: a.id})).structuredContent).toMatchObject({found: true, hops: 0});
+    for (const change of [{to: orphan.id}, {to: c.id, type: "knows"}]) expect((await callTool(w.ctx, "graph_path", {project: "fund", from: a.id, ...change})).structuredContent).toMatchObject({found: false, hops: null, nodes: []});
+    expect((await callTool(w.ctx, "graph_neighbors", {project: "fund", id: a.id, hops: 2})).structuredContent).toMatchObject({nodes: [expect.objectContaining({id: a.id, depth: 0}), expect.objectContaining({id: b.id, depth: 1}), expect.objectContaining({id: c.id, depth: 2})]});
+    for (const [name, args] of [["person_list", {tag: "portfolio"}], ["company_list", {q: "company"}]] as const) expect((await callTool(w.ctx, name, {project: "fund", ...args})).structuredContent).toMatchObject({entities: [expect.objectContaining({tags: ["portfolio"]})]});
+    expect((await callTool(w.ctx, "person_list", {project: "fund", after: "zzzz"})).structuredContent).toMatchObject({entities: []});
+    expect((await callTool(w.ctx, "connection_list", {project: "fund", entity: b.id})).structuredContent).toMatchObject({connections: [expect.objectContaining({type: "knows"}), expect.objectContaining({type: "founder"})]});
+    expect((await callTool(w.ctx, "search_query", {q: "researchneedle"})).structuredContent).toMatchObject({contacts: [expect.objectContaining({title: expect.stringContaining("Contactneedle"), href: `/fund/contacts/${a.id}`})]});
+    const page = await SELF.fetch(`https://${HOST}/fund/contacts/${a.id}?hops=2`, {headers: w.headers});
+    const html = await page.text();
+    expect(page.status).toBe(200); expect(html).toContain("data-contact-graph"); expect(html).toContain("<svg"); expect(html).toContain(`src="${ASSETS.graph.path}"`); expect(html).toContain("Companyneedle"); expect(html).not.toContain("<script>alert(1)</script>");
+    expect((await SELF.fetch(`https://${HOST}${ASSETS.graph.path}`)).headers.get("content-type")).toContain("javascript");
+    const list = await (await SELF.fetch(`https://${HOST}/fund/contacts`, {headers: w.headers})).text();
+    expect(list).toContain("Introducer"); expect(list).toContain('action="/api/person.upsert"');
+    const home = await (await SELF.fetch(`https://${HOST}/fund`, {headers: w.headers})).text(); expect(home).toContain('href="/fund/contacts"');
+    await w.call("connection_remove", {id: edge.id});
+    expect((await callTool(w.ctx, "graph_path", {project: "fund", from: a.id, to: c.id})).structuredContent).toMatchObject({found: false});
+  });
+  it("links items, research, files and readable mail and preserves mailbox boundaries on read and edits", async () => {
+    const w = await world();
+    const item = (await callTool(w.ctx, "work_create", {project: "fund", kind: "errand", title: "Entity evidence"})).structuredContent as {item: {id: string}};
+    await w.call("research_save", {slug: "finding", expected_revision: 0, topic: "Research evidence", summary: "Evidence", status: "draft", sources: [], note: "Save"});
+    await w.call("file_put", {path: "memo.txt", content_type: "text/plain", expected_revision: 0, base64: Buffer.from("Evidence").toString("base64")});
+    for (const [id, recipient] of [["SHARED", null], ["PRIVATE", w.h.identity.id]] as const) await env.HUB_DB.prepare("INSERT INTO inbound_mail (id, tenant_id, recipient_id, identity_id, from_email, to_address, subject, received_at, size, verdict, text, attachments, forwarded) VALUES (?, ?, ?, ?, 'a@example.com', 'acme@pimwell.test', ?, ?, 1, 'admitted', 'Evidence', '[]', 0)").bind(id, w.t.id, recipient, w.h.identity.id, `${id} evidence`, Date.now()).run();
+    const links = [{kind: "item", ref: item.item.id}, {kind: "research", ref: "finding"}, {kind: "file", ref: "memo.txt"}, {kind: "mail", ref: "SHARED"}, {kind: "mail", ref: "PRIVATE"}];
+    const a = (await w.call("person_upsert", {name: "Linked", links})).entity;
+    const read = await callTool(w.ctx, "person_read", {project: "fund", id: a.id});
+    expect(read.structuredContent).toMatchObject({backlinks: expect.arrayContaining(links.map(l => expect.objectContaining(l)))});
+    const other = await seedHuman("other@example.com", {memberships: [{tenant_id: w.t.id, role: "member"}]});
+    const headers = cookieHeaders(other.token, HOST);
+    const result = await apiPost(HOST, "person.read", {project: "fund", id: a.id}, headers);
+    expect(await result.text()).not.toContain("PRIVATE");
+    expect(await (await SELF.fetch(`https://${HOST}/fund/contacts/${a.id}`, {headers})).text()).not.toContain("PRIVATE");
+    expect((await apiPost(HOST, "person.upsert", {project: "fund", id: a.id, expected_revision: 1, name: "Linked", links: [{kind: "mail", ref: "PRIVATE"}]}, headers)).status).toBe(404);
+    expect((await apiPost(HOST, "person.upsert", {project: "fund", id: a.id, expected_revision: 1, name: "Linked", links: []}, headers)).status).toBe(200);
+    expect((await callTool(w.ctx, "person_read", {project: "fund", id: a.id})).structuredContent).toMatchObject({backlinks: [{kind: "mail", ref: "PRIVATE"}]});
+    for (const link of [{kind: "item", ref: "missing"}, {kind: "research", ref: "missing"}, {kind: "file", ref: "../a"}, {kind: "mail", ref: "missing"}]) expect((await callTool(w.ctx, "person_upsert", {project: "fund", name: "Invalid", links: [link]})).isError).toBe(true);
+  });
+  it("merges person data, connections and backlinks atomically and rejects stale edits without changing links", async () => {
+    const w = await world();
+    const a = (await w.call("person_upsert", {name: "Source", emails: ["one@example.com"], tags: ["a"], notes: "First"})).entity;
+    const b = (await w.call("person_upsert", {name: "Target", emails: ["two@example.com"], tags: ["b"], notes: "Second"})).entity;
+    const c = (await w.call("company_upsert", {name: "Company"})).entity;
+    await w.call("connection_add", {a: a.id, b: b.id, type: "knows"});
+    await w.call("connection_add", {a: a.id, b: c.id, type: "founder"});
+    const item = (await callTool(w.ctx, "work_create", {project: "fund", kind: "errand", title: "Linked"})).structuredContent as {item: {id: string}};
+    await w.call("person_upsert", {id: a.id, expected_revision: 1, name: "Source", emails: ["one@example.com"], tags: ["a"], notes: "First", links: [{kind: "item", ref: item.item.id}]});
+    expect((await callTool(w.ctx, "person_upsert", {project: "fund", id: a.id, expected_revision: 1, name: "Stale", links: []})).isError).toBe(true);
+    expect((await callTool(w.ctx, "person_read", {project: "fund", id: a.id})).structuredContent).toMatchObject({entity: {name: "Source", revision: 2}, backlinks: [{ref: item.item.id}]});
+    expect((await callTool(w.ctx, "person_merge", {project: "fund", from: a.id, into: b.id, from_revision: 1, into_revision: 1})).isError).toBe(true);
+    await w.call("person_merge", {from: a.id, into: b.id, from_revision: 2, into_revision: 1});
+    expect((await callTool(w.ctx, "person_read", {project: "fund", id: b.id})).structuredContent).toMatchObject({entity: {name: "Target", revision: 2, emails: ["two@example.com", "one@example.com"], tags: ["b", "a"], notes: "Second\n\nFirst"}, backlinks: [{ref: item.item.id}]});
+    expect((await callTool(w.ctx, "person_read", {project: "fund", id: a.id})).isError).toBe(true);
+    expect((await callTool(w.ctx, "connection_list", {project: "fund"})).structuredContent).toMatchObject({connections: [{a: b.id, b: c.id, type: "founder"}]});
+    const races = await Promise.all([1, 2].map(n => callTool(w.ctx, "person_upsert", {project: "fund", id: b.id, expected_revision: 2, name: `Race ${n}`})));
+    expect(races.filter(r => !r.isError)).toHaveLength(1);
+  });
+  it("enforces tenant isolation, reader/member roles, workspace scope, archived writes and input bounds", async () => {
+    const w = await world();
+    const a = (await w.call("person_upsert", {name: "Tenantsecret"})).entity;
+    const c = (await w.call("company_upsert", {name: "Tenantcompany"})).entity;
+    const edge = (await w.call("connection_add", {a: a.id, b: c.id, type: "founder"})).connection;
+    const foreign = await seedTenant("foreign");
+    await createProject(env.HUB_DB, {tenant_id: foreign.id, namespace_id: null, slug: "fund", kind: "workspace", display_name: "Other Fund"}, Date.now());
+    const outsider = await seedHuman("outsider@example.com", {memberships: [{tenant_id: foreign.id, role: "member"}]});
+    const fh = cookieHeaders(outsider.token, "foreign.pimwell.test");
+    for (const [verb, input] of [["person.read", {id: a.id}], ["company.read", {id: c.id}], ["graph.neighbors", {id: a.id}], ["graph.path", {from: a.id, to: c.id}], ["connection.add", {a: a.id, b: c.id, type: "knows"}], ["connection.remove", {id: edge.id}], ["person.merge", {from: a.id, into: c.id, from_revision: 1, into_revision: 1}], ["person.upsert", {id: a.id, expected_revision: 1, name: "Overwrite"}]] as const) expect((await apiPost("foreign.pimwell.test", verb, {project: "fund", ...input}, fh)).status, verb).toBe(404);
+    for (const [verb, key] of [["person.list", "entities"], ["company.list", "entities"], ["connection.list", "connections"]] as const) expect(await (await apiPost("foreign.pimwell.test", verb, {project: "fund"}, fh)).json()).toMatchObject({result: {[key]: []}});
+    expect(await (await apiPost("foreign.pimwell.test", "search.query", {q: "tenantsecret"}, fh)).json()).toMatchObject({result: {contacts: []}});
+    for (const path of ["/fund/contacts", `/fund/contacts/${a.id}`]) {
+      expect((await SELF.fetch(`https://${HOST}${path}`)).status).toBe(404);
+      expect((await SELF.fetch(`https://${HOST}${path}`, {headers: fh})).status).toBe(404);
+    }
+    expect((await SELF.fetch(`https://foreign.pimwell.test/fund/contacts/${a.id}`, {headers: fh})).status).toBe(404);
+    const reader = await seedHuman("reader@example.com", {memberships: [{tenant_id: w.t.id, role: "reader"}]});
+    const rh = cookieHeaders(reader.token, HOST);
+    expect((await apiPost(HOST, "person.read", {project: "fund", id: a.id}, rh)).status).toBe(200);
+    for (const verb of ["person.upsert", "company.upsert", "person.merge", "connection.add", "connection.remove"]) expect((await apiPost(HOST, verb, {}, rh)).status).toBe(403);
+    expect(await (await SELF.fetch(`https://${HOST}/fund/contacts`, {headers: rh})).text()).not.toContain('action="/api/person.upsert"');
+    await createProject(env.HUB_DB, {tenant_id: w.t.id, namespace_id: null, slug: "other", kind: "workspace", display_name: "Other"}, Date.now());
+    expect((await callTool(w.ctx, "person_read", {project: "other", id: a.id})).isError).toBe(true);
+    await createProject(env.HUB_DB, {tenant_id: w.t.id, namespace_id: null, slug: "wiki", kind: "wiki", display_name: "Wiki"}, Date.now());
+    expect((await callTool(w.ctx, "person_list", {project: "wiki"})).isError).toBe(true);
+    for (const input of [{a: a.id, b: a.id}, {a: a.id, b: "missing"}, {a: a.id, b: c.id, strength: 2}, {a: a.id, b: c.id, date: "2026-02-30"}]) expect((await callTool(w.ctx, "connection_add", {project: "fund", type: "knows", ...input})).isError).toBe(true);
+    expect((await callTool(w.ctx, "graph_neighbors", {project: "fund", id: a.id, hops: 7})).isError).toBe(true);
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.p.id).run();
+    expect((await callTool(w.ctx, "person_upsert", {project: "fund", name: "New"})).isError).toBe(true);
+    expect((await callTool(w.ctx, "connection_remove", {project: "fund", id: edge.id})).isError).toBe(true);
+    expect((await callTool(w.ctx, "person_read", {project: "fund", id: a.id})).isError).toBeUndefined();
+    const count = await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM membership WHERE tenant_id = ?").bind(w.t.id).first<{n: number}>(); expect(count!.n).toBe(2);
   });
 });
 

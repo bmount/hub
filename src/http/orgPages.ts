@@ -109,20 +109,20 @@ export async function projectPage(request: Request, env: Env, slug: string): Pro
   const kinds = new Map((byKind!.results as Array<{ kind: WorkKind; n: number }>).map((r) => [r.kind, r.n]));
   const openRows = open!.results as Array<{ number: number; kind: WorkKind; title: string; state: WorkState }>;
   const features = projectFeatures(p.kind);
-  const tabs = features.map((f) => `<a class="chip" href="${f === "docket" ? `/${esc(p.slug)}/docket` : f === "repo" ? `/${esc(p.slug)}/code` : f === "wiki" ? `/${esc(p.slug)}/wiki` : f === "files" ? `/${esc(p.slug)}/documents` : `#feature-${f}`}">${FEATURE_LABELS[f]}</a>`).join("");
+  const tabs = features.map((f) => `<a class="chip" href="${f === "docket" ? `/${esc(p.slug)}/docket` : f === "repo" ? `/${esc(p.slug)}/code` : f === "wiki" ? `/${esc(p.slug)}/wiki` : f === "files" ? `/${esc(p.slug)}/documents` : f === "people" ? `/${esc(p.slug)}/contacts` : `#feature-${f}`}">${FEATURE_LABELS[f]}</a>`).join("");
   let knowledge = "";
   if (features.includes("knowledge")) {
     const kb = await wikiList.run(ctx, wikiList.parse({project: p.slug}));
     const research = await researchList.run(ctx, researchList.parse({project: p.slug}));
     knowledge = `<section id="feature-knowledge"><h2>Knowledge base</h2><p><a href="/${esc(p.slug)}/wiki">All KB pages and research</a></p><ul>${kb.pages.filter(r => r.page_type === "kb").map(r => `<li><a href="/${esc(p.slug)}/wiki/${esc(r.slug)}">${esc(r.title)}</a></li>`).join("")}</ul><h2>Research results</h2><ul>${research.results.map(r => `<li><a href="/${esc(p.slug)}/wiki/${esc(r.slug)}">${esc(r.topic)}</a> · ${esc(r.status)} · ${esc(r.author)}</li>`).join("")}</ul><p>First 200 pages shown. Agents file or revise results with <code>research.save</code>; filter with <code>research.list</code>.</p></section>`;
   }
-  const pending = features.filter((f) => f !== "knowledge" && f !== "docket" && f !== "repo" && f !== "wiki" && f !== "files").map((f) => `<section id="feature-${f}"><h2>${FEATURE_LABELS[f]}</h2><p class="lede">Coming soon.</p></section>`).join("");
+  const contacts = features.includes("people") ? `<section id="feature-people"><h2>People and companies</h2><p><a href="/${esc(p.slug)}/contacts">Browse workspace contacts and connection graphs</a></p><p>Contacts are separate from organization accounts and membership.</p></section>` : "";
   const clone = features.includes("repo") ? `<p>Clone: <code>git clone https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/${esc(p.slug)}.git</code> <small>(make a git credential on <a href="https://${esc(env.HUB_DOMAIN)}/me">your account</a>)</small></p>` : "";
   const body = `<p class="crumbs"><a href="/">${esc(t.display_name)}</a> /</p>
 <h1>${esc(p.display_name)}${p.state === "archived" ? " <small>(archived)</small>" : ""}</h1>
 <p class="lede">Send or forward anything to <code>${esc(t.slug)}.${esc(p.slug)}@${esc(env.HUB_DOMAIN)}</code>. It is filed here as evidence, never as instructions.</p>
 ${clone}
-<nav class="chips" aria-label="Project features">${tabs}</nav>${knowledge}${pending}
+<nav class="chips" aria-label="Project features">${tabs}</nav>${knowledge}${contacts}
 ${features.includes("docket") ? `<div class="chips">${(Object.keys(KINDS) as WorkKind[]).map((k) => `<a class="chip k-${k}" href="/${esc(p.slug)}/docket?kind=${k}">${esc(KINDS[k].plural)} ${kinds.get(k) ?? 0}</a>`).join("")}<a class="chip" href="/${esc(p.slug)}/docket">Docket</a></div>
 ${p.usage_ref ? `<p><a href="/usage?project=${esc(encodeURIComponent(p.usage_ref))}">Recorded AI usage for this project</a></p>` : ""}
 <h2>Open now</h2>${openRows.length ? `<ul>${openRows.map((w) => `<li><a href="/${esc(p.slug)}/w/${w.number}">#${w.number}</a> <span class="k-${w.kind}">${esc(KINDS[w.kind].name)}</span>: ${esc(w.title)} <small>${esc(STATES[w.state])}</small></li>`).join("")}</ul>` : `<p class="lede">Nothing open. File a wish, a snag, or an errand from the Docket.</p>`}

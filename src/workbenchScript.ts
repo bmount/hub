@@ -28,7 +28,7 @@ export const WORKBENCH_JS = String.raw`
   function revive(root) {
     $$("script", root).forEach(function (old) {
       var src = old.getAttribute("src"), url = src && new URL(src, location.href);
-      if (!url || url.origin !== location.origin || url.search || url.hash || !/^\/assets\/(assistant|playground|presence|copy)\.[a-z0-9]+\.js$/.test(url.pathname)) { old.remove(); return; }
+      if (!url || url.origin !== location.origin || url.search || url.hash || !/^\/assets\/(assistant|playground|presence|copy|contactgraph)\.[a-z0-9]+\.js$/.test(url.pathname)) { old.remove(); return; }
       var s = document.createElement("script");
       s.src = url.href;
       old.replaceWith(s);

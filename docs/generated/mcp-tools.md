@@ -29,6 +29,12 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `chat_run_claim` | write | member | no | Implemented | **`c`**, **`run_key`**, **`source`** |
 | `chat_run_status` | read | reader | no | Implemented | **`c`**, **`msg`** |
 | `chat_thread` | read | reader | no | Implemented | `after`, `budget`, **`c`**, **`msg`** |
+| `company_list` | read | reader | no | Implemented | `after`, **`project`**, `q`, `tag` |
+| `company_read` | read | reader | no | Implemented | **`id`**, **`project`** |
+| `company_upsert` | write | member | no | Implemented | `domain`, `expected_revision`, `id`, `links`, **`name`**, `notes`, **`project`**, `sector`, `stage`, `tags` |
+| `connection_add` | write | member | no | Implemented | **`a`**, **`b`**, `date`, **`project`**, `source`, `strength`, **`type`** |
+| `connection_list` | read | reader | no | Implemented | `after`, `entity`, **`project`**, `type` |
+| `connection_remove` | write | member | no | Implemented | **`id`**, **`project`** |
 | `deploy_list` | read | reader | no | Implemented | `project` |
 | `deploy_read` | read | reader | no | Implemented | **`id`** |
 | `deploy_record` | write | member | no | Implemented | **`commit`**, `deployed_at`, `deployment`, `environment`, `message`, **`project`**, `triggered_by`, `version`, `worker` |
@@ -38,6 +44,8 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `file_list` | read | reader | no | Implemented | `after`, `folder`, `path`, **`project`** |
 | `file_put` | write | member | no | Implemented | **`base64`**, **`content_type`**, **`expected_revision`**, `item_id`, **`path`**, `person_id`, **`project`** |
 | `file_upload_url` | write | member | no | Implemented | **`content_type`**, **`expected_revision`**, `item_id`, **`path`**, `person_id`, **`project`** |
+| `graph_neighbors` | read | reader | no | Implemented | `hops`, **`id`**, **`project`**, `type` |
+| `graph_path` | read | reader | no | Implemented | **`from`**, **`project`**, **`to`**, `type` |
 | `inbox_ack` | write | reader | no | Implemented | `items`, `through` |
 | `inbox_ack_status` | read | reader | no | Implemented | **`items`** |
 | `mail_list` | read | reader | no | Implemented | `limit`, `mine`, `project`, `quarantined` |
@@ -46,6 +54,10 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `mail_reply` | write | member | no | Implemented | `all`, **`body`**, **`id`** |
 | `mail_send` | write | member | no | Implemented | **`body`**, `cc`, `from_project`, **`subject`**, **`to`** |
 | `message_search` | read | reader | no | Implemented | `c`, **`q`** |
+| `person_list` | read | reader | no | Implemented | `after`, **`project`**, `q`, `tag` |
+| `person_merge` | write | member | no | Implemented | **`from`**, **`from_revision`**, **`into`**, **`into_revision`**, **`project`** |
+| `person_read` | read | reader | no | Implemented | **`id`**, **`project`** |
+| `person_upsert` | write | member | no | Implemented | `emails`, `expected_revision`, `id`, `links`, **`name`**, `notes`, `phones`, **`project`**, `tags`, `title` |
 | `project_create` | write | member | no | Implemented | **`display_name`**, **`kind`**, `namespace`, **`slug`** |
 | `project_history` | read | reader | no | Implemented | `before`, `limit`, **`project`** |
 | `project_list` | read | reader | no | Implemented | `state` |

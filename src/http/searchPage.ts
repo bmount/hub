@@ -8,7 +8,7 @@ import { shellFor } from "./shell";
 import { HubError } from "../errors";
 import { searchAll, coverageText, type Hit, type SearchCoverage } from "../verbs/search";
 
-const LABEL: Record<string, string> = { files: "Files", wiki: "Wiki pages", work: "Work", mail: "Mail", messages: "Conversations", people: "People and agents", projects: "Projects", errors: "App errors", reviews: "Reviews", situations: "Situations", assistant: "Your assistant conversations", outgoing: "Sent mail" };
+const LABEL: Record<string, string> = { contacts: "Workspace contacts", files: "Files", wiki: "Wiki pages", work: "Work", mail: "Mail", messages: "Conversations", people: "People and agents", projects: "Projects", errors: "App errors", reviews: "Reviews", situations: "Situations", assistant: "Your assistant conversations", outgoing: "Sent mail" };
 
 export async function searchPage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
