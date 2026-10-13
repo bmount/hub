@@ -65,7 +65,7 @@ h1{font-size:var(--fs-h1);line-height:1.25;letter-spacing:-.01em;margin:2px 0 6p
 
 .chips{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 8px}.chip{display:inline-block;padding:1px 8px;border-radius:var(--r-sm);background:var(--sunk);color:var(--ink);text-decoration:none;font-size:var(--fs-sm);border:1px solid transparent}
 .chip[aria-current]{background:var(--ink);color:var(--panel)}.chips+.chips{margin-top:-4px}.chips .gap{width:8px}
-form.filters{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 8px}form.filters label{margin:0}
+form.filters{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 8px}form.filters label{margin:0;display:flex;flex-direction:column;align-items:flex-start}
 .k-wish{color:var(--wish)}.k-snag{color:var(--snag)}.k-errand{color:var(--errand)}.k-quest{color:var(--quest)}.k-call{color:var(--call)}.k-spark{color:var(--spark)}
 .kd{display:inline-block;width:8px;height:8px;border-radius:2px;background:currentColor;margin-right:6px;vertical-align:1px}
 table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
@@ -79,7 +79,7 @@ button:hover,.button:hover{background:var(--accent);border-color:var(--accent)}b
 .wb-address{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;overflow-wrap:normal;font-family:var(--mono)}.wb-address code{white-space:nowrap}.wb-address button{padding:0 4px;min-height:24px;font-weight:400}
 .pane form:not(.inline):not(.filters):not(.wb-comment):not(.composer):not(.docket-toolbar form){max-width:46rem}.pane form:not(.inline):not(.filters):not(.wb-comment):not(.composer) label:has(>input:not([type=hidden])):not(:has(input[type=checkbox])),.pane form:not(.inline):not(.filters) label:has(>textarea),.pane form:not(.inline):not(.filters) label:has(>select){display:block;margin:0 0 8px}.pane form:not(.inline):not(.filters) label>input:not([type=checkbox]),.pane form:not(.inline):not(.filters) label>textarea,.pane form:not(.inline):not(.filters) label>select{display:block;max-width:100%;margin-top:4px}
 .voice-field{position:relative;display:block}.voice-field textarea{display:block;padding-right:44px!important}.voice-field>.mic{position:absolute;right:5px;bottom:5px}.voice-field>.voicestate{display:none}
-.wb-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.wb-board-columns td:last-child{overflow-wrap:normal;word-break:normal}.wb-toolbar a,.wb-toolbar button{font-weight:500}.channel-header>.button.quiet{font-weight:500}
+.wb-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.wb-board-columns td:last-child{overflow-wrap:normal;word-break:normal}.wb-toolbar a,.wb-toolbar button{font-weight:500;white-space:nowrap}.wb-toolbar a:not(.wb-tabs a),.wb-toolbar button,.channel-header>.button.quiet,[data-presence-toggle],.wb-close{font-size:var(--fs);font-weight:500;padding:3px 8px;min-height:0;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel);color:var(--ink);text-decoration:none}.wb-toolbar button:hover,.button.quiet:hover,button.quiet:hover{background:var(--sunk);border-color:var(--line)}.channel-header>.button.quiet{font-weight:500}
 .status-report .wb-table thead{display:none}
 button:disabled{opacity:.5;cursor:not-allowed}
 button.link{background:none;border:0;padding:3px 8px;color:var(--ink);font-weight:500;cursor:pointer}button.link:hover{background:none;color:var(--accent);text-decoration:underline}

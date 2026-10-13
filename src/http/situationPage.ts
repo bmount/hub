@@ -1,7 +1,7 @@
 // /situations: describe a problem, get a diagnosis built from the record; record what turned out to be true.
 import { errorOriginColumns } from "../apps/origin";
 import type { Env } from "../env";
-import { emptyState, esc, htmlResponse, formRow, kitTable, toolbar, workbench } from "../html";
+import { localTime, emptyState, esc, htmlResponse, formRow, kitTable, toolbar, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -29,8 +29,8 @@ export async function situationsPage(request: Request, env: Env): Promise<Respon
 ${ctx.identity.kind === "human" ? `<form method="post" action="/api/situation.open" data-reload><input type="hidden" name="_back" value="@result">${formRow("situation-question","Problem",'<textarea id="situation-question" data-voice name="text" rows="3" required minlength="10" maxlength="4000" style="width:100%" placeholder="Signups dropped last week. Why?"></textarea>')}${toolbar("Situation actions",'<button type="submit">Investigate</button>')} <small class="lede">Takes up to a minute.</small></form>` : ""}
 ${newErrors}
 <h2>Recorded situations</h2>
-${rows.length ? kitTable("Situations",[{label:"Situation"},{label:"By"},{label:"Outcome"},{label:"Recorded"}],rows.map(r=>({href:`/situations?s=${encodeURIComponent(r.id)}`,selected:r.id === sel,cells:[{html:`<a href="/situations?s=${esc(r.id)}">${esc(r.title)}</a>`},{html:esc(r.who)},{html:r.outcome ? "recorded" : "not recorded"},{html:new Date(r.created_at).toISOString().slice(0,10)}]}))) : emptyState("No situations yet","Describe a problem to investigate the record.",{label:"Assistant",href:"/assistant"})}`;
-  const inspector = one ? `<a class="back" href="/situations">‹ Situations</a><div class="head"><span>${esc(one.who)}</span><span>${new Date(one.created_at).toISOString().slice(0, 16).replace("T", " ")}</span><a href="/assistant?t=${esc(one.thread_id)}">Continue in the Assistant</a></div>
+${rows.length ? kitTable("Situations",[{label:"Situation"},{label:"By"},{label:"Outcome"},{label:"Recorded"}],rows.map(r=>({href:`/situations?s=${encodeURIComponent(r.id)}`,selected:r.id === sel,cells:[{html:`<a href="/situations?s=${esc(r.id)}">${esc(r.title)}</a>`},{html:esc(r.who)},{html:r.outcome ? "recorded" : "not recorded"},{html:localTime(r.created_at)}]}))) : emptyState("No situations yet","Describe a problem to investigate the record.",{label:"Assistant",href:"/assistant"})}`;
+  const inspector = one ? `<a class="back" href="/situations">‹ Situations</a><div class="head"><span>${esc(one.who)}</span><span>${localTime(one.created_at)}</span><a href="/assistant?t=${esc(one.thread_id)}">Continue in the Assistant</a></div>
 <h1>${esc(one.title)}</h1><blockquote>${esc(one.question)}</blockquote><div>${format(one.report)}</div>
 <h2>What turned out to be true</h2>${one.outcome ? `<div class="prose">${esc(one.outcome)}</div>` : rank(ctx.role) >= rank("member") ? `<form method="post" action="/api/situation.resolve"><input type="hidden" name="id" value="${esc(one.id)}"><input type="hidden" name="_back" value="/situations?s=${esc(one.id)}"><label style="display:block"><textarea data-voice name="outcome" rows="3" required style="display:block;width:100%" placeholder="Once you know: what the cause really was."></textarea></label><button type="submit" class="quiet">Record it</button></form>` : `<p class="lede">Not recorded yet.</p>`}` : null;
   return htmlResponse(workbench(one ? one.title : "Situations", { list, stackOnPhone:true, listKey: `situations:${rows.length}:${groups.map(g => g.id + (g.first_deploy ?? "")).join(",")}`, inspector, inspectorKey: one ? `sit:${one.id}:${one.outcome ? 1 : 0}` : "" }, shellFor(ctx, env, "situations", "situations")!), 200, extra);

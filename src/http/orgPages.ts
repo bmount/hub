@@ -1,7 +1,7 @@
 import { projectControls } from "./projectControls";
 import { PROJECT_KINDS, projectFeatures } from "../projectFeatures";
 import type { Env } from "../env";
-import { naturalName, plural, COPY_SCRIPT, esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
+import { localTime, naturalName, plural, COPY_SCRIPT, esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { readableMailEvents } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
@@ -12,13 +12,7 @@ import { projectPathSql } from "../db/projects";
 import { HubError } from "../errors";
 import { selectedWorkInspector } from "./workPages";
 
-const ago = (now: number, t: number | null) => {
-  if (!t) return "—";
-  const m = Math.round((now - t) / 60000);
-  if (m < 1) return "just now"; if (m < 60) return `${m} min ago`;
-  const h = Math.round(m / 60); if (h < 36) return `${h} h ago`;
-  return new Date(t).toISOString().slice(0, 10);
-};
+const ago = (_now: number, t: number | null) => localTime(t);
 
 async function orgCtx(request: Request, env: Env): Promise<{ ctx: Ctx; extra: Record<string, string> } | Response> {
   const ctx = await buildContext(request, env);
@@ -68,9 +62,9 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   const list = `<div class="head"><h1>${esc(t.display_name)}</h1><span>${plural(rows.length,"project")}</span></div>${toolbar("Home actions", actions)}<p class="wb-hint">${esc(shellFor(ctx,env,"home")!.tip)}</p>
 <h2>Projects</h2>${kitTable("Projects", [{label:"Project"},{label:"Kind"},{label:"Open work"},{label:"Needs me"},{label:"Last activity"}], rows.map(p => {
     const href = `/?project=${encodeURIComponent(p.path)}`;
-    return {href, selected: p.path === selected, cells: [{html:`<a href="${esc(href)}">${esc(p.display_name)}</a> <small>${esc(p.path)}</small>`},{html:esc(p.kind)},{html:String(p.open_work)},{html:String(p.needs)},{html:esc(ago(ctx.now,p.last_activity))}]};
+    return {href, selected: p.path === selected, cells: [{html:`<a href="${esc(href)}">${esc(p.display_name)}</a> <small>${esc(p.path)}</small>`},{html:esc(p.kind)},{html:String(p.open_work)},{html:String(p.needs)},{html:ago(ctx.now,p.last_activity)}]};
   }))}
-<h2><a href="/attention">Needs me</a></h2>${entries.length ? kitTable("Needs me",[{label:"Waiting"},{label:"When"}],entries.slice(0,5).map(e => ({href:e.slug ? `/?work=${encodeURIComponent(`${e.slug}#${e.number}`)}` : e.href ?? "/attention",cells:[{html:`<a href="${esc(e.slug ? `/?work=${encodeURIComponent(`${e.slug}#${e.number}`)}` : e.href ?? "/attention")}">${esc(e.summary)}</a>`},{html:esc(ago(ctx.now,e.created_at))}]}))) : '<p class="empty">Nothing needs you right now.</p>'}${entries.length > 5 ? '<a href="/attention">All Needs me →</a>' : ""}`;
+<h2><a href="/attention">Needs me</a></h2>${entries.length ? kitTable("Needs me",[{label:"Waiting"},{label:"When"}],entries.slice(0,5).map(e => ({href:e.slug ? `/?work=${encodeURIComponent(`${e.slug}#${e.number}`)}` : e.href ?? "/attention",cells:[{html:`<a href="${esc(e.slug ? `/?work=${encodeURIComponent(`${e.slug}#${e.number}`)}` : e.href ?? "/attention")}">${esc(e.summary)}</a>`},{html:ago(ctx.now,e.created_at)}]}))) : '<p class="empty">Nothing needs you right now.</p>'}${entries.length > 5 ? '<a href="/attention">All Needs me →</a>' : ""}`;
   const overview = chosen ? await projectOverview(ctx, env, chosen, null) : null;
   return htmlResponse(workbench(t.display_name, {list, listKey:`home:${rows.map(p => `${p.path}:${p.open_work}:${p.needs}:${p.last_activity}`).join(",")}:${entries.map(e => e.id).join(",")}`, inspector:overview ? `<a class="back" href="/">‹ Home</a>${overview.list}<p><a href="/${esc(chosen!.path)}">Open project workspace →</a></p>` : work.html, inspectorKey:chosen ? `home:${chosen.path}` : work.key}, shellFor(ctx,env,"home",t.slug)!),200,extra);
 }
@@ -123,7 +117,7 @@ async function projectOverview(ctx: Ctx, env: Env, p: Project, selected: string 
   const actions = `${features.includes("repo") ? `<a href="${esc(base)}/code">Code</a>` : ""}${writable && features.includes("docket") ? `<a class="primary" href="/new?project=${esc(encodeURIComponent(p.path))}">File</a>` : ""}${writable && features.includes("wiki") ? `<a href="${esc(select("new-page"))}">New page</a>` : ""}${writable && features.includes("files") ? `<a href="${esc(select("upload"))}">Upload</a>` : ""}${writable && features.includes("people") ? `<a href="${esc(select("add-contact"))}">Add contact</a>` : ""}${writable && features.includes("wiki") ? `<a href="${esc(select("share"))}">Share</a>` : ""}<a href="/usage?project=${esc(encodeURIComponent(p.path))}">AI usage</a>${writable && rank(ctx.role) >= rank("admin") && ctx.identity!.kind === "human" ? projectControls(p,false) : ""}`;
   const list = `<div class="overview"><div class="head"><h1>${esc(p.display_name)}</h1>${p.state === "archived" ? '<span>Archived</span>' : ""}</div>
 ${toolbar("Project actions",actions)}
-${kitTable("Project contents",[{label:"Resource"},{label:"Count"},{label:"Latest activity"}],resources.map(r=>({href:select(r.key),selected:selected === r.key,cells:[{html:`<a href="${esc(select(r.key))}">${esc(r.label)}</a>`},{html:r.key === "deploy" && last ? `<code title="${esc(last.version)}">${esc(last.version.slice(0,12))}</code>` : String(r.n)},{html:esc(ago(ctx.now,r.at))}]})))}
+${kitTable("Project contents",[{label:"Resource"},{label:"Count"},{label:"Latest activity"}],resources.map(r=>({href:select(r.key),selected:selected === r.key,cells:[{html:`<a href="${esc(select(r.key))}">${esc(r.label)}</a>`},{html:r.key === "deploy" && last ? `<code title="${esc(last.version)}">${esc(last.version.slice(0,12))}</code>` : String(r.n)},{html:ago(ctx.now,r.at)}]})))}
 ${inspectorSection("Identity",[{label:"Kind",html:esc(p.kind)},{label:"Mail",html:`<code>${esc(t.slug)}.${esc(p.path.replace("/", "."))}@${esc(env.HUB_DOMAIN)}</code>`},{label:"MCP",html:`<code id="project-mcp-url">https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/p/${esc(p.path)}/mcp</code> <button type="button" class="quiet" aria-label="Copy MCP URL" title="Copy MCP URL" data-copy="#project-mcp-url">⧉</button>`}, ...(features.includes("repo") ? [{label:"Clone",html:`<code>git clone https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/${esc(p.path)}.git</code>`}] : [])])}
 </div>`;
   const resource = resources.find(r=>r.key === selected);
@@ -134,7 +128,7 @@ ${inspectorSection("Identity",[{label:"Kind",html:esc(p.kind)},{label:"Mail",htm
     inspector = `<a class="back" href="${esc(base)}">‹ ${esc(p.display_name)}</a><h1>${esc(resource?.label ?? ({"new-page":"New page",upload:"Upload","add-contact":"Add contact",share:"Share"}[selected] ?? selected))}</h1>`;
     const hidden = `<input type="hidden" name="project" value="${esc(p.path)}"><input type="hidden" name="_back" value="@result">`;
     if (selected === "new-page") inspector += `<form method="post" action="/api/wiki.write">${hidden}<input type="hidden" name="expected_revision" value="0"><label>Slug <input name="slug" required maxlength="100" pattern="[a-z0-9]+(-[a-z0-9]+)*"></label><label>Title <input name="title" required maxlength="200"></label><label>Markdown <textarea name="body" rows="8"></textarea></label><label>Revision note <input name="note" required maxlength="500"></label><button>Create page</button></form>`;
-    else if (selected === "upload") inspector += `<form method="post" data-reload enctype="multipart/form-data" action="${esc(base)}/documents/upload"><label>File <input type="file" name="file" required></label><label>Folder/name (blank uses filename) <input name="path" maxlength="240"></label><label>Current revision (0 for new) <input name="expected_revision" type="number" min="0" value="0" required></label><button>Upload</button></form>`;
+    else if (selected === "upload") inspector += `<form method="post" data-reload enctype="multipart/form-data" action="${esc(base)}/documents/upload"><label>File <input type="file" name="file" required></label><label>Folder/name (blank uses filename) <input name="path" maxlength="240"></label><button>Upload</button></form>`;
     else if (selected === "add-contact") inspector += `<form method="post" action="/api/person.upsert">${hidden}<label>Name <input name="name" required maxlength="200"></label><label>Notes <textarea name="notes" rows="6"></textarea></label><button>Create contact</button></form>`;
     else if (selected === "share") inspector += `<p>Select a document, then use its Share by mail action. Only workspace members can receive it.</p><p><a href="${esc(select("wiki"))}">Pages</a> · <a href="${esc(select("files"))}">Files</a></p>`;
     else inspector += await resourceInspector(ctx,p,selected,resource,channelRows,last);
@@ -158,7 +152,7 @@ async function resourceInspector(ctx: Ctx, p: Project, key: string, resource: Re
     const result = await ctx.db.prepare(sql).bind(...bindings).all<{title: string; ref: string | number; at: number}>();
     rows = result.results.map(r=>({title:r.title,at:r.at,href:key in KINDS ? `${base}/w/${r.ref}` : ["wiki","research"].includes(key) ? `${base}/wiki/${encodeURIComponent(r.ref)}` : key === "files" ? `${base}/documents?path=${encodeURIComponent(r.ref)}` : key === "contacts" ? `${base}/contacts/${encodeURIComponent(r.ref)}` : key === "reviews" ? `${base}/reviews/${r.ref}` : `/apps?g=${encodeURIComponent(r.ref)}`}));
   }
-  return `${rows.length ? kitTable("Resource entries",[{label:"Name"},{label:"Updated"}],rows.slice(0,20).map(r=>({href:r.href,cells:[{html:`<a href="${esc(r.href)}">${esc(r.title)}</a>`},{html:esc(ago(ctx.now,r.at))}]}))) : '<p class="empty">Nothing here yet.</p>'}${resource ? `<p><a href="${esc(resource.href)}">Open ${esc(resource.label)} →</a>${rows.length > 20 ? " · First 20 shown" : ""}</p>` : ""}`;
+  return `${rows.length ? kitTable("Resource entries",[{label:"Name"},{label:"Updated"}],rows.slice(0,20).map(r=>({href:r.href,cells:[{html:`<a href="${esc(r.href)}">${esc(r.title)}</a>`},{html:ago(ctx.now,r.at)}]}))) : '<p class="empty">Nothing here yet.</p>'}${resource ? `<p><a href="${esc(resource.href)}">Open ${esc(resource.label)} →</a>${rows.length > 20 ? " · First 20 shown" : ""}</p>` : ""}`;
 }
 
 export async function projectPage(request: Request, env: Env, slug: string): Promise<Response> {

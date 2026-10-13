@@ -2,7 +2,7 @@
 // the work filed from it, and Propose work) in the inspector. Quarantined mail is shown to admins only.
 import type { Env } from "../env";
 import { shellFor } from "./shell";
-import { address, naturalName, esc, htmlResponse, kitTable, kitTree, toolbar, inspectorSection, workbench } from "../html";
+import { localTime, address, naturalName, esc, htmlResponse, kitTable, kitTree, toolbar, inspectorSection, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
 import { canInspectMail, readableMail, readableOutgoingMail } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
@@ -13,11 +13,8 @@ import { mailDeliveryNotice, type DeliveryNotice } from "./mailDeliveryNotice";
 import { attachmentCoverage, type AttachmentEvidence } from "../mail/attachments";
 import { mailWorkResults, mailWorkStatement, type MailWorkItem } from "../mail/work";
 
-const when = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
-const ago = (ms: number, now: number) => {
-  const m = Math.max(0, Math.round((now - ms) / 60_000));
-  return m < 1 ? "now" : m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : m < 1440 * 60 ? `${Math.round(m / 1440)}d` : new Date(ms).toISOString().slice(0, 10);
-};
+const when = localTime;
+const ago = (ms: number | null, _now: number) => localTime(ms);
 
 type Row = { id: string; project: string | null; from_email: string; subject: string; received_at: number; verdict: string; forwarded: number };
 type Msg = { id: string; recipient_id: string | null; project: string | null; from_email: string; to_address: string; subject: string; received_at: number; verdict: string; reason: string | null; text: string; attachments: string; forwarded: number };

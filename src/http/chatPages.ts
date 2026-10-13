@@ -6,7 +6,7 @@ import { shellFor } from "./shell";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { HubError } from "../errors";
-import { esc, htmlResponse, page, workbench, kitTree, kitTable, toolbar, inspectorSection, type Shell } from "../html";
+import { localTime, esc, htmlResponse, page, workbench, kitTree, kitTable, toolbar, inspectorSection, type Shell } from "../html";
 import { runVerb } from "../verbs/dispatch";
 import { getVerb } from "../verbs/table";
 import { getChannelById } from "../db/chat";
@@ -90,7 +90,7 @@ function markRead(slug: string, head: number, back: string): string {
   return `<form class="inline" method="post" action="/api/chat.mark_read"><input type="hidden" name="_back" value="${esc(back)}"><input type="hidden" name="c" value="${esc(slug)}"><input type="hidden" name="seq" value="${head}"><button class="quiet" type="submit" title="Mark channel read through #${head}">Mark read</button></form>`;
 }
 
-const when = (at: number) => new Date(at).toISOString().slice(0, 16).replace("T", " ");
+const when = (at: number) => localTime(at);
 
 /** The name tag as the server computed it; nothing here comes from message text. */
 function tagHtml(a: AuthorJson): string {

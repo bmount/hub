@@ -3,7 +3,7 @@
 // everyone else sees who is here and what they are on. One D1 batch per page.
 import { agentSrcAccess } from "../code/agentSrc";
 import type { Env } from "../env";
-import { address, naturalName, plural, emptyState, esc, htmlResponse, inspectorSection, kitTable, toolbar, workbench } from "../html";
+import { localTime, address, naturalName, plural, emptyState, esc, htmlResponse, inspectorSection, kitTable, toolbar, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { readableMailEvents } from "../auth/mailAccess";
 import { clearSessionCookie } from "../auth/cookie";
@@ -18,12 +18,8 @@ type Person = { id: string; display_name: string; email: string; kind: string; i
 type Invite = { id: string; email: string; role: string; display_name: string | null; created_at: number; expires_at: number; by: string | null };
 type Activity = { summary: string; created_at: number };
 
-const ago = (ms: number | null, now: number) => {
-  if (!ms) return "not yet";
-  const m = Math.max(0, Math.round((now - ms) / 60_000));
-  return m < 1 ? "now" : m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
-};
-const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+const ago = (ms: number | null, _now: number) => localTime(ms);
+const day = localTime;
 const option = (v: string, label: string, sel: boolean) => `<option value="${esc(v)}"${sel ? " selected" : ""}>${esc(label)}</option>`;
 
 export async function peoplePage(request: Request, env: Env, who: string | null = null): Promise<Response> {
@@ -58,7 +54,7 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
   if (email && !person) return notFoundPage(extra);
 
   const sourceLink = (p: Person) => p.kind === "agent" && agentSrcAccess({ identity: ctx.identity!, role: ctx.role! }, p)
-    ? ` <a href="/agent-src/${esc(encodeURIComponent(p.email.slice(p.email.indexOf(".") + 1, p.email.indexOf("@"))))}/code">Source</a>` : "";
+    ? ` <a href="/agent-src/${esc(encodeURIComponent(p.email.slice(p.email.indexOf(".") + 1, p.email.indexOf("@"))))}/code">agent-src/${esc(p.email.slice(p.email.indexOf(".") + 1, p.email.indexOf("@")))}</a>` : "";
   const humans = people.filter((p) => p.kind === "human"), agents = people.filter((p) => p.kind !== "human");
   const table = (rows: Person[], agent: boolean) => rows.length ? kitTable(agent ? "Agents" : "People",
     [{label:"Name"},...(agent ? [{label:"Source",className:"hide-s"}] : []),{label:"Address",className:"hide-s"},{label:"Role"},...(agent ? [{label:"Answers to",className:"hide-s"}] : []),{label:"Open"},{label:"Active"}],

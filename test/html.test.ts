@@ -4,6 +4,13 @@ import { ASSETS } from "../src/assets";
 import { breadcrumb, emptyState, esc, formRow, HTML_CSP, htmlResponse, inspectorSection, kitList, kitTable, kitTabs, kitTree, page, statusChip, toolbar, workbench } from "../src/html";
 
 describe("workbench kit", () => {
+  it("keeps page timestamps in the shared helper", () => {
+    // @ts-expect-error Vite transforms raw page imports in the Workers test build.
+    const pages = import.meta.glob("../src/http/*.ts", {query:"?raw", import:"default", eager:true});
+    for (const [path, source] of Object.entries(pages)) {
+      expect(source, path).not.toMatch(/\.toISOString\(|\.toUTCString\(|\.toLocale(?:Date|Time)?String\(/);
+    }
+  });
   it("renders selectable table/list rows with native links and scoped headings", () => {
     const table = kitTable('Work <items>', [{label: 'Title', className: 'hide-s'}], [
       {href: '/sample/w/1?owner=me&kind=wish', selected: true, cells: [{html: '<a href="/sample/w/1">One</a>'}]},

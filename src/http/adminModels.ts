@@ -1,7 +1,7 @@
 // "Models and keys" (admin spec 10.4): what is needed, what is in use, and how to change it. Apex, root only.
 import type { Env } from "../env";
 import { shellFor } from "./shell";
-import { plural, esc, htmlResponse, inspectorSection, kitTable, page, toolbar } from "../html";
+import { localTime, plural, esc, htmlResponse, inspectorSection, kitTable, page, toolbar } from "../html";
 import { buildContext } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -9,7 +9,7 @@ import { listCredentials, purposeStatus, revealSecret } from "../models/store";
 import { PROVIDERS, provider as providerById } from "../models/providers";
 import { newerModels } from "../models/purposes";
 
-const when = (ms: number | null) => (ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") : "never");
+const when = localTime;
 const BACK = `<input type="hidden" name="_back" value="/admin/models">`;
 const form = (verb: string, fields: Record<string, string>, label: string) =>
   `<form class="inline" method="post" action="/api/${verb}">${Object.entries(fields).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join("")}${BACK}<button type="submit" class="quiet">${esc(label)}</button></form>`;
@@ -87,7 +87,7 @@ ${keys.length ? keyRows : "<p>No keys yet.</p>"}
 <p><small>Keys are encrypted at rest with the hub's own secret. They are never shown again, never sent to an assistant, and never written to logs.</small></p>
 </details><h2>Prices</h2>
 <p class="lede">Dollars per million tokens. Each recorded AI call keeps the cost it had when it happened; a new price applies from now on. Calls with no price show as "price unknown", never a guess.</p>
-${prices.length ? kitTable("Prices",[{label:"Model"},{label:"Input"},{label:"Cached input"},{label:"Output"},{label:"Since"}],prices.map(p=>({cells:[{html:`<code>${esc(p.provider)}/${esc(p.model)}</code>`},{html:`$${p.input_per_mtok/1e6}`},{html:p.cached_input_per_mtok === null ? "same as input" : `$${p.cached_input_per_mtok/1e6}`},{html:`$${p.output_per_mtok/1e6}`},{html:new Date(p.effective_from).toISOString().slice(0,10)}]}))) : "<p>No prices yet.</p>"}
+${prices.length ? kitTable("Prices",[{label:"Model"},{label:"Input"},{label:"Cached input"},{label:"Output"},{label:"Since"}],prices.map(p=>({cells:[{html:`<code>${esc(p.provider)}/${esc(p.model)}</code>`},{html:`$${p.input_per_mtok/1e6}`},{html:p.cached_input_per_mtok === null ? "same as input" : `$${p.cached_input_per_mtok/1e6}`},{html:`$${p.output_per_mtok/1e6}`},{html:localTime(p.effective_from)}]}))) : "<p>No prices yet.</p>"}
 ${unpriced.length ? `<p>Used without a price in the last 30 days: ${unpriced.map((u) => `<code>${esc(u.provider)}/${esc(u.model)}</code> (${u.n})`).join(", ")}</p>` : ""}
 <details><summary>Set a price</summary><form method="post" action="/api/model.price_set">
 <label>Provider <input name="provider" required maxlength="40" size="10" placeholder="openai"></label>

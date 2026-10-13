@@ -10,7 +10,7 @@ import { attentionQuery } from "../verbs/collab";
 import type { Env } from "../env";
 import { HubError } from "../errors";
 import { safeExternalUrl } from "../security/urls";
-import { emptyState, esc, htmlResponse, inspectorSection, formRow, kitList, kitTable, kitTabs, statusChip, toolbar, workbench, type KitRow } from "../html";
+import { localTime, emptyState, esc, htmlResponse, inspectorSection, formRow, kitList, kitTable, kitTabs, statusChip, toolbar, workbench, type KitRow } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -23,11 +23,8 @@ import { cutText } from "../mcp/render";
 import { traceEvidenceUrl, traceDraftStatement } from "../apps/work";
 import { reviewEvidenceUrl, reviewDraftStatement } from "../work/reviewEvidence";
 
-const when = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace("T", " ");
-const ago = (ms: number, now: number) => {
-  const m = Math.max(0, Math.round((now - ms) / 60_000));
-  return m < 1 ? "now" : m < 60 ? `${m}m` : m < 60 * 24 ? `${Math.round(m / 60)}h` : m < 60 * 24 * 60 ? `${Math.round(m / 1440)}d` : new Date(ms).toISOString().slice(0, 10);
-};
+const when = localTime;
+const ago = (ms: number | null, _now: number) => localTime(ms);
 
 type Member = { id: string; display_name: string; email: string; kind: string };
 type Quest = { id: string; number: number; title: string };

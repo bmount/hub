@@ -2,7 +2,7 @@
 // + File, the jump box, and the planned areas in plain view.
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
-import { address, localTime, naturalName, plural } from "../src/html";
+import { address, localTime, timeText, naturalName, plural } from "../src/html";
 import { WORKBENCH_JS } from "../src/workbenchScript";
 import { clientSlow } from "../src/http/clientSlow";
 import { createProject } from "../src/db/projects";
@@ -62,9 +62,15 @@ describe("the workbench", () => {
 
   it("renders safe, browser-local time hooks, copyable addresses and singular counts", () => {
     expect(localTime(null)).toBe("Not recorded");
+    const now = Date.UTC(2026, 9, 13, 19, 22);
+    expect(timeText(now, now, "America/Chicago")).toBe("Today 14:22");
+    expect(timeText(Date.UTC(2026, 9, 12, 14, 10), now, "America/Chicago")).toBe("Mon 09:10");
+    expect(timeText(Date.UTC(2026, 9, 6, 14, 10), now, "America/Chicago")).toBe("6 Oct");
+    expect(timeText(now, now, "UTC")).toBe("Today 19:22");
+    expect(localTime(0)).toContain('data-local-time="0"');
     expect(localTime(Date.UTC(2026,9,13,17,8))).toContain('data-local-time="1791911280000"');
     expect(WORKBENCH_JS).toContain('d.toLocaleTimeString');
-    expect(WORKBENCH_JS).toContain('"Today"');
+    expect(WORKBENCH_JS).toContain('"Today "');
     expect(address('x<y@example.test')).toContain('x&lt;y@example.test</code>');
     expect(address('x@example.test')).toContain('data-copy="address"');
     expect(naturalName("Team 2","Team 10")).toBeLessThan(0);

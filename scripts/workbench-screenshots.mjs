@@ -179,12 +179,20 @@ try {
       await route.fulfill({status:res.status,headers:{...Object.fromEntries(res.headers),'x-local-final-url':finalURL},body:Buffer.from(await res.arrayBuffer())});
     });
     const page = await ctx.newPage();
+    const browserErrors = [];
+    page.on('pageerror', error => browserErrors.push(error.message));
     let searchPosition;
     for (const [name, route] of Object.entries(pages).filter(([name]) => !process.env.WORKBENCH_PAGES || process.env.WORKBENCH_PAGES.split(',').includes(name))) {
       if (name === 'attention') await db.prepare('UPDATE attention SET done_at = NULL WHERE tenant_id = ?').bind(tenant).run();
       const response = await page.goto(route.startsWith('https:') ? route : base+route);
       expect(response.status(), name).toBe(200);
       await page.locator('main').waitFor();
+      expect(browserErrors, name+' browser errors').toEqual([]);
+      for (const time of await page.locator('time[data-local-time]').all()) {
+        await expect(time).not.toContainText('UTC');
+        await expect(time).toHaveAttribute('title', /.+/);
+        await expect(time).not.toContainText(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/);
+      }
       await page.screenshot({path:path.join(artifacts,`${phase}-${name}-${label}.png`),fullPage:false});
       manifest.push({phase,name,route,viewport,file:`${phase}-${name}-${label}.png`});
       if (phase === 'after') {

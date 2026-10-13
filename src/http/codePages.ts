@@ -1,7 +1,7 @@
 // Code in the workbench: /<project>/code (commits as the list, one commit with its diff in the inspector) and
 // /<project>/files (a directory as the list, a file in the inspector). Reads go to Ardi as the viewer.
 import type { Env } from "../env";
-import { emptyState, esc, htmlResponse, inspectorSection, kitTable, kitTabs, toolbar, workbench } from "../html";
+import { localTime, emptyState, esc, htmlResponse, inspectorSection, kitTable, kitTabs, toolbar, workbench } from "../html";
 import { buildContext, type Ctx } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
@@ -14,10 +14,7 @@ import type { commitWorkResults } from "../work/commitEvidence";
 import { sha256Hex } from "../ids";
 import { codeDiff as diffHtml, recordedWorkTable } from "./codeMarkup";
 
-const ago = (s: number, now: number) => {
-  const m = Math.max(0, Math.round((now - s * 1000) / 60_000));
-  return m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : m < 1440 * 60 ? `${Math.round(m / 1440)}d` : new Date(s * 1000).toISOString().slice(0, 10);
-};
+const ago = (s: number, _now: number) => localTime(s * 1000);
 const branchOf = (r: string) => r.replace(/^refs\/heads\//, "");
 
 async function run<T>(ctx: Ctx, verb: string, input: Record<string, unknown>): Promise<T> {
@@ -61,13 +58,13 @@ ${log.next ? `<p><a href="${esc(q({next:log.next,c:null}))}">Older commits</a></
     if (oid) {
       const c = await run<{ commit: ArdiCommit; pushed_by: string | null; files: FileChange[]; after: After } & ReturnType<typeof commitWorkResults>>(ctx, "repo.commit", { project: project.slug, oid });
       inspectorKey = `commit:${project.id}:${oid.toLowerCase()}:${await sha256Hex(JSON.stringify([c.relatedWork, c.relatedWorkCoverage, c.after]))}`;
-      inspector = `<a class="back" href="${esc(q({c:null}))}">‹ Commits</a><div class="head"><code>${oid.slice(0, 12)}</code><span>${esc(c.commit.author_name)}</span>${c.pushed_by ? `<span>pushed by ${esc(c.pushed_by)}</span>` : ""}<span>${new Date(c.commit.commit_time * 1000).toISOString().slice(0, 16).replace("T", " ")}</span></div>
+      inspector = `<a class="back" href="${esc(q({c:null}))}">‹ Commits</a><div class="head"><code>${oid.slice(0, 12)}</code><span>${esc(c.commit.author_name)}</span>${c.pushed_by ? `<span>pushed by ${esc(c.pushed_by)}</span>` : ""}<span>${localTime(c.commit.commit_time * 1000)}</span></div>
 <h1>${esc(c.commit.summary)}</h1>${(c.commit.message ?? "").trim().split("\n").slice(1).join("\n").trim() ? `<div class="prose">${esc((c.commit.message ?? "").trim().split("\n").slice(1).join("\n").trim())}</div>` : ""}
 <h2>Recorded work</h2><p class="lede">Full commit references and exact canonical URLs only. Recorded associations do not prove that this commit completes, reviews or approves the work.</p>
 ${c.relatedWork.length ? recordedWorkTable(c.relatedWork) : `<p class="lede">No work associations recorded for this commit.</p>`}
 <p class="lede">${c.relatedWorkCoverage.shown} related work items shown${c.relatedWorkCoverage.truncated ? `; capped at ${c.relatedWorkCoverage.limit}, more omitted` : "; complete for recorded associations"}.</p>
 <h2>After this commit</h2><p class="lede">Recorded deploy/time associations do not prove live rollout, continued deployment, absence of errors or causation.</p>
-${inspectorSection("Record", [{label:"Recorded deploy",html:`${c.after.shipped ? `<a href="/apps?d=${esc(encodeURIComponent(c.after.shipped.id))}">${esc(c.after.shipped.script)}</a> <code>${esc(c.after.shipped.tag ?? "")}</code>, ${new Date(c.after.shipped.at).toISOString().slice(0, 16).replace("T", " ")} · ${c.after.shipped.match === "full-commit" ? "exact full commit ID" : "tag-prefix hint"}` : "no supported deploy association recorded"}`},{label:"Deploy sample from commit time",html:`${c.after.since.length ? c.after.since.map((d) => `<a href="/apps?d=${esc(encodeURIComponent(d.id))}"><code>${esc(d.tag ?? "?")}</code></a>`).join(" ") : "none recorded"}<br>${c.after.sinceCoverage.shown} shown${c.after.sinceCoverage.truncated ? "; capped at 10, more omitted" : "; complete for the recorded time window"}`},{label:"Recorded error groups",html:`${c.after.errors.length ? c.after.errors.map((e) => `<a href="/apps?g=${esc(encodeURIComponent(e.id))}">${esc(e.title)}</a> ×${e.count}`).join("<br>") : "none recorded"}<br>${c.after.errorsCoverage.shown} shown${c.after.errorsCoverage.truncated ? "; capped at 10, more omitted" : "; complete for the recorded time window"}<br>First recorded at or after ${new Date(c.after.errorsSince.at).toISOString()} (${c.after.errorsSince.basis})`}])}
+${inspectorSection("Record", [{label:"Recorded deploy",html:`${c.after.shipped ? `<a href="/apps?d=${esc(encodeURIComponent(c.after.shipped.id))}">${esc(c.after.shipped.script)}</a> <code>${esc(c.after.shipped.tag ?? "")}</code>, ${localTime(c.after.shipped.at)} · ${c.after.shipped.match === "full-commit" ? "exact full commit ID" : "tag-prefix hint"}` : "no supported deploy association recorded"}`},{label:"Deploy sample from commit time",html:`${c.after.since.length ? c.after.since.map((d) => `<a href="/apps?d=${esc(encodeURIComponent(d.id))}"><code>${esc(d.tag ?? "?")}</code></a>`).join(" ") : "none recorded"}<br>${c.after.sinceCoverage.shown} shown${c.after.sinceCoverage.truncated ? "; capped at 10, more omitted" : "; complete for the recorded time window"}`},{label:"Recorded error groups",html:`${c.after.errors.length ? c.after.errors.map((e) => `<a href="/apps?g=${esc(encodeURIComponent(e.id))}">${esc(e.title)}</a> ×${e.count}`).join("<br>") : "none recorded"}<br>${c.after.errorsCoverage.shown} shown${c.after.errorsCoverage.truncated ? "; capped at 10, more omitted" : "; complete for the recorded time window"}<br>First recorded at or after ${localTime(c.after.errorsSince.at)} (${c.after.errorsSince.basis})`}])}
 ${c.commit.parents.length ? `<p class="lede">Parent${c.commit.parents.length > 1 ? "s" : ""}: ${c.commit.parents.map((p) => `<a href="${esc(q({c:p}))}"><code>${p.slice(0, 8)}</code></a>`).join(" ")}</p>` : ""}
 ${c.files.map((f) => diffHtml(f.path, f.diff, f.note, f.kind)).join("")}`;
     } else if (project.slug.startsWith("agent-src/")) {

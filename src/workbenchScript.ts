@@ -4,7 +4,8 @@
 // - Keyboard: ⌘K or Ctrl+K jump, j and k move through the list, Enter opens, e edits, c files, / filters, Esc closes.
 // - The status bar shows the server's own timing for the last page (Server-Timing).
 // Written without template literals so it can live in a TypeScript string.
-export const WORKBENCH_JS = String.raw`
+import { timeText } from "./html";
+export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.raw`
 (function () {
   var $ = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
@@ -558,9 +559,7 @@ export const WORKBENCH_JS = String.raw`
   function localTimes(root) {
     $$("time[data-local-time]", root).forEach(function (el) {
       var d = new Date(Number(el.getAttribute("data-local-time"))), now = new Date();
-      var yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
-      var day = d.toDateString() === now.toDateString() ? "Today" : d.toDateString() === yesterday.toDateString() ? "Yesterday" : d.toLocaleDateString(undefined, {day:"numeric", month:"short", year:d.getFullYear() === now.getFullYear() ? undefined : "numeric"});
-      el.textContent = day + " " + d.toLocaleTimeString(undefined, {hour:"2-digit", minute:"2-digit", hour12:false});
+      el.textContent = timeText(d.getTime(), now.getTime());
       el.title = d.toLocaleString(undefined, {dateStyle:"full", timeStyle:"long"});
     });
   }

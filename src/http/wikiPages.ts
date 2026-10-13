@@ -7,7 +7,7 @@ import { miniMarkdown } from "./skillsPages";
 import { wikiList, wikiHistory, readWiki, wikiProject, wikiSlug } from "../verbs/wiki";
 import { HubError } from "../errors";
 import { researchList, type Research } from "../verbs/research";
-import { workbench, kitTree, kitTable, kitTabs, toolbar, emptyState, inspectorSection } from "../html";
+import { localTime, workbench, kitTree, kitTable, kitTabs, toolbar, emptyState, inspectorSection } from "../html";
 import { diffText, unified } from "../code/diff";
 
 import { documentSharing } from "./documentSharing";
@@ -68,14 +68,14 @@ export async function wikiPage(request: Request, env: Env, project: string, slug
       const expected = revision === null ? r.revision : head.history[0]!.revision;
       let content = r.research ? researchHtml(r.research, project, people) : `<div class="prose">${wikiMarkdown(r.body, project)}</div>`;
       if (writable && !r.research) content = inspectorSection("Page", [{label:revision === null ? "Content" : "Revert", html:`<div class="prose">${wikiMarkdown(r.body, project)}</div>`, editHtml:`<form method="post" action="/api/wiki.write"><input type="hidden" name="project" value="${esc(project)}"><input type="hidden" name="slug" value="${esc(slug)}"><input type="hidden" name="expected_revision" value="${expected}"><input type="hidden" name="_back" value="${esc(target(slug))}"><label>Title <input name="title" required maxlength="200" value="${esc(r.title)}"></label><label>Markdown <textarea name="body" rows="15">${esc(r.body)}</textarea></label><label>Revision note <input name="note" required maxlength="500" value="${revision === null ? "" : `Revert to revision ${r.revision}`}"></label><button>${revision === null ? "Save revision" : "Revert page"}</button></form>`}]);
-      body += `<h1>${esc(r.title)}</h1><p>Revision ${r.revision} · ${esc(r.author)} · ${esc(new Date(r.created_at).toISOString())} · ${esc(r.note)}${r.deleted ? " · deleted" : ""}</p>${content}<h2>Links</h2><ul>${v.links.map(s => `<li><a href="${base}/${s}">${s}</a></li>`).join("")}</ul><h2>Backlinks</h2><ul>${v.backlinks.map(p => `<li><a href="${base}/${esc(p.slug)}">${esc(p.title)}</a></li>`).join("")}</ul>`;
+      body += `<h1>${esc(r.title)}</h1><p>Revision ${r.revision} · ${esc(r.author)} · ${localTime(r.created_at)} · ${esc(r.note)}${r.deleted ? " · deleted" : ""}</p>${content}<h2>Links</h2><ul>${v.links.map(s => `<li><a href="${base}/${s}">${s}</a></li>`).join("")}</ul><h2>Backlinks</h2><ul>${v.backlinks.map(p => `<li><a href="${base}/${esc(p.slug)}">${esc(p.title)}</a></li>`).join("")}</ul>`;
       body += await documentSharing(ctx, pr.id, project, "page", slug, writable && !r.deleted, target(slug));
       if (url.searchParams.has("diff") && r.revision > 1) {
         const previous = await readWiki(ctx, project, slug, r.revision - 1);
         body += `<h2>Diff from revision ${r.revision - 1}</h2><pre>${esc(unified(slug, diffText(previous.page.title + "\n\n" + previous.page.body, r.title + "\n\n" + r.body)))}</pre>`;
       }
 
-      body += kitTable("History", [{label:"Revision"},{label:"Author / note"}], h.history.map(x=>({cells:[{html:`<a href="${esc(target(slug,{revision:String(x.revision)}))}">Revision ${x.revision}</a> · <a href="${esc(target(slug,{revision:String(x.revision),diff:"1"}))}">Diff</a>`},{html:`${esc(x.author)} · ${esc(new Date(x.created_at).toISOString())} · ${esc(x.note)}${x.deleted ? " · deleted" : ""}`}]}))) + (h.next_cursor ? `<a href="${esc(target(slug,{revision:String(r.revision),before:String(h.next_cursor)}))}">Older history</a>` : "");
+      body += kitTable("History", [{label:"Revision"},{label:"Author / note"}], h.history.map(x=>({cells:[{html:`<a href="${esc(target(slug,{revision:String(x.revision)}))}">Revision ${x.revision}</a> · <a href="${esc(target(slug,{revision:String(x.revision),diff:"1"}))}">Diff</a>`},{html:`${esc(x.author)} · ${localTime(x.created_at)} · ${esc(x.note)}${x.deleted ? " · deleted" : ""}`}]}))) + (h.next_cursor ? `<a href="${esc(target(slug,{revision:String(r.revision),before:String(h.next_cursor)}))}">Older history</a>` : "");
       if (writable && rank(ctx.role) >= rank("admin") && !r.deleted && revision === null) body += `<form method="post" action="/api/wiki.delete"><input type="hidden" name="project" value="${esc(project)}"><input type="hidden" name="slug" value="${esc(slug)}"><input type="hidden" name="expected_revision" value="${expected}"><input type="hidden" name="_back" value="${base}"><label>Deletion note <input name="note" required maxlength="500"></label><button class="quiet destructive">Delete page (retain history)</button></form>`;
     }
     return htmlResponse(workbench("Wiki pages", {list, stackOnPhone:true, listKey:`wiki:${project}:${query}`, inspector:slug || url.searchParams.has("new") ? body : "", inspectorKey:slug ? `wiki:${slug}` : "", focus:url.searchParams.has("new") ? "inspector" : undefined}, shell));

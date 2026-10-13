@@ -11,11 +11,21 @@ export type KitLink = { label: string; href: string; current?: boolean; count?: 
 const kitHref = (href: string) => esc(/^(\/(?!\/)|https?:\/\/|mailto:|#)/i.test(href) ? href : "#");
 const kitLink = (l: KitLink) => `<a href="${kitHref(l.href)}"${l.current ? ' aria-current="page"' : ""}>${esc(l.label)}${l.count !== undefined && l.count > 0 ? `<span class="wb-count">${esc(String(l.count))}</span>` : ""}</a>`;
 
+export function timeText(ms: number, now: number, timeZone?: string): string {
+  const d = new Date(ms), today = new Date(now);
+  const todayKey = today.toLocaleDateString("en-GB", {timeZone}).split("/").reverse().join("-");
+  const dateKey = d.toLocaleDateString("en-GB", {timeZone}).split("/").reverse().join("-");
+  const days = Math.round((Date.parse(todayKey) - Date.parse(dateKey)) / 86400000);
+  if (days === 0) return "Today " + d.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit", hour12:false, timeZone});
+  if (days > 0 && days < 7) return d.toLocaleDateString("en-GB", {weekday:"short", timeZone}) + " " + d.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit", hour12:false, timeZone});
+  return d.toLocaleDateString("en-GB", {day:"numeric", month:"short", ...(d.getUTCFullYear() !== today.getUTCFullYear() ? {year:"numeric" as const} : {}), timeZone});
+}
+
 export function localTime(ms: number | null): string {
-  if (!ms) return "Not recorded";
+  if (ms === null) return "Not recorded";
   const date = new Date(ms);
   if (!Number.isFinite(date.getTime())) return "Not recorded";
-  return `<time datetime="${date.toISOString()}" data-local-time="${ms}" title="${esc(date.toUTCString())}">${esc(date.toLocaleString("en", {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", hour12:false, timeZone:"UTC"}))} UTC</time>`;
+  return `<time datetime="${date.toISOString()}" data-local-time="${ms}" title="${esc(date.toUTCString())}">${esc(timeText(ms, Date.now(), "UTC"))} UTC</time>`;
 }
 
 export const naturalName = (a: string, b: string) => a.localeCompare(b, undefined, {numeric:true, sensitivity:"base"});

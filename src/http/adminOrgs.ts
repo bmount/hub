@@ -32,7 +32,7 @@ export async function adminOrgsPage(request: Request, env: Env): Promise<Respons
       : `<form data-reload class="inline" method="post" action="/api/tenant.unarchive"><input type="hidden" name="slug" value="${esc(o.slug)}">${BACK}<button type="submit" class="quiet">Unarchive</button></form>
 <form data-reload class="inline" method="post" action="/api/tenant.delete"><input type="hidden" name="slug" value="${esc(o.slug)}">
 <input name="confirm" placeholder="type ${esc(o.slug)} to delete" size="22" autocomplete="off" required>${BACK}<button type="submit" class="quiet destructive">Delete permanently</button></form>`;
-    return {cells:[{html:link},{html:esc(o.state)},{html:String(o.people)},{html:String(o.agents)},{html:String(o.projects)},{html:when(o.created_at)},{html:`<a href="https://${esc(o.slug)}.${esc(env.HUB_DOMAIN)}/admin/agents">Manage</a> <details class="wb-inline-edit"><summary>Controls</summary>${action}</details>`}]};
+    return {cells:[{html:link},{html:esc(o.state)},{html:String(o.people)},{html:String(o.agents)},{html:String(o.projects)},{html:when(o.created_at)},{html:`<a href="https://${esc(o.slug)}.${esc(env.HUB_DOMAIN)}/admin/agents" style="white-space:nowrap">Manage</a> <details class="wb-inline-edit"><summary>Controls</summary>${action}</details>`}]};
   };
   const body = `<h1>Organizations</h1>${toolbar("Hub admin",'<a href="/admin/models">Models and keys</a><a href="/admin/apps">Apps</a>')}
 ${kitTable("Organizations",[{label:"Organization"},{label:"State"},{label:"People"},{label:"Agents"},{label:"Projects"},{label:"Created"},{label:"Controls"}],orgs.sort((a,b)=>naturalName(a.display_name,b.display_name)).map(row))}

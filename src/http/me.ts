@@ -60,7 +60,7 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
       + `<label>Label <input name="label" required maxlength="80" placeholder="laptop"></label> `
       + `<button type="submit" class="quiet">New git credential for ${esc(slug)}</button></form>`).join("")) + "</details>";
 
-  body += `<h2>Assistants</h2><p>Assistants you connected. Each acts as you in one tenant; its activity is listed by <code>event.list</code> with its session id.</p>`
+  body += `<h2>Assistants</h2><p>Assistants you connected. Each acts as you in one organization; find its activity in Sessions.</p>`
     + table(["Assistant", "Sends codes to", "Tenant", "Scopes", "Connected", "Last used", "Action"], grants.map(({ grant, tenant_slug, last_seen_at }) => [
       `"${esc(grant.client_name)}"`, `<code>${esc(grant.redirect_host)}</code>`, esc(tenant_slug), esc(grant.scopes), when(grant.created_at), when(last_seen_at),
       button("session.revoke", { session_id: grant.session_id }, "Revoke"),
