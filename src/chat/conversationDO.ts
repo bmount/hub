@@ -840,8 +840,7 @@ export class Conversation extends DurableObject<Env> {
         this.#run("DELETE FROM meta WHERE key NOT IN ('tenant_id', 'owner_id')");
         this.#run("INSERT INTO meta (key, value) VALUES ('deleted', ?)", String(n));
       });
-      await this.#storage.delete("presence:v1");
-      await this.#storage.deleteAlarm();
+      await Promise.all([this.#storage.delete("presence:v1"), this.#storage.deleteAlarm()]);
       return n;
     });
   }

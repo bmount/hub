@@ -46,8 +46,8 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
       .bind(key, project.id, tid, ctx.identity!.id, ids).run();
     if (!r.meta.changes) throw new HubError(403, "forbidden", "agents may only delete their own tmp- projects with no other human members; otherwise sign in on the web as an admin");
   } else {
-    await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:49:11:deleteProject:62b7165b*/ INSERT OR IGNORE INTO meta (key, value) SELECT ?, 'deleting' FROM project WHERE id = ? AND tenant_id = ? AND state = 'archived'").bind(key, project.id, tid).run();
-    if (!await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:50:16:deleteProject:44558753*/ SELECT 1 FROM meta WHERE key = ?").bind(key).first()) throw conflict("archive the project before deleting it");
+    const marker = await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:49:11:deleteProject:62b7165b*/ INSERT INTO meta (key, value) SELECT ?, 'deleting' FROM project WHERE id = ? AND tenant_id = ? AND state = 'archived' ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key, project.id, tid).run();
+    if (!marker.meta.changes) throw conflict("archive the project before deleting it");
   }
   const eventKind = throwaway ? "project.deleted" : "project.delete";
   const projects = "SELECT value FROM json_each(?2)";
@@ -159,20 +159,35 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   if (!bucket && counts.file_revision) throw new HubError(503, "unavailable", "file storage unavailable; sign in on the web and retry deletion");
   if (bucket) {
     // Only internal tenant/project ids select storage; trailing slash keeps sibling prefixes disjoint.
-    for (const id of [project.id, ...channels]) {
-      let cursor: string | undefined;
-      do {
-        const page = await bucket.list({ prefix: `project-files/${tid}/${id}/`, cursor });
-        if (page.objects.length) await bucket.delete(page.objects.map(o => o.key));
-        counts.file_objects = (counts.file_objects ?? 0) + page.objects.length;
-        cursor = page.truncated ? page.cursor : undefined;
-      } while (cursor);
+    const fileProjects = [project.id, ...channels];
+    let nextProject = 0;
+    const objects = await Promise.allSettled(Array.from({ length: Math.min(3, fileProjects.length) }, async () => {
+      let total = 0;
+      while (nextProject < fileProjects.length) {
+        const id = fileProjects[nextProject++]!;
+        let cursor: string | undefined;
+        do {
+          const page = await bucket.list({ prefix: `project-files/${tid}/${id}/`, cursor });
+          if (page.objects.length) await bucket.delete(page.objects.map(o => o.key));
+          total += page.objects.length;
+          cursor = page.truncated ? page.cursor : undefined;
+        } while (cursor);
+      }
+      return total;
+    }));
+    for (const result of objects) {
+      if (result.status === "rejected") throw result.reason;
+      counts.file_objects = (counts.file_objects ?? 0) + result.value;
     }
   }
   if (project.kind === "repo" || project.kind === "workspace") {
-    const mapped = await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:deleteProject:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).first();
+    const [mapping, repositoryResult] = await db.batch([
+      db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:deleteProject:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
+      db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:155:33:deleteProject:cf63d832*/ SELECT name, storage_name FROM repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
+    ]);
+    const mapped = mapping!.results.length > 0;
     if (project.kind === "repo" && !mapped && ctx.env.ARDI_REPO_CREATE === "on") throw conflict("repository is not mapped to Artifacts; migrate it before deleting the project");
-    const repositories = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:155:33:deleteProject:cf63d832*/ SELECT name, storage_name FROM repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).all<{name: string; storage_name: string}>()).results;
+    const repositories = repositoryResult!.results as { name: string; storage_name: string }[];
     if (mapped || repositories.length) {
       const api = new ArtifactsRest(ctx.env), ns = artifactNamespace(ctx.tenant!.slug);
       const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:158:29:deleteProject:66af9d38*/ SELECT id, namespace, repo, shadow, replay_key FROM git_push WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id)

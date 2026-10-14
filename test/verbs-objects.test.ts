@@ -402,6 +402,8 @@ describe("project deletion from the web", () => {
     const ctx = await buildContext(new Request(`https://${w.host}/`, {headers: w.headers}), env);
     const countBatches: number[] = [];
     let countQueries = 0, active = 0, peak = 0, completed = 0, fail = true;
+    let conversationActive = 0, conversationCompleted = 0, conversationFail = true;
+    let objectActive = 0, objectPeak = 0;
     const db = {
       prepare(sql: string) {
         if (sql.includes("SELECT COUNT(*)")) countQueries++;
@@ -415,6 +417,7 @@ describe("project deletion from the web", () => {
     } as D1Database;
     const purgeProject = async (tenant: string, identity: string, channels: string[], mail: string[]) => {
       expect(tenant).toBe(w.tenant.id);
+      expect(conversationActive).toBe(0);
       expect(identity).toBeTruthy();
       expect(channels).toHaveLength(2);
       expect(mail).toEqual([]);
@@ -426,10 +429,35 @@ describe("project deletion from the web", () => {
       if (fail) { fail = false; throw new Error("inbox outage"); }
       return 1;
     };
-    const wrapped = {...ctx, db, env: {...env, INBOX: {
-      idFromName: (name: string) => name,
-      get: () => ({purgeProject}),
-    } as unknown as typeof env.INBOX}};
+    const wrapped = {...ctx, db, env: {...env,
+      CONVERSATION: {
+        idFromName: (name: string) => name,
+        get: () => ({purge: async () => {
+          conversationActive++;
+          await new Promise(resolve => setTimeout(resolve, 5));
+          conversationActive--;
+          conversationCompleted++;
+          if (conversationFail) { conversationFail = false; throw new Error("conversation outage"); }
+          return 0;
+        }}),
+      } as unknown as typeof env.CONVERSATION,
+      INBOX: {
+        idFromName: (name: string) => name,
+        get: () => ({purgeProject}),
+      } as unknown as typeof env.INBOX,
+      GIT_PUSH_STAGING: {list: async ({prefix}: {prefix: string}) => {
+        expect(prefix).toMatch(new RegExp(`^project-files/${w.tenant.id}/[^/]+/$`));
+        objectActive++;
+        objectPeak = Math.max(objectPeak, objectActive);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        objectActive--;
+        return {objects: [], truncated: false};
+      }} as unknown as R2Bucket,
+    }};
+    await expect(deleteProject(wrapped, w.project)).rejects.toThrow("conversation outage");
+    expect(conversationActive).toBe(0);
+    expect(conversationCompleted).toBe(2);
+    expect(completed).toBe(0);
     await expect(deleteProject(wrapped, w.project)).rejects.toThrow("inbox outage");
     expect(active).toBe(0);
     expect(peak).toBe(10);
@@ -437,7 +465,9 @@ describe("project deletion from the web", () => {
     expect(await w.count("project", "id", w.project.id)).toBe(1);
     expect(await env.HUB_DB.prepare("SELECT 1 FROM event WHERE kind = 'project.delete'").first()).toBeNull();
     expect(await deleteProject(wrapped, w.project)).toMatchObject({ok: true, counts: {inbox_items: 21, project: 3}});
-    expect(countBatches.filter(n => n > 0)).toEqual([44, 44]);
+    expect(countBatches.filter(n => n > 0)).toEqual([44, 44, 44]);
+    expect(objectPeak).toBe(3);
+    expect(objectActive).toBe(0);
     expect(active).toBe(0);
     expect(await w.count("project", "id", w.project.id)).toBe(0);
   });
