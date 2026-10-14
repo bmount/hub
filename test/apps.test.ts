@@ -54,6 +54,8 @@ describe("sites", () => {
     expect(weightedMetrics).toContain("AS client_errors");
     const selection=performanceSelection(new URLSearchParams());
     expect(population(selection)).toContain("AND NOT");
+    expect(population(selection)).toContain("blob8 LIKE 'scheduled.%'");
+    expect(population(selection)).toContain("blob8 LIKE 'rpc.%'");
     expect(population({...selection,kind:"background"})).toContain("blob7 IN ('request','rpc')");
     expect(population({...selection,kind:"interactions"})).toContain("blob9 = 'ready'");
     const data:PerformanceData={overview:[],spark:[],browser:[],histogram:[],splits:{},sql:[],exemplars:[],waterfall:[],comparison:[],triggers:[],breakdown:[
@@ -70,6 +72,12 @@ describe("sites", () => {
     expect(trips.reduce((sum,r)=>sum+Number(r.attributed),0)).toBe(1200);
     expect(trips.find(r=>r.name==='d1.batch')!.attributed).toBe(1000);
     expect(JSON.stringify(trips)).not.toContain('private');
+    const repeated=tripAttribution([
+      {tenant:'private',request:'trip',label:'docket',kind:'request',name:'request',n:10,root_wall:1320,attributed:200},
+      {tenant:'private',request:'trip',label:'docket',kind:'span',name:'d1.batch',span:1,n:100,attributed:4000},
+      {tenant:'private',request:'trip',label:'docket',kind:'span',name:'d1.batch',span:2,n:100,attributed:6000},
+    ]);
+    expect(repeated.find(r=>r.name==='d1.batch')!.attributed).toBe(1000);
     const bounded=tripAttribution([
       {tenant:'private',request:'trip',label:'docket',kind:'request',name:'request',n:1,root_wall:132,attributed:20},
       {tenant:'private',request:'trip',label:'docket',kind:'span',name:'d1.batch',n:1,attributed:468.6},
@@ -162,9 +170,9 @@ describe("sites", () => {
       const outsider=await seedHuman("outsider@example.com"),rootOutsider=await seedHuman("global-root@example.com",{is_root:true});const before=sqls.length;
       expect((await get("",outsider.token)).status).toBe(404);expect(sqls).toHaveLength(before);
       expect((await get("",rootOutsider.token)).status).toBe(404);expect(sqls).toHaveLength(before);
-      expect((await get("",w.root.token)).status).toBe(200);expect(sqls).toHaveLength(before);
+      expect((await get("",w.root.token)).status).toBe(200);expect(sqls).toHaveLength(before+1); // Unselected attribution has its own bounded population.
       const other=await seedTenant("other");const foreign=await seedHuman("foreign@example.com",{memberships:[{tenant_id:other.id,role:"member"}]});
-      expect((await get("",foreign.token,"other.pimwell.test")).status).toBe(404);expect(sqls).toHaveLength(before);
+      expect((await get("",foreign.token,"other.pimwell.test")).status).toBe(404);expect(sqls).toHaveLength(before+1);
       expect((await appsPage(new Request(base.replace("project=pricebench","project=missing"),{headers:cookieHeaders(w.pat.token,HOST)}),measured)).status).toBe(404);
       const ctx={...await buildContext(new Request(base,{headers:cookieHeaders(w.pat.token,HOST)}),measured),playground:{scopes:["read"]}};
       const site=await ctx.db.prepare("SELECT s.*, 'pricebench' AS project FROM site s WHERE tenant_id = ?").bind(w.t.id).first<any>();
