@@ -1,8 +1,11 @@
-import { env } from "cloudflare:test";
+import { env, createExecutionContext } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { authorizeGit } from "../src/code/gitAccess";
 import { artifactRead } from "../src/code/artifactRead";
 import { artifactGit } from "../src/http/artifactGit";
+import gitProxy from "../git-proxy/index";
+import * as gitAccess from "../src/code/gitAccess";
+import * as tenants from "../src/db/tenants";
 import { repoOwnership } from "../src/code/artifactPush";
 import { clearArtifactTokensForTest, type ArtifactCommit } from "../src/code/artifactsRest";
 import { indexCommitNodes } from "../src/code/gitCommitIndex";
@@ -82,6 +85,30 @@ async function setup(role: "member" | "reader" = "member") {
 }
 
 describe("Artifacts compatibility adapter", () => {
+  it("starts live authorization beside routing and consumes it only once", async () => {
+    const s = await setup(), grant = await authorizeGit(s.configured, s.auth, "acme", "site");
+    await env.HUB_DB.prepare("INSERT OR IGNORE INTO git_repository (tenant_id,project_id,imported_at) VALUES (?,?,0)").bind(s.tenant.id, s.project.id).run();
+    let release!: () => void;
+    const started = new Promise<void>(resolve => { release = resolve; });
+    const authorize = vi.spyOn(gitAccess, "authorizeGit").mockImplementation(async () => { release(); return grant; });
+    vi.spyOn(tenants, "getTenantBySlug").mockImplementation(async () => { await started;return s.tenant; });
+    const configured = { ...s.configured, HUB: { fetch: async () => new Response("unexpected hub") } } as any;
+    const response = await gitProxy.fetch(new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: s.auth } }), configured, createExecutionContext());
+    expect(response.status).toBe(200);expect(await response.text()).toContain(`${hash(4)} HEAD`);
+    expect(authorize).toHaveBeenCalledTimes(1);expect(authorize.mock.calls[0]![1]).toBe(s.auth);
+  });
+  it("fails closed for mis-scoped preauthorization and preserves lookup errors as 503", async () => {
+    const s = await setup(), grant = (await authorizeGit(s.configured, s.auth, "acme", "site"))!;
+    const request = () => new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: s.auth } });
+    for (const wrong of [
+      { ...grant, tenant: { ...grant.tenant, slug: "foreign" } },
+      { ...grant, project: { ...grant.project, slug: "other" } },
+      { ...grant, repository: { name: "secondary", storage_name: "other", is_default: 0 } },
+    ]) expect((await artifactGit(request(), s.configured, "acme", Promise.resolve(wrong))).status).toBe(404);
+    expect(s.requests).toHaveLength(0);
+    expect((await artifactGit(request(), s.configured, "acme", Promise.reject(new Error("lookup failed")))).status).toBe(503);
+    expect(s.requests).toHaveLength(0);
+  });
   it("reuses the live ownership metadata for HEAD normalization without log lookups", async () => {
     const s = await setup(), batch = vi.spyOn(s.configured.HUB_DB, "batch");
     const response = await artifactGit(new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: s.auth } }), s.configured, "acme");

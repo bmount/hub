@@ -26,7 +26,10 @@ branch/tag rules as the default. See [git-history.md](git-history.md).
 Agent source repositories retain their separate, narrower access rules.
 Git authorization reads the live session, tenant, identity, parent token,
 agent/operator memberships, operator, active project and tenant-scoped storage
-mapping in one D1 batch (caller-only reads omit the project lookup). The existing credential
+mapping in one D1 batch (caller-only reads omit the project lookup). The Git service
+starts this request-local lookup alongside routing and passes its result to the
+Artifacts handler once; routing never grants access, grants never survive the
+request, and live storage ownership is still checked before fetching Git data. The existing credential
 policy and role caps consume that request-local snapshot; none of those rows are
 cached between requests. Git routing overlaps its independent tenant/backend reads.
 The hub overlaps its own tenant/tracing lookup with the Git service, which still

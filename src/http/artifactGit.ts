@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { ArtifactsRest, artifactNamespace } from "../code/artifactsRest";
-import { authorizeGit } from "../code/gitAccess";
+import { authorizeGit, type GitGrant } from "../code/gitAccess";
 import { agentSrcGrant } from "../code/agentSrc";
 import { artifactPush, repoOwnership } from "../code/artifactPush";
 import { HubError } from "../errors";
@@ -8,7 +8,9 @@ import { HubError } from "../errors";
 /** Smart-HTTP paths on a tenant host: /<repo>.git for project repositories, /agent-src/<agent>.git for an agent's own source. */
 export const GIT_PATH = /^\/(?:([A-Za-z0-9][A-Za-z0-9._-]*)\/)?([A-Za-z0-9][A-Za-z0-9._-]*)\.git\/(info\/refs|git-upload-pack|git-receive-pack)$/;
 
-export async function artifactGit(request: Request, env: Env, tenant: string): Promise<Response> {
+// The optional promise is a live authorizeGit lookup for this exact request,
+// started by the Git service alongside its routing reads; never client input.
+export async function artifactGit(request: Request, env: Env, tenant: string, authorization?: Promise<GitGrant | null>): Promise<Response> {
   const url = new URL(request.url), match = GIT_PATH.exec(url.pathname);
   if (!match) return new Response("not found\n", { status: 404 });
   const agentSrc = match[1] === "agent-src", repo = match[1] && !agentSrc ? `${match[1]}/${match[2]}` : match[2]!, tail = match[3]!;
@@ -16,10 +18,16 @@ export async function artifactGit(request: Request, env: Env, tenant: string): P
   if (!["git-upload-pack", "git-receive-pack"].includes(service ?? "")) return new Response("smart HTTP only\n", { status: 400 });
   if (request.method !== (tail === "info/refs" ? "GET" : "POST")) return new Response("method not allowed\n", { status: 405 });
   try {
-    const found = agentSrc ? await agentSrcGrant(env, request.headers.get("authorization"), tenant, repo) : await authorizeGit(env, request.headers.get("authorization"), tenant, repo);
+    const found = authorization ? await authorization : agentSrc ? await agentSrcGrant(env, request.headers.get("authorization"), tenant, repo) : await authorizeGit(env, request.headers.get("authorization"), tenant, repo);
     if (found === "not_found") return new Response("not found\n", { status: 404 });
     if (!found || found === "unauthenticated") return new Response("authentication required\n", { status: 401, headers: { "www-authenticate": 'Basic realm="pimwell git"' } });
     const grant = found;
+    if (authorization) {
+      const [project, named] = repo.split("/");
+      if (agentSrc || grant.tenant.slug !== tenant || grant.tenant.state !== "active" || grant.project.slug !== project
+        || (named ? grant.repository?.name !== named : grant.repository && grant.repository.is_default !== 1))
+        return new Response("not found\n", { status: 404 });
+    }
     const write = service === "git-receive-pack";
     if (write && !grant.write) return new Response("read-only access\n", { status: 403 });
     const api = new ArtifactsRest(env), namespace = artifactNamespace(grant.tenant.slug);
