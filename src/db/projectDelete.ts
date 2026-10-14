@@ -86,10 +86,12 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   ];
   const address = project.namespace_id === null ? `${ctx.tenant!.slug}.${project.slug}@${ctx.env.HUB_DOMAIN}` : "";
   const statement = (sql: string, condition: string) => db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:88:57:statement:c34d43fb*/ " + (sql)).bind(tid, ids, ...(condition.includes("?3") ? [address] : []));
-  for (const [table, condition] of rules) {
-    const n = (await statement(`SELECT COUNT(*) AS n FROM ${table} WHERE ${condition}`, condition).first<{ n: number }>())?.n;
+  const countResults = await db.batch<{ n: number }>(rules.map(([table, condition]) =>
+    statement(`SELECT COUNT(*) AS n FROM ${table} WHERE ${condition}`, condition)));
+  rules.forEach(([table], i) => {
+    const n = countResults[i]!.results[0]?.n;
     if (n) counts[table] = n;
-  }
+  });
   const stmts = [db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:93:18:deleteProject:fba0ca60*/ PRAGMA defer_foreign_keys = true")];
   // Keep other projects' records, detaching only references that can no longer resolve.
   for (const [table, column] of [["work_item", "parent_id"], ["app_error_group", "work_item_id"], ["model_call", "work_item_id"]]) {
@@ -129,14 +131,23 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   const mailIds = (await scoped(`SELECT id FROM inbound_mail WHERE tenant_id = ?1 AND project_id IN (${projects})`).all<{ id: string }>()).results.map(r => r.id);
   const identities = (await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:130:29:deleteProject:5600b7bc*/ SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?`)
     .bind(tid, tid).all<{ identity_id: string }>()).results;
-  for (const { identity_id } of identities) {
-    const n = await inboxStub(ctx.env, tid, identity_id).purgeProject(tid, identity_id, channels, mailIds);
-    if (n) counts.inbox_items = (counts.inbox_items ?? 0) + n;
+  // Drain all workers even on failure: no purge may outlive this deletion attempt.
+  let nextIdentity = 0;
+  const purges = await Promise.allSettled(Array.from({ length: Math.min(10, identities.length) }, async () => {
+    let total = 0;
+    while (nextIdentity < identities.length) {
+      const { identity_id } = identities[nextIdentity++]!;
+      total += await inboxStub(ctx.env, tid, identity_id).purgeProject(tid, identity_id, channels, mailIds);
+    }
+    return total;
+  }));
+  for (const result of purges) {
+    if (result.status === "rejected") throw result.reason;
+    if (result.value) counts.inbox_items = (counts.inbox_items ?? 0) + result.value;
   }
 
   const bucket = ctx.env.GIT_PUSH_STAGING;
-  const files = await scoped(`SELECT COUNT(*) AS n FROM file_revision WHERE tenant_id = ?1 AND project_id IN (${projects})`).first<{ n: number }>();
-  if (!bucket && files?.n) throw new HubError(503, "unavailable", "file storage unavailable; sign in on the web and retry deletion");
+  if (!bucket && counts.file_revision) throw new HubError(503, "unavailable", "file storage unavailable; sign in on the web and retry deletion");
   if (bucket) {
     // Only internal tenant/project ids select storage; trailing slash keeps sibling prefixes disjoint.
     for (const id of [project.id, ...channels]) {

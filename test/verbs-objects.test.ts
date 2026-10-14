@@ -12,7 +12,7 @@ import { conversationStub, inboxStub } from "../src/chat/stubs";
 import { projectDelete, projectCreate } from "../src/verbs/project";
 import { ArtifactsRest, validationRepository } from "../src/code/artifactsRest";
 import { vi } from "vitest";
-import { PROJECT_DELETE_SCOPED_TABLES, PROJECT_DELETE_OTHER_TABLES } from "../src/db/projectDelete";
+import { deleteProject, PROJECT_DELETE_SCOPED_TABLES, PROJECT_DELETE_OTHER_TABLES } from "../src/db/projectDelete";
 import { cleanupFileObjects, FILE_ORPHAN_GRACE_MS, FILE_CLEANUP_CURSOR, FILE_CLEANUP_LIMIT } from "../src/db/fileCleanup";
 import { ulid } from "../src/ids";
 
@@ -393,6 +393,54 @@ describe("project deletion from the web", () => {
     const project = await env.HUB_DB.prepare("SELECT * FROM project WHERE tenant_id = ? AND slug = 'gone'").bind(tenant.id).first<any>();
     return { tenant, blue, admin, member, bot, host, headers, post, form, get, count, project };
   }
+
+  it("batches counts and bounds inbox purges, draining failures before a retry", async () => {
+    const w = await world();
+    for (let i = 0; i < 18; i++) await seedAgent(w.tenant, w.admin.identity, `purge-${i}`);
+    await w.post("project.archive", {slug: "gone"});
+    w.project.state = "archived";
+    const ctx = await buildContext(new Request(`https://${w.host}/`, {headers: w.headers}), env);
+    const countBatches: number[] = [];
+    let countQueries = 0, active = 0, peak = 0, completed = 0, fail = true;
+    const db = {
+      prepare(sql: string) {
+        if (sql.includes("SELECT COUNT(*)")) countQueries++;
+        return env.HUB_DB.prepare(sql);
+      },
+      batch(statements: D1PreparedStatement[]) {
+        countBatches.push(countQueries);
+        countQueries = 0;
+        return env.HUB_DB.batch(statements);
+      },
+    } as D1Database;
+    const purgeProject = async (tenant: string, identity: string, channels: string[], mail: string[]) => {
+      expect(tenant).toBe(w.tenant.id);
+      expect(identity).toBeTruthy();
+      expect(channels).toHaveLength(2);
+      expect(mail).toEqual([]);
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      active--;
+      completed++;
+      if (fail) { fail = false; throw new Error("inbox outage"); }
+      return 1;
+    };
+    const wrapped = {...ctx, db, env: {...env, INBOX: {
+      idFromName: (name: string) => name,
+      get: () => ({purgeProject}),
+    } as unknown as typeof env.INBOX}};
+    await expect(deleteProject(wrapped, w.project)).rejects.toThrow("inbox outage");
+    expect(active).toBe(0);
+    expect(peak).toBe(10);
+    expect(completed).toBe(21);
+    expect(await w.count("project", "id", w.project.id)).toBe(1);
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM event WHERE kind = 'project.delete'").first()).toBeNull();
+    expect(await deleteProject(wrapped, w.project)).toMatchObject({ok: true, counts: {inbox_items: 21, project: 3}});
+    expect(countBatches.filter(n => n > 0)).toEqual([44, 44]);
+    expect(active).toBe(0);
+    expect(await w.count("project", "id", w.project.id)).toBe(0);
+  });
 
   it("lets member agents delete their own active or archived tmp- projects over MCP and API, cascading channels and files", async () => {
     const w = await world(), headers = bearer(w.bot.token);
