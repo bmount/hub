@@ -403,7 +403,7 @@ describe("project deletion from the web", () => {
     const countBatches: number[] = [];
     let countQueries = 0, active = 0, peak = 0, completed = 0, fail = true;
     let conversationActive = 0, conversationCompleted = 0, conversationFail = true;
-    let objectActive = 0, objectPeak = 0;
+    let objectActive = 0, objectPeak = 0, objectFail = false;
     const db = {
       prepare(sql: string) {
         if (sql.includes("SELECT COUNT(*)")) countQueries++;
@@ -451,6 +451,7 @@ describe("project deletion from the web", () => {
         objectPeak = Math.max(objectPeak, objectActive);
         await new Promise(resolve => setTimeout(resolve, 5));
         objectActive--;
+        if (objectFail) { objectFail = false; throw new Error("object outage"); }
         return {objects: [], truncated: false};
       }} as unknown as R2Bucket,
     }};
@@ -464,8 +465,15 @@ describe("project deletion from the web", () => {
     expect(completed).toBe(21);
     expect(await w.count("project", "id", w.project.id)).toBe(1);
     expect(await env.HUB_DB.prepare("SELECT 1 FROM event WHERE kind = 'project.delete'").first()).toBeNull();
+    expect(objectActive).toBe(0);
+    objectFail = true;
+    await expect(deleteProject(wrapped, w.project)).rejects.toThrow("object outage");
+    expect(active).toBe(0);
+    expect(objectActive).toBe(0);
+    expect(await w.count("project", "id", w.project.id)).toBe(1);
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM event WHERE kind = 'project.delete'").first()).toBeNull();
     expect(await deleteProject(wrapped, w.project)).toMatchObject({ok: true, counts: {inbox_items: 21, project: 3}});
-    expect(countBatches.filter(n => n > 0)).toEqual([44, 44, 44]);
+    expect(countBatches.filter(n => n > 0)).toEqual([44, 44, 44, 44]);
     expect(objectPeak).toBe(3);
     expect(objectActive).toBe(0);
     expect(active).toBe(0);

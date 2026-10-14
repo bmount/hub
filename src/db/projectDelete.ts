@@ -57,10 +57,10 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   const groups = `SELECT id FROM app_error_group WHERE tenant_id = ?1 AND project_id IN (${projects})`;
   const proposals = `SELECT id FROM work_proposal WHERE tenant_id = ?1 AND item_id IN (${items})`;
   const scoped = (sql: string) => db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:59:35:scoped:c34d43fb*/ " + (sql)).bind(tid, ids);
-  await db.batch([
+  const archiveStmts = [
     scoped(`UPDATE project SET state = 'archived' WHERE tenant_id = ?1 AND id IN (${projects})`),
     ...channels.map(id => db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:62:27:deleteProject:6a5b395e*/ INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").bind(`project_channel:v1:${tid}:${id}`, project.id)),
-  ]);
+  ];
 
   const counts: Record<string, number> = {};
   const rules: Array<[string, string]> = [
@@ -86,10 +86,12 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   ];
   const address = project.namespace_id === null ? `${ctx.tenant!.slug}.${project.slug}@${ctx.env.HUB_DOMAIN}` : "";
   const statement = (sql: string, condition: string) => db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:88:57:statement:c34d43fb*/ " + (sql)).bind(tid, ids, ...(condition.includes("?3") ? [address] : []));
-  const countResults = await db.batch<{ n: number }>(rules.map(([table, condition]) =>
-    statement(`SELECT COUNT(*) AS n FROM ${table} WHERE ${condition}`, condition)));
+  const countResults = await db.batch<{ n: number }>([
+    ...archiveStmts,
+    ...rules.map(([table, condition]) => statement(`SELECT COUNT(*) AS n FROM ${table} WHERE ${condition}`, condition)),
+  ]);
   rules.forEach(([table], i) => {
-    const n = countResults[i]!.results[0]?.n;
+    const n = countResults[archiveStmts.length + i]!.results[0]?.n;
     if (n) counts[table] = n;
   });
   const stmts = [db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:93:18:deleteProject:fba0ca60*/ PRAGMA defer_foreign_keys = true")];
@@ -140,46 +142,52 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   ]);
   const mailIds = (mailResult!.results as { id: string }[]).map(r => r.id);
   const identities = identityResult!.results as { identity_id: string }[];
-  // Drain all workers even on failure: no purge may outlive this deletion attempt.
-  let nextIdentity = 0;
-  const purges = await Promise.allSettled(Array.from({ length: Math.min(10, identities.length) }, async () => {
-    let total = 0;
-    while (nextIdentity < identities.length) {
-      const { identity_id } = identities[nextIdentity++]!;
-      total += await inboxStub(ctx.env, tid, identity_id).purgeProject(tid, identity_id, channels, mailIds);
-    }
-    return total;
-  }));
-  for (const result of purges) {
-    if (result.status === "rejected") throw result.reason;
-    if (result.value) counts.inbox_items = (counts.inbox_items ?? 0) + result.value;
-  }
-
   const bucket = ctx.env.GIT_PUSH_STAGING;
   if (!bucket && counts.file_revision) throw new HubError(503, "unavailable", "file storage unavailable; sign in on the web and retry deletion");
-  if (bucket) {
-    // Only internal tenant/project ids select storage; trailing slash keeps sibling prefixes disjoint.
-    const fileProjects = [project.id, ...channels];
-    let nextProject = 0;
-    const objects = await Promise.allSettled(Array.from({ length: Math.min(3, fileProjects.length) }, async () => {
+  // Independent stores can be cleaned together, but both must drain on failure.
+  const purgeInboxes = async () => {
+    let nextIdentity = 0;
+    const purges = await Promise.allSettled(Array.from({ length: Math.min(10, identities.length) }, async () => {
       let total = 0;
-      while (nextProject < fileProjects.length) {
-        const id = fileProjects[nextProject++]!;
-        let cursor: string | undefined;
-        do {
-          const page = await bucket.list({ prefix: `project-files/${tid}/${id}/`, cursor });
-          if (page.objects.length) await bucket.delete(page.objects.map(o => o.key));
-          total += page.objects.length;
-          cursor = page.truncated ? page.cursor : undefined;
-        } while (cursor);
+      while (nextIdentity < identities.length) {
+        const { identity_id } = identities[nextIdentity++]!;
+        total += await inboxStub(ctx.env, tid, identity_id).purgeProject(tid, identity_id, channels, mailIds);
       }
       return total;
     }));
-    for (const result of objects) {
+    for (const result of purges) {
       if (result.status === "rejected") throw result.reason;
-      counts.file_objects = (counts.file_objects ?? 0) + result.value;
+      if (result.value) counts.inbox_items = (counts.inbox_items ?? 0) + result.value;
     }
-  }
+
+  };
+  const purgeFiles = async () => {
+    if (bucket) {
+      // Only internal tenant/project ids select storage; trailing slash keeps sibling prefixes disjoint.
+      const fileProjects = [project.id, ...channels];
+      let nextProject = 0;
+      const objects = await Promise.allSettled(Array.from({ length: Math.min(3, fileProjects.length) }, async () => {
+        let total = 0;
+        while (nextProject < fileProjects.length) {
+          const id = fileProjects[nextProject++]!;
+          let cursor: string | undefined;
+          do {
+            const page = await bucket.list({ prefix: `project-files/${tid}/${id}/`, cursor });
+            if (page.objects.length) await bucket.delete(page.objects.map(o => o.key));
+            total += page.objects.length;
+            cursor = page.truncated ? page.cursor : undefined;
+          } while (cursor);
+        }
+        return total;
+      }));
+      for (const result of objects) {
+        if (result.status === "rejected") throw result.reason;
+        counts.file_objects = (counts.file_objects ?? 0) + result.value;
+      }
+    }
+  };
+  const stores = await Promise.allSettled([purgeInboxes(), purgeFiles()]);
+  for (const result of stores) if (result.status === "rejected") throw result.reason;
   if (project.kind === "repo" || project.kind === "workspace") {
     const [mapping, repositoryResult] = await db.batch([
       db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:deleteProject:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
