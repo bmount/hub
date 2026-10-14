@@ -12,7 +12,7 @@ type Target = { identity_id: string; email: string; display_name: string; kind: 
 
 async function target(ctx: Ctx, email: string): Promise<Target> {
   const t = await ctx.db.prepare(
-    `/*perf-site:src%2Fverbs%2Fmember.ts:14:19:t:25b8daf0*/ SELECT i.id AS identity_id, i.email, i.display_name, i.kind, i.is_root, m.role, m.state FROM identity i JOIN membership m ON m.identity_id = i.id
+    `/*perf-site:src%2Fverbs%2Fmember.ts:14:19:target:25b8daf0*/ SELECT i.id AS identity_id, i.email, i.display_name, i.kind, i.is_root, m.role, m.state FROM identity i JOIN membership m ON m.identity_id = i.id
      WHERE m.tenant_id = ? AND i.email = ?`,
   ).bind(ctx.tenant!.id, email.trim().toLowerCase()).first<Target>();
   if (!t || t.state !== "active") throw notFound("no such member here");
@@ -35,7 +35,7 @@ export const memberSetRole = defineVerb({
     const t = await target(ctx, p.email);
     if (t.role === p.role) return { email: t.email, role: p.role, changed: false };
     mayManage(ctx, t.role, p.role);
-    await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fmember.ts:38:11:memberSetRole:aa0916ee*/ UPDATE membership SET role = ? WHERE identity_id = ? AND tenant_id = ?").bind(p.role, t.identity_id, ctx.tenant!.id).run();
+    await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fmember.ts:38:11:memberSetRole.run:aa0916ee*/ UPDATE membership SET role = ? WHERE identity_id = ? AND tenant_id = ?").bind(p.role, t.identity_id, ctx.tenant!.id).run();
     await recordEvent(ctx.db, {
       tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "member.set_role",
       target_kind: "identity", target_id: t.identity_id, summary: `Changed ${t.display_name} <${t.email}> from ${t.role} to ${p.role}`,
@@ -53,8 +53,8 @@ export const memberRemove = defineVerb({
     const t = await target(ctx, p.email);
     mayManage(ctx, t.role, null);
     await ctx.db.batch([
-      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fmember.ts:56:7:memberRemove:18024cbb*/ UPDATE membership SET state = 'archived' WHERE identity_id = ? AND tenant_id = ?").bind(t.identity_id, ctx.tenant!.id),
-      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fmember.ts:57:7:memberRemove:05be31f4*/ UPDATE work_item SET owner_id = NULL, lease_until = NULL WHERE tenant_id = ? AND owner_id = ? AND state IN ('open', 'doing')").bind(ctx.tenant!.id, t.identity_id),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fmember.ts:56:7:memberRemove.run:18024cbb*/ UPDATE membership SET state = 'archived' WHERE identity_id = ? AND tenant_id = ?").bind(t.identity_id, ctx.tenant!.id),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fmember.ts:57:7:memberRemove.run:05be31f4*/ UPDATE work_item SET owner_id = NULL, lease_until = NULL WHERE tenant_id = ? AND owner_id = ? AND state IN ('open', 'doing')").bind(ctx.tenant!.id, t.identity_id),
     ]);
     await recordEvent(ctx.db, {
       tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "member.remove",

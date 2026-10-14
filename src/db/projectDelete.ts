@@ -21,7 +21,7 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   if (!throwaway && project.state !== "archived") throw conflict("archive the project before deleting it");
   const key = projectDeleteKey(tid, project.id);
 
-  const channels = (await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:24:27:channels:663c5180*/ SELECT p.id FROM project p JOIN channel c ON c.project_id = p.id AND c.tenant_id = p.tenant_id
+  const channels = (await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:24:27:deleteProject:663c5180*/ SELECT p.id FROM project p JOIN channel c ON c.project_id = p.id AND c.tenant_id = p.tenant_id
     WHERE p.tenant_id = ? AND p.namespace_id IS NULL AND p.kind = 'channel' AND (
       EXISTS (SELECT 1 FROM meta m WHERE m.key = 'project_channel:v1:' || p.tenant_id || ':' || p.id AND m.value = ?)
       OR (NOT EXISTS (SELECT 1 FROM meta m WHERE m.key = 'project_channel:v1:' || p.tenant_id || ':' || p.id) AND ? IS NULL AND p.created_at = ? AND c.created_at = ? AND (
@@ -40,7 +40,7 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
         WHERE cm.tenant_id = ?3 AND cm.conversation_id IN (SELECT value FROM json_each(?5))
         AND cm.removed_at IS NULL AND cm.identity_id <> ?4 AND i.kind <> 'agent')`;
     // Reauthorize retries too; a deletion marker is not an authorization grant.
-    const r = await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:43:21:r:270933fb*/ INSERT INTO meta (key, value)
+    const r = await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:43:21:deleteProject:270933fb*/ INSERT INTO meta (key, value)
       SELECT ?1, 'deleting' FROM project WHERE id = ?2 AND tenant_id = ?3 AND ${eligible}
       ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
       .bind(key, project.id, tid, ctx.identity!.id, ids).run();
@@ -90,7 +90,7 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
     const n = (await statement(`SELECT COUNT(*) AS n FROM ${table} WHERE ${condition}`, condition).first<{ n: number }>())?.n;
     if (n) counts[table] = n;
   }
-  const stmts = [db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:93:18:stmts:fba0ca60*/ PRAGMA defer_foreign_keys = true")];
+  const stmts = [db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:93:18:deleteProject:fba0ca60*/ PRAGMA defer_foreign_keys = true")];
   // Keep other projects' records, detaching only references that can no longer resolve.
   for (const [table, column] of [["work_item", "parent_id"], ["app_error_group", "work_item_id"], ["model_call", "work_item_id"]]) {
     stmts.push(scoped(`UPDATE ${table} SET ${column} = NULL WHERE tenant_id = ?1 AND ${column} IN (${items}) AND project_id NOT IN (${projects})`));
@@ -127,7 +127,7 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
 
   for (const id of channels) counts.message_versions = (counts.message_versions ?? 0) + await conversationStub(ctx.env, tid, id).purge(tid, id);
   const mailIds = (await scoped(`SELECT id FROM inbound_mail WHERE tenant_id = ?1 AND project_id IN (${projects})`).all<{ id: string }>()).results.map(r => r.id);
-  const identities = (await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:130:29:identities:5600b7bc*/ SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?`)
+  const identities = (await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:130:29:deleteProject:5600b7bc*/ SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?`)
     .bind(tid, tid).all<{ identity_id: string }>()).results;
   for (const { identity_id } of identities) {
     const n = await inboxStub(ctx.env, tid, identity_id).purgeProject(tid, identity_id, channels, mailIds);
@@ -150,11 +150,11 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
     }
   }
   if (project.kind === "repo") {
-    const mapped = await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:mapped:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).first();
+    const mapped = await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:deleteProject:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).first();
     if (!mapped && ctx.env.ARDI_REPO_CREATE === "on") throw conflict("repository is not mapped to Artifacts; migrate it before deleting the project");
     if (mapped) {
       const api = new ArtifactsRest(ctx.env), ns = artifactNamespace(ctx.tenant!.slug);
-      const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:157:29:pushes:7181cbc4*/ SELECT id, namespace, shadow, replay_key FROM git_push WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id)
+      const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:157:29:deleteProject:7181cbc4*/ SELECT id, namespace, shadow, replay_key FROM git_push WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id)
         .all<{ id: string; namespace: string; shadow: string; replay_key: string }>()).results;
       for (const push of pushes) {
         if (push.namespace !== ns) throw conflict("repository staging ownership mismatch");

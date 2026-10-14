@@ -169,9 +169,9 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
     const state = actual.some(update => update.outcome === "unknown") || outcomes.some(update => update.outcome === "unknown") ? "unknown" : "complete";
     const accepted = new Set(actual.filter(update => update.outcome === "ok").map(update => update.ref));
     const commits = introduced.filter(commit => accepted.has(commit.ref));
-    const row = await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:172:23:row:4594633d*/ SELECT seq, identity_id FROM git_push WHERE id = ?").bind(id).first<{ seq: number; identity_id: string | null }>();
+    const row = await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:172:23:artifactPush:4594633d*/ SELECT seq, identity_id FROM git_push WHERE id = ?").bind(id).first<{ seq: number; identity_id: string | null }>();
     const now = Date.now();
-    const events = commits.map((commit, index) => db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:174:51:events:75c5e4bf*/ INSERT OR IGNORE INTO code_event (tenant_id, project_id, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, 'commit', ?, ?, ?, ?, ?, ?)`)
+    const events = commits.map((commit, index) => db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:174:51:artifactPush:75c5e4bf*/ INSERT OR IGNORE INTO code_event (tenant_id, project_id, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, 'commit', ?, ?, ?, ?, ?, ?)`)
       .bind(grant.tenant.id, grant.project.id, 1_000_000_000_000 + row!.seq * 8192 + 4096 + index, row!.identity_id, grant.session.id, commit.ref, commit.hash, commit.summary, now));
     for (let offset = 0; offset < events.length; offset += 100) await db.batch(events.slice(offset, offset + 100));
     await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:177:11:artifactPush:0225ad0d*/ UPDATE git_push SET state = ?, outcomes_json = ?, published_json = ?, commits_json = ?, completed_at = ? WHERE id = ?").bind(state, JSON.stringify(outcomes), JSON.stringify(actual), JSON.stringify(commits), now, id).run();

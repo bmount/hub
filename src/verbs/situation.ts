@@ -54,7 +54,7 @@ export const situationResolve = defineVerb({
   },
   parse: (i) => ({ id: reqString(i, "id", { max: 40 }), outcome: reqString(i, "outcome", { max: 4000 }) }),
   run: async (ctx, p) => {
-    const r = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsituation.ts:57:21:r:ad9eacfb*/ UPDATE situation SET outcome = ?, outcome_by = ?, outcome_at = ? WHERE id = ? AND tenant_id = ?").bind(p.outcome.trim(), ctx.identity!.id, ctx.now, p.id, ctx.tenant!.id).run();
+    const r = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsituation.ts:57:21:situationResolve.run:ad9eacfb*/ UPDATE situation SET outcome = ?, outcome_by = ?, outcome_at = ? WHERE id = ? AND tenant_id = ?").bind(p.outcome.trim(), ctx.identity!.id, ctx.now, p.id, ctx.tenant!.id).run();
     if (!r.meta.changes) throw notFound("no such situation");
     return { id: p.id };
   },
@@ -69,5 +69,5 @@ export const situationList = defineVerb({
     render: (r) => { const x = (r as { situations: Array<{ id: string; title: string; report: string; outcome: string | null }> }).situations; return [DATA_NOTE, "", ...x.map((s) => `- \`${s.id}\` ${cleanText(s.title)}${s.outcome ? ` — outcome: ${cleanText(s.outcome).slice(0, 200)}` : ""}\n  ${cleanText(s.report).slice(0, 400)}`)].join("\n"); },
   },
   parse: () => ({}),
-  run: async (ctx) => ({ situations: (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsituation.ts:72:45:situationList:d4a45c5a*/ SELECT s.id, s.title, s.report, s.outcome, s.created_at, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id WHERE s.tenant_id = ? ORDER BY s.created_at DESC LIMIT 50").bind(ctx.tenant!.id).all()).results }),
+  run: async (ctx) => ({ situations: (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsituation.ts:72:45:situationList.run:d4a45c5a*/ SELECT s.id, s.title, s.report, s.outcome, s.created_at, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id WHERE s.tenant_id = ? ORDER BY s.created_at DESC LIMIT 50").bind(ctx.tenant!.id).all()).results }),
 });

@@ -38,6 +38,6 @@ export function getIdentityById(db: D1Database, id: string): Promise<Identity | 
 }
 
 export async function rootExists(db: D1Database): Promise<boolean> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fidentities.ts:41:19:r:40e733b2*/ SELECT 1 FROM identity WHERE is_root = 1 AND state = 'active' LIMIT 1").first();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fidentities.ts:41:19:rootExists:40e733b2*/ SELECT 1 FROM identity WHERE is_root = 1 AND state = 'active' LIMIT 1").first();
   return r !== null;
 }

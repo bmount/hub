@@ -44,7 +44,7 @@ export async function agentSrcGrant(env: Env, authorization: string | null, tena
   const access = agent ? agentSrcAccess(caller, agent) : null;
   if (!agent || !access) return "not_found";
   const slug = agentSrcSlug(agent.id);
-  let project = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:47:23:project:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = ?").bind(caller.tenant.id, slug, AGENT_SRC).first<{ id: string; slug: string }>();
+  let project = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:47:23:agentSrcGrant:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = ?").bind(caller.tenant.id, slug, AGENT_SRC).first<{ id: string; slug: string }>();
   if (!project) {
     if (!access.write) return "not_found";
     project = await createAgentSrc(env, caller.tenant, agent, slug, now);
@@ -59,7 +59,7 @@ async function createAgentSrc(env: Env, tenant: Tenant, agent: Identity, slug: s
   await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:59:9:createAgentSrc:2cbef356*/ INSERT INTO project (id, tenant_id, namespace_id, slug, kind, display_name, state, created_at) VALUES (?, ?, NULL, ?, ?, ?, 'active', ?) ON CONFLICT DO NOTHING")
     .bind(id, tenant.id, slug, AGENT_SRC, `${agent.display_name} (agent source)`, now).run();
   // Two first pushes at once: whoever inserted first owns the row; the other uses it.
-  const project = (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:62:26:project:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = ?").bind(tenant.id, slug, AGENT_SRC).first<{ id: string; slug: string }>())!;
+  const project = (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:62:26:createAgentSrc:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = ?").bind(tenant.id, slug, AGENT_SRC).first<{ id: string; slug: string }>())!;
   const api = new ArtifactsRest(env), namespace = artifactNamespace(tenant.slug), ownership = repoOwnership(tenant.id, project.id);
   try {
     const info = await api.info(namespace, slug);

@@ -48,7 +48,7 @@ function plan(db: D1Database, actor: Actor, g: Graph, change: ProposalChange, sl
 }
 
 export async function getProposal(db: D1Database, tenant_id: string, id: string): Promise<Proposal> {
-  const p = await db.prepare(`/*perf-site:src%2Fwork%2Fproposals.ts:51:19:p:d73605b5*/ SELECT p.*, d.decision, d.note, d.result_json, d.decided_by, d.decided_at FROM work_proposal p
+  const p = await db.prepare(`/*perf-site:src%2Fwork%2Fproposals.ts:51:19:getProposal:d73605b5*/ SELECT p.*, d.decision, d.note, d.result_json, d.decided_by, d.decided_at FROM work_proposal p
     LEFT JOIN work_proposal_decision d ON d.proposal_id = p.id WHERE p.id = ? AND p.tenant_id = ?`).bind(id, tenant_id).first<Proposal>();
   if (!p) throw notFound("no such proposal");
   return p;

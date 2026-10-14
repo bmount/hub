@@ -52,9 +52,9 @@ export type PerfScope = {where:string;scripts:string[]};
 /** SQL credentials are account-wide; product authorization is checked before every cache lookup. */
 export async function performanceScope(ctx:Ctx, site:SiteRow, hours:number):Promise<PerfScope> {
   if(!ctx.tenant || !ctx.identity || !ctx.role || site.tenant_id!==ctx.tenant.id || (ctx.mcpProject && ctx.mcpProject.id!==site.project_id)) throw notFound("no such site");
-  const project=await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:55:23:project:e8c7cd55*/ SELECT id FROM project WHERE id = ? AND tenant_id = ? AND kind = 'repo' AND state = 'active'").bind(site.project_id,ctx.tenant.id).first();
+  const project=await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:55:23:performanceScope:e8c7cd55*/ SELECT id FROM project WHERE id = ? AND tenant_id = ? AND kind = 'repo' AND state = 'active'").bind(site.project_id,ctx.tenant.id).first();
   if(!project) throw notFound("no such site");
-  const scripts=(await ctx.db.prepare(`/*perf-site:src%2Fapps%2Fperformance.ts:57:24:scripts:7a84f38e*/ SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
+  const scripts=(await ctx.db.prepare(`/*perf-site:src%2Fapps%2Fperformance.ts:57:24:performanceScope:7a84f38e*/ SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
     WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? AND a.state = 'active' ORDER BY a.script_name`).bind(site.id,ctx.tenant.id,site.project_id).all<{script_name:string}>()).results.map(r=>r.script_name);
   const hash=await tenantHash(ctx.tenant.id,ctx.env.PERF_TENANT_KEY??ctx.env.HUB_INTERNAL_SECRET??ctx.env.HUB_SECRETS_KEY??"");
   if(!hash) throw new PerformanceUnavailable("Performance tenant identity is not configured.");

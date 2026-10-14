@@ -6,14 +6,14 @@ export type PrivateChat = ChannelRow & { kind: "direct" | "group"; members: stri
 const prefix = (tenant: string) => `private_chat:v1:${tenant}:`;
 
 export async function privateChats(db: D1Database, tenant: string): Promise<PrivateChat[]> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:9:19:r:4bfbf8e2*/ SELECT value FROM meta WHERE key GLOB ? ORDER BY key").bind(`${prefix(tenant)}*`).all<{ value: string }>();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:9:19:privateChats:4bfbf8e2*/ SELECT value FROM meta WHERE key GLOB ? ORDER BY key").bind(`${prefix(tenant)}*`).all<{ value: string }>();
   return r.results.map(r => JSON.parse(r.value) as PrivateChat);
 }
 
 export async function privateChat(db: D1Database, tenant: string, idOrSlug: string): Promise<PrivateChat | null> {
   const id = idOrSlug.replace(/^(dm|group)-/, "").toUpperCase();
   if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)) return null;
-  const row = await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:16:21:row:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(prefix(tenant) + id).first<{ value: string }>();
+  const row = await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:16:21:privateChat:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(prefix(tenant) + id).first<{ value: string }>();
   if (!row) return null;
   const chat = JSON.parse(row.value) as PrivateChat;
   return idOrSlug === chat.slug || idOrSlug === chat.project_id ? chat : null;
@@ -27,7 +27,7 @@ export async function openPrivateChat(db: D1Database, tenant: string, caller: st
   const key = replayPrefix + clientId;
   await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:28:9:openPrivateChat:a330b83a*/ DELETE FROM meta WHERE key GLOB ? AND json_extract(value, '$.created_at') <= ?").bind(`${replayPrefix}*`, now - 86_400_000).run();
   const prior = async () => {
-    const row = await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:30:23:row:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key).first<{ value: string }>();
+    const row = await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:30:23:prior:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key).first<{ value: string }>();
     if (!row) return null;
     const stored = JSON.parse(row.value) as { intent: string; id: string };
     if (stored.intent !== intent) throw conflict("client_id is bound to a different chat opening intent");

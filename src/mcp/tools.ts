@@ -151,7 +151,7 @@ export async function callTool(ctx: Ctx, name: string, args: Record<string, unkn
       if (verb.name.startsWith("work.")) {
         // A cross-project dependency/resource must not reveal another project's work
         // or silently change readiness. Use the organization endpoint for such graphs.
-        const outside = await ctx.db.prepare(`/*perf-site:src%2Fmcp%2Ftools.ts:154:31:outside:3beed974*/ SELECT 1 FROM work_dep d
+        const outside = await ctx.db.prepare(`/*perf-site:src%2Fmcp%2Ftools.ts:154:31:callTool:3beed974*/ SELECT 1 FROM work_dep d
           JOIN work_item a ON a.id = d.prereq_id JOIN work_item b ON b.id = d.dependent_id
           WHERE d.tenant_id = ? AND ((a.project_id = ? AND b.project_id != ?) OR (b.project_id = ? AND a.project_id != ?))
           UNION ALL SELECT 1 FROM work_resource a JOIN work_resource b ON a.name = b.name

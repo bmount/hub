@@ -45,9 +45,9 @@ export async function agentRecipientRefusals(ctx: Ctx, recipients: string[]): Pr
   const out: string[] = [];
   for (const r of recipients) {
     const [member, known] = await ctx.db.batch([
-      ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:48:7:%5Bmember%2C%20known%5D:eee56f87*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id WHERE lower(i.email) = ? AND i.kind = 'human' AND i.state = 'active'
+      ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:48:7:agentRecipientRefusals:eee56f87*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id WHERE lower(i.email) = ? AND i.kind = 'human' AND i.state = 'active'
         AND m.tenant_id = ? AND m.state = 'active' LIMIT 1`).bind(r, ctx.tenant!.id),
-      ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:50:7:%5Bmember%2C%20known%5D:db98becf*/ SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND recipient_id = ? AND verdict = 'admitted'
+      ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:50:7:agentRecipientRefusals:db98becf*/ SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND recipient_id = ? AND verdict = 'admitted'
         AND (from_email = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(inbound_mail.copied, '[]')) WHERE value = ?)) LIMIT 1`).bind(ctx.tenant!.id, ctx.identity!.id, r, r),
     ]);
     if (!member!.results.length) out.push(`${r} is not a member of this organization with an active human membership; an administrator must set up membership for this exact address before an agent can write to it. Root authority or incoming mail admission does not replace membership`);
@@ -57,7 +57,7 @@ export async function agentRecipientRefusals(ctx: Ctx, recipients: string[]): Pr
 }
 
 export async function capsAndSwitch(ctx: Ctx): Promise<void> {
-  const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:60:19:r:44fcc385*/ SELECT t.mail_out,
+  const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:60:19:capsAndSwitch:44fcc385*/ SELECT t.mail_out,
       (SELECT COUNT(*) FROM outbound_mail WHERE sent_by = ? AND status = 'sent' AND created_at > ?) AS mine,
       (SELECT COUNT(*) FROM outbound_mail WHERE tenant_id = t.id AND status = 'sent' AND created_at > ?) AS ours
     FROM tenant t WHERE t.id = ?`).bind(ctx.identity!.id, ctx.now - 86_400_000, ctx.now - 86_400_000, ctx.tenant!.id).first<{ mail_out: number; mine: number; ours: number }>();
@@ -114,7 +114,7 @@ export const mailReply = defineVerb({
   parse: (i) => ({ id: reqString(i, "id", { max: 40 }), body: body(i), all: i.all === true || i.all === "1" || i.all === "true" }),
   run: async (ctx, p) => {
     const access = readableMail(ctx);
-    const m = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:117:21:m:41c9b32c*/ SELECT m.id, m.from_email, m.to_address, m.subject, m.message_id, m.received_at, m.verdict, m.recipient_id, m.copied FROM inbound_mail m WHERE m.id = ? AND ${access.sql}`).bind(p.id, ...access.bindings)
+    const m = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:117:21:mailReply.run:41c9b32c*/ SELECT m.id, m.from_email, m.to_address, m.subject, m.message_id, m.received_at, m.verdict, m.recipient_id, m.copied FROM inbound_mail m WHERE m.id = ? AND ${access.sql}`).bind(p.id, ...access.bindings)
       .first<{ id: string; from_email: string; to_address: string; subject: string; message_id: string | null; received_at: number; verdict: string; recipient_id: string | null; copied: string | null }>();
     if (!m || m.verdict !== "admitted") throw notFound("no such message");
     if (m.recipient_id ? m.recipient_id !== ctx.identity!.id : ctx.identity!.kind !== "human") throw forbidden(m.recipient_id ? "only the agent it was sent to replies to it" : "people reply to the organization's and projects' mail");
@@ -130,7 +130,7 @@ export const mailReply = defineVerb({
       }
     }
     const subject = /^re:/i.test(m.subject) ? m.subject : `Re: ${m.subject || "your message"}`;
-    const earlier = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:133:28:earlier:04887000*/ SELECT o.id FROM outbound_mail o WHERE o.in_reply_to = ? AND o.status = 'sent' ORDER BY o.created_at").bind(m.id).all<{ id: string }>()).results.map((o) => `<${o.id}@${ctx.env.HUB_DOMAIN}>`);
+    const earlier = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:133:28:mailReply.run:04887000*/ SELECT o.id FROM outbound_mail o WHERE o.in_reply_to = ? AND o.status = 'sent' ORDER BY o.created_at").bind(m.id).all<{ id: string }>()).results.map((o) => `<${o.id}@${ctx.env.HUB_DOMAIN}>`);
     const notice = skipped.length
       ? `Reply-all omitted: ${skipped.join(", ")}. No mail was sent to these addresses. Recipients must join this organization or accept its membership invitation, with an active human membership for their exact email address set up by an administrator, and must have written to this agent or been copied on admitted mail to it. Membership checks cannot be bypassed by external mail.`
       : undefined;
@@ -171,7 +171,7 @@ export const mailSend = defineVerb({
       from = ctx.identity!.email;
     } else {
       if (!p.from_project) throw badRequest("people send from a project's address: give from_project");
-      const pr = await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:174:24:pr:f365a4f2*/ SELECT slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active' AND (? IS NULL OR id = ?)").bind(ctx.tenant!.id, p.from_project.toLowerCase(), ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first<{ slug: string }>();
+      const pr = await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:174:24:mailSend.run:f365a4f2*/ SELECT slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active' AND (? IS NULL OR id = ?)").bind(ctx.tenant!.id, p.from_project.toLowerCase(), ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first<{ slug: string }>();
       if (!pr) throw notFound("no such project");
       from = `${ctx.tenant!.slug}.${pr.slug}@${ctx.env.HUB_DOMAIN}`;
     }
@@ -186,7 +186,7 @@ export const mailSend = defineVerb({
     if (p.to.length > 1 || p.cc.length) throw badRequest("people send to one address at a time");
     const one = p.to[0]!;
     const r = await deliver(ctx, { from, to: one, inbound_id: null, message_id: null }, p.subject, p.body, [], async () => {
-      const wrote = await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:189:27:wrote:5573f4de*/ SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND from_email = ? AND to_address = ? AND verdict = 'admitted' AND received_at > ? AND (? IS NULL OR project_id = ?) LIMIT 1")
+      const wrote = await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:189:27:mailSend.run:5573f4de*/ SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND from_email = ? AND to_address = ? AND verdict = 'admitted' AND received_at > ? AND (? IS NULL OR project_id = ?) LIMIT 1")
         .bind(ctx.tenant!.id, one, from, ctx.now - REPLY_WINDOW_MS, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first();
       if (!wrote) throw new HubError(403, "forbidden", `Pimwell writes only to people who wrote to ${from} in the last 30 days`, { mail_block: "reply_window" });
       await capsAndSwitch(ctx);
@@ -201,7 +201,7 @@ export const mailSending = defineVerb({
   parse: (i) => ({ on: i.on === true || i.on === "1" || i.on === "true" }),
   run: async (ctx, p) => {
     if (rank(ctx.role) < rank("admin")) throw forbidden();
-    await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:204:11:mailSending:40425880*/ UPDATE tenant SET mail_out = ? WHERE id = ?").bind(p.on ? 1 : 0, ctx.tenant!.id).run();
+    await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:204:11:mailSending.run:40425880*/ UPDATE tenant SET mail_out = ? WHERE id = ?").bind(p.on ? 1 : 0, ctx.tenant!.id).run();
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "mail.sending", target_kind: "tenant", target_id: ctx.tenant!.id, summary: `Turned outbound mail ${p.on ? "on" : "off"}` }, ctx.now);
     return { on: p.on };
   },

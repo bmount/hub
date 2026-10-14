@@ -168,6 +168,8 @@ describe("request tracing guardrails", () => {
     const first=entries.find(([,value])=>entries.some(([,other])=>other!==value&&other.text===value.text))!;
     const second=entries.find(([,value])=>value!==first[1]&&value.text===first[1].text)!;
     expect(first).toBeDefined();expect(second).toBeDefined();
+    const sessionQuery=entries.find(([,value])=>value.sites[0]?.file==="src/auth/context.ts"&&value.text.startsWith("select * from session where"))!;
+    expect(sessionQuery[1].sites[0]!.fn).toBe("prefetch");
     const statement={bind(){return this;},async all(){return {results:[],meta:{duration:1,rows_read:0,rows_written:0}};}};
     const raw={prepare(){return statement;}} as unknown as D1Database;
     const trace=newTrace(), db=meteredD1(raw,{trips:0,statements:0,ms:0});

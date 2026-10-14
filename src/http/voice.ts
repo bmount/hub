@@ -31,10 +31,10 @@ export async function vocabulary(ctx: Ctx): Promise<Vocabulary> {
   const scope = t ? "= ?" : "IN (SELECT tenant_id FROM membership WHERE identity_id = ? AND state = 'active')";
   const key = t ? t.id : ctx.identity!.id;
   const [projR, peopleR, orgR] = await ctx.db.batch([
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2Fvoice.ts:34:5:%5BprojR%2C%20peopleR%2C%20orgR%5D:dd7b5966*/ SELECT slug, display_name AS name FROM project WHERE tenant_id ${scope} AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name LIMIT 60`).bind(key),
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2Fvoice.ts:35:5:%5BprojR%2C%20peopleR%2C%20orgR%5D:a0cbbabb*/ SELECT DISTINCT i.display_name AS name, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2Fvoice.ts:34:5:vocabulary:dd7b5966*/ SELECT slug, display_name AS name FROM project WHERE tenant_id ${scope} AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name LIMIT 60`).bind(key),
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2Fvoice.ts:35:5:vocabulary:a0cbbabb*/ SELECT DISTINCT i.display_name AS name, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id
       WHERE m.tenant_id ${scope} AND m.state = 'active' AND i.state = 'active' ORDER BY i.display_name LIMIT 100`).bind(key),
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2Fvoice.ts:37:5:%5BprojR%2C%20peopleR%2C%20orgR%5D:19d08f16*/ SELECT display_name AS name, slug FROM tenant WHERE id ${scope} AND state = 'active' ORDER BY display_name LIMIT 20`).bind(key),
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2Fvoice.ts:37:5:vocabulary:19d08f16*/ SELECT display_name AS name, slug FROM tenant WHERE id ${scope} AND state = 'active' ORDER BY display_name LIMIT 20`).bind(key),
   ]);
   const people = peopleR!.results as Array<{ name: string; kind: string }>;
   const orgs = orgR!.results as Array<{ name: string; slug: string }>;

@@ -874,7 +874,7 @@ export class Conversation extends DurableObject<Env> {
   async #wakeGate(now: number): Promise<(identity_id: string) => boolean> {
     const [controls, ch] = await Promise.all([
       getControls(this.env.HUB_DB, this.#tenant, now),
-      this.env.HUB_DB.prepare("/*perf-site:src%2Fchat%2FconversationDO.ts:877:7:%5Bcontrols%2C%20ch%5D:b5cfad71*/ SELECT agent_policy FROM channel WHERE project_id = ? AND tenant_id = ?").bind(this.#id, this.#tenant).first<{ agent_policy: string }>(),
+      this.env.HUB_DB.prepare("/*perf-site:src%2Fchat%2FconversationDO.ts:877:7:Conversation.%23wakeGate:b5cfad71*/ SELECT agent_policy FROM channel WHERE project_id = ? AND tenant_id = ?").bind(this.#id, this.#tenant).first<{ agent_policy: string }>(),
     ]);
     if (!controls.agents_enabled || ch?.agent_policy === "muted") return () => false;
     const muted = new Set(controls.muted);
@@ -985,14 +985,14 @@ export class Conversation extends DurableObject<Env> {
     const stmts: D1PreparedStatement[] = [];
     const retracted = (JSON.parse(a.meta_json) as Meta).retracted === true;
     stmts.push(db.prepare(
-      `/*perf-site:src%2Fchat%2FconversationDO.ts:987:16:%23indexStatements:cdfa34f8*/ INSERT OR IGNORE INTO msg_index (tenant_id, conversation_id, msg_id, seq, rev, kind, author_id, session_id, thread_root, hop, title, state, created_at)
+      `/*perf-site:src%2Fchat%2FconversationDO.ts:987:16:Conversation.%23indexStatements:cdfa34f8*/ INSERT OR IGNORE INTO msg_index (tenant_id, conversation_id, msg_id, seq, rev, kind, author_id, session_id, thread_root, hop, title, state, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
     ).bind(this.#tenant, this.#id, a.msg_id, a.seq, a.rev, a.kind, a.author_id, a.session_id, a.thread_root, a.hop, retracted ? "retracted" : "live", a.created_at));
-    if (a.rev > 1) stmts.push(db.prepare("/*perf-site:src%2Fchat%2FconversationDO.ts:991:31:%23indexStatements:1b25df58*/ DELETE FROM msg_ref WHERE conversation_id = ? AND msg_id = ? AND rev < ?").bind(this.#id, a.msg_id, a.rev));
+    if (a.rev > 1) stmts.push(db.prepare("/*perf-site:src%2Fchat%2FconversationDO.ts:991:31:Conversation.%23indexStatements:1b25df58*/ DELETE FROM msg_ref WHERE conversation_id = ? AND msg_id = ? AND rev < ?").bind(this.#id, a.msg_id, a.rev));
     for (const r of this.#q<{ kind: string; key: string }>("SELECT kind, key FROM ref WHERE seq = ?", seq)) {
       // Skipped when a newer version is already indexed: an old flush arriving late must not bring back refs the newer one replaced (B-I3).
       stmts.push(db.prepare(
-        `/*perf-site:src%2Fchat%2FconversationDO.ts:994:18:%23indexStatements:e9500c39*/ INSERT OR IGNORE INTO msg_ref (tenant_id, target_kind, target_key, conversation_id, msg_id, rev, seq, msg_kind, author_id, created_at)
+        `/*perf-site:src%2Fchat%2FconversationDO.ts:994:18:Conversation.%23indexStatements:e9500c39*/ INSERT OR IGNORE INTO msg_ref (tenant_id, target_kind, target_key, conversation_id, msg_id, rev, seq, msg_kind, author_id, created_at)
          SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
           WHERE NOT EXISTS (SELECT 1 FROM msg_index WHERE conversation_id = ?4 AND msg_id = ?5 AND rev > ?6)`,
       ).bind(this.#tenant, r.kind, r.key, this.#id, a.msg_id, a.rev, a.seq, a.kind, a.author_id, a.created_at));

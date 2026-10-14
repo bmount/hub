@@ -30,7 +30,7 @@ async function recipientsAllowed(ctx: Ctx, recipients: string[]) {
     const refused = await agentRecipientRefusals(ctx, recipients);
     if (refused.length) throw forbidden(refused.join("; "));
   } else for (const r of recipients) {
-    const member = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fdoc.ts:33:26:member:eee56f87*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id
+    const member = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fdoc.ts:33:26:recipientsAllowed:eee56f87*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id
       WHERE lower(i.email) = ? AND i.kind = 'human' AND i.state = 'active' AND m.tenant_id = ? AND m.state = 'active' LIMIT 1`).bind(r, ctx.tenant!.id).first();
     if (!member) throw forbidden(`${r} is not an active human member of this organization`);
   }

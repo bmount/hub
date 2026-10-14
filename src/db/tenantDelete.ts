@@ -21,26 +21,26 @@ const TENANT_TABLES = [
 export type DeleteResult = { tenant_id: string; slug: string; counts: Record<string, number>; agents_deleted: number };
 
 export async function deleteTenant(db: D1Database, slug: string, deleted_by: string, now: number): Promise<DeleteResult> {
-  const t = await db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:24:19:t:ed9f2a92*/ SELECT id, slug, display_name, state FROM tenant WHERE slug = ?").bind(slug)
+  const t = await db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:24:19:deleteTenant:ed9f2a92*/ SELECT id, slug, display_name, state FROM tenant WHERE slug = ?").bind(slug)
     .first<{ id: string; slug: string; display_name: string; state: string }>();
   if (!t) throw notFound("no such organization");
   if (t.state !== "archived") throw conflict("archive the organization before deleting it");
 
   const counts: Record<string, number> = {};
   for (const table of TENANT_TABLES) {
-    const r = await db.prepare(`/*perf-site:src%2Fdb%2FtenantDelete.ts:31:21:r:1a14f12c*/ SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ?`).bind(t.id).first<{ n: number }>();
+    const r = await db.prepare(`/*perf-site:src%2Fdb%2FtenantDelete.ts:31:21:deleteTenant:1a14f12c*/ SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ?`).bind(t.id).first<{ n: number }>();
     if (r && r.n) counts[table] = r.n;
   }
   // Agents that belong only to this organization go with it.
   const agents = (await db.prepare(
-    `/*perf-site:src%2Fdb%2FtenantDelete.ts:35:25:agents:887178ff*/ SELECT i.id FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ?
+    `/*perf-site:src%2Fdb%2FtenantDelete.ts:35:25:deleteTenant:887178ff*/ SELECT i.id FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ?
      WHERE i.kind = 'agent' AND NOT EXISTS (SELECT 1 FROM membership o WHERE o.identity_id = i.id AND o.tenant_id != ?)`,
   ).bind(t.id, t.id).all<{ id: string }>()).results.map((r) => r.id);
   if (agents.length) counts.identity = agents.length;
-  const links = await db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:40:23:links:82019f4a*/ SELECT COUNT(*) AS n FROM work_link WHERE item_id IN (SELECT id FROM work_item WHERE tenant_id = ?)").bind(t.id).first<{ n: number }>();
+  const links = await db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:40:23:deleteTenant:82019f4a*/ SELECT COUNT(*) AS n FROM work_link WHERE item_id IN (SELECT id FROM work_item WHERE tenant_id = ?)").bind(t.id).first<{ n: number }>();
   if (links?.n) counts.work_link = links.n;
 
-  const stmts: D1PreparedStatement[] = [db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:43:41:stmts:fba0ca60*/ PRAGMA defer_foreign_keys = true")];
+  const stmts: D1PreparedStatement[] = [db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:43:41:deleteTenant:fba0ca60*/ PRAGMA defer_foreign_keys = true")];
   // Replay records live in existing meta until a dedicated schema
   // is authorized. Tenant ids are internal ULIDs; the trailing colon scopes them.
   stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:46:14:deleteTenant:bb48d152*/ DELETE FROM meta WHERE substr(key, 1, length(?)) = ?").bind(`project_channel:v1:${t.id}:`, `project_channel:v1:${t.id}:`));

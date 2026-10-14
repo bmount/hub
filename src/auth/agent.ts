@@ -16,7 +16,7 @@ export async function operatorActiveIn(db: D1Database, operator_id: string | nul
 export async function agentCredentialOk(db: D1Database, agent: Identity, tenant_id: string, parent_token_id: string | null): Promise<boolean> {
   if (agent.kind !== "agent" || agent.state !== "active") return false;
   if (parent_token_id !== null) {
-    const t = await db.prepare("/*perf-site:src%2Fauth%2Fagent.ts:19:21:t:f899664f*/ SELECT identity_id, tenant_id, revoked_at FROM api_token WHERE id = ?")
+    const t = await db.prepare("/*perf-site:src%2Fauth%2Fagent.ts:19:21:agentCredentialOk:f899664f*/ SELECT identity_id, tenant_id, revoked_at FROM api_token WHERE id = ?")
       .bind(parent_token_id).first<{ identity_id: string; tenant_id: string; revoked_at: number | null }>();
     if (!t || t.revoked_at !== null || t.identity_id !== agent.id || t.tenant_id !== tenant_id) return false;
   }

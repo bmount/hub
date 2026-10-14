@@ -85,8 +85,8 @@ export async function resolve(ctx: Ctx, intent: Intent): Promise<Outcome> {
   const p = intent.params, say = intent.say;
   const str = (k: string) => (typeof p[k] === "string" ? (p[k] as string) : "");
   const [projR, peopleR] = await ctx.db.batch([
-    ctx.db.prepare("/*perf-site:src%2Fintent%2Fresolve.ts:88:5:%5BprojR%2C%20peopleR%5D:e9814ffa*/ SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name").bind(ctx.tenant!.id),
-    ctx.db.prepare(`/*perf-site:src%2Fintent%2Fresolve.ts:89:5:%5BprojR%2C%20peopleR%5D:0f12982b*/ SELECT i.id, i.display_name AS name, i.email, i.kind, i.operator_id FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' ORDER BY i.display_name`).bind(ctx.tenant!.id),
+    ctx.db.prepare("/*perf-site:src%2Fintent%2Fresolve.ts:88:5:resolve:e9814ffa*/ SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name").bind(ctx.tenant!.id),
+    ctx.db.prepare(`/*perf-site:src%2Fintent%2Fresolve.ts:89:5:resolve:0f12982b*/ SELECT i.id, i.display_name AS name, i.email, i.kind, i.operator_id FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' ORDER BY i.display_name`).bind(ctx.tenant!.id),
   ]);
   const projects = projR!.results as Project[], people = peopleR!.results as Person[];
   const findProject = (said: string) => bestMatch(said, projects, (x) => [x.slug, x.name]);

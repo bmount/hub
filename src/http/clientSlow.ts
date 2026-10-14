@@ -23,7 +23,7 @@ export async function clientSlow(request: Request, env: Env, waitUntil: (p: Prom
       !Number.isSafeInteger(x.duration) || (x.duration as number) < 0 || (x.duration as number) > 3_600_000 ||
       !(x.status === null || (Number.isInteger(x.status) && (x.status as number) >= 100 && (x.status as number) <= 599))) return reply(400);
   // Use only this tenant's approved source; never let a client choose a source or another tenant's group.
-  const source = await ctx.db.prepare("/*perf-site:src%2Fhttp%2FclientSlow.ts:26:24:source:d7c3b932*/ SELECT s.project_id FROM app_source s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id WHERE s.tenant_id = ? AND s.script_name = 'pimwell-hub' AND s.state = 'active' AND p.state = 'active'").bind(ctx.tenant.id).first<{ project_id: string }>();
+  const source = await ctx.db.prepare("/*perf-site:src%2Fhttp%2FclientSlow.ts:26:24:clientSlow:d7c3b932*/ SELECT s.project_id FROM app_source s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id WHERE s.tenant_id = ? AND s.script_name = 'pimwell-hub' AND s.state = 'active' AND p.state = 'active'").bind(ctx.tenant.id).first<{ project_id: string }>();
   if (!source) return reply(204);
   const fingerprint = await sha256Hex(`${ctx.tenant.id}|client|${x.path}|${x.phase}|${x.result}`);
   const title = `Browser ${x.result}: ${x.path} (${x.phase})`;

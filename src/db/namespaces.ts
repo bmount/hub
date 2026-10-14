@@ -10,7 +10,7 @@ export async function createNamespace(
 ): Promise<Namespace> {
   if (!isValidSlug(input.slug)) throw badRequest("invalid namespace slug");
   if (!input.display_name.trim()) throw badRequest("display_name required");
-  const clash = await db.prepare("/*perf-site:src%2Fdb%2Fnamespaces.ts:13:23:clash:f290d79f*/ SELECT 1 FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = ?")
+  const clash = await db.prepare("/*perf-site:src%2Fdb%2Fnamespaces.ts:13:23:createNamespace:f290d79f*/ SELECT 1 FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = ?")
     .bind(input.tenant_id, input.slug).first();
   if (clash) throw conflict("slug is used by a top-level project");
   const row: Namespace = { id: ulid(now), tenant_id: input.tenant_id, slug: input.slug, display_name: input.display_name.trim(), state: "active", created_at: now };
@@ -33,14 +33,14 @@ export function getNamespaceById(db: D1Database, tenant_id: string, id: string):
 }
 
 export async function listNamespaces(db: D1Database, tenant_id: string, state: State): Promise<Namespace[]> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fnamespaces.ts:36:19:r:3e665f25*/ SELECT * FROM namespace WHERE tenant_id = ? AND state = ? ORDER BY slug").bind(tenant_id, state).all<Namespace>();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fnamespaces.ts:36:19:listNamespaces:3e665f25*/ SELECT * FROM namespace WHERE tenant_id = ? AND state = ? ORDER BY slug").bind(tenant_id, state).all<Namespace>();
   return r.results;
 }
 
 export async function setNamespaceState(db: D1Database, tenant_id: string, id: string, state: State): Promise<boolean> {
   const [ns] = await db.batch([
-    db.prepare("/*perf-site:src%2Fdb%2Fnamespaces.ts:42:5:%5Bns%5D:f716e514*/ UPDATE namespace SET state = ? WHERE id = ? AND tenant_id = ? AND state <> ?").bind(state, id, tenant_id, state),
-    db.prepare("/*perf-site:src%2Fdb%2Fnamespaces.ts:43:5:%5Bns%5D:b3cb6203*/ UPDATE project SET state = ? WHERE namespace_id = ? AND tenant_id = ? AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'project_delete:v1:' || project.tenant_id || ':' || project.id)").bind(state, id, tenant_id, state),
+    db.prepare("/*perf-site:src%2Fdb%2Fnamespaces.ts:42:5:setNamespaceState:f716e514*/ UPDATE namespace SET state = ? WHERE id = ? AND tenant_id = ? AND state <> ?").bind(state, id, tenant_id, state),
+    db.prepare("/*perf-site:src%2Fdb%2Fnamespaces.ts:43:5:setNamespaceState:b3cb6203*/ UPDATE project SET state = ? WHERE namespace_id = ? AND tenant_id = ? AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'project_delete:v1:' || project.tenant_id || ':' || project.id)").bind(state, id, tenant_id, state),
   ]);
   return ns!.meta.changes === 1;
 }

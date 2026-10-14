@@ -18,7 +18,7 @@ export async function hasActiveConsent(db: D1Database, email: string): Promise<b
  * login@ is an explicit request and may establish new consent.
  */
 export async function consentWithdrawn(db: D1Database, email: string): Promise<boolean> {
-  const row = await db.prepare("/*perf-site:src%2Fdb%2Fconsent.ts:21:21:row:76cc5421*/ SELECT revoked_at FROM consent WHERE email = ? ORDER BY granted_at DESC, id DESC LIMIT 1")
+  const row = await db.prepare("/*perf-site:src%2Fdb%2Fconsent.ts:21:21:consentWithdrawn:76cc5421*/ SELECT revoked_at FROM consent WHERE email = ? ORDER BY granted_at DESC, id DESC LIMIT 1")
     .bind(normalizeEmail(email)).first<{ revoked_at: number | null }>();
   return !!row && row.revoked_at !== null;
 }
@@ -36,7 +36,7 @@ export async function grantConsent(
   // If the active row we lost to is revoked before we read it, insert once more.
   for (let attempt = 0; attempt < 2; attempt++) {
     const r = await db.prepare(
-      `/*perf-site:src%2Fdb%2Fconsent.ts:38:21:r:8a9b3b9e*/ INSERT INTO consent (id, email, tenant_id, kind, granted_at, revoked_at, source_message_id, evidence)
+      `/*perf-site:src%2Fdb%2Fconsent.ts:38:21:grantConsent:8a9b3b9e*/ INSERT INTO consent (id, email, tenant_id, kind, granted_at, revoked_at, source_message_id, evidence)
        SELECT ?, ?, NULL, ?, ?, NULL, ?, ? WHERE NOT EXISTS (SELECT 1 FROM consent WHERE email = ? AND revoked_at IS NULL)`,
     ).bind(row.id, row.email, row.kind, row.granted_at, row.source_message_id, row.evidence, row.email).run();
     if (r.meta.changes === 1) return { consent: row, created: true };
@@ -47,18 +47,18 @@ export async function grantConsent(
 }
 
 export async function revokeConsentById(db: D1Database, id: string, now: number): Promise<number> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fconsent.ts:50:19:r:0d474bc8*/ UPDATE consent SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").bind(now, id).run();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fconsent.ts:50:19:revokeConsentById:0d474bc8*/ UPDATE consent SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").bind(now, id).run();
   return r.meta.changes;
 }
 
 export async function listConsent(db: D1Database, email: string): Promise<Consent[]> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fconsent.ts:55:19:r:070990a5*/ SELECT * FROM consent WHERE email = ? ORDER BY granted_at DESC, id DESC")
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fconsent.ts:55:19:listConsent:070990a5*/ SELECT * FROM consent WHERE email = ? ORDER BY granted_at DESC, id DESC")
     .bind(normalizeEmail(email)).all<Consent>();
   return r.results;
 }
 
 export async function revokeConsent(db: D1Database, email: string, now: number): Promise<number> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fconsent.ts:61:19:r:3c0925e5*/ UPDATE consent SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL")
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fconsent.ts:61:19:revokeConsent:3c0925e5*/ UPDATE consent SET revoked_at = ? WHERE email = ? AND revoked_at IS NULL")
     .bind(now, normalizeEmail(email)).run();
   return r.meta.changes;
 }

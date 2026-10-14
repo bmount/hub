@@ -81,8 +81,8 @@ export const tenantDelete = defineVerb({
     if (ctx.authKind !== "cookie" || ctx.session?.kind !== "browser") throw new HubError(403, "forbidden", "organization deletion requires a web sign-in");
     confirmMatches(p.slug, p.confirm);
     if (tenant.state !== "archived") throw conflict("archive the organization before deleting it");
-    await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ftenant.ts:84:11:tenantDelete:73d84089*/ INSERT OR IGNORE INTO meta (key, value) SELECT ?, 'deleting' FROM tenant WHERE id = ? AND state = 'archived'").bind(`tenant_delete:v1:${tenant.id}`, tenant.id).run();
-    if (!await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ftenant.ts:85:16:tenantDelete:44558753*/ SELECT 1 FROM meta WHERE key = ?").bind(`tenant_delete:v1:${tenant.id}`).first()) throw conflict("archive the organization before deleting it");
+    await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ftenant.ts:84:11:tenantDelete.run:73d84089*/ INSERT OR IGNORE INTO meta (key, value) SELECT ?, 'deleting' FROM tenant WHERE id = ? AND state = 'archived'").bind(`tenant_delete:v1:${tenant.id}`, tenant.id).run();
+    if (!await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ftenant.ts:85:16:tenantDelete.run:44558753*/ SELECT 1 FROM meta WHERE key = ?").bind(`tenant_delete:v1:${tenant.id}`).first()) throw conflict("archive the organization before deleting it");
     await purgeTenantStores(ctx, tenant);
     const r = await deleteTenant(ctx.db, p.slug, ctx.identity!.id, ctx.now);
     const total = Object.values(r.counts).reduce((a, b) => a + b, 0);

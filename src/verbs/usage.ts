@@ -82,7 +82,7 @@ export const usageReport = defineVerb({
       session_id: ctx.session?.id ?? null, project_id: c.work ? items.get(c.work)!.project_id : null, work_item_id: c.work ? items.get(c.work)!.id : null,
       client: c.client, ok: true, ms: 0, input_tokens: c.input_tokens, output_tokens: c.output_tokens, cached_tokens: c.cached_tokens, reported_cost_micros: c.cost_micros, created_at: c.at ?? ctx.now,
     })));
-    const sum = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fusage.ts:85:24:sum:940529a4*/ SELECT ${USAGE_MONEY_COLUMNS} FROM model_call m WHERE m.tenant_id = ? AND m.identity_id = ? AND m.id IN (${ids.map(() => "?").join(",")})`).bind(ctx.tenant!.id, ctx.identity!.id, ...ids).first<UsageMoney>())!;
+    const sum = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fusage.ts:85:24:usageReport.run:940529a4*/ SELECT ${USAGE_MONEY_COLUMNS} FROM model_call m WHERE m.tenant_id = ? AND m.identity_id = ? AND m.id IN (${ids.map(() => "?").join(",")})`).bind(ctx.tenant!.id, ctx.identity!.id, ...ids).first<UsageMoney>())!;
     return { recorded: calls.length, ...sum, cost: usageMoney(sum) };
   },
 });
@@ -102,7 +102,7 @@ export async function resolveUsageWork(ctx: Ctx, reference: string | null): Prom
   if (reference === null || reference === "") return null;
   if (reference.length > 80) throw badRequest("work is too long");
   const item = await itemRef(ctx, { id: reference });
-  const work = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fusage.ts:105:22:work:76200548*/ SELECT w.id, w.project_id, p.slug || '#' || w.number AS ref
+  const work = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fusage.ts:105:22:resolveUsageWork:76200548*/ SELECT w.id, w.project_id, p.slug || '#' || w.number AS ref
     FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
     WHERE w.id = ? AND w.tenant_id = ?`).bind(item.id, ctx.tenant!.id).first<UsageWork>();
   if (!work) throw notFound("no such work item");
@@ -118,7 +118,7 @@ export async function resolveUsageProject(ctx: Ctx, reference: string | null, wo
   const slug = parts.at(-1)!;
   const namespace = parts.length === 2 ? parts[0]! : null;
   if (parts.length > 2 || parts.some(p => !isValidSlug(p))) throw notFound("no such project");
-  const project = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fusage.ts:121:25:project:9d1d47c0*/ SELECT p.id, CASE WHEN n.id IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END AS ref
+  const project = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fusage.ts:121:25:resolveUsageProject:9d1d47c0*/ SELECT p.id, CASE WHEN n.id IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END AS ref
     FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id
     WHERE p.tenant_id = ? AND p.kind NOT IN ('channel', 'agent-src') AND p.slug = ?
       AND ((? IS NULL AND p.namespace_id IS NULL) OR n.slug = ?)`)
@@ -192,7 +192,7 @@ export const modelPriceSet = defineVerb({
   },
   run: async (ctx, p) => {
     const id = ulid(ctx.now);
-    await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fusage.ts:195:11:modelPriceSet:df83f5b3*/ INSERT INTO model_price (id, provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok, effective_from, set_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fusage.ts:195:11:modelPriceSet.run:df83f5b3*/ INSERT INTO model_price (id, provider, model, input_per_mtok, output_per_mtok, cached_input_per_mtok, effective_from, set_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .bind(id, p.provider, p.model, p.input, p.output, p.cached, ctx.now, ctx.identity!.id, ctx.now).run();
     await recordEvent(ctx.db, { tenant_id: null, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "model.price_set", target_kind: "model_price", target_id: id,
       summary: `Priced ${p.provider}/${p.model}: $${p.input / 1e6} in, $${p.output / 1e6} out${p.cached !== null ? `, $${p.cached / 1e6} cached` : ""} per million tokens` }, ctx.now);

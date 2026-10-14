@@ -50,7 +50,7 @@ async function runBoundTurn(ctx: Ctx, threadId: string, scopes: "read" | "write"
   if (!cred) throw new HubError(503, "unavailable", `no ${p.name} key: a root adds one under Models and keys`);
   const key = await budget.wait(() => open(ctx.env.HUB_SECRETS_KEY, { ciphertext: cred.secret_ciphertext, iv: cred.secret_iv }));
 
-  const history = (await budget.wait(() => db.prepare("/*perf-site:src%2Fassistant%2Frun.ts:53:44:history:500ab6cd*/ SELECT role, text FROM assistant_message WHERE thread_id = ? ORDER BY created_at DESC LIMIT ?").bind(threadId, HISTORY).all<{ role: "user" | "assistant"; text: string }>())).results.reverse();
+  const history = (await budget.wait(() => db.prepare("/*perf-site:src%2Fassistant%2Frun.ts:53:44:runBoundTurn:500ab6cd*/ SELECT role, text FROM assistant_message WHERE thread_id = ? ORDER BY created_at DESC LIMIT ?").bind(threadId, HISTORY).all<{ role: "user" | "assistant"; text: string }>())).results.reverse();
   const items: TurnItem[] = [...history.map((m) => ({ role: m.role, content: m.text })), { role: "user", content: text }];
   const toolCtx: Ctx = { ...ctx, playground: { scopes: scopes === "write" ? ["read", "write"] : ["read"] } };
   const tools: FunctionTool[] = toolsFor(toolCtx).map(v => toolDefinition(v)).map((t) => ({ name: t.name, description: (t.description ?? "").slice(0, 1000), parameters: t.inputSchema as Record<string, unknown> }));

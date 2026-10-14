@@ -61,7 +61,7 @@ export async function createGrant(db: D1Database, input: NewGrant, now: number):
 export async function replaceEarlierGrants(db: D1Database, grant: OAuthGrant, now: number): Promise<OAuthGrant[]> {
   const same = "identity_id = ? AND client_id = ? AND resource = ? AND revoked_at IS NULL AND id < ?";
   const binds = [grant.identity_id, grant.client_id, grant.resource, grant.id];
-  const old = (await db.prepare(`/*perf-site:src%2Fdb%2FoauthGrants.ts:64:22:old:e90a70d6*/ SELECT * FROM oauth_grant WHERE ${same}`).bind(...binds).all<OAuthGrant>()).results;
+  const old = (await db.prepare(`/*perf-site:src%2Fdb%2FoauthGrants.ts:64:22:replaceEarlierGrants:e90a70d6*/ SELECT * FROM oauth_grant WHERE ${same}`).bind(...binds).all<OAuthGrant>()).results;
   if (old.length === 0) return [];
   await db.batch([
     db.prepare(`/*perf-site:src%2Fdb%2FoauthGrants.ts:67:5:replaceEarlierGrants:254fa9cb*/ UPDATE session SET revoked_at = ? WHERE revoked_at IS NULL AND id IN (SELECT session_id FROM oauth_grant WHERE ${same})`).bind(now, ...binds),
@@ -93,7 +93,7 @@ export async function setLibraryGrantId(db: D1Database, id: string, library_gran
 export const liveGrant: typeof liveGrantImpl = (...args) => span("auth.grant.liveGrant", () => liveGrantImpl(...args));
 async function liveGrantImpl(db: D1Database, grant_id: string, now: number): Promise<LiveGrant | null> {
   const row = await db.prepare(
-    `/*perf-site:src%2Fdb%2FoauthGrants.ts:95:21:row:382c8eea*/ SELECT g.*,
+    `/*perf-site:src%2Fdb%2FoauthGrants.ts:95:21:liveGrantImpl:382c8eea*/ SELECT g.*,
             s.label AS s_label, s.token_hash AS s_token_hash, s.created_at AS s_created_at, s.last_seen_at AS s_last_seen_at,
             s.expires_at AS s_expires_at, s.last_proof_at AS s_last_proof_at,
             i.display_name AS i_display_name, i.is_root AS i_is_root, i.email AS i_email, i.operator_id AS i_operator_id, i.created_at AS i_created_at,
@@ -133,16 +133,16 @@ async function liveGrantImpl(db: D1Database, grant_id: string, now: number): Pro
  */
 export async function rotateRefreshHash(db: D1Database, id: string, expected: string | null, next: string, now: number): Promise<boolean> {
   const stmt = expected === null
-    ? db.prepare("/*perf-site:src%2Fdb%2FoauthGrants.ts:136:7:stmt:c4ae1a05*/ UPDATE oauth_grant SET prev_refresh_hash = refresh_hash, refresh_hash = ?, refreshed_at = ? WHERE id = ? AND revoked_at IS NULL AND refresh_hash IS NULL").bind(next, now, id)
-    : db.prepare("/*perf-site:src%2Fdb%2FoauthGrants.ts:137:7:stmt:17a8c7be*/ UPDATE oauth_grant SET prev_refresh_hash = refresh_hash, refresh_hash = ?, refreshed_at = ? WHERE id = ? AND revoked_at IS NULL AND refresh_hash = ?").bind(next, now, id, expected);
+    ? db.prepare("/*perf-site:src%2Fdb%2FoauthGrants.ts:136:7:rotateRefreshHash:c4ae1a05*/ UPDATE oauth_grant SET prev_refresh_hash = refresh_hash, refresh_hash = ?, refreshed_at = ? WHERE id = ? AND revoked_at IS NULL AND refresh_hash IS NULL").bind(next, now, id)
+    : db.prepare("/*perf-site:src%2Fdb%2FoauthGrants.ts:137:7:rotateRefreshHash:17a8c7be*/ UPDATE oauth_grant SET prev_refresh_hash = refresh_hash, refresh_hash = ?, refreshed_at = ? WHERE id = ? AND revoked_at IS NULL AND refresh_hash = ?").bind(next, now, id, expected);
   return (await stmt.run()).meta.changes === 1;
 }
 
 /** Revoke one grant and its session in one batch (MCP spec 10.2). True if this call revoked it. */
 export async function revokeGrantRows(db: D1Database, id: string, by: string | null, reason: string, now: number): Promise<boolean> {
   const [g] = await db.batch([
-    db.prepare("/*perf-site:src%2Fdb%2FoauthGrants.ts:144:5:%5Bg%5D:c8234d49*/ UPDATE oauth_grant SET revoked_at = ?, revoked_by = ?, revoke_reason = ? WHERE id = ? AND revoked_at IS NULL").bind(now, by, reason, id),
-    db.prepare("/*perf-site:src%2Fdb%2FoauthGrants.ts:145:5:%5Bg%5D:b3f40f2c*/ UPDATE session SET revoked_at = ? WHERE revoked_at IS NULL AND id = (SELECT session_id FROM oauth_grant WHERE id = ?)").bind(now, id),
+    db.prepare("/*perf-site:src%2Fdb%2FoauthGrants.ts:144:5:revokeGrantRows:c8234d49*/ UPDATE oauth_grant SET revoked_at = ?, revoked_by = ?, revoke_reason = ? WHERE id = ? AND revoked_at IS NULL").bind(now, by, reason, id),
+    db.prepare("/*perf-site:src%2Fdb%2FoauthGrants.ts:145:5:revokeGrantRows:b3f40f2c*/ UPDATE session SET revoked_at = ? WHERE revoked_at IS NULL AND id = (SELECT session_id FROM oauth_grant WHERE id = ?)").bind(now, id),
   ]);
   return g!.meta.changes === 1;
 }
@@ -159,7 +159,7 @@ export async function revokeGrantsFor(
   if (scope.identity_id) { where.push("identity_id = ?"); binds.push(scope.identity_id); }
   if (scope.tenant_id) { where.push("tenant_id = ?"); binds.push(scope.tenant_id); }
   if (binds.length === 0) throw new Error("revokeGrantsFor needs an identity or a tenant");
-  const live = (await db.prepare(`/*perf-site:src%2Fdb%2FoauthGrants.ts:162:23:live:8cf6f63d*/ SELECT * FROM oauth_grant WHERE ${where.join(" AND ")}`).bind(...binds).all<OAuthGrant>()).results;
+  const live = (await db.prepare(`/*perf-site:src%2Fdb%2FoauthGrants.ts:162:23:revokeGrantsFor:8cf6f63d*/ SELECT * FROM oauth_grant WHERE ${where.join(" AND ")}`).bind(...binds).all<OAuthGrant>()).results;
   if (live.length === 0) return [];
   const ids = live.map((g) => g.id);
   const marks = ids.map(() => "?").join(", ");
@@ -172,7 +172,7 @@ export async function revokeGrantsFor(
 
 export async function listLiveGrantsForIdentity(db: D1Database, identity_id: string, now: number): Promise<Array<{ grant: OAuthGrant; tenant_slug: string; last_seen_at: number }>> {
   const r = await db.prepare(
-    `/*perf-site:src%2Fdb%2FoauthGrants.ts:174:19:r:b9512912*/ SELECT g.*, t.slug AS tenant_slug, s.last_seen_at AS last_seen_at
+    `/*perf-site:src%2Fdb%2FoauthGrants.ts:174:19:listLiveGrantsForIdentity:b9512912*/ SELECT g.*, t.slug AS tenant_slug, s.last_seen_at AS last_seen_at
        FROM oauth_grant g JOIN tenant t ON t.id = g.tenant_id JOIN session s ON s.id = g.session_id
       WHERE g.identity_id = ? AND g.revoked_at IS NULL AND g.expires_at > ?
       ORDER BY g.created_at DESC`,

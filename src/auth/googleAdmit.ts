@@ -27,7 +27,7 @@ async function matchingRules(db: D1Database, c: GoogleClaims): Promise<Rule[]> {
   // Workspace, which a consumer account that merely uses the address cannot claim.
   const hd = c.hd && c.hd === domain ? c.hd : null;
   const r = await db.prepare(
-    "/*perf-site:src%2Fauth%2FgoogleAdmit.ts:29:19:r:87328aad*/ SELECT id, kind, value FROM signin_rule WHERE revoked_at IS NULL AND ((kind = 'email' AND value = ?) OR (kind = 'domain' AND value = ?))",
+    "/*perf-site:src%2Fauth%2FgoogleAdmit.ts:29:19:matchingRules:87328aad*/ SELECT id, kind, value FROM signin_rule WHERE revoked_at IS NULL AND ((kind = 'email' AND value = ?) OR (kind = 'domain' AND value = ?))",
   ).bind(c.email, hd ?? "\u0000").all<Rule>();
   return r.results;
 }
@@ -44,15 +44,15 @@ async function grantMembership(db: D1Database, identity_id: string, tenant_id: s
 async function applyGrants(db: D1Database, identity: Identity, rules: Rule[], now: number): Promise<number> {
   if (!rules.length || identity.is_root === 1) return 0;
   const grants = await db.prepare(
-    `/*perf-site:src%2Fauth%2FgoogleAdmit.ts:46:24:grants:fe4be0a5*/ SELECT rule_id, tenant_id, role FROM signin_grant WHERE rule_id IN (${rules.map(() => "?").join(",")})`,
+    `/*perf-site:src%2Fauth%2FgoogleAdmit.ts:46:24:applyGrants:fe4be0a5*/ SELECT rule_id, tenant_id, role FROM signin_grant WHERE rule_id IN (${rules.map(() => "?").join(",")})`,
   ).bind(...rules.map((r) => r.id)).all<Grant>();
   let n = 0;
   for (const g of grants.results) {
     const tenants = g.tenant_id
       ? [g.tenant_id]
-      : (await db.prepare("/*perf-site:src%2Fauth%2FgoogleAdmit.ts:53:16:tenants:8d88a522*/ SELECT id FROM tenant WHERE state = 'active'").all<{ id: string }>()).results.map((t) => t.id);
+      : (await db.prepare("/*perf-site:src%2Fauth%2FgoogleAdmit.ts:53:16:applyGrants:8d88a522*/ SELECT id FROM tenant WHERE state = 'active'").all<{ id: string }>()).results.map((t) => t.id);
     for (const t of tenants) {
-      const live = await db.prepare("/*perf-site:src%2Fauth%2FgoogleAdmit.ts:55:26:live:8b616dd0*/ SELECT 1 FROM tenant WHERE id = ? AND state = 'active'").bind(t).first();
+      const live = await db.prepare("/*perf-site:src%2Fauth%2FgoogleAdmit.ts:55:26:applyGrants:8b616dd0*/ SELECT 1 FROM tenant WHERE id = ? AND state = 'active'").bind(t).first();
       if (live && await grantMembership(db, identity.id, t, g.role, now)) n++;
     }
   }
@@ -65,7 +65,7 @@ async function applyGrants(db: D1Database, identity: Identity, rules: Rule[], no
  */
 export async function applyStandingGrants(db: D1Database, tenant_id: string, now: number): Promise<number> {
   const rows = await db.prepare(
-    `/*perf-site:src%2Fauth%2FgoogleAdmit.ts:67:22:rows:d5e6b184*/ SELECT i.id AS identity_id, g.role AS role FROM signin_grant g
+    `/*perf-site:src%2Fauth%2FgoogleAdmit.ts:67:22:applyStandingGrants:d5e6b184*/ SELECT i.id AS identity_id, g.role AS role FROM signin_grant g
        JOIN signin_rule r ON r.id = g.rule_id AND r.revoked_at IS NULL AND r.kind = 'email'
        JOIN identity i ON i.email = r.value AND i.kind = 'human' AND i.state = 'active' AND i.is_root = 0
      WHERE g.tenant_id IS NULL`,
@@ -80,17 +80,17 @@ export async function admitGoogle(db: D1Database, c: GoogleClaims, now: number, 
   if (isHubAddress(c.email, hubDomain)) return { ok: false, reason: "unavailable" };
   if (!c.email_verified) return { ok: false, reason: "unverified" };
 
-  const bound = await db.prepare("/*perf-site:src%2Fauth%2FgoogleAdmit.ts:83:23:bound:317683ff*/ SELECT identity_id FROM google_account WHERE sub = ?").bind(c.sub).first<{ identity_id: string }>();
+  const bound = await db.prepare("/*perf-site:src%2Fauth%2FgoogleAdmit.ts:83:23:admitGoogle:317683ff*/ SELECT identity_id FROM google_account WHERE sub = ?").bind(c.sub).first<{ identity_id: string }>();
   let identity = await getIdentityByEmail(db, c.email);
   if (identity && (identity.kind !== "human" || identity.state !== "active")) return { ok: false, reason: "unavailable" };
   if (bound && identity && bound.identity_id !== identity.id) return { ok: false, reason: "other_google_account" };
   if (identity) {
-    const other = await db.prepare("/*perf-site:src%2Fauth%2FgoogleAdmit.ts:88:25:other:6183c307*/ SELECT sub FROM google_account WHERE identity_id = ?").bind(identity.id).first<{ sub: string }>();
+    const other = await db.prepare("/*perf-site:src%2Fauth%2FgoogleAdmit.ts:88:25:admitGoogle:6183c307*/ SELECT sub FROM google_account WHERE identity_id = ?").bind(identity.id).first<{ sub: string }>();
     if (other && other.sub !== c.sub) return { ok: false, reason: "other_google_account" };
   }
 
   const rules = await matchingRules(db, c);
-  const invites = (await db.prepare("/*perf-site:src%2Fauth%2FgoogleAdmit.ts:93:26:invites:962cdecf*/ SELECT * FROM invite WHERE email = ?").bind(c.email).all<Invite>()).results
+  const invites = (await db.prepare("/*perf-site:src%2Fauth%2FgoogleAdmit.ts:93:26:admitGoogle:962cdecf*/ SELECT * FROM invite WHERE email = ?").bind(c.email).all<Invite>()).results
     .filter((i) => inviteIsOpen(i, now));
   if (!identity && !invites.length && !rules.length) return { ok: false, reason: "not_listed" };
 

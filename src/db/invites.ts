@@ -61,7 +61,7 @@ export async function acceptInvite(db: D1Database, invite: Invite, now: number):
   const pre = await getIdentityByEmail(db, invite.email);
   if (pre && (pre.state !== "active" || pre.kind !== "human")) return null;
   const claim = await db.prepare(
-    "/*perf-site:src%2Fdb%2Finvites.ts:63:23:claim:41069035*/ UPDATE invite SET accepted_at = ? WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
+    "/*perf-site:src%2Fdb%2Finvites.ts:63:23:acceptInvite:41069035*/ UPDATE invite SET accepted_at = ? WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
   ).bind(now, invite.id, now).run();
   if (claim.meta.changes !== 1) return null;
 
@@ -103,11 +103,11 @@ export async function setInviteAcceptedSession(db: D1Database, invite_id: string
 }
 
 export async function revokeInvite(db: D1Database, tenant_id: string, id: string, now: number): Promise<boolean> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:106:19:r:df31f95b*/ UPDATE invite SET revoked_at = ? WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL AND accepted_at IS NULL").bind(now, id, tenant_id).run();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:106:19:revokeInvite:df31f95b*/ UPDATE invite SET revoked_at = ? WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL AND accepted_at IS NULL").bind(now, id, tenant_id).run();
   return r.meta.changes === 1;
 }
 
 export async function listInvites(db: D1Database, tenant_id: string): Promise<Invite[]> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:111:19:r:7c67f68d*/ SELECT * FROM invite WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenant_id).all<Invite>();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:111:19:listInvites:7c67f68d*/ SELECT * FROM invite WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenant_id).all<Invite>();
   return r.results;
 }

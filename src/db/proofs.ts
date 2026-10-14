@@ -9,6 +9,6 @@ export async function recordProof(db: D1Database, input: { identity_id: string; 
 }
 
 export async function listProofs(db: D1Database, identity_id: string): Promise<Proof[]> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fproofs.ts:12:19:r:a828d36a*/ SELECT * FROM proof WHERE identity_id = ? ORDER BY created_at, id").bind(identity_id).all<Proof>();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fproofs.ts:12:19:listProofs:a828d36a*/ SELECT * FROM proof WHERE identity_id = ? ORDER BY created_at, id").bind(identity_id).all<Proof>();
   return r.results;
 }

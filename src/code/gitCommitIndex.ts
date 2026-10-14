@@ -7,7 +7,7 @@ export async function indexCommitNodes(db: D1Database, tenantId: string, project
   const generations = new Map<string, number>(), needed = [...new Set(nodes.flatMap(node => node.parents))];
   for (let offset = 0; offset < needed.length; offset += 100) {
     const ids = needed.slice(offset, offset + 100);
-    const rows = (await db.prepare(`/*perf-site:src%2Fcode%2FgitCommitIndex.ts:10:25:rows:ab52df74*/ SELECT oid, generation FROM git_commit WHERE tenant_id = ? AND project_id = ? AND oid IN (${ids.map(() => "?").join(",")})`)
+    const rows = (await db.prepare(`/*perf-site:src%2Fcode%2FgitCommitIndex.ts:10:25:indexCommitNodes:ab52df74*/ SELECT oid, generation FROM git_commit WHERE tenant_id = ? AND project_id = ? AND oid IN (${ids.map(() => "?").join(",")})`)
       .bind(tenantId, projectId, ...ids).all<{ oid: string; generation: number }>()).results;
     for (const row of rows) generations.set(row.oid, row.generation);
   }

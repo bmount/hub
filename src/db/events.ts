@@ -42,11 +42,11 @@ export async function listEventsPage(
   if (opts.before) { where.push("id < ?"); binds.push(opts.before); }
   if (opts.session_id) { where.push("session_id = ?"); binds.push(opts.session_id); }
   if (opts.visibility) { where.push(opts.visibility.sql); binds.push(...opts.visibility.bindings); }
-  const r = await db.prepare(`/*perf-site:src%2Fdb%2Fevents.ts:45:19:r:ae162378*/ SELECT * FROM event WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`).bind(...binds, opts.limit).all<EventRow>();
+  const r = await db.prepare(`/*perf-site:src%2Fdb%2Fevents.ts:45:19:listEventsPage:ae162378*/ SELECT * FROM event WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`).bind(...binds, opts.limit).all<EventRow>();
   return r.results;
 }
 
 export async function listEvents(db: D1Database, tenant_id: string, limit: number): Promise<EventRow[]> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fevents.ts:50:19:r:74588200*/ SELECT * FROM event WHERE tenant_id = ? ORDER BY created_at DESC, id DESC LIMIT ?").bind(tenant_id, limit).all<EventRow>();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fevents.ts:50:19:listEvents:74588200*/ SELECT * FROM event WHERE tenant_id = ? ORDER BY created_at DESC, id DESC LIMIT ?").bind(tenant_id, limit).all<EventRow>();
   return r.results;
 }

@@ -25,7 +25,7 @@ export function authLinkIsOpen(link: AuthLink, now: number): boolean {
 
 // Atomic single-use claim: exactly one concurrent caller sees true.
 export async function claimAuthLink(db: D1Database, id: string, now: number): Promise<boolean> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2FauthLinks.ts:28:19:r:5461fbfd*/ UPDATE auth_link SET used_at = ? WHERE id = ? AND used_at IS NULL AND expires_at > ?")
+  const r = await db.prepare("/*perf-site:src%2Fdb%2FauthLinks.ts:28:19:claimAuthLink:5461fbfd*/ UPDATE auth_link SET used_at = ? WHERE id = ? AND used_at IS NULL AND expires_at > ?")
     .bind(now, id, now).run();
   return r.meta.changes === 1;
 }

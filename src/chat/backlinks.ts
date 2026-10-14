@@ -14,7 +14,7 @@ export async function backlinks(db: D1Database, v: Viewer, t: { kind: RefKind; k
   if (slug.size === 0) return [];
   // Keys are hub-built from [a-z0-9-], hex, '#', '@', '/', and ULIDs: no LIKE wildcards can appear in them.
   const r = await db.prepare(
-    `/*perf-site:src%2Fchat%2Fbacklinks.ts:16:19:r:ff02a0a4*/ SELECT r.conversation_id, r.msg_id, MAX(r.msg_kind) AS msg_kind, MAX(r.author_id) AS author_id, MAX(r.created_at) AS created_at,
+    `/*perf-site:src%2Fchat%2Fbacklinks.ts:16:19:backlinks:ff02a0a4*/ SELECT r.conversation_id, r.msg_id, MAX(r.msg_kind) AS msg_kind, MAX(r.author_id) AS author_id, MAX(r.created_at) AS created_at,
             (SELECT MIN(i.seq) FROM msg_index i WHERE i.conversation_id = r.conversation_id AND i.msg_id = r.msg_id) AS seq
        FROM msg_ref r
       WHERE r.tenant_id = ? AND r.target_kind = ? AND ${t.prefix ? "r.target_key LIKE ?" : "r.target_key = ?"}

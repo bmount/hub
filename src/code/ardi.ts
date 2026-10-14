@@ -55,10 +55,10 @@ export async function codeAuth(ctx: Ctx): Promise<string> {
     if (ctx.agentMcp && ctx.session?.kind === "agent_run") return basic("agent", await open(ctx.env.HUB_SECRETS_KEY, ctx.agentMcp.sealed));
     throw new HubError(403, "forbidden", "agents read code with their run session");
   }
-  const row = await ctx.db.prepare("/*perf-site:src%2Fcode%2Fardi.ts:58:21:row:341bdda0*/ SELECT ciphertext, iv, expires_at FROM ardi_cred WHERE identity_id = ? AND tenant_id = ? AND kind = 'git_session'")
+  const row = await ctx.db.prepare("/*perf-site:src%2Fcode%2Fardi.ts:58:21:codeAuth:341bdda0*/ SELECT ciphertext, iv, expires_at FROM ardi_cred WHERE identity_id = ? AND tenant_id = ? AND kind = 'git_session'")
     .bind(id.id, ctx.tenant.id).first<{ ciphertext: string; iv: string; expires_at: number | null }>();
   if (row && (row.expires_at ?? 0) - ctx.now > REFRESH_MS) {
-    const live = await ctx.db.prepare("/*perf-site:src%2Fcode%2Fardi.ts:61:24:live:e5b62ded*/ SELECT 1 FROM session s JOIN ardi_cred c ON c.ref_id = s.id WHERE c.identity_id = ? AND c.tenant_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?")
+    const live = await ctx.db.prepare("/*perf-site:src%2Fcode%2Fardi.ts:61:24:codeAuth:e5b62ded*/ SELECT 1 FROM session s JOIN ardi_cred c ON c.ref_id = s.id WHERE c.identity_id = ? AND c.tenant_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?")
       .bind(id.id, ctx.tenant.id, ctx.now).first();
     if (live) return basic(id.email, await open(ctx.env.HUB_SECRETS_KEY, row));
   }
@@ -86,7 +86,7 @@ export class RepoProvisioningPending extends HubError {
 
 export async function createRepo(env: Env, db: D1Database, input: { identity_id: string; tenant_id: string; org: string; name: string }, now: number): Promise<void> {
   if (env.GIT_BACKEND === "artifacts") {
-    const project = await db.prepare("/*perf-site:src%2Fcode%2Fardi.ts:89:27:project:5d33999f*/ SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'").bind(input.tenant_id, input.name).first<{ id: string }>();
+    const project = await db.prepare("/*perf-site:src%2Fcode%2Fardi.ts:89:27:createRepo:5d33999f*/ SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'").bind(input.tenant_id, input.name).first<{ id: string }>();
     if (!project) throw new HubError(404, "not_found", "repository project not found");
     const api = new ArtifactsRest(env), namespace = artifactNamespace(input.org), ownership = repoOwnership(input.tenant_id, project.id);
     try {

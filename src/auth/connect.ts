@@ -80,7 +80,7 @@ It was already used, it expired (links last 24 hours), or it isn't a Pimwell con
     console.log("connect rate failed", e instanceof Error ? e.name : "error");
   }
   if (!token.startsWith(LINK_PREFIX) || token.length > 100) return gone;
-  const link = await env.HUB_DB.prepare(`/*perf-site:src%2Fauth%2Fconnect.ts:83:22:link:1de341b5*/ UPDATE agent_connect_link SET claimed_at = ?, claimed_ip = ?
+  const link = await env.HUB_DB.prepare(`/*perf-site:src%2Fauth%2Fconnect.ts:83:22:claimConnectLink:1de341b5*/ UPDATE agent_connect_link SET claimed_at = ?, claimed_ip = ?
       WHERE token_hash = ? AND claimed_at IS NULL AND expires_at > ? AND tenant_id = (SELECT id FROM tenant WHERE slug = ? AND state = 'active')
       RETURNING id, tenant_id, agent_id, created_by`)
     .bind(now, ip.slice(0, 64), await sha256Hex(token), now, tenantSlug).first<{ id: string; tenant_id: string; agent_id: string; created_by: string }>();

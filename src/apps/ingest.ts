@@ -45,7 +45,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
   if (!scripts.length) return { accepted: 0, dropped: raw.length };
   const marks = scripts.map(() => "?").join(",");
   const sources = new Map((await db.prepare(
-    `/*perf-site:src%2Fapps%2Fingest.ts:47:34:sources:ccbc7d95*/ SELECT s.script_name, s.tenant_id, s.project_id, p.slug, p.display_name FROM app_source s JOIN project p ON p.id = s.project_id JOIN tenant t ON t.id = s.tenant_id
+    `/*perf-site:src%2Fapps%2Fingest.ts:47:34:ingest:ccbc7d95*/ SELECT s.script_name, s.tenant_id, s.project_id, p.slug, p.display_name FROM app_source s JOIN project p ON p.id = s.project_id JOIN tenant t ON t.id = s.tenant_id
      WHERE s.script_name IN (${marks}) AND s.state = 'active' AND p.state = 'active' AND t.state = 'active'`,
   ).bind(...scripts).all<Source>()).results.map((s) => [s.script_name, s]));
   const mine = events.filter((e) => sources.has(e.script));
@@ -55,7 +55,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
   const versions = [...new Set(mine.map((e) => e.version).filter((v): v is string => !!v))];
   // Cloudflare tail items carry the version UUID, but not consistently its tag. Resolve the commit from
   // authenticated release records, scoped to the exact source tenant/project (never another tenant's record).
-  const deployRows = versions.length ? (await db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:58:47:deployRows:39dd54d6*/ SELECT tenant_id, project_id, script_name, version_id, tag FROM app_deploy
+  const deployRows = versions.length ? (await db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:58:47:ingest:39dd54d6*/ SELECT tenant_id, project_id, script_name, version_id, tag FROM app_deploy
     WHERE version_id IN (${versions.map(() => "?").join(",")}) OR substr(version_id, 1, 36) IN (${versions.map(() => "?").join(",")})`)
     .bind(...versions, ...versions).all<{ tenant_id: string; project_id: string; script_name: string; version_id: string; tag: string | null }>()).results : [];
   const known = new Set<string>();
@@ -82,7 +82,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
   }
   found.sort((a, b) => a.e.at - b.e.at);
   const fps = [...new Set(found.map((f) => f.fp))];
-  const groups = new Map(fps.length ? (await db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:85:46:groups:0a026af3*/ SELECT id, fingerprint, last_seen FROM app_error_group WHERE fingerprint IN (${fps.map(() => "?").join(",")})`)
+  const groups = new Map(fps.length ? (await db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:85:46:ingest:0a026af3*/ SELECT id, fingerprint, last_seen FROM app_error_group WHERE fingerprint IN (${fps.map(() => "?").join(",")})`)
     .bind(...fps).all<{ id: string; fingerprint: string; last_seen: number }>()).results.map((g) => [g.fingerprint, g]) : []);
 
   const stmts: D1PreparedStatement[] = [];
@@ -168,7 +168,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
 /** Pimwell's own message in #<project>-ops; a project without that channel just doesn't get one. */
 async function postNotices(env: Env, notices: Array<{ src: Source; text: string }>, now: number): Promise<void> {
   for (const n of notices) {
-    const ch = await env.HUB_DB.prepare("/*perf-site:src%2Fapps%2Fingest.ts:171:22:ch:7caf507d*/ SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'channel' AND state = 'active'").bind(n.src.tenant_id, `${n.src.slug}-ops`).first<{ id: string }>();
+    const ch = await env.HUB_DB.prepare("/*perf-site:src%2Fapps%2Fingest.ts:171:22:postNotices:7caf507d*/ SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'channel' AND state = 'active'").bind(n.src.tenant_id, `${n.src.slug}-ops`).first<{ id: string }>();
     if (!ch) continue;
     try {
       await (conversationStub(env, n.src.tenant_id, ch.id) as unknown as { notice(t: string, c: string, body: string, now: number): Promise<unknown> }).notice(n.src.tenant_id, ch.id, n.text.slice(0, 500), now);

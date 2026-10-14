@@ -27,7 +27,7 @@ export async function createChannel(
   if (!isValidSlug(slug)) throw badRequest("invalid channel name");
   if (input.topic.length > TOPIC_MAX) throw badRequest("topic is too long");
   const display_name = input.display_name.trim() || slug;
-  const clash = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:30:23:clash:24d8647c*/ SELECT 1 FROM namespace WHERE tenant_id = ? AND slug = ?").bind(input.tenant_id, slug).first();
+  const clash = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:30:23:createChannel:24d8647c*/ SELECT 1 FROM namespace WHERE tenant_id = ? AND slug = ?").bind(input.tenant_id, slug).first();
   if (clash) throw conflict("name is used by a namespace");
   const id = ulid(now);
   try {
@@ -66,9 +66,9 @@ export async function getChannelById(db: D1Database, tenant_id: string, id: stri
 /** Optional viewer predicates keep private discovery participant-only and within one D1 round trip. */
 export async function listChannels(db: D1Database, tenant_id: string, state: State, viewer?: { identity_id: string; human: boolean }): Promise<ChannelRow[]> {
   const [channels, privateRows] = await db.batch<Record<string, unknown>>([
-    db.prepare(`/*perf-site:src%2Fdb%2Fchat.ts:69:5:%5Bchannels%2C%20privateRows%5D:953554eb*/ ${SELECT} WHERE p.tenant_id = ? AND p.state = ? ${viewer && !viewer.human ? "AND EXISTS (SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = p.tenant_id AND cm.conversation_id = p.id AND cm.identity_id = ? AND cm.removed_at IS NULL)" : ""} ORDER BY p.slug`)
+    db.prepare(`/*perf-site:src%2Fdb%2Fchat.ts:69:5:listChannels:953554eb*/ ${SELECT} WHERE p.tenant_id = ? AND p.state = ? ${viewer && !viewer.human ? "AND EXISTS (SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = p.tenant_id AND cm.conversation_id = p.id AND cm.identity_id = ? AND cm.removed_at IS NULL)" : ""} ORDER BY p.slug`)
       .bind(tenant_id, state, ...(viewer && !viewer.human ? [viewer.identity_id] : [])),
-    db.prepare(`/*perf-site:src%2Fdb%2Fchat.ts:71:5:%5Bchannels%2C%20privateRows%5D:bef2e3ef*/ SELECT value FROM meta WHERE key GLOB ? ${viewer ? `AND EXISTS (
+    db.prepare(`/*perf-site:src%2Fdb%2Fchat.ts:71:5:listChannels:bef2e3ef*/ SELECT value FROM meta WHERE key GLOB ? ${viewer ? `AND EXISTS (
       SELECT 1 FROM conversation_member cm JOIN membership m ON m.tenant_id = cm.tenant_id AND m.identity_id = cm.identity_id
       JOIN identity i ON i.id = cm.identity_id WHERE cm.tenant_id = ? AND cm.conversation_id = json_extract(meta.value, '$.project_id')
       AND cm.identity_id = ? AND cm.removed_at IS NULL AND m.state = 'active' AND i.state = 'active'
@@ -88,7 +88,7 @@ export async function setAgentPolicy(db: D1Database, tenant_id: string, id: stri
 }
 
 export async function setChannelState(db: D1Database, tenant_id: string, id: string, state: State): Promise<boolean> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:91:19:r:29f2fce9*/ UPDATE project SET state = ? WHERE id = ? AND tenant_id = ? AND kind = 'channel' AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta owner JOIN meta deletion ON deletion.key = 'project_delete:v1:' || project.tenant_id || ':' || owner.value WHERE owner.key = 'project_channel:v1:' || project.tenant_id || ':' || project.id)").bind(state, id, tenant_id, state).run();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:91:19:setChannelState:29f2fce9*/ UPDATE project SET state = ? WHERE id = ? AND tenant_id = ? AND kind = 'channel' AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta owner JOIN meta deletion ON deletion.key = 'project_delete:v1:' || project.tenant_id || ':' || owner.value WHERE owner.key = 'project_channel:v1:' || project.tenant_id || ':' || project.id)").bind(state, id, tenant_id, state).run();
   return r.meta.changes === 1;
 }
 
@@ -97,24 +97,24 @@ export async function addAgentMember(
   db: D1Database, input: { conversation_id: string; tenant_id: string; identity_id: string; added_by: string }, now: number,
 ): Promise<boolean> {
   // Two concurrent adds both reach the INSERT; the loser's OR IGNORE changes nothing and it reports false.
-  const ins = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:100:21:ins:3d8b2979*/ INSERT OR IGNORE INTO conversation_member (conversation_id, tenant_id, identity_id, role, added_by, added_at, removed_at) VALUES (?, ?, ?, 'agent', ?, ?, NULL)")
+  const ins = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:100:21:addAgentMember:3d8b2979*/ INSERT OR IGNORE INTO conversation_member (conversation_id, tenant_id, identity_id, role, added_by, added_at, removed_at) VALUES (?, ?, ?, 'agent', ?, ?, NULL)")
     .bind(input.conversation_id, input.tenant_id, input.identity_id, input.added_by, now).run();
   if (ins.meta.changes === 1) return true;
   const back = await db.prepare(
-    "/*perf-site:src%2Fdb%2Fchat.ts:103:22:back:ae3d0fc9*/ UPDATE conversation_member SET added_by = ?, added_at = ?, removed_at = NULL WHERE conversation_id = ? AND tenant_id = ? AND identity_id = ? AND removed_at IS NOT NULL",
+    "/*perf-site:src%2Fdb%2Fchat.ts:103:22:addAgentMember:ae3d0fc9*/ UPDATE conversation_member SET added_by = ?, added_at = ?, removed_at = NULL WHERE conversation_id = ? AND tenant_id = ? AND identity_id = ? AND removed_at IS NOT NULL",
   ).bind(input.added_by, now, input.conversation_id, input.tenant_id, input.identity_id).run();
   return back.meta.changes === 1;
 }
 
 export async function removeAgentMember(db: D1Database, tenant_id: string, conversation_id: string, identity_id: string, now: number): Promise<boolean> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:110:19:r:71e90d0c*/ UPDATE conversation_member SET removed_at = ? WHERE tenant_id = ? AND conversation_id = ? AND identity_id = ? AND removed_at IS NULL")
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:110:19:removeAgentMember:71e90d0c*/ UPDATE conversation_member SET removed_at = ? WHERE tenant_id = ? AND conversation_id = ? AND identity_id = ? AND removed_at IS NULL")
     .bind(now, tenant_id, conversation_id, identity_id).run();
   return r.meta.changes === 1;
 }
 
 export async function listAgentMembers(db: D1Database, tenant_id: string, conversation_id: string): Promise<Array<{ identity_id: string; operator_id: string | null }>> {
   const r = await db.prepare(
-    `/*perf-site:src%2Fdb%2Fchat.ts:116:19:r:1f0b19cb*/ SELECT cm.identity_id, i.operator_id FROM conversation_member cm JOIN identity i ON i.id = cm.identity_id
+    `/*perf-site:src%2Fdb%2Fchat.ts:116:19:listAgentMembers:1f0b19cb*/ SELECT cm.identity_id, i.operator_id FROM conversation_member cm JOIN identity i ON i.id = cm.identity_id
       WHERE cm.tenant_id = ? AND cm.conversation_id = ? AND cm.removed_at IS NULL AND i.state = 'active' AND i.kind = 'agent'
         AND EXISTS (SELECT 1 FROM membership m WHERE m.tenant_id = cm.tenant_id AND m.identity_id = i.id AND m.state = 'active') ORDER BY cm.added_at, cm.identity_id`,
   ).bind(tenant_id, conversation_id).all<{ identity_id: string; operator_id: string | null }>();
@@ -122,13 +122,13 @@ export async function listAgentMembers(db: D1Database, tenant_id: string, conver
 }
 
 export async function isAgentMember(db: D1Database, tenant_id: string, conversation_id: string, identity_id: string): Promise<boolean> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:125:19:r:c5f7850e*/ SELECT 1 FROM conversation_member WHERE tenant_id = ? AND conversation_id = ? AND identity_id = ? AND removed_at IS NULL")
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:125:19:isAgentMember:c5f7850e*/ SELECT 1 FROM conversation_member WHERE tenant_id = ? AND conversation_id = ? AND identity_id = ? AND removed_at IS NULL")
     .bind(tenant_id, conversation_id, identity_id).first();
   return r !== null;
 }
 
 export async function agentConversationIds(db: D1Database, tenant_id: string, identity_id: string): Promise<Set<string>> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:131:19:r:47928fb0*/ SELECT conversation_id FROM conversation_member WHERE tenant_id = ? AND identity_id = ? AND removed_at IS NULL")
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:131:19:agentConversationIds:47928fb0*/ SELECT conversation_id FROM conversation_member WHERE tenant_id = ? AND identity_id = ? AND removed_at IS NULL")
     .bind(tenant_id, identity_id).all<{ conversation_id: string }>();
   return new Set(r.results.map((x) => x.conversation_id));
 }
@@ -136,8 +136,8 @@ export async function agentConversationIds(db: D1Database, tenant_id: string, id
 /** Kill switch and muted agents, read on every agent post (spec 6.7). */
 export async function getControls(db: D1Database, tenant_id: string, now: number): Promise<{ agents_enabled: boolean; muted: string[] }> {
   const [control, muted] = await db.batch<Record<string, unknown>>([
-    db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:139:5:%5Bcontrol%2C%20muted%5D:16d6692a*/ SELECT agents_enabled FROM chat_control WHERE tenant_id = ?").bind(tenant_id),
-    db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:140:5:%5Bcontrol%2C%20muted%5D:46bc04e0*/ SELECT identity_id FROM agent_chat_state WHERE tenant_id = ? AND muted_until IS NOT NULL AND muted_until > ? ORDER BY identity_id").bind(tenant_id, now),
+    db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:139:5:getControls:16d6692a*/ SELECT agents_enabled FROM chat_control WHERE tenant_id = ?").bind(tenant_id),
+    db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:140:5:getControls:46bc04e0*/ SELECT identity_id FROM agent_chat_state WHERE tenant_id = ? AND muted_until IS NOT NULL AND muted_until > ? ORDER BY identity_id").bind(tenant_id, now),
   ]);
   const row = control!.results[0] as { agents_enabled: number } | undefined;
   return { agents_enabled: row ? row.agents_enabled === 1 : true, muted: muted!.results.map((r) => (r as { identity_id: string }).identity_id) };
@@ -164,7 +164,7 @@ export async function setAgentMute(db: D1Database, tenant_id: string, identity_i
 }
 
 export async function agentMutedUntil(db: D1Database, tenant_id: string, identity_id: string, now: number): Promise<number | null> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:167:19:r:379ed222*/ SELECT muted_until FROM agent_chat_state WHERE tenant_id = ? AND identity_id = ? AND muted_until IS NOT NULL AND muted_until > ?")
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fchat.ts:167:19:agentMutedUntil:379ed222*/ SELECT muted_until FROM agent_chat_state WHERE tenant_id = ? AND identity_id = ? AND muted_until IS NOT NULL AND muted_until > ?")
     .bind(tenant_id, identity_id, now).first<{ muted_until: number }>();
   return r ? r.muted_until : null;
 }

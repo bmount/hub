@@ -24,7 +24,7 @@ export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false)
   if (allowAgentSrc && slug.startsWith("agent-src/")) {
     const agent = await agentByName(ctx.db, ctx.tenant!, slug.slice(10));
     if (!agent || !ctx.identity || !ctx.role || !agentSrcAccess({ identity: ctx.identity, role: ctx.role }, agent)) throw notFound("no such repository");
-    const source = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:27:26:source:2b1609cf*/ SELECT id, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'agent-src'")
+    const source = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:27:26:repoProject:2b1609cf*/ SELECT id, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'agent-src'")
       .bind(ctx.tenant!.id, agentSrcSlug(agent.id)).first<{ id: string; display_name: string }>();
     if (!source) throw notFound("no such repository");
     return { ...source, slug };
@@ -45,7 +45,7 @@ function rev(v: string | null, fallback = "HEAD"): string {
 export async function whoPushed(ctx: Ctx, ids: Array<string | null>): Promise<Map<string, string>> {
   const u = [...new Set(ids.filter((x): x is string => !!x))].slice(0, 100);
   if (!u.length) return new Map();
-  const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:48:19:r:da2826d8*/ SELECT id, display_name FROM identity WHERE id IN (${u.map(() => "?").join(",")})`).bind(...u).all<{ id: string; display_name: string }>();
+  const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:48:19:whoPushed:da2826d8*/ SELECT id, display_name FROM identity WHERE id IN (${u.map(() => "?").join(",")})`).bind(...u).all<{ id: string; display_name: string }>();
   return new Map(r.results.map((x) => [x.id, x.display_name]));
 }
 
@@ -78,11 +78,11 @@ export async function afterCommit(ctx: Ctx, project_id: string, oid: string, com
         AND substr(?, 1, length(d.tag)) = lower(d.tag)))
     ORDER BY CASE WHEN ${fullVersion} THEN 0 ELSE 1 END, d.seen_at, d.id LIMIT 1`;
   const [shipped, since, errors] = await ctx.db.batch([
-    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:81:5:%5Bshipped%2C%20since%2C%20errors%5D:71a4dc57*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at,
+    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:81:5:afterCommit:71a4dc57*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at,
       CASE WHEN ${fullVersion} THEN 'full-commit' ELSE 'tag-prefix' END AS match ${matchingDeploy}`)
       .bind(project_id, ctx.tenant!.id, normalized, normalized),
-    ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:84:5:%5Bshipped%2C%20since%2C%20errors%5D:0bb3acb1*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo' WHERE d.project_id = ? AND d.tenant_id = ? AND d.seen_at >= ? ORDER BY d.seen_at, d.id LIMIT 11").bind(project_id, ctx.tenant!.id, commitMs),
-    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:85:5:%5Bshipped%2C%20since%2C%20errors%5D:f9bf1757*/ SELECT g.id, g.title, g.count, g.first_seen FROM app_error_group g
+    ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:84:5:afterCommit:0bb3acb1*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo' WHERE d.project_id = ? AND d.tenant_id = ? AND d.seen_at >= ? ORDER BY d.seen_at, d.id LIMIT 11").bind(project_id, ctx.tenant!.id, commitMs),
+    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:85:5:afterCommit:f9bf1757*/ SELECT g.id, g.title, g.count, g.first_seen FROM app_error_group g
       JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind = 'repo'
       WHERE g.project_id = ? AND g.tenant_id = ? AND g.first_seen >= COALESCE(
         (SELECT d.seen_at ${matchingDeploy}), ?) ORDER BY g.first_seen, g.id LIMIT 11`)
@@ -320,7 +320,7 @@ export const repoList = defineVerb({
   parse: () => ({}),
   run: async (ctx) => {
     const host = `${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN.toLowerCase()}`;
-    const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:323:25:rows:602e7d9c*/ SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND kind = 'repo' AND state = 'active' AND (? IS NULL OR id = ?) ORDER BY slug").bind(ctx.tenant!.id, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).all<{ slug: string; name: string }>()).results;
+    const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:323:25:repoList.run:602e7d9c*/ SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND kind = 'repo' AND state = 'active' AND (? IS NULL OR id = ?) ORDER BY slug").bind(ctx.tenant!.id, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).all<{ slug: string; name: string }>()).results;
     const push = rank(ctx.role) >= rank("member");
     return {
       access: push ? "read and push (never force: history is kept)" : "read",

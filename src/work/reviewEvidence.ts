@@ -22,7 +22,7 @@ export function reviewDraftStatement(ctx: Ctx, reference: string) {
 export function reviewWorkQuery(ctx: Ctx, review: { id: string; slug: string; number: number; head_oid: string | null }) {
   const url = reviewEvidenceUrl(ctx, review);
   const commit = review.head_oid && /^[0-9a-f]{40}$/i.test(review.head_oid) ? `${review.slug}@${review.head_oid.toLowerCase()}` : null;
-  const statement = ctx.db.prepare(`/*perf-site:src%2Fwork%2FreviewEvidence.ts:25:21:statement:d4c9658f*/ SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,
+  const statement = ctx.db.prepare(`/*perf-site:src%2Fwork%2FreviewEvidence.ts:25:21:reviewWorkQuery:d4c9658f*/ SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,
       CASE WHEN w.source_kind = 'url' AND w.source_ref = ? THEN 'filed'
         WHEN EXISTS (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND l.target_kind = 'url' AND l.target_ref = ?) THEN 'linked'
         ELSE 'commit' END AS relationship

@@ -52,7 +52,7 @@ async function tenantCtx(request: Request, env: Env) {
 async function projectCtx(request: Request, env: Env, slug: string) {
   const { ctx, extra, ok } = await tenantCtx(request, env);
   if (!ok) return { ctx, extra, project: null };
-  const project = await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:55:25:project:d1055dba*/ SELECT p.id, ${projectPathSql()} AS slug, p.kind, p.display_name, p.state FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, slug)
+  const project = await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:55:25:projectCtx:d1055dba*/ SELECT p.id, ${projectPathSql()} AS slug, p.kind, p.display_name, p.state FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, slug)
     .first<Project>();
   return { ctx, extra, project: project && projectFeatures(project.kind).includes("docket") ? project : null };
 }
@@ -306,19 +306,19 @@ export async function selectedWorkInspector(ctx: Ctx, env: Env, url: URL, scope:
   if (!ref) return { html: null, key: "" };
   const match = /^([a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)?)#([1-9][0-9]{0,7})$/.exec(ref);
   if (!match || scope && match[1] !== scope) throw new HubError(404, "not_found");
-  const project = await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:309:25:project:d1055dba*/ SELECT p.id, ${projectPathSql()} AS slug, p.kind, p.display_name, p.state FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, match[1]).first<Project>();
+  const project = await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:309:25:selectedWorkInspector:d1055dba*/ SELECT p.id, ${projectPathSql()} AS slug, p.kind, p.display_name, p.state FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, match[1]).first<Project>();
   if (!project || !projectFeatures(project.kind).includes("docket")) throw new HubError(404, "not_found");
   const w = await getWorkByNumber(ctx.db, project.id, Number(match[2]));
   if (!w) throw new HubError(404, "not_found");
   const [members, quests, links, children, owner, parent, activity, comments, following] = await ctx.db.batch([
     membersStatement(ctx), questsStatement(ctx, project.id), listLinksStatement(ctx.db, w.id),
     listWorkStatement(ctx.db, ctx.tenant!.id, { parent_id: w.id, limit: 200, states: [] }),
-    ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:316:5:%5Bmembers%2C%20quests%2C%20links%2C%20children%2C%20owner%2C%20parent%2C%20activity%2C%20comments%2C%20following%5D:f7d22dac*/ SELECT id, display_name, email, kind FROM identity WHERE id = ?").bind(w.owner_id),
-    ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:317:5:%5Bmembers%2C%20quests%2C%20links%2C%20children%2C%20owner%2C%20parent%2C%20activity%2C%20comments%2C%20following%5D:da0948f2*/ SELECT id, number, title FROM work_item WHERE id = ?").bind(w.parent_id),
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:318:5:%5Bmembers%2C%20quests%2C%20links%2C%20children%2C%20owner%2C%20parent%2C%20activity%2C%20comments%2C%20following%5D:940f9327*/ SELECT e.kind, e.summary, e.created_at, i.display_name AS who FROM event e LEFT JOIN identity i ON i.id = e.identity_id WHERE e.tenant_id = ? AND e.target_id = ? ORDER BY e.created_at DESC LIMIT 30`).bind(ctx.tenant!.id, w.id),
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:319:5:%5Bmembers%2C%20quests%2C%20links%2C%20children%2C%20owner%2C%20parent%2C%20activity%2C%20comments%2C%20following%5D:6688422a*/ SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author, m.handle FROM work_comment c JOIN identity i ON i.id = c.author_id LEFT JOIN membership m ON m.identity_id = c.author_id AND m.tenant_id = c.tenant_id WHERE c.item_id = ? ORDER BY c.created_at LIMIT 200`).bind(w.id),
-    ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:320:5:%5Bmembers%2C%20quests%2C%20links%2C%20children%2C%20owner%2C%20parent%2C%20activity%2C%20comments%2C%20following%5D:ff730cad*/ SELECT 1 FROM follow WHERE identity_id = ? AND target_kind = 'item' AND target_id = ?").bind(ctx.identity!.id, w.id),
-    ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:321:5:%5Bmembers%2C%20quests%2C%20links%2C%20children%2C%20owner%2C%20parent%2C%20activity%2C%20comments%2C%20following%5D:a8780539*/ UPDATE attention SET done_at = ? WHERE identity_id = ? AND item_id = ? AND done_at IS NULL").bind(ctx.now, ctx.identity!.id, w.id),
+    ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:316:5:selectedWorkInspector:f7d22dac*/ SELECT id, display_name, email, kind FROM identity WHERE id = ?").bind(w.owner_id),
+    ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:317:5:selectedWorkInspector:da0948f2*/ SELECT id, number, title FROM work_item WHERE id = ?").bind(w.parent_id),
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:318:5:selectedWorkInspector:940f9327*/ SELECT e.kind, e.summary, e.created_at, i.display_name AS who FROM event e LEFT JOIN identity i ON i.id = e.identity_id WHERE e.tenant_id = ? AND e.target_id = ? ORDER BY e.created_at DESC LIMIT 30`).bind(ctx.tenant!.id, w.id),
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:319:5:selectedWorkInspector:6688422a*/ SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author, m.handle FROM work_comment c JOIN identity i ON i.id = c.author_id LEFT JOIN membership m ON m.identity_id = c.author_id AND m.tenant_id = c.tenant_id WHERE c.item_id = ? ORDER BY c.created_at LIMIT 200`).bind(w.id),
+    ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:320:5:selectedWorkInspector:ff730cad*/ SELECT 1 FROM follow WHERE identity_id = ? AND target_kind = 'item' AND target_id = ?").bind(ctx.identity!.id, w.id),
+    ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:321:5:selectedWorkInspector:a8780539*/ UPDATE attention SET done_at = ? WHERE identity_id = ? AND item_id = ? AND done_at IS NULL").bind(ctx.now, ctx.identity!.id, w.id),
   ]);
   const back = new URL(url); back.searchParams.delete("work");
   return { html: await itemInspector(ctx, env, project, w, {
@@ -404,7 +404,7 @@ export async function newWorkPage(request: Request, env: Env): Promise<Response>
   if (traceId !== null && reviewId !== null || traceId !== null && (!traceId || traceId.length > 40)
     || reviewId !== null && (!reviewId || reviewId.length > 80)) return notFoundPage(extra);
   const [projects, sourceR] = await ctx.db.batch([
-    ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:407:5:%5Bprojects%2C%20sourceR%5D:44d6fa5c*/ SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active' ORDER BY display_name").bind(ctx.tenant!.id),
+    ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:407:5:newWorkPage:44d6fa5c*/ SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active' ORDER BY display_name").bind(ctx.tenant!.id),
     ...(traceId !== null ? [traceDraftStatement(ctx, traceId)] : reviewId !== null ? [reviewDraftStatement(ctx, reviewId)] : [])]);
   const ps = projects!.results as Array<{ id: string; slug: string; display_name: string }>;
   type TraceSource = { id: string; project: string; script_name: string; title: string; last_message: string; count: number; last_version: string | null };
@@ -444,9 +444,9 @@ export async function jumpPage(request: Request, env: Env): Promise<Response> {
   if (!q && new URL(request.url).searchParams.get("suggest") === "1") {
     const tid = ctx.tenant!.id;
     const [mineR, projR] = await ctx.db.batch([
-      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:447:7:%5BmineR%2C%20projR%5D:d3c8914a*/ SELECT p.slug, w.number, w.title, w.kind FROM work_item w JOIN project p ON p.id = w.project_id
+      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:447:7:jumpPage:d3c8914a*/ SELECT p.slug, w.number, w.title, w.kind FROM work_item w JOIN project p ON p.id = w.project_id
         WHERE w.tenant_id = ? AND w.owner_id = ? AND w.state IN ('open', 'doing') ORDER BY w.updated_at DESC LIMIT 4`).bind(tid, ctx.identity!.id),
-      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:449:7:%5BmineR%2C%20projR%5D:f87136cd*/ SELECT p.slug, p.display_name, MAX(w.updated_at) AS last, SUM(w.state IN ('open', 'doing')) AS open FROM project p LEFT JOIN work_item w ON w.project_id = p.id
+      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:449:7:jumpPage:f87136cd*/ SELECT p.slug, p.display_name, MAX(w.updated_at) AS last, SUM(w.state IN ('open', 'doing')) AS open FROM project p LEFT JOIN work_item w ON w.project_id = p.id
         WHERE p.tenant_id = ? AND p.state = 'active' AND p.kind NOT IN ('channel', 'agent-src') GROUP BY p.id ORDER BY last IS NULL, last DESC, p.display_name LIMIT 5`).bind(tid),
     ]);
     const needs = ctx.rail?.needs ?? 0;
@@ -462,12 +462,12 @@ export async function jumpPage(request: Request, env: Env): Promise<Response> {
     const ref = /^([a-z0-9][a-z0-9-]*)?#(\d{1,8})$/i.exec(q);
     const tid = ctx.tenant!.id;
     const [refR, projR, workR, peopleR] = await ctx.db.batch([
-      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:465:7:%5BrefR%2C%20projR%2C%20workR%2C%20peopleR%5D:0a7daebe*/ SELECT p.slug, w.number, w.title FROM work_item w JOIN project p ON p.id = w.project_id WHERE w.tenant_id = ? AND p.slug = ? AND w.number = ?`)
+      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:465:7:jumpPage:0a7daebe*/ SELECT p.slug, w.number, w.title FROM work_item w JOIN project p ON p.id = w.project_id WHERE w.tenant_id = ? AND p.slug = ? AND w.number = ?`)
         .bind(tid, ref?.[1]?.toLowerCase() ?? "", ref ? Number(ref[2]) : 0),
-      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:467:7:%5BrefR%2C%20projR%2C%20workR%2C%20peopleR%5D:d1f9736d*/ SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND (slug LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\') ORDER BY display_name LIMIT 5`).bind(tid, like, like),
-      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:468:7:%5BrefR%2C%20projR%2C%20workR%2C%20peopleR%5D:8277f40c*/ SELECT p.slug, w.number, w.title, w.kind FROM work_item w JOIN project p ON p.id = w.project_id WHERE w.tenant_id = ? AND w.title LIKE ? ESCAPE '\\'
+      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:467:7:jumpPage:d1f9736d*/ SELECT slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND (slug LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\') ORDER BY display_name LIMIT 5`).bind(tid, like, like),
+      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:468:7:jumpPage:8277f40c*/ SELECT p.slug, w.number, w.title, w.kind FROM work_item w JOIN project p ON p.id = w.project_id WHERE w.tenant_id = ? AND w.title LIKE ? ESCAPE '\\'
         ORDER BY w.state IN ('done', 'dropped'), w.updated_at DESC LIMIT 8`).bind(tid, like),
-      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:470:7:%5BrefR%2C%20projR%2C%20workR%2C%20peopleR%5D:a22e626b*/ SELECT i.display_name, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active'
+      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:470:7:jumpPage:a22e626b*/ SELECT i.display_name, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active'
         AND (i.display_name LIKE ? ESCAPE '\\' OR i.email LIKE ? ESCAPE '\\') LIMIT 5`).bind(tid, like, like),
     ]);
     for (const x of refR!.results as Array<{ slug: string; number: number; title: string }>) results.push({ label: `${x.slug}#${x.number} ${x.title}`, hint: "item", href: `/${x.slug}/w/${x.number}` });

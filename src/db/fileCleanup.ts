@@ -15,7 +15,7 @@ const objectKey = /^project-files\/[0-9A-HJKMNP-TV-Z]{26}\/[0-9A-HJKMNP-TV-Z]{26
 export async function cleanupFileObjects(env: Env, now: number, dryRun = true) {
   const bucket = env.GIT_PUSH_STAGING;
   if (!bucket) return { scanned: 0, eligible: 0, deleted: 0, dry_run: dryRun, next_cursor: null };
-  const cursor = (await env.HUB_DB.prepare("/*perf-site:src%2Fdb%2FfileCleanup.ts:18:25:cursor:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(FILE_CLEANUP_CURSOR).first<{value: string}>())?.value;
+  const cursor = (await env.HUB_DB.prepare("/*perf-site:src%2Fdb%2FfileCleanup.ts:18:25:cleanupFileObjects:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(FILE_CLEANUP_CURSOR).first<{value: string}>())?.value;
   const page = await bucket.list({ prefix: "project-files/", limit: FILE_CLEANUP_LIMIT, ...(cursor ? {cursor} : {}) });
   let eligible = 0, deleted = 0;
   for (const object of page.objects) {

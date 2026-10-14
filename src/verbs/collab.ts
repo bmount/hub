@@ -27,7 +27,7 @@ export const workComment = defineVerb({
     const body = reqString(i, "body", { max: 10_000 }).trim();
     if (!body) throw badRequest("a comment needs some text");
     const replyTo = optString(i, "reply_to", { max: 40 });
-    if (replyTo && !(await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:30:28:workComment:5ca35b19*/ SELECT 1 FROM work_comment WHERE id = ? AND item_id = ?").bind(replyTo, item.id).first())) throw badRequest("reply_to is not a comment on this item");
+    if (replyTo && !(await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:30:28:workComment.run:5ca35b19*/ SELECT 1 FROM work_comment WHERE id = ? AND item_id = ?").bind(replyTo, item.id).first())) throw badRequest("reply_to is not a comment on this item");
     const project = await slugOf(ctx, item.project_id);
     const r = ref(project, item);
     const dir = await people(ctx.db, ctx.tenant!.id);
@@ -38,9 +38,9 @@ export const workComment = defineVerb({
     const gist = cleanText(body).slice(0, 120);
     const fs = await followers(ctx, item);
     await ctx.db.batch([
-      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:41:7:workComment:93ebccc0*/ INSERT INTO work_comment (id, tenant_id, item_id, author_id, session_id, body, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:41:7:workComment.run:93ebccc0*/ INSERT INTO work_comment (id, tenant_id, item_id, author_id, session_id, body, reply_to, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(id, ctx.tenant!.id, item.id, ctx.identity!.id, ctx.session?.id ?? null, body, replyTo, ctx.now),
-      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:43:7:workComment:a3512ac6*/ UPDATE work_item SET updated_at = ? WHERE id = ?").bind(ctx.now, item.id),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:43:7:workComment.run:a3512ac6*/ UPDATE work_item SET updated_at = ? WHERE id = ?").bind(ctx.now, item.id),
       followStatement(ctx, ctx.identity!.id, "item", item.id),
       ...attentionStatements(ctx, item, [
         ...mentioned.map((p) => ({ to: p.identity_id, reason: "mention" as const, summary: `${who} mentioned you on ${r}: ${gist}` })),
@@ -65,7 +65,7 @@ export const workSubscribe = defineVerb({
     let kind: "item" | "project"; let target: string; let label: string;
     const projectSlug = optString(i, "project", { max: 63 });
     if (projectSlug && !i.id) {
-      const p = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:68:23:p:35f6cac9*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, projectSlug.toLowerCase()).first<{ id: string; slug: string }>();
+      const p = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:68:23:workSubscribe.run:35f6cac9*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, projectSlug.toLowerCase()).first<{ id: string; slug: string }>();
       if (!p) throw notFound("no such project");
       kind = "project"; target = p.id; label = p.slug;
     } else {
@@ -73,7 +73,7 @@ export const workSubscribe = defineVerb({
       kind = "item"; target = item.id; label = ref(await slugOf(ctx, item.project_id), item);
     }
     if (follow) await followStatement(ctx, ctx.identity!.id, kind, target).run();
-    else await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:76:16:workSubscribe:7ecb4427*/ DELETE FROM follow WHERE identity_id = ? AND target_kind = ? AND target_id = ?").bind(ctx.identity!.id, kind, target).run();
+    else await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:76:16:workSubscribe.run:7ecb4427*/ DELETE FROM follow WHERE identity_id = ? AND target_kind = ? AND target_id = ?").bind(ctx.identity!.id, kind, target).run();
     return { following: follow, target: label, kind };
   },
 });
@@ -121,8 +121,8 @@ export const attentionDone = defineVerb({
   run: async (ctx, p) => {
     const base = "UPDATE attention SET done_at = ? WHERE tenant_id = ? AND identity_id = ? AND done_at IS NULL";
     const r = p.all
-      ? await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:124:15:r:23eb1f1c*/ " + (base)).bind(ctx.now, ctx.tenant!.id, ctx.identity!.id).run()
-      : await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcollab.ts:125:15:r:a724964b*/ ${base} AND id IN (${p.ids.map(() => "?").join(",")})`).bind(ctx.now, ctx.tenant!.id, ctx.identity!.id, ...p.ids).run();
+      ? await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcollab.ts:124:15:attentionDone.run:23eb1f1c*/ " + (base)).bind(ctx.now, ctx.tenant!.id, ctx.identity!.id).run()
+      : await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcollab.ts:125:15:attentionDone.run:a724964b*/ ${base} AND id IN (${p.ids.map(() => "?").join(",")})`).bind(ctx.now, ctx.tenant!.id, ctx.identity!.id, ...p.ids).run();
     return { done: r.meta.changes };
   },
 });

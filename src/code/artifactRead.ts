@@ -29,7 +29,7 @@ export async function artifactRead<T>(env: Env, org: string, authorization: stri
   if (info.description !== repoOwnership(grant.tenant.id, grant.project.id)) throw new HubError(503, "unavailable", "repository migration is not ready");
   const page = (result: unknown, next: string | null = null) => ({ result: result as T, next });
   const metadata = async (commit: ArtifactCommit): Promise<ArdiCommit> => {
-    const by = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactRead.ts:32:22:by:e8dde379*/ SELECT identity_id, session_id FROM code_event WHERE tenant_id = ? AND project_id = ? AND kind = 'commit' AND target = ? ORDER BY at, ardi_id LIMIT 1")
+    const by = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactRead.ts:32:22:metadata:e8dde379*/ SELECT identity_id, session_id FROM code_event WHERE tenant_id = ? AND project_id = ? AND kind = 'commit' AND target = ? ORDER BY at, ardi_id LIMIT 1")
       .bind(grant.tenant.id, grant.project.id, commit.hash).first<{ identity_id: string | null; session_id: string | null }>();
     return { oid: commit.hash, tree: commit.treeHash, parents: commit.parents, author_name: commit.author.name, author_email: commit.author.email,
       author_time: commit.authoredAt, committer_name: commit.committer.name, committer_email: commit.committer.email, commit_time: commit.committedAt,
@@ -126,9 +126,9 @@ export async function artifactRead<T>(env: Env, org: string, authorization: stri
     if (!head) throw new HubError(404, "not_found", "revision not found");
     const cursor = body.since ? String(body.since) : null;
     if (cursor && !/^[0-9a-f]{40}$/.test(cursor)) throw new HubError(400, "bad_request", "invalid history cursor");
-    const indexed = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactRead.ts:129:27:indexed:96d0a526*/ SELECT 1 FROM git_commit WHERE tenant_id = ? AND project_id = ? AND oid = ?").bind(grant.tenant.id, grant.project.id, head.hash).first();
+    const indexed = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactRead.ts:129:27:artifactRead:96d0a526*/ SELECT 1 FROM git_commit WHERE tenant_id = ? AND project_id = ? AND oid = ?").bind(grant.tenant.id, grant.project.id, head.hash).first();
     if (!indexed) throw new HubError(503, "unavailable", "repository history metadata is not ready");
-    const nodes = (await env.HUB_DB.prepare(`/*perf-site:src%2Fcode%2FartifactRead.ts:131:26:nodes:ed08fd4b*/ WITH RECURSIVE reachable(oid) AS (
+    const nodes = (await env.HUB_DB.prepare(`/*perf-site:src%2Fcode%2FartifactRead.ts:131:26:artifactRead:ed08fd4b*/ WITH RECURSIVE reachable(oid) AS (
       SELECT ? UNION SELECT parent.value FROM reachable r JOIN git_commit c ON c.oid = r.oid AND c.project_id = ? JOIN json_each(c.parents_json) parent
     ) SELECT c.oid, c.tree_hash, c.parents_json FROM reachable r JOIN git_commit c ON c.oid = r.oid AND c.project_id = ? AND c.tenant_id = ? ORDER BY c.generation DESC, c.commit_time DESC, c.oid DESC`)
       .bind(head.hash, grant.project.id, grant.project.id, grant.tenant.id).all<{ oid: string; tree_hash: string; parents_json: string }>()).results;
@@ -151,7 +151,7 @@ export async function artifactRead<T>(env: Env, org: string, authorization: stri
     const since = body.since ? Number(body.since) : null, limit = Math.max(1, Math.min(Number(body.limit) || 100, 1000));
     if (since !== null && !Number.isSafeInteger(since)) throw new HubError(400, "bad_request", "invalid event cursor");
     const seq = since === null ? 0 : Math.max(0, Math.floor((since - 1_000_000_000_000) / 8192));
-    const rows = (await env.HUB_DB.prepare(`/*perf-site:src%2Fcode%2FartifactRead.ts:154:25:rows:f044ec2e*/ SELECT seq, identity_id, session_id, published_json, commits_json, completed_at FROM git_push WHERE project_id = ? AND tenant_id = ? AND state = 'complete' AND seq >= ? ORDER BY seq ${since === null ? "DESC" : "ASC"} LIMIT ?`)
+    const rows = (await env.HUB_DB.prepare(`/*perf-site:src%2Fcode%2FartifactRead.ts:154:25:artifactRead:f044ec2e*/ SELECT seq, identity_id, session_id, published_json, commits_json, completed_at FROM git_push WHERE project_id = ? AND tenant_id = ? AND state = 'complete' AND seq >= ? ORDER BY seq ${since === null ? "DESC" : "ASC"} LIMIT ?`)
       .bind(grant.project.id, grant.tenant.id, seq, limit + 1).all<{ seq: number; identity_id: string | null; session_id: string | null; published_json: string; commits_json: string; completed_at: number }>()).results;
     if (since === null) rows.reverse();
     const events: ArdiEvent[] = rows.flatMap(row => {

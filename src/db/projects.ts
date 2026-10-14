@@ -29,10 +29,10 @@ export async function createProject(
   if (!KINDS.has(input.kind)) throw badRequest("unknown project kind");
   if (!input.display_name.trim()) throw badRequest("display_name required");
   if (input.namespace_id === null) {
-    const clash = await db.prepare("/*perf-site:src%2Fdb%2Fprojects.ts:32:25:clash:24d8647c*/ SELECT 1 FROM namespace WHERE tenant_id = ? AND slug = ?").bind(input.tenant_id, input.slug).first();
+    const clash = await db.prepare("/*perf-site:src%2Fdb%2Fprojects.ts:32:25:createProject:24d8647c*/ SELECT 1 FROM namespace WHERE tenant_id = ? AND slug = ?").bind(input.tenant_id, input.slug).first();
     if (clash) throw conflict("slug is used by a namespace");
   } else {
-    const ns = await db.prepare("/*perf-site:src%2Fdb%2Fprojects.ts:35:22:ns:61c5df14*/ SELECT 1 FROM namespace WHERE id = ? AND tenant_id = ?").bind(input.namespace_id, input.tenant_id).first();
+    const ns = await db.prepare("/*perf-site:src%2Fdb%2Fprojects.ts:35:22:createProject:61c5df14*/ SELECT 1 FROM namespace WHERE id = ? AND tenant_id = ?").bind(input.namespace_id, input.tenant_id).first();
     if (!ns) throw badRequest("namespace not in tenant");
   }
   const row: Project = {
@@ -43,7 +43,7 @@ export async function createProject(
     // Projects and agents share one name space per organization, first come, first served (mailboxes spec,
     // amendment 2026-10-07 b). The check is inside the insert, so two creators can never both win.
     const r = await db.prepare(
-      `/*perf-site:src%2Fdb%2Fprojects.ts:45:21:r:6db0b64d*/ INSERT INTO project (id, tenant_id, namespace_id, slug, kind, display_name, state, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?
+      `/*perf-site:src%2Fdb%2Fprojects.ts:45:21:createProject:6db0b64d*/ INSERT INTO project (id, tenant_id, namespace_id, slug, kind, display_name, state, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (${HELPER_NAMED})`,
     ).bind(row.id, row.tenant_id, row.namespace_id, row.slug, row.kind, row.display_name, row.state, row.created_at, row.tenant_id, row.slug).run();
     if (r.meta.changes !== 1) throw conflict(`"${row.slug}" is the name of an agent in this organization; choose another project name`);
@@ -68,11 +68,11 @@ export function getProjectByPath(db: D1Database, tenant_id: string, namespace_sl
 }
 
 export async function listProjects(db: D1Database, tenant_id: string, state: State): Promise<Project[]> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fprojects.ts:71:19:r:27258738*/ SELECT * FROM project WHERE tenant_id = ? AND state = ? AND kind NOT IN ('channel', 'agent-src') ORDER BY namespace_id, slug").bind(tenant_id, state).all<Project>();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fprojects.ts:71:19:listProjects:27258738*/ SELECT * FROM project WHERE tenant_id = ? AND state = ? AND kind NOT IN ('channel', 'agent-src') ORDER BY namespace_id, slug").bind(tenant_id, state).all<Project>();
   return r.results;
 }
 
 export async function setProjectState(db: D1Database, tenant_id: string, id: string, state: State): Promise<boolean> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fprojects.ts:76:19:r:7a7a0e0b*/ UPDATE project SET state = ? WHERE id = ? AND tenant_id = ? AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'project_delete:v1:' || project.tenant_id || ':' || project.id)").bind(state, id, tenant_id, state).run();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fprojects.ts:76:19:setProjectState:7a7a0e0b*/ UPDATE project SET state = ? WHERE id = ? AND tenant_id = ? AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'project_delete:v1:' || project.tenant_id || ':' || project.id)").bind(state, id, tenant_id, state).run();
   return r.meta.changes === 1;
 }

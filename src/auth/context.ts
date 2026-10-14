@@ -200,10 +200,10 @@ type Prefetched = { tenant: Tenant | null; session: Session | null; identity: Id
 async function prefetch(db: D1Database, slug: string | null, tokenHash: string, now: number, wantRail = false, request?: Request): Promise<Prefetched> {
   const live = "SELECT identity_id FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?";
   const [t, s, i, m, rc, ec] = await db.batch([
-    db.prepare("/*perf-site:src%2Fauth%2Fcontext.ts:203:5:%5Bt%2C%20s%2C%20i%2C%20m%2C%20rc%2C%20ec%5D:d9bfee79*/ SELECT * FROM tenant WHERE slug = ?").bind(slug),
-    db.prepare("/*perf-site:src%2Fauth%2Fcontext.ts:204:5:%5Bt%2C%20s%2C%20i%2C%20m%2C%20rc%2C%20ec%5D:f39885ba*/ SELECT * FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?").bind(tokenHash, now),
-    db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:205:5:%5Bt%2C%20s%2C%20i%2C%20m%2C%20rc%2C%20ec%5D:0e329609*/ SELECT * FROM identity WHERE id = (${live})`).bind(tokenHash, now),
-    db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:206:5:%5Bt%2C%20s%2C%20i%2C%20m%2C%20rc%2C%20ec%5D:8dcf294c*/ SELECT * FROM membership WHERE identity_id = (${live}) AND tenant_id = (SELECT id FROM tenant WHERE slug = ?)`).bind(tokenHash, now, slug),
+    db.prepare("/*perf-site:src%2Fauth%2Fcontext.ts:203:5:prefetch:d9bfee79*/ SELECT * FROM tenant WHERE slug = ?").bind(slug),
+    db.prepare("/*perf-site:src%2Fauth%2Fcontext.ts:204:5:prefetch:f39885ba*/ SELECT * FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?").bind(tokenHash, now),
+    db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:205:5:prefetch:0e329609*/ SELECT * FROM identity WHERE id = (${live})`).bind(tokenHash, now),
+    db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:206:5:prefetch:8dcf294c*/ SELECT * FROM membership WHERE identity_id = (${live}) AND tenant_id = (SELECT id FROM tenant WHERE slug = ?)`).bind(tokenHash, now, slug),
     ...(wantRail ? [railStatement(db, slug, live, tokenHash, now), explorerStatement(db, slug, live, tokenHash, now, request!)] : []),
   ]);
   const one = <T>(r: D1Result<unknown> | undefined): T | null => ((r?.results[0] as T | undefined) ?? null);

@@ -40,16 +40,16 @@ export async function appsPage(request: Request, env: Env): Promise<Response> {
   if (did !== null && (!did || did.length > 40 || params.has("g"))) return notFoundPage(extra);
   const [appsR, groupsR, oneR, eventsR, deploysR, relatedR, allDeploysR, namesR, selectedDeployR] = await ctx.db.batch([
     appsStatement(ctx.db, ctx.tenant.id, ctx.now),
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FappsPages.ts:43:5:%5BappsR%2C%20groupsR%2C%20oneR%2C%20eventsR%2C%20deploysR%2C%20relatedR%2C%20allDeploysR%2C%20namesR%2C%20selectedDeployR%5D:6b570489*/ SELECT g.id, p.slug AS project, g.script_name, COALESCE(g.client_kind, g.kind) AS kind, g.title, g.last_message, g.count, g.first_seen, g.last_seen, g.last_version FROM app_error_group g JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FappsPages.ts:43:5:appsPage:6b570489*/ SELECT g.id, p.slug AS project, g.script_name, COALESCE(g.client_kind, g.kind) AS kind, g.title, g.last_message, g.count, g.first_seen, g.last_seen, g.last_version FROM app_error_group g JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
       WHERE g.tenant_id = ? AND g.last_seen >= ? AND (? IS NULL OR p.slug = ?)
       AND (? IS NULL OR EXISTS (SELECT 1 FROM site_app sa JOIN app_source a ON a.id = sa.app_id WHERE sa.site_id = ? AND a.tenant_id = g.tenant_id AND a.project_id = g.project_id AND a.script_name = g.script_name))
       ORDER BY g.last_seen DESC LIMIT 100`).bind(ctx.tenant.id, ctx.now - 7 * 86_400_000, project, project, site?.id ?? null, site?.id ?? null),
     traceGroupStatement(ctx, gid),
-    ctx.db.prepare("/*perf-site:src%2Fhttp%2FappsPages.ts:48:5:%5BappsR%2C%20groupsR%2C%20oneR%2C%20eventsR%2C%20deploysR%2C%20relatedR%2C%20allDeploysR%2C%20namesR%2C%20selectedDeployR%5D:a022f8b0*/ SELECT e.at, e.method, e.path, e.status, e.ray FROM app_event e JOIN app_error_group g ON g.id = e.group_id AND g.tenant_id = e.tenant_id WHERE g.id = ? AND g.tenant_id = ? ORDER BY e.at DESC LIMIT 20").bind(gid, ctx.tenant.id),
-    ctx.db.prepare("/*perf-site:src%2Fhttp%2FappsPages.ts:49:5:%5BappsR%2C%20groupsR%2C%20oneR%2C%20eventsR%2C%20deploysR%2C%20relatedR%2C%20allDeploysR%2C%20namesR%2C%20selectedDeployR%5D:8968f541*/ SELECT d.id, d.tag, d.version_id, d.message, d.seen_at FROM app_deploy d JOIN app_error_group g ON g.script_name = d.script_name AND g.tenant_id = d.tenant_id AND g.project_id = d.project_id WHERE g.id = ? AND g.tenant_id = ? ORDER BY d.seen_at DESC LIMIT 5").bind(gid, ctx.tenant.id),
+    ctx.db.prepare("/*perf-site:src%2Fhttp%2FappsPages.ts:48:5:appsPage:a022f8b0*/ SELECT e.at, e.method, e.path, e.status, e.ray FROM app_event e JOIN app_error_group g ON g.id = e.group_id AND g.tenant_id = e.tenant_id WHERE g.id = ? AND g.tenant_id = ? ORDER BY e.at DESC LIMIT 20").bind(gid, ctx.tenant.id),
+    ctx.db.prepare("/*perf-site:src%2Fhttp%2FappsPages.ts:49:5:appsPage:8968f541*/ SELECT d.id, d.tag, d.version_id, d.message, d.seen_at FROM app_deploy d JOIN app_error_group g ON g.script_name = d.script_name AND g.tenant_id = d.tenant_id AND g.project_id = d.project_id WHERE g.id = ? AND g.tenant_id = ? ORDER BY d.seen_at DESC LIMIT 5").bind(gid, ctx.tenant.id),
     traceWorkStatement(ctx, gid),
     deploysStatement(ctx, project, site?.id ?? null),
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FappsPages.ts:52:5:%5BappsR%2C%20groupsR%2C%20oneR%2C%20eventsR%2C%20deploysR%2C%20relatedR%2C%20allDeploysR%2C%20namesR%2C%20selectedDeployR%5D:c6873b4d*/ SELECT
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FappsPages.ts:52:5:appsPage:c6873b4d*/ SELECT
       (SELECT p.display_name FROM app_error_group g JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id WHERE g.id = ? AND g.tenant_id = ?) AS group_name,
       (SELECT p.display_name FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id WHERE d.id = ? AND d.tenant_id = ?) AS deploy_name`).bind(gid,ctx.tenant.id,did ?? "",ctx.tenant.id),
     ...(did !== null ? [deployStatement(ctx, did)] : []),
@@ -111,7 +111,7 @@ export async function adminAppsPage(request: Request, env: Env): Promise<Respons
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "apex" || !ctx.identity || ctx.identity.kind !== "human" || ctx.identity.is_root !== 1) return notFoundPage(extra);
-  const rows = (await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FappsPages.ts:114:23:rows:576c3f89*/ SELECT s.script_name, s.state, s.created_at, s.last_event_at, t.slug AS org, p.slug AS project, i.display_name AS who FROM app_source s
+  const rows = (await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FappsPages.ts:114:23:adminAppsPage:576c3f89*/ SELECT s.script_name, s.state, s.created_at, s.last_event_at, t.slug AS org, p.slug AS project, i.display_name AS who FROM app_source s
     JOIN tenant t ON t.id = s.tenant_id JOIN project p ON p.id = s.project_id LEFT JOIN identity i ON i.id = s.created_by ORDER BY s.state = 'pending' DESC, s.created_at DESC`)
     .all<{ script_name: string; state: string; created_at: number; last_event_at: number | null; org: string; project: string; who: string | null }>()).results;
   const form = (script: string, enable: boolean, label: string) => `<form class="inline" method="post" action="/api/app.approve"><input type="hidden" name="script" value="${esc(script)}"><input type="hidden" name="enable" value="${enable ? "1" : "0"}"><input type="hidden" name="_back" value="/admin/apps"><button type="submit" class="quiet">${label}</button></form>`;

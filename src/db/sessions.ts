@@ -33,13 +33,13 @@ export async function touchSession(db: D1Database, session: Session, now: number
 }
 
 export async function revokeSession(db: D1Database, id: string, now: number): Promise<boolean> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Fsessions.ts:36:19:r:5d7290c6*/ UPDATE session SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").bind(now, id).run();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fsessions.ts:36:19:revokeSession:5d7290c6*/ UPDATE session SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").bind(now, id).run();
   return r.meta.changes === 1;
 }
 
 export async function listSessions(db: D1Database, identity_id: string, now: number): Promise<Session[]> {
   const r = await db.prepare(
-    "/*perf-site:src%2Fdb%2Fsessions.ts:41:19:r:9138e0da*/ SELECT * FROM session WHERE identity_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC",
+    "/*perf-site:src%2Fdb%2Fsessions.ts:41:19:listSessions:9138e0da*/ SELECT * FROM session WHERE identity_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC",
   ).bind(identity_id, now).all<Session>();
   return r.results.map((x) => ({ ...x, token_hash: "" }));
 }
@@ -99,7 +99,7 @@ export function getSessionById(db: D1Database, id: string): Promise<Session | nu
 
 export async function listAgentRunsForOperator(db: D1Database, operator_id: string, now: number): Promise<Array<{ session: Session; agent_email: string; tenant_slug: string }>> {
   const r = await db.prepare(
-    `/*perf-site:src%2Fdb%2Fsessions.ts:101:19:r:ccd9fa4e*/ SELECT s.*, i.email AS agent_email, t.slug AS tenant_slug
+    `/*perf-site:src%2Fdb%2Fsessions.ts:101:19:listAgentRunsForOperator:ccd9fa4e*/ SELECT s.*, i.email AS agent_email, t.slug AS tenant_slug
        FROM session s JOIN identity i ON i.id = s.identity_id JOIN tenant t ON t.id = s.tenant_id
       WHERE i.operator_id = ? AND s.kind = 'agent_run' AND s.revoked_at IS NULL AND s.expires_at > ?
       ORDER BY s.created_at DESC`,

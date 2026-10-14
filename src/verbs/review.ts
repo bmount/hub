@@ -22,7 +22,7 @@ type Review = { id: string; project_id: string; slug: string; number: number; br
 
 export async function reviewRef(ctx: Ctx, ref: string): Promise<Review> {
   const m = /^([a-z0-9-]+(?:\/[a-z0-9-]+)?)!(\d{1,8})$/.exec(ref.trim()) ?? null;
-  const row = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:25:21:row:d041bdca*/ SELECT r.*, ${projectPathSql()} AS slug, i.display_name AS author FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id AND p.kind = 'repo' JOIN identity i ON i.id = r.author_id
+  const row = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:25:21:reviewRef:d041bdca*/ SELECT r.*, ${projectPathSql()} AS slug, i.display_name AS author FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id AND p.kind = 'repo' JOIN identity i ON i.id = r.author_id
     WHERE r.tenant_id = ? AND ${m ? `(${projectPathSql()}) = ? AND r.number = ?` : "r.id = ?"}`).bind(ctx.tenant!.id, ...(m ? [m[1], Number(m[2])] : [ref])).first<Review>();
   if (!row) throw notFound("no such review");
   return row;
@@ -74,7 +74,7 @@ export const reviewRequest = defineVerb({
     const fingerprint = key ? await sha256Hex(JSON.stringify({ project_id: pr.id, branch: p.branch, base: p.base,
       title: p.title, summary: p.summary, reviewers: p.reviewers })) : null;
     if (key) {
-      const prior = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:77:27:prior:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key).first<string>("value");
+      const prior = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:77:27:reviewRequest.run:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key).first<string>("value");
       if (prior !== null) return requestReplay(ctx, prior, fingerprint!, pr.id);
     }
     const head = (await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: `refs/heads/${p.branch}`, limit: 1 })).result.commits[0];
@@ -93,23 +93,23 @@ export const reviewRequest = defineVerb({
     // Only the winning transaction has this new review ID; racing keyed retries
     // select no rows for any effect and return the winner's durable snapshot.
     const results = await ctx.db.batch([
-      ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:96:7:results:27e3266d*/ INSERT INTO review (id, tenant_id, project_id, number, branch, base, head_oid, title, summary, status, author_id, created_at, updated_at)
+      ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:96:7:reviewRequest.run:27e3266d*/ INSERT INTO review (id, tenant_id, project_id, number, branch, base, head_oid, title, summary, status, author_id, created_at, updated_at)
         SELECT ?, ?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM review WHERE project_id = ?), ?, ?, ?, ?, ?, 'open', ?, ?, ?
         WHERE NOT EXISTS (SELECT 1 FROM meta WHERE key = ?)`)
         .bind(id, ctx.tenant!.id, pr.id, pr.id, p.branch, p.base, head.oid, title, p.summary, ctx.identity!.id, ctx.now, ctx.now, key),
-      ...[...new Set(ids)].map((rid) => ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:100:41:results:a5745f14*/ INSERT INTO review_reviewer (review_id, identity_id) SELECT id, ? FROM review WHERE tenant_id = ? AND id = ?").bind(rid, ctx.tenant!.id, id)),
-      ...[...new Set(ids)].filter((rid) => rid !== ctx.identity!.id).map((rid) => ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:101:83:results:62585d42*/
+      ...[...new Set(ids)].map((rid) => ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:100:41:reviewRequest.run:a5745f14*/ INSERT INTO review_reviewer (review_id, identity_id) SELECT id, ? FROM review WHERE tenant_id = ? AND id = ?").bind(rid, ctx.tenant!.id, id)),
+      ...[...new Set(ids)].filter((rid) => rid !== ctx.identity!.id).map((rid) => ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:101:83:reviewRequest.run:62585d42*/
         INSERT INTO attention (id, tenant_id, identity_id, reason, item_id, actor_id, summary, created_at, href)
         SELECT ?, r.tenant_id, ?, 'assigned', NULL, ?, substr(? || (${projectPathSql()}) || '!' || r.number || ': ' || r.title, 1, 300), ?,
           '/' || (${projectPathSql()}) || '/reviews/' || r.number
         FROM review r JOIN project p ON p.id = r.project_id WHERE r.tenant_id = ? AND r.id = ?`)
         .bind(ulid(ctx.now), rid, ctx.identity!.id, `${ctx.identity!.display_name} asked you to review `, ctx.now, ctx.tenant!.id, id)),
-      ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:107:7:results:7a4bc5d7*/ INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
+      ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:107:7:reviewRequest.run:7a4bc5d7*/ INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
         SELECT ?, r.tenant_id, ?, ?, 'review.request', 'review', r.id,
           'Opened review ' || (${projectPathSql()}) || '!' || r.number || ' (' || r.branch || ' into ' || r.base || '): ' || r.title, ?
         FROM review r JOIN project p ON p.id = r.project_id WHERE r.tenant_id = ? AND r.id = ?`)
         .bind(ulid(ctx.now), ctx.identity!.id, ctx.session?.id ?? null, ctx.now, ctx.tenant!.id, id),
-      ...(key ? [ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:112:18:results:39f726e6*/ INSERT INTO meta (key, value)
+      ...(key ? [ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:112:18:reviewRequest.run:39f726e6*/ INSERT INTO meta (key, value)
         SELECT ?, json_object('fingerprint', ?, 'result', json_object('ref', (${projectPathSql()}) || '!' || r.number,
           'review', json_object('id', r.id, 'tenant_id', r.tenant_id, 'project_id', r.project_id, 'slug', (${projectPathSql()}),
             'number', r.number, 'branch', r.branch, 'base', r.base, 'head_oid', r.head_oid, 'title', r.title,
@@ -117,8 +117,8 @@ export const reviewRequest = defineVerb({
             'created_at', r.created_at, 'updated_at', r.updated_at)))
         FROM review r JOIN project p ON p.id = r.project_id JOIN identity i ON i.id = r.author_id
         WHERE r.tenant_id = ? AND r.id = ?`).bind(key, fingerprint, ctx.tenant!.id, id)] : []),
-      key ? ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:120:13:results:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key)
-        : ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:121:11:results:5318ab4b*/ SELECT r.*, ${projectPathSql()} AS slug, i.display_name AS author FROM review r
+      key ? ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:120:13:reviewRequest.run:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key)
+        : ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:121:11:reviewRequest.run:5318ab4b*/ SELECT r.*, ${projectPathSql()} AS slug, i.display_name AS author FROM review r
           JOIN project p ON p.id = r.project_id JOIN identity i ON i.id = r.author_id
           WHERE r.tenant_id = ? AND r.id = ?`).bind(ctx.tenant!.id, id),
     ]);
@@ -165,8 +165,8 @@ export async function readReview(ctx: Ctx, ref: string): Promise<ReviewView> {
   const r = await reviewRef(ctx, ref);
   const related = reviewWorkQuery(ctx, r);
   const [rev, com, work] = await ctx.db.batch([
-    ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:168:5:%5Brev%2C%20com%2C%20work%5D:bd1253ad*/ SELECT x.identity_id, i.display_name AS name, x.verdict, x.reason, x.head_oid FROM review_reviewer x JOIN identity i ON i.id = x.identity_id WHERE x.review_id = ?").bind(r.id),
-    ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:169:5:%5Brev%2C%20com%2C%20work%5D:b1937d64*/ SELECT c.id, i.display_name AS author, c.path, c.line, c.body, c.created_at FROM review_comment c JOIN identity i ON i.id = c.author_id WHERE c.review_id = ? AND c.tenant_id = ? ORDER BY c.created_at").bind(r.id, ctx.tenant!.id),
+    ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:168:5:readReview:bd1253ad*/ SELECT x.identity_id, i.display_name AS name, x.verdict, x.reason, x.head_oid FROM review_reviewer x JOIN identity i ON i.id = x.identity_id WHERE x.review_id = ?").bind(r.id),
+    ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:169:5:readReview:b1937d64*/ SELECT c.id, i.display_name AS author, c.path, c.line, c.body, c.created_at FROM review_comment c JOIN identity i ON i.id = c.author_id WHERE c.review_id = ? AND c.tenant_id = ? ORDER BY c.created_at").bind(r.id, ctx.tenant!.id),
     related.statement,
   ]);
   let diff: ReviewView["diff"] = null, diffError: string | null = null, head: string | null = null;
@@ -213,10 +213,10 @@ export const reviewComment = defineVerb({
   run: async (ctx, p) => {
     if (!p.body) throw badRequest("a comment needs some text");
     const r = await reviewRef(ctx, p.id);
-    const others = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:216:27:others:2452e78e*/ SELECT identity_id FROM review_reviewer WHERE review_id = ?").bind(r.id).all<{ identity_id: string }>()).results.map((x) => x.identity_id);
+    const others = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:216:27:reviewComment.run:2452e78e*/ SELECT identity_id FROM review_reviewer WHERE review_id = ?").bind(r.id).all<{ identity_id: string }>()).results.map((x) => x.identity_id);
     await ctx.db.batch([
-      ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:218:7:reviewComment:4c6c5691*/ INSERT INTO review_comment (id, review_id, tenant_id, author_id, path, line, head_oid, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(ulid(ctx.now), r.id, ctx.tenant!.id, ctx.identity!.id, p.path, p.line, r.head_oid, p.body, ctx.now),
-      ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:219:7:reviewComment:00a33ba7*/ UPDATE review SET updated_at = ? WHERE id = ?").bind(ctx.now, r.id),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:218:7:reviewComment.run:4c6c5691*/ INSERT INTO review_comment (id, review_id, tenant_id, author_id, path, line, head_oid, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(ulid(ctx.now), r.id, ctx.tenant!.id, ctx.identity!.id, p.path, p.line, r.head_oid, p.body, ctx.now),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:219:7:reviewComment.run:00a33ba7*/ UPDATE review SET updated_at = ? WHERE id = ?").bind(ctx.now, r.id),
       ...attentionFor(ctx, [...others, r.author_id], `/${r.slug}/reviews/${r.number}`, `${ctx.identity!.display_name} commented on ${r.slug}!${r.number}: ${p.body.slice(0, 120)}`),
     ]);
     return { ref: `${r.slug}!${r.number}` };
@@ -240,14 +240,14 @@ export const reviewVerdict = defineVerb({
     if (r.status === "closed") throw badRequest("this review is closed");
     if (r.author_id === ctx.identity!.id) throw forbidden("the author doesn't review their own change");
     if (p.verdict === "changes" && !p.reason) throw badRequest("say what should change");
-    await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:243:11:reviewVerdict:223c0ddd*/ INSERT INTO review_reviewer (review_id, identity_id, verdict, reason, head_oid, at) VALUES (?, ?, ?, ?, ?, ?)
+    await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:243:11:reviewVerdict.run:223c0ddd*/ INSERT INTO review_reviewer (review_id, identity_id, verdict, reason, head_oid, at) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT (review_id, identity_id) DO UPDATE SET verdict = excluded.verdict, reason = excluded.reason, head_oid = excluded.head_oid, at = excluded.at`)
       .bind(r.id, ctx.identity!.id, p.verdict, p.reason, r.head_oid, ctx.now).run();
     // Any "changes" holds it; all answered approvals approve it.
-    const v = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:247:22:v:f224fbc3*/ SELECT verdict FROM review_reviewer WHERE review_id = ?").bind(r.id).all<{ verdict: string | null }>()).results;
+    const v = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:247:22:reviewVerdict.run:f224fbc3*/ SELECT verdict FROM review_reviewer WHERE review_id = ?").bind(r.id).all<{ verdict: string | null }>()).results;
     const status = v.some((x) => x.verdict === "changes") ? "changes" : v.length && v.every((x) => x.verdict === "approve") ? "approved" : "open";
     await ctx.db.batch([
-      ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:250:7:reviewVerdict:1a8515ef*/ UPDATE review SET status = ?, updated_at = ? WHERE id = ?").bind(status, ctx.now, r.id),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:250:7:reviewVerdict.run:1a8515ef*/ UPDATE review SET status = ?, updated_at = ? WHERE id = ?").bind(status, ctx.now, r.id),
       ...attentionFor(ctx, [r.author_id], `/${r.slug}/reviews/${r.number}`, `${ctx.identity!.display_name} ${p.verdict === "approve" ? "approved" : "asked for changes on"} ${r.slug}!${r.number}${p.reason ? `: ${p.reason.slice(0, 120)}` : ""}`),
     ]);
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "review.verdict", target_kind: "review", target_id: r.id, summary: `${p.verdict === "approve" ? "Approved" : "Asked for changes on"} ${r.slug}!${r.number}` }, ctx.now);

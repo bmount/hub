@@ -17,8 +17,21 @@ async function scan(dir) {
   function location(node) {
    let fn='module';
    for(let p=node.parent;p;p=p.parent) {
-    if((ts.isFunctionDeclaration(p)||ts.isMethodDeclaration(p)) && p.name) {fn=p.name.getText(source);break;}
-    if(ts.isVariableDeclaration(p) && p.name) {fn=p.name.getText(source);break;}
+    if(ts.isConstructorDeclaration(p)&&ts.isClassDeclaration(p.parent)&&p.parent.name) {fn=p.parent.name.text+'.constructor';break;}
+    if((ts.isFunctionDeclaration(p)||ts.isMethodDeclaration(p)||ts.isFunctionExpression(p)||ts.isGetAccessorDeclaration(p)||ts.isSetAccessorDeclaration(p)) && p.name) {
+     fn=p.name.getText(source);
+     if((ts.isMethodDeclaration(p)||ts.isGetAccessorDeclaration(p)||ts.isSetAccessorDeclaration(p))&&ts.isClassDeclaration(p.parent)&&p.parent.name)fn=p.parent.name.text+'.'+fn;
+     break;
+    }
+    if(ts.isArrowFunction(p)||ts.isFunctionExpression(p)) {
+     const owner=p.parent;
+     if(ts.isVariableDeclaration(owner)&&owner.initializer===p) {fn=owner.name.getText(source);break;}
+     if(ts.isPropertyAssignment(owner)&&owner.initializer===p) {
+      fn=owner.name.getText(source);
+      for(let ancestor=owner.parent;ancestor;ancestor=ancestor.parent) if(ts.isVariableDeclaration(ancestor)) {fn=ancestor.name.getText(source)+'.'+fn;break;}
+      break;
+     }
+    }
    }
    const pos=source.getLineAndCharacterOfPosition(node.getStart(source));
    return {file,line:pos.line+1,column:pos.character+1,fn};
