@@ -10,6 +10,12 @@ Delete a feature branch once it is merged or abandoned: `git push origin --delet
 
 A refused update gets `ng <ref> <reason>` in Git's report; the rest of the push still applies unless the client asked for an atomic push. The rules are in `src/code/gitHistory.ts` and are tested in `test/git-history.test.ts` and `test/artifacts-git.test.ts`.
 
+## Search snapshots
+
+Repository search reuses the hub request's live authorization, not a cached grant or a second Git credential. Verified snapshots are immutable and keyed by storage account, tenant, project, physical repository and commit. An immutable commit hit needs no upstream metadata, log or pack request. A symbolic revision still reads fresh Git refs before looking up the snapshot; branch moves are never hidden by a ref TTL. HEAD is read from the advertisement. On a miss, storage ownership is checked and a shallow pack supplies the commit and files; decoding verifies the requested commit exists, without a separate log request. Binary, oversized-file, path, ordering and match-limit rules are unchanged.
+
+Measure completed `repo.search` calls (including fresh request authorization and response consumption) separately from local `searchFiles` CPU. For reproducible small-repository acquisition measurements, use an owned `tmp-` repository with one UTF-8 `fixture.txt`: `needle fixture <revision>\n` followed by 100 `ordinary text\n` lines, about 1.4 KB. Publish distinct commits, then search each commit exactly once to measure cold acquisition; repeat the same commits for warm snapshots. Also measure a symbolic branch separately, since it intentionally pays for a fresh advertisement. Check the exact matching line and searched-file count on every response. Run at least 100 calls per phase, report nearest-rank p95, and remove the fixture afterward. These timings do not establish a bound for large repositories or other caller locations.
+
 ## Large pushes and recovery
 
 Initial pushes retain original history, vendored files and tags; there is no squash or stripped-source requirement. The HTTP replay limit is 100 MiB (commands plus compressed pack), not the unpacked checkout size. A ~65 MiB, 11,999-object, 33-commit repository fits. Ancestry validation permits at most 512 log requests; metadata validation has a 900-call ceiling. Larger histories can be sent in fast-forward batches without changing commit IDs.

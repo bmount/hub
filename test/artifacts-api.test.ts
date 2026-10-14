@@ -16,7 +16,7 @@ import { packet } from "../src/code/gitProtocol";
 import { seedHuman, seedTenant } from "./helpers";
 import { createHash } from "node:crypto";
 import { deflateSync } from "node:zlib";
-import { repoFile, searchFiles } from "../src/verbs/code";
+import { repoFile, repoSearch, searchFiles } from "../src/verbs/code";
 import { buildContext } from "../src/auth/context";
 import { runVerb } from "../src/verbs/dispatch";
 import type { VerbDef } from "../src/verbs/table";
@@ -308,6 +308,26 @@ describe("Artifacts code snapshots", () => {
     await expect(s.read("snapshot", { rev: "main" })).rejects.toMatchObject({ status: 502 });
     s.setDescription("another owner");
     await expect(s.read("snapshot", { rev: "main" })).rejects.toMatchObject({ status: 503 });
+  });
+
+  it("shares fresh hub authorization for search, denying warm snapshots after operator revocation", async () => {
+    const s = await setup(), { response, commit } = syntheticSnapshot();
+    s.serve(commit, response);
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(s.tenant.id, s.project.id, Date.now()).run();
+    const bot = await seedAgent(s.tenant, s.human.identity, "reader", "reader");
+    const call = async (headers: Record<string, string>) => {
+      const ctx = await buildContext(new Request("https://acme.pimwell.test/", { headers }), s.configured);
+      return runVerb(ctx, repoSearch as VerbDef<unknown, unknown>, { project: "site", ref: commit.hash, q: "needle" });
+    };
+    const first = await call(cookieHeaders(s.human.token, "acme.pimwell.test"));
+    expect(first).toMatchObject({ searched: 3, skipped_binary: 1 });
+    expect(await call(bearer(bot.token))).toEqual(first);
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM ardi_cred").first()).toBeNull();
+    const count = s.requests.length;
+    await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ?").bind(s.human.identity.id).run();
+    await expect(call(bearer(bot.token))).rejects.toMatchObject({ status: 404 });
+    await expect(call(cookieHeaders(s.human.token, "acme.pimwell.test"))).rejects.toMatchObject({ status: 404 });
+    expect(s.requests).toHaveLength(count);
   });
 
   it("checks the caller's access before answering from the cache", async () => {
