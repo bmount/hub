@@ -63,6 +63,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `person_read` | read | reader | no | Implemented | **`id`**, **`project`** |
 | `person_upsert` | write | member | no | Implemented | `emails`, `expected_revision`, `id`, `links`, **`name`**, `notes`, `phones`, **`project`**, `tags`, `title` |
 | `project_create` | write | member | no | Implemented | **`display_name`**, **`kind`**, `namespace`, **`slug`** |
+| `project_delete` | write | member | yes | Implemented | **`project`** |
 | `project_history` | read | reader | no | Implemented | `before`, `limit`, **`project`** |
 | `project_list` | read | reader | no | Implemented | `state` |
 | `project_status` | read | reader | no | Implemented | **`project`**, `since` |

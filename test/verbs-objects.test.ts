@@ -366,6 +366,79 @@ describe("project deletion from the web", () => {
     return { tenant, blue, admin, member, bot, host, headers, post, form, get, count, project };
   }
 
+  it("lets member agents delete their own active or archived tmp- projects over MCP and API, cascading channels and files", async () => {
+    const w = await world(), headers = bearer(w.bot.token);
+    const base = await buildContext(new Request(`https://${w.host}/`, { headers }), env);
+    const ctx = { ...base, agentMcp: { token_id: "test", scopes: ["read", "write"], sealed: { ciphertext: "", iv: "" } } };
+    for (const archived of [false, true]) {
+      const slug = archived ? "tmp-archived" : "tmp-active";
+      const made = (await (await apiPost(w.host, "project.create", { slug, kind: "workspace", display_name: slug }, headers)).json() as any).result;
+      expect((await apiPost(w.host, "file.put", { project: slug, path: "safe.txt", content_type: "text/plain", base64: btoa("safe"), expected_revision: 0 }, headers)).status).toBe(200);
+      expect((await apiPost(w.host, "chat.post", { c: `${slug}-team`, body: "Throwaway", after: 0 }, headers)).status).toBe(200);
+      const channel = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ?").bind(w.tenant.id, `${slug}-team`).first<{id: string}>();
+      // Another agent member is permitted.
+      const other = await seedAgent(w.tenant, w.admin.identity, `other-${slug}`);
+      await env.HUB_DB.prepare("INSERT INTO conversation_member (conversation_id, tenant_id, identity_id, role, added_by, added_at) VALUES (?, ?, ?, 'member', ?, ?)").bind(channel!.id, w.tenant.id, other.agent.identity.id, w.admin.identity.id, Date.now()).run();
+      if (archived) await w.post("project.archive", { slug });
+      if (archived) expect((await apiPost(w.host, "project.delete", { project: slug }, headers)).status).toBe(200);
+      else expect((await callTool(ctx, "project_delete", { project: slug })).structuredContent).toMatchObject({ok: true, counts: {file_objects: 1, message_versions: 1}});
+      expect(await w.count("project", "id", made.project.id)).toBe(0);
+      expect(await w.count("project", "id", channel!.id)).toBe(0);
+      expect(await w.count("conversation_member", "conversation_id", channel!.id)).toBe(0);
+      expect((await env.GIT_PUSH_STAGING!.list({prefix: `project-files/${w.tenant.id}/${made.project.id}/`})).objects).toHaveLength(0);
+      expect((await env.HUB_DB.prepare("SELECT kind, identity_id FROM event WHERE target_id = ?").bind(made.project.id).all()).results).toEqual([{kind: "project.deleted", identity_id: w.bot.agent.identity.id}]);
+    }
+    expect(await w.count("project", "id", w.project.id)).toBe(1);
+  });
+
+  it("refuses foreign creators, non-tmp slugs, unknown creators and other human members without changing data", async () => {
+    const w = await world(), headers = bearer(w.bot.token);
+    const base = await buildContext(new Request(`https://${w.host}/`, { headers }), env);
+    const ctx = { ...base, agentMcp: { token_id: "test", scopes: ["read", "write"], sealed: { ciphertext: "", iv: "" } } };
+    for (const slug of ["tmp-foreign", "not-tmp", "tmp-human", "tmp-unknown"]) {
+      const made = (await (await apiPost(w.host, "project.create", {slug, kind: "workspace", display_name: slug}, slug === "tmp-foreign" ? w.headers : headers)).json() as any).result;
+      if (slug === "tmp-human") {
+        const ch = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ?").bind(w.tenant.id, `${slug}-ops`).first<{id: string}>();
+        await env.HUB_DB.prepare("INSERT INTO conversation_member (conversation_id, tenant_id, identity_id, role, added_by, added_at) VALUES (?, ?, ?, 'member', ?, ?)").bind(ch!.id, w.tenant.id, w.member.identity.id, w.admin.identity.id, Date.now()).run();
+      }
+      if (slug === "tmp-unknown") await env.HUB_DB.prepare("DELETE FROM event WHERE target_id = ? AND kind = 'project.create'").bind(made.project.id).run();
+      // A later creation/provisioning retry must not confer ownership.
+      if (slug === "tmp-foreign") await env.HUB_DB.prepare("INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at) VALUES (?, ?, ?, ?, 'project.create', 'project', ?, 'Retry', ?)").bind(ulid(), w.tenant.id, w.bot.agent.identity.id, w.bot.session.id, made.project.id, Date.now() + 1).run();
+      expect((await apiPost(w.host, "project.delete", {project: slug}, headers)).status).toBe(403);
+      expect((await callTool(ctx, "project_delete", {project: slug})).isError).toBe(true);
+      expect(await w.count("project", "id", made.project.id)).toBe(1);
+      expect((await env.HUB_DB.prepare("SELECT state FROM project WHERE id = ?").bind(made.project.id).first<any>())!.state).toBe("active");
+      expect(await env.HUB_DB.prepare("SELECT 1 FROM meta WHERE key = ?").bind(`project_delete:v1:${w.tenant.id}:${made.project.id}`).first()).toBeNull();
+    }
+    const reader = await seedAgent(w.tenant, w.admin.identity, "reader", "reader");
+    expect((await apiPost(w.host, "project.delete", {project: "tmp-human"}, bearer(reader.token))).status).toBe(403);
+    expect((await apiPost("blue.pimwell.test", "project.delete", {project: "tmp-human"}, headers)).status).toBe(404);
+  });
+
+  it("deletes an empty namespaced throwaway and retries agent repository purges with original authorization", async () => {
+    const w = await world(), headers = bearer(w.bot.token);
+    await w.post("namespace.create", {slug: "checks", display_name: "Checks"});
+    const ns = (await (await apiPost(w.host, "project.create", {slug: "tmp-empty", namespace: "checks", kind: "wiki", display_name: "Empty"}, headers)).json() as any).result.project;
+    expect((await apiPost(w.host, "project.delete", {project: "checks/tmp-empty"}, headers)).status).toBe(200);
+    expect(await w.count("project", "id", ns.id)).toBe(0);
+    const ctx = await buildContext(new Request(`https://${w.host}/`, {headers}), env);
+    const made = await projectCreate.run(ctx, projectCreate.parse({slug: "tmp-repo", kind: "repo", display_name: "Repo"})) as {project: {id: string}};
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(w.tenant.id, made.project.id, Date.now()).run();
+    ctx.env = {...env, ARTIFACTS_ACCOUNT_ID: "0".repeat(32), ARTIFACTS_API_TOKEN: "synthetic-test-token"};
+    const deletion = vi.spyOn(ArtifactsRest.prototype, "deleteProject").mockRejectedValueOnce(new Error("storage outage")).mockResolvedValue(undefined);
+    try {
+      await expect(projectDelete.run(ctx, projectDelete.parse({project: "tmp-repo"}))).rejects.toThrow("storage outage");
+      expect((await env.HUB_DB.prepare("SELECT state FROM project WHERE id = ?").bind(made.project.id).first<any>())!.state).toBe("archived");
+      const other = await seedAgent(w.tenant, w.admin.identity, "other");
+      expect((await apiPost(w.host, "project.delete", {project: "tmp-repo"}, bearer(other.token))).status).toBe(403);
+      expect(deletion).toHaveBeenCalledTimes(1);
+      const result = await projectDelete.run(ctx, projectDelete.parse({project: "tmp-repo"}));
+      expect(result.counts.repositories).toBe(1);
+      expect(deletion).toHaveBeenLastCalledWith("acme", "tmp-repo", `Pimwell tenant ${w.tenant.id} project ${made.project.id}`);
+      expect((await env.HUB_DB.prepare("SELECT kind, identity_id FROM event WHERE target_id = ?").bind(made.project.id).all()).results).toEqual([{kind: "project.deleted", identity_id: w.bot.agent.identity.id}]);
+    } finally { deletion.mockRestore(); }
+  });
+
   it("covers every D1 table with a project_id column, or a reasoned exemption", async () => {
     // Cloudflare's private _cf_ tables are inaccessible and contain platform metadata, not project content.
     const tables = (await env.HUB_DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND substr(name, 1, 4) <> '_cf_'").all<{ name: string }>()).results;
@@ -562,8 +635,9 @@ describe("project deletion from the web", () => {
     expect((await w.post("project.delete", { ...args, confirm: "" })).status).toBe(400);
     for (const token of [w.member.token, w.bot.token, w.admin.token]) expect((await apiPost(w.host, "project.delete", args, bearer(token))).status).toBe(403);
     expect(await (await apiPost(w.host, "project.delete", args, bearer(w.bot.token))).text()).toContain("sign in on the web");
-    const ctx = await buildContext(new Request(`https://${w.host}/`, { headers: bearer(w.bot.token) }), env);
-    const result = await callTool(ctx, "project_delete", args);
+    const base = await buildContext(new Request(`https://${w.host}/`, { headers: bearer(w.bot.token) }), env);
+    const ctx = { ...base, agentMcp: { token_id: "test", scopes: ["read", "write"], sealed: { ciphertext: "", iv: "" } } };
+    const result = await callTool(ctx, "project_delete", { project: "gone" });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result)).toContain("sign in on the web");
     expect((await w.form("project.delete", args, { ...w.headers, origin: "https://evil.test" })).status).toBe(403);

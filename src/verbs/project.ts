@@ -90,16 +90,29 @@ export const projectUnarchive = defineVerb({
 });
 
 export const projectDelete = defineVerb({
-  name: "project.delete", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 10, humanOnly: true,
-  summary: "Permanently delete an archived project and its contents. Sign in on the web and type the project slug to confirm.",
+  name: "project.delete", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
+  summary: "Delete your own tmp- project with no other human members. Other projects require an admin's fresh web confirmation after archiving.",
+  mcp: { scope: "write", destructive: true, title: "Delete throwaway project", input: { type: "object", properties: {
+    project: { type: "string", description: "Your throwaway project's path (slug or namespace/slug)." },
+  }, required: ["project"], additionalProperties: false } },
   formBack: () => "/archive",
-  parse: (i) => ({ slug: reqString(i, "slug", { max: 63 }), namespace: optString(i, "namespace", { max: 63 }), confirm: optString(i, "confirm", { max: 63 }) }),
+  parse: (i) => {
+    const path = optString(i, "project", { max: 127 });
+    const parts = path?.split("/");
+    if (parts && (parts.length > 2 || parts.some(s => !s))) throw badRequest("invalid project path");
+    return { slug: parts?.at(-1) ?? reqString(i, "slug", { max: 63 }), namespace: parts && parts.length === 2 ? parts[0]! : optString(i, "namespace", { max: 63 }), confirm: optString(i, "confirm", { max: 63 }) };
+  },
   run: async (ctx, p) => {
-    if (ctx.authKind !== "cookie" || ctx.session?.kind !== "browser" || ctx.playground) throw new HubError(403, "forbidden", "sign in on the web to delete a project");
+    const agent = ctx.identity!.kind === "agent";
+    if (!agent) {
+      if (ctx.role !== "admin" && ctx.role !== "root") throw new HubError(403, "forbidden");
+      if (ctx.authKind !== "cookie" || ctx.session?.kind !== "browser" || ctx.playground) throw new HubError(403, "forbidden", "sign in on the web to delete a project");
+      if (ctx.now - ctx.session.last_proof_at > 600_000) throw new HubError(403, "reproof_required");
+    }
     const project = await getProjectByPath(ctx.db, ctx.tenant!.id, p.namespace, p.slug);
     if (!project || project.kind === "channel" || project.kind === "agent-src") throw notFound("no such project");
-    if (p.confirm !== project.slug) throw badRequest("type the project slug exactly to confirm");
-    return deleteProject(ctx, project);
+    if (!agent && p.confirm !== project.slug) throw badRequest("type the project slug exactly to confirm");
+    return deleteProject(ctx, project, agent);
   },
 });
 

@@ -141,7 +141,6 @@ export async function callTool(ctx: Ctx, name: string, args: Record<string, unkn
   if (!verb) {
     await audit(ctx, ctx.playground ? "playground.denied" : "mcp.denied", name, "denied", args, undefined, true);
     await audit(ctx, call, name, "denied", args, undefined, true);
-    if (name === "project_delete") return errorResult("forbidden", "project deletion is human-only; sign in on the web as an admin, archive the project and type its slug to confirm");
     return errorResult("not_found", `no tool named ${quotedName(name, 64)} is available to this connection`);
   }
   try {

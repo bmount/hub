@@ -16,12 +16,10 @@ export const projectDeleteKey = (tenant: string, project: string) => `project_de
  * External stores are idempotently purged; the D1 cascade and its single event commit together.
  * A failed external purge leaves an archived, retryable project, never a successfully deleted shell.
  */
-export async function deleteProject(ctx: Ctx, project: Project) {
+export async function deleteProject(ctx: Ctx, project: Project, throwaway = false) {
   const db = ctx.db, tid = ctx.tenant!.id;
-  if (project.state !== "archived") throw conflict("archive the project before deleting it");
+  if (!throwaway && project.state !== "archived") throw conflict("archive the project before deleting it");
   const key = projectDeleteKey(tid, project.id);
-  await db.prepare("INSERT OR IGNORE INTO meta (key, value) SELECT ?, 'deleting' FROM project WHERE id = ? AND tenant_id = ? AND state = 'archived'").bind(key, project.id, tid).run();
-  if (!await db.prepare("SELECT 1 FROM meta WHERE key = ?").bind(key).first()) throw conflict("archive the project before deleting it");
 
   const channels = (await db.prepare(`SELECT p.id FROM project p JOIN channel c ON c.project_id = p.id AND c.tenant_id = p.tenant_id
     WHERE p.tenant_id = ? AND p.namespace_id IS NULL AND p.kind = 'channel' AND (
@@ -33,6 +31,25 @@ export async function deleteProject(ctx: Ctx, project: Project) {
       `${project.slug}-team`, `${project.display_name} team`, `${project.slug}-ops`, `${project.display_name} ops`)
     .all<{ id: string }>()).results.map(r => r.id);
   const ids = JSON.stringify([project.id, ...channels]);
+  if (throwaway) {
+    // Projects have no separate membership: explicit members live on their owned channels.
+    // The original creation event is authoritative, not a later provisioning retry.
+    const eligible = `substr(slug, 1, 4) = 'tmp-' AND kind NOT IN ('channel', 'agent-src')
+      AND (SELECT identity_id FROM event WHERE tenant_id = ?3 AND target_id = ?2 AND target_kind = 'project' AND kind = 'project.create' ORDER BY created_at, id LIMIT 1) = ?4
+      AND NOT EXISTS (SELECT 1 FROM conversation_member cm JOIN identity i ON i.id = cm.identity_id
+        WHERE cm.tenant_id = ?3 AND cm.conversation_id IN (SELECT value FROM json_each(?5))
+        AND cm.removed_at IS NULL AND cm.identity_id <> ?4 AND i.kind <> 'agent')`;
+    // Reauthorize retries too; a deletion marker is not an authorization grant.
+    const r = await db.prepare(`INSERT INTO meta (key, value)
+      SELECT ?1, 'deleting' FROM project WHERE id = ?2 AND tenant_id = ?3 AND ${eligible}
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+      .bind(key, project.id, tid, ctx.identity!.id, ids).run();
+    if (!r.meta.changes) throw new HubError(403, "forbidden", "agents may only delete their own tmp- projects with no other human members; otherwise sign in on the web as an admin");
+  } else {
+    await db.prepare("INSERT OR IGNORE INTO meta (key, value) SELECT ?, 'deleting' FROM project WHERE id = ? AND tenant_id = ? AND state = 'archived'").bind(key, project.id, tid).run();
+    if (!await db.prepare("SELECT 1 FROM meta WHERE key = ?").bind(key).first()) throw conflict("archive the project before deleting it");
+  }
+  const eventKind = throwaway ? "project.deleted" : "project.delete";
   const projects = "SELECT value FROM json_each(?2)";
   const items = `SELECT id FROM work_item WHERE tenant_id = ?1 AND project_id IN (${projects})`;
   const reviews = `SELECT id FROM review WHERE tenant_id = ?1 AND project_id IN (${projects})`;
@@ -87,12 +104,12 @@ export async function deleteProject(ctx: Ctx, project: Project) {
   stmts.push(scoped(`DELETE FROM meta WHERE (substr(key, 1, length('mail_replay:v1:' || ?1 || ':')) = 'mail_replay:v1:' || ?1 || ':' OR substr(key, 1, length('mail_welcome:v1:' || ?1 || ':')) = 'mail_welcome:v1:' || ?1 || ':') AND json_valid(value) AND json_extract(value, '$.mail_id') IN (${mail})`));
   for (const [table, condition] of rules) {
     // The one deletion event remains as the audit record.
-    stmts.push(statement(`DELETE FROM ${table} WHERE ${condition}${table === "event" ? " AND kind <> 'project.delete'" : ""}`, condition));
+    stmts.push(statement(`DELETE FROM ${table} WHERE ${condition}${table === "event" ? " AND kind NOT IN ('project.delete', 'project.deleted')" : ""}`, condition));
   }
   // Insert before removing the project; a simultaneous retry cannot create a second deletion event.
   const deletionEvent = () => db.prepare(`INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
-    SELECT ?, ?, ?, ?, 'project.delete', 'project', ?, ?, ? WHERE EXISTS (SELECT 1 FROM project WHERE tenant_id = ? AND id = ? AND state = 'archived')`)
-    .bind(ulid(ctx.now), tid, ctx.identity!.id, ctx.session!.id, project.id, `Deleted project ${project.slug}; counts ${JSON.stringify(counts)}`, ctx.now, tid, project.id);
+    SELECT ?, ?, ?, ?, ?, 'project', ?, ?, ? WHERE EXISTS (SELECT 1 FROM project WHERE tenant_id = ? AND id = ? AND state = 'archived')`)
+    .bind(ulid(ctx.now), tid, ctx.identity!.id, ctx.session!.id, eventKind, project.id, `Deleted project ${project.slug}; counts ${JSON.stringify(counts)}`, ctx.now, tid, project.id);
 
   // D1 batches roll back on any statement failure. Check deferred FKs explicitly,
   // then deliberately collide with our existing deletion key to roll back the trial.
