@@ -62,6 +62,37 @@ describe("chat WebSocket stream", () => {
     expect((await stub.presence(w.acme.id, ch.project_id)).find(p => p.identity_id === w.lead.identity.id)?.status).toBe('offline');
   });
 
+  it('coalesces update bursts without losing events and rechecks chat access on the next page', async () => {
+    const w = await chatWorld();
+    await channelWith(w, 'general', ['scout']);
+    await channelWith(w, 'other', ['scout']);
+    await channelWith(w, 'hidden', []);
+    const { ch } = await conv(w);
+    const { ch: other } = await conv(w, 'other');
+    const { ch: hidden } = await conv(w, 'hidden');
+    const response = await SELF.fetch('https://acme.pimwell.test/chat/v1/ws', { headers: { authorization: `Bearer ${w.scout.longLived}`, upgrade: 'websocket' } });
+    expect(response.status).toBe(101);
+    const ws = response.webSocket!;
+    const next = frames(ws); ws.accept();
+    await next(f => f.type === 'connected');
+    await next(f => f.result?.updates);
+    const box = inboxStub(env, w.acme.id, w.scout.agent.identity.id);
+    const update = (id: string, body: string) => ({ key: crypto.randomUUID(), type: 'message', chat: { id, kind: 'channel' as const }, data: { body }, created_at: Date.now() });
+    await box.deliverUpdates(w.acme.id, w.scout.agent.identity.id, [
+      ...Array.from({ length: 20 }, (_, i) => update(ch.project_id, `burst-${i}`)),
+      update(hidden.project_id, 'hidden-burst'),
+    ]);
+    const burst = await next(f => f.result?.updates.some((u: any) => u.data.body === 'burst-19'));
+    expect(burst.result.updates.filter((u: any) => u.data.body?.startsWith('burst-')).map((u: any) => u.data.body)).toEqual(Array.from({ length: 20 }, (_, i) => `burst-${i}`));
+    expect(burst.result.updates.some((u: any) => u.data.body === 'hidden-burst')).toBe(false);
+    await env.HUB_DB.prepare('UPDATE conversation_member SET removed_at = ? WHERE tenant_id = ? AND conversation_id = ? AND identity_id = ?')
+      .bind(Date.now(), w.acme.id, ch.project_id, w.scout.agent.identity.id).run();
+    await box.deliverUpdates(w.acme.id, w.scout.agent.identity.id, [update(ch.project_id, 'revoked-burst'), update(other.project_id, 'still-readable')]);
+    const later = await next(f => f.result?.updates.some((u: any) => u.data.body === 'still-readable'));
+    expect(later.result.updates.some((u: any) => u.data.body === 'revoked-burst')).toBe(false);
+    ws.close(1000);
+  });
+
   function frames(ws: WebSocket) {
     const buffered: any[] = [];
     let wake: (() => void) | undefined;

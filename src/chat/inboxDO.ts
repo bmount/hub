@@ -53,6 +53,7 @@ export class Inbox extends DurableObject<Env> {
   #waiters = new Set<() => void>();
   #updateWaiters = new Set<() => void>();
   #socketJobs = new Map<WebSocket, Promise<void>>();
+  #scheduledPushes = new Set<WebSocket>();
 
   #request(state: SocketState, method = 'getUpdates', params: Record<string, unknown> = {}): Request {
     const url = new URL(state.url);
@@ -76,7 +77,8 @@ export class Inbox extends DurableObject<Env> {
     const { ctx, v } = await this.#viewer(state);
     checkScope(ctx, getVerb('chat.heartbeat')!); checkAccess(ctx, getVerb('chat.heartbeat')!);
     for (const ch of await readableChannels(ctx.db, v, 'active')) {
-      if (status === 'offline' && this.ctx.getWebSockets().some(ws => ws.readyState === WebSocket.OPEN)) return;
+      const connected = this.ctx.getWebSockets().some(ws => ws.readyState === WebSocket.OPEN);
+      if ((status === 'offline' && connected) || (status === 'online' && !connected)) return;
       await conversationStub(this.env, state.tenant, ch.project_id).heartbeat(state.tenant, ch.project_id, state.identity, status, !!(ctx.oauth || ctx.playground));
     }
   }
@@ -92,6 +94,17 @@ export class Inbox extends DurableObject<Env> {
     return next;
   }
 
+  /** One pending push per socket; it reads the latest durable head when it runs.
+   * Clear before reading so an update arriving during the push schedules a successor. */
+  #schedulePush(ws: WebSocket): void {
+    if (this.#scheduledPushes.has(ws)) return;
+    this.#scheduledPushes.add(ws);
+    this.ctx.waitUntil(this.#queue(ws, async () => {
+      this.#scheduledPushes.delete(ws);
+      await this.#push(ws);
+    }));
+  }
+
   async #push(ws: WebSocket, initial = false): Promise<void> {
     if (ws.readyState !== WebSocket.OPEN) return;
     const state = ws.deserializeAttachment() as SocketState;
@@ -102,10 +115,16 @@ export class Inbox extends DurableObject<Env> {
         ws.send(JSON.stringify({ ok: false, error: { code: page.error, min_offset: page.min_offset } }));
         ws.close(1008, page.error); return;
       }
+      // Reauthorize each chat for this page, not once per event in a presence burst.
+      // This cache is local to the freshly authenticated page, never to the socket.
+      const readable = new Set<string>();
+      await Promise.all([...new Set(page.updates.map(update => update.chat.id))].map(async id => {
+        const ch = await getChannelById(ctx.db, state.tenant, id);
+        if (ch && await canRead(ctx.db, v, ch)) readable.add(id);
+      }));
       const updates: ChatUpdate[] = [];
       for (const update of page.updates) {
-        const ch = await getChannelById(ctx.db, state.tenant, update.chat.id);
-        if (!ch || !await canRead(ctx.db, v, ch)) continue;
+        if (!readable.has(update.chat.id)) continue;
         if (update.type === 'typing' && Number(update.data.expires_at) <= Date.now()) update.data.active = false;
         if (update.type === 'presence' && Number(update.data.expires_at) <= Date.now() && update.data.status !== 'offline') update.data.stale = true;
         updates.push(update);
@@ -139,7 +158,7 @@ export class Inbox extends DurableObject<Env> {
     this.ctx.waitUntil(this.#queue(pair[1], async () => {
       pair[1].send(JSON.stringify({ type: 'connected', server_request_id: requestId() }));
       await this.#push(pair[1], true);
-      await this.#presence(state, 'online').catch(() => {});
+      this.ctx.waitUntil(this.#presence(state, 'online').catch(() => {}));
     }));
     await this.#socketAlarm();
     return new Response(null, { status: 101, webSocket: pair[0] });
@@ -160,8 +179,11 @@ export class Inbox extends DurableObject<Env> {
       }
       if (frame.type === 'ping' || frame.type === 'heartbeat') {
         ws.send(JSON.stringify({ type: 'pong' }));
-        await this.#presence(state, 'online').catch(() => {});
-        await this.#push(ws); return;
+        // Presence fans out to every readable chat. It must not hold the command
+        // queue while recipient/index delivery runs; each write still reauthorizes.
+        this.ctx.waitUntil(this.#presence(state, 'online').catch(() => {}));
+        this.#schedulePush(ws);
+        return;
       }
       const methods = ['sendMessage', 'editMessage', 'retractMessage', 'markRead', 'sendTyping', 'setPresence', 'openChat', 'getUpdates', 'getMessages', 'getChats', 'getPresence'];
       if (typeof frame.request_id !== 'string' || frame.request_id.length > 64 || typeof frame.method !== 'string' || !methods.includes(frame.method) || !frame.params || typeof frame.params !== 'object' || Array.isArray(frame.params)) {
@@ -236,7 +258,7 @@ export class Inbox extends DurableObject<Env> {
       this.#pruneUpdates();
     });
     for (const wake of [...this.#updateWaiters]) wake();
-    for (const ws of this.ctx.getWebSockets()) this.ctx.waitUntil(this.#queue(ws, () => this.#push(ws)));
+    for (const ws of this.ctx.getWebSockets()) this.#schedulePush(ws);
     await this.#scheduleRetention();
   }
 
