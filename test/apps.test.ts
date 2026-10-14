@@ -70,6 +70,8 @@ describe("sites", () => {
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer runtime-read-only");
       const sql=String(init?.body);sqls.push(sql);
       expect(sql).toContain("_sample_interval");expect(sql).not.toContain("COUNT(*)");
+      // index1 changed at #230; blob filters must span both sampling schemes.
+      expect(sql).not.toContain("index1");
       let data:Record<string,string|number>[];
       const metric={n:"100",p50:25,p95:100,p99:250,errors:2,total:4000};
       if(sql.includes("AS schema")) data=[{request,kind:"request",name:"request",phase:"GET",source:JSON.stringify(location),code:"",fingerprint:"",version,worker:"pricebench",duration:100,span:0,parent:0,complete:1,offset:0,started:1000,schema:2,weight:1},{request,kind:"client",name:"pane.swap",phase:"fetch",source:"/:project",code:"",fingerprint:"",version,worker:"pricebench",duration:120,span:0,parent:0,complete:1,offset:0,started:0,schema:0,weight:1}];
@@ -102,6 +104,9 @@ describe("sites", () => {
       const calls=sqls.length;await get("&selected=%2F%3Aproject");expect(sqls).toHaveLength(calls);
       const date=vi.spyOn(Date,"now").mockReturnValue(Date.now()+61_000);await get("&selected=%2F%3Aproject");date.mockRestore();expect(sqls.length).toBeGreaterThan(calls);
       expect((await (await get(`&kind=deploys&version=${version}&previous=${previous}`)).text()).replaceAll("\u00a0"," ")).toContain("+20 ms");
+      expect(sqls.some(sql => sql.includes(`blob3 IN ('${version}','${previous}')`))).toBe(true);
+      await get(`&version=${version}`);
+      expect(sqls.some(sql => sql.includes(`blob3 = '${version}'`))).toBe(true);
       expect(await (await get("&kind=spinners&selected=pane.swap")).text()).toContain("Time shown");
       expect(await (await get("&kind=interactions")).text()).toContain("Not collected");
       expect(await (await get("&kind=verbs&selected=work.read")).text()).toContain("work.read");
@@ -677,7 +682,8 @@ describe("app telemetry", () => {
     const raw = tail({ scriptName: "pimwell-hub", cpuTime: 0.2, wallTime: 180, logs: [{ message: [JSON.stringify(marker)] }] }) as unknown as TraceItem;
     writeInvocation(measured, raw);
     expect(points).toHaveLength(1);
-    expect(points[0]!.indexes).toEqual(["v-1111aaaa"]);
+    expect(points[0]!.indexes).toEqual(["invocation:" + id]);
+    expect(points[0]!.blobs?.[2]).toBe("v-1111aaaa");
     expect(points[0]!.blobs?.[5]).toBe(id);
     expect(points[0]!.blobs?.[6]).toBe("invocation");
     expect(points[0]!.doubles?.slice(11, 13)).toEqual([0.2, 180]);
@@ -687,6 +693,8 @@ describe("app telemetry", () => {
     writeInvocation(measured, { ...raw, logs: [{ message: [JSON.stringify({ ...marker, tenant: "private-tenant" })] } as TraceLog] });
     expect(points[1]!.blobs?.[4]).toBe("");
     expect(points[1]!.blobs?.[5]).toBe("");
+    expect(points[1]!.indexes?.[0]).toMatch(/^invocation:[0-9a-f-]{36}$/);
+    expect(points[1]!.indexes).not.toEqual(points[0]!.indexes);
   });
 
   it("forwards only a bounded cause digest from the actual tail handler", async () => {

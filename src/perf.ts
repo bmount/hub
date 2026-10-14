@@ -314,7 +314,8 @@ export async function writeClientPoints(env: Parameters<typeof writeTrace>[0], t
     const tenant = await tenantHash(tenantId, env.PERF_TENANT_KEY ?? env.HUB_INTERNAL_SECRET ?? env.HUB_SECRETS_KEY ?? "");
     const version = env.WORKER_VERSION?.id ?? "unknown";
     for (const p of points) env.PERF.writeDataPoint({
-      indexes: [version],
+      // Browser phases must not compete with each other or high-volume server spans.
+      indexes: [`client:${p.phase}:${p.request || crypto.randomUUID()}`],
       blobs: ["pimwell.com", "pimwell-hub", version, colo, tenant, p.request, "client", p.path, p.phase, "", "cookie", "", "", p.name, "", "", "", "", p.previous, JSON.stringify({file:"src/clientTimingScript.ts",line:19,fn:"point"})],
       doubles: [p.duration, 0, 0, 0, 0, -1, -1, -1, -1, p.phase === "first-token" ? p.duration : -1, 1, 0, 0, 1, 0, p.at ?? 0, 0, 0, 0, p.at === undefined ? 0 : 2],
     });
@@ -346,7 +347,8 @@ export async function writeTrace(env: Pick<Env, "PERF" | "WORKER_VERSION" | "PER
       const wall=kind==="other"?0:attributed.get(kind===trace.kind?trace.parent:s.id)??0;
       const execution=s.execution===undefined||s.execution<0?-1:wall*Math.min(1,s.ms>0?s.execution/s.ms:0);
       env.PERF!.writeDataPoint({
-      indexes: [version],
+      // Keep roots outside the detail budget, including across internal RPC invocations.
+      indexes: [`${kind === "span" || kind === "other" ? "trace" : kind}:${trace.id}`],
       blobs: [site, worker, version, trace.colo, tenant, trace.id, kind, trace.route, trace.method, `${Math.floor(trace.status/100)}xx`, trace.auth,
         trace.verb, trace.tool, s.name, s.fingerprint ?? "", s.region ?? "", s.provider ?? "", s.model ?? "", s.source ? JSON.stringify(s.source) : "", s.sqlCode ?? ""],
       doubles: [s.finished === false ? snapshot - s.started! : s.ms, +trace.cold, s.id, s.parent, +s.failed, s.execution ?? -1, s.read ?? -1, s.written ?? -1, s.primary === undefined ? -1 : +s.primary, s.firstToken ?? -1, kind === "other" ? trace.other : 1, 0, 0, s.finished === false ? 0 : 1, kind==="other"?0:Math.max(0,(s.started ?? trace.started)-trace.started), kind==="other"?0:trace.at + ((s.started ?? trace.started)-trace.started), wall, trace.kind === "rpc" ? 1 : 0, execution, 2],

@@ -1,6 +1,6 @@
 // Performance budget (overnight plan 2, N4): every signed-in page stays within a fixed number of D1 round trips.
 // A batch is one round trip. If a page needs more, read in one batch, or record a ruling and raise its budget here.
-import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, type TimingSpan } from "../src/perf";
+import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, writeClientPoints, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, type TimingSpan } from "../src/perf";
 import worker, { app } from "../src/index";
 import gitWorker from "../git-proxy/index";
 import { Conversation } from "../src/chat/conversationDO";
@@ -81,6 +81,35 @@ describe("request tracing guardrails", () => {
     expect(point.doubles![16]).toBeGreaterThanOrEqual(0);
     expect(point.doubles![19]).toBe(2);
   });
+  it("separates rare roots and browser phases from request-scoped trace detail", async () => {
+    const c = collector(), a = newTrace(), b = newTrace();
+    const measured = { ...c.measured, WORKER_VERSION: { id: "same-version", tag: "", timestamp: "" } };
+    for (const trace of [a, b]) {
+      await withTrace(trace, () => { for (let i = 0; i < 500; i++) span("bounded", () => 1); });
+      await writeTrace(measured, trace);
+    }
+    const rpc = { ...a, kind: "rpc" as const, parent: 123 };
+    await writeTrace(measured, rpc, "pimwell-git");
+    await writeClientPoints(measured, "", "", [
+      { request: a.id, path: "/apps", previous: "/", phase: "fetch", name: "list.select", duration: 10 },
+      { request: a.id, path: "/apps", previous: "/", phase: "spinner", name: "list.select", duration: 10 },
+      { request: "", path: "/apps", previous: "/", phase: "spinner", name: "list.select", duration: 10 },
+      { request: "", path: "/apps", previous: "/", phase: "spinner", name: "list.select", duration: 10 },
+    ]);
+    const keys = (kind: string, request: string) => c.points.filter(p => p.blobs?.[6] === kind && p.blobs?.[5] === request).map(p => p.indexes?.[0]);
+    expect(keys("request", a.id)).toEqual(["request:" + a.id]);
+    expect(keys("request", b.id)).toEqual(["request:" + b.id]);
+    expect(keys("rpc", a.id)).toEqual(["rpc:" + a.id]);
+    expect(new Set([...keys("span", a.id), ...keys("other", a.id)])).toEqual(new Set(["trace:" + a.id]));
+    expect(new Set(keys("span", b.id))).toEqual(new Set(["trace:" + b.id]));
+    expect(keys("client", a.id)).toEqual(["client:fetch:" + a.id, "client:spinner:" + a.id]);
+    const unjoined = keys("client", "");
+    expect(unjoined).toHaveLength(2);
+    expect(unjoined[0]).toMatch(/^client:spinner:[0-9a-f-]{36}$/);
+    expect(unjoined[0]).not.toBe(unjoined[1]);
+    for (const p of c.points) expect(p.blobs?.[2]).toBe("same-version");
+  });
+
   it("every registered verb, page route and public Durable Object method emits a span", async () => {
     const routes = app.routes.filter(r => !["*", "/*"].includes(r.path));
     expect(routes.length).toBeGreaterThan(100);

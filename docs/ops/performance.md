@@ -34,7 +34,7 @@ The Workers clock advances across I/O, not synchronous CPU work. Synchronous ren
 
 ## Point schema (v1)
 
-Every point uses **index1 = Worker version UUID**. Identity is repeated in blobs so queries need not infer it from the index. Empty tenant/colo mean an unscoped invocation or unavailable platform metadata, never a fabricated tenant/region. Tenant IDs are HMAC-SHA-256 pseudonyms truncated to 128 bits, using the shared **PERF_TENANT_KEY** secret on hub and Git Workers. It grants no authorization. For isolated/local setups without that key, the existing internal/secrets key is a fallback; without any key the tenant dimension is empty. Only completed hash strings are cached: native I/O promises cannot be shared across invocation/DO contexts. Key rotation changes pseudonyms; never expose the key in queries or product responses.
+**index1 is a request-scoped sampling key**, not a version or authorization dimension. Server roots use `request:<request UUID>` or `rpc:<request UUID>`, detail (`span` and `other`) shares `trace:<request UUID>`, native timings use `invocation:<request UUID>`, and browser points use `client:<phase>:<request UUID>`. Missing request IDs on client/native points get a fresh random UUID in the index only; blob 6 stays empty. Version remains **blob3**. Roots and browser phases do not compete with high-volume trace detail; internal calls share the detail key. Identity is repeated in blobs so queries need not infer it from the index. Empty tenant/colo mean an unscoped invocation or unavailable platform metadata, never a fabricated tenant/region. Tenant IDs are HMAC-SHA-256 pseudonyms truncated to 128 bits, using the shared **PERF_TENANT_KEY** secret on hub and Git Workers. It grants no authorization. For isolated/local setups without that key, the existing internal/secrets key is a fallback; without any key the tenant dimension is empty. Only completed hash strings are cached: native I/O promises cannot be shared across invocation/DO contexts. Key rotation changes pseudonyms; never expose the key in queries or product responses.
 
 | Blob | Meaning |
 | --- | --- |
@@ -86,7 +86,7 @@ Server points with double 20 = 2 add double 15 (start offset from invocation), d
 
 ## Sampling and SQL
 
-All requests are submitted; Analytics Engine can downsample on ingestion/query. **Always weight counts, means and distributions with `_sample_interval`**. Do not use raw `COUNT(*)` as a traffic total. An individual trace can lose its root or parent points to sampling; missing points are not zero time or proof of failed emission. Filter kind `request` for external/event requests, `rpc` for internal roots, and `invocation` for native CPU. Filter by site/authorized tenant hash before exposing aggregates through the product; account-level SQL access alone is not product authorization.
+All requests are submitted; Analytics Engine can downsample on ingestion/query. **Always weight counts, means and distributions with `_sample_interval`**. Do not use raw `COUNT(*)` as a traffic total. Request-scoped keys keep rare roots/browser phases at normal traffic even when detail is downsampled. This is not an atomic whole-trace retention guarantee: high-volume detail or query sampling can still lose parents, and sufficiently hot root/client keys can also be sampled. Missing points are not zero time or proof of failed emission. **Cutover (#230):** older releases indexed all points by Worker version UUID, so span volume could drop rare roots and browser points. Old data is not rewritten or recoverable. Filter versions on blob3 and requests on blob6 across both schemes; the Performance view/MCP queries already use these blob dimensions and retain sample weights. Filter kind `request` for external/event requests, `rpc` for internal roots, and `invocation` for native CPU. Filter by site/authorized tenant hash before exposing aggregates through the product; account-level SQL access alone is not product authorization.
 
 Example version query (replace the UUID; Cloudflare Analytics Engine SQL API):
 
@@ -95,7 +95,7 @@ SELECT blob2 AS worker, blob7 AS kind, blob8 AS route,
        SUM(_sample_interval) AS represented_points,
        SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean_wall_ms
 FROM pimwell_perf
-WHERE index1 = 'worker-version-uuid'
+WHERE blob3 = 'worker-version-uuid'
 GROUP BY worker, kind, route
 ORDER BY represented_points DESC
 ```
@@ -107,7 +107,7 @@ SELECT blob2 AS worker,
        SUM(double12 * _sample_interval) / SUM(_sample_interval) AS mean_cpu_ms,
        SUM(double13 * _sample_interval) / SUM(_sample_interval) AS mean_native_wall_ms
 FROM pimwell_perf
-WHERE index1 = 'worker-version-uuid' AND blob7 = 'invocation'
+WHERE blob3 = 'worker-version-uuid' AND blob7 = 'invocation'
   AND double12 >= 0
 GROUP BY worker
 ```
