@@ -198,6 +198,38 @@ export const workList = defineVerb({
   },
 });
 
+/** Resolve the item and its project together; keep itemRef's project/tenant checks. */
+async function readItemRef(ctx: Ctx, i: Record<string, unknown>): Promise<WorkItem> {
+  const id = optString(i, "id", { max: 80 });
+  const match = id?.match(/^([a-z0-9-]+(?:\/[a-z0-9-]+)?)#(\d+)$/);
+  const path = match?.[1] ?? (!id ? optString(i, "project", { max: 127 }) : null);
+  const number = match ? Number(match[2]) : !id ? optInt(i, "number", { min: 1, max: 10_000_000 }) : null;
+  if (!id && (!path || !number)) throw badRequest("give id, or project and number");
+  let where: string;
+  let args: unknown[];
+  if (path) {
+    const scoped = ctx.mcpProject;
+    const normalized = path.trim().toLowerCase();
+    if (scoped && normalized !== scoped.slug && normalized !== scoped.path) throw notFound("no such project");
+    const parts = (scoped?.path ?? normalized).split("/");
+    if (parts.length > 2 || parts.some(p => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(p) || p.length > 63)) throw notFound("no such project");
+    where = `p.slug = ? AND ${parts.length === 2 ? "p.namespace_id = (SELECT id FROM namespace WHERE tenant_id = ? AND slug = ?)" : "p.namespace_id IS NULL"} AND w.number = ?`;
+    args = [parts.at(-1)!, ...(parts.length === 2 ? [ctx.tenant!.id, parts[0]!] : []), number];
+  } else {
+    where = "w.id = ?";
+    args = [id];
+  }
+  const row = await ctx.db.prepare(`SELECT w.*, p.kind AS project_kind, ${projectPathSql()} AS project_slug
+    FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id
+    WHERE w.tenant_id = ? AND p.kind NOT IN ('channel', 'agent-src') AND ${where}`)
+    .bind(ctx.tenant!.id, ...args).first<WorkItem & { project_kind: string; project_slug: string }>();
+  if (!row) return itemRef(ctx, i); // Preserve missing-project and unsupported-feature errors.
+  if (ctx.mcpProject && row.project_id !== ctx.mcpProject.id) throw notFound("no such item");
+  requireProjectFeature({ kind: row.project_kind, slug: row.project_slug }, "docket");
+  const { project_kind: _kind, project_slug: _slug, ...item } = row;
+  return item;
+}
+
 export const workRead = defineVerb({
   name: "work.read", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
   summary: "One work item with its links, its quest, and the items under it.",
@@ -220,7 +252,7 @@ export const workRead = defineVerb({
   },
   parse: (i) => i,
   run: async (ctx, i) => {
-    const item = await itemRef(ctx, i);
+    const item = await readItemRef(ctx, i);
     // All independent details share one snapshot and one D1 round trip.
     const [projectRows, parentRows, childRows, commentRows, linkRows, ...graph] = await ctx.db.batch([
       ctx.db.prepare(`SELECT ${projectPathSql()} AS slug FROM project p WHERE p.id = ?`).bind(item.project_id),
