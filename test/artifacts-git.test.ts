@@ -185,6 +185,59 @@ describe("Artifacts REST transport", () => {
     expect(advertised).toContain(`${main} HEAD\0multi_ack symref=HEAD:refs/heads/main agent=x\n`);
     expect(advertised).toContain(`${stale} refs/heads/old\n`);
   });
+  it.each(["main", "release"])("uses fresh advertised %s tips without log requests or ref caching", async branch => {
+    let tip = OID, metadataCalls = 0;
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+      const text = String(url);
+      if (text.endsWith("/tokens")) return Response.json({ success: true, result: issued() });
+      if (text.endsWith("/repos/site")) {
+        metadataCalls++;
+        return Response.json({ success: true, result: { name: "site", remote: configured().remote("acme", "site"), default_branch: branch } });
+      }
+      if (text.includes("/info/refs?")) return new Response(join(packet(`${NEXT} HEAD\0symref=HEAD:refs/heads/old\n`), packet(`${tip} refs/heads/${branch}\n`), flush));
+      throw new Error("unnecessary log lookup");
+    });
+    for (const fresh of [OID, NEXT]) {
+      tip = fresh;
+      const response = await configured().git("acme", "site", "info/refs", new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack"), null, false);
+      expect(await response.text()).toContain(`${fresh} HEAD\0symref=HEAD:refs/heads/${branch}`);
+    }
+    expect(metadataCalls).toBe(2);
+    expect(fake.mock.calls.filter(([url]) => String(url).endsWith("/tokens"))).toHaveLength(1);
+  });
+  it("starts metadata before token acquisition, without awaiting it for empty adverts", async () => {
+    let metadataStarted = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+      if (String(url).endsWith("/repos/site")) { metadataStarted = true; return new Promise<Response>(() => {}); }
+      if (String(url).endsWith("/tokens")) { expect(metadataStarted).toBe(true); return Response.json({ success: true, result: issued() }); }
+      return new Response(flush);
+    });
+    const response = await configured().git("acme", "site", "info/refs", new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack"), null, false);
+    expect(await response.text()).toBe("0000");
+  });
+  it.each([403, 500, 200])("preserves capability/error responses (%s) without metadata", async status => {
+    const bytes = join(packet("version 2\n"), packet("ls-refs\n"), flush);
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+      if (String(url).endsWith("/tokens")) return Response.json({ success: true, result: issued() });
+      if (String(url).includes("/info/refs?")) return new Response(bytes, { status });
+      throw new Error("unexpected metadata");
+    });
+    const response = await configured().git("acme", "site", "info/refs", new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { "git-protocol": "version=2" } }), null, false);
+    expect(response.status).toBe(status);expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+    expect(fake).toHaveBeenCalledTimes(2);
+  });
+  it("falls back to the actual default branch only when v2 ref-prefix omits its tip", async () => {
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+      const text = String(url);
+      if (text.endsWith("/tokens")) return Response.json({ success: true, result: issued() });
+      if (text.endsWith("/repos/site")) return Response.json({ success: true, result: { name: "site", remote: configured().remote("acme", "site"), default_branch: "release" } });
+      if (text.includes("/log?")) { expect(new URL(text).searchParams.get("ref")).toBe("release");return Response.json({ success: true, result: [{ hash: OID }] }); }
+      return new Response(join(packet(`${NEXT} HEAD symref-target:refs/heads/old\n`), flush));
+    });
+    const response = await configured().git("acme", "site", "git-upload-pack", new Request("https://acme.pimwell.test/site.git/git-upload-pack", { method: "POST" }), stream(join(packet("command=ls-refs\n"), flush, packet("ref-prefix HEAD\n"), flush)), false);
+    expect(await response.text()).toContain(`${OID} HEAD symref-target:refs/heads/release`);
+    expect(fake.mock.calls.filter(([url]) => String(url).includes("/log?"))).toHaveLength(1);
+  });
   it("normalizes compressed v2 ls-refs HEAD without decoding pack responses", async () => {
     const token = issued(), stale = "1".repeat(40), main = "2".repeat(40), plain = join(packet("command=ls-refs\n"), flush, packet("symrefs\n"), flush), compressed = await gzip(plain);
     let sawUpstreamBody = false;

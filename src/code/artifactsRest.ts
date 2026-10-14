@@ -67,6 +67,22 @@ function replaceV2Head(bytes: Uint8Array, branch: string, target: string): Uint8
   }
   return sawHead ? joinPackets(out) : bytes;
 }
+/** Read tips from this very advertisement, never a separately cached mutable ref. */
+function advertisedHead(bytes: Uint8Array, branch?: string): { head: boolean; target?: string } {
+  let head = false, target: string | undefined;
+  for (let offset = 0; offset < bytes.length;) {
+    if (bytes.length - offset < 4) throw new Error("truncated advertisement");
+    const length = pktLen(bytes, offset);
+    if (!length) { offset += 4;continue; }
+    if (offset + length > bytes.length) throw new Error("truncated advertisement");
+    const line = pktDecode.decode(bytes.subarray(offset + 4, offset + length)).split("\0", 1)[0]!;
+    const ref = /^([0-9a-f]{40}) ([^ \n]+)(?: |\n|$)/.exec(line);
+    if (ref?.[2] === "HEAD") head = true;
+    if (branch && ref?.[2] === `refs/heads/${branch}`) target = ref[1];
+    offset += length;
+  }
+  return { head, target };
+}
 async function looksLikeV2LsRefs(source: ReadableStream<Uint8Array> | null, encoding: string | null): Promise<boolean> {
   if (!source) return false;
   let stream: ReadableStream<Uint8Array> = source;
@@ -264,15 +280,25 @@ export class ArtifactsRest {
     if (tail === "git-upload-pack" && request.method === "POST" && body) [body, inspect] = body.tee();
     const normalizeV0 = normalizeHead && tail === "info/refs" && url.searchParams.get("service") === "git-upload-pack";
     const normalizeV2 = normalizeHead && tail === "git-upload-pack" && request.method === "POST" && await looksLikeV2LsRefs(inspect, request.headers.get("content-encoding"));
+    // v2 discovery advertises capabilities, not refs. Overlap fresh metadata with
+    // token/storage I/O, but never retain promises across Worker invocations.
+    const needsHead = normalizeV2 || (normalizeV0 && !request.headers.get("git-protocol")?.split(":").includes("version=2"));
+    const metadata = needsHead ? this.info(namespace, repo).then(info => ({ info }), error => ({ error })) : null;
     headers.set("authorization", `Bearer ${await this.repoToken(namespace, repo, write ? "write" : "read")}`);
     let response: Response;
     try { response = await fetch(upstream, { method: request.method, headers, body, redirect: "manual", signal: this.signal(120_000) }); }
     catch { throw new HubError(503, "unavailable", "Git storage did not answer within 120s; run git ls-remote before retrying"); }
-    if (!normalizeV0 && !normalizeV2) return response;
-    const [info, commits] = await Promise.all([this.info(namespace, repo), this.log(namespace, repo, "main", 1).catch(() => [])]);
-    const branch = info.default_branch || "main", target = branch === "main" ? commits[0]?.hash : (await this.log(namespace, repo, branch, 1).catch(() => []))[0]?.hash;
-    if (!/^[0-9a-f]{40}$/.test(target ?? "")) return response;
+    if (!response.ok || (!normalizeV0 && !normalizeV2)) return response;
     const bytes = new Uint8Array(await response.arrayBuffer());
+    const original = () => new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
+    try { if (!advertisedHead(bytes).head) return original(); }
+    catch { return original(); }
+    const result = await (metadata ?? this.info(namespace, repo).then(info => ({ info }), error => ({ error })));
+    if ("error" in result) throw result.error;
+    const branch = result.info.default_branch || "main";
+    // v2 ref-prefix can omit the default branch; only then is a log lookup needed.
+    const target = advertisedHead(bytes, branch).target ?? (await this.log(namespace, repo, branch, 1).catch(() => []))[0]?.hash;
+    if (!/^[0-9a-f]{40}$/.test(target ?? "")) return original();
     let replaced: Uint8Array;
     try { replaced = normalizeV0 ? replaceHeadAdvert(bytes, branch, target!) : replaceV2Head(bytes, branch, target!); }
     catch { return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers }); }
