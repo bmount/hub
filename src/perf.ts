@@ -48,8 +48,8 @@ export function span<T>(name: string, fn: () => T): T {
   if (!current) return fn();
   const { trace } = current;
   const started = performance.now(), id = ++trace.next;
-  const entry: TimingSpan = { name, id, parent: current.parent, ms: 0, failed: false, started, finished: false, source: spanSource(name) };
   const retained = trace.spans.length < 199;
+  const entry: TimingSpan = { name, id, parent: current.parent, ms: 0, failed: false, started, finished: false, source: retained ? spanSource(name) : undefined };
   if (retained) trace.spans.push(entry);
   else { trace.other++; trace.otherOpen++; trace.otherStarted += started; }
   const finish = (failed: boolean) => {
@@ -74,11 +74,28 @@ const SQL = new WeakMap<object, string>();
 const fingerprints = new Map<string, string>();
 const normalizedSQL = new Map<string, string>();
 const sqlSources = new Map<string, {source?: CodeSite; sqlCode: string}>();
+export function applicationSource(stack:string):CodeSite|undefined {
+  for(const frame of stack.split("\n").slice(1)) {
+    if(/(?:^|[/\\])perf\.ts[:)]/.test(frame)) continue;
+    const fn=/\bat (?:async )?([^ (]+)\s*\(/.exec(frame)?.[1];
+    const location=fn&&Object.hasOwn(FUNCTION_CATALOG,fn)?FUNCTION_CATALOG[fn]:undefined;
+    if(location && location.file!=="src/perf.ts") return location;
+  }
+}
 function spanSource(name: string): CodeSite | undefined {
-  return SPAN_CATALOG[name] ?? FUNCTION_CATALOG[name.startsWith("d1.") ? "meteredD1" :
-    name.startsWith("fetch.") ? "installFetchTiming" : name.startsWith("do.handler.") ? "instrumentDurableObject" :
-    name.startsWith("do.stub.") ? "timedStub" : name.startsWith("do.") ? "timedStorage" :
-    /^(RATE|OAUTH_KV|MAIL|GIT_PUSH_STAGING|GIT_PROXY|ARDI)\./.test(name) ? "timedBinding" : "span"]; 
+  const defined=SPAN_CATALOG[name];
+  if(defined && defined.file!=="src/perf.ts") return defined;
+  const enclosing=context.getStore()?.entry?.source;
+  const application=enclosing?.file!=="src/perf.ts"?enclosing:undefined;
+  // Batch statement details belong to the batch's call site. Ordinary named spans
+  // already have catalog/enclosing locations; don't capture hundreds of stacks.
+  if(name==='d1.statement'||!/^(d1\.|fetch\.|do\.|RATE\.|OAUTH_KV\.|MAIL\.|GIT_PUSH_STAGING\.|GIT_PROXY\.|ARDI\.)/.test(name)) return application;
+  // Bundled stacks carry function names, not reliable TypeScript line numbers.
+  // Resolve only source-defined catalog entries, skipping instrumentation frames.
+  const holder:{stack?:string}={},limit=Error.stackTraceLimit;
+  try {Error.stackTraceLimit=10;Error.captureStackTrace(holder,span);}
+  finally {Error.stackTraceLimit=limit;}
+  return applicationSource(holder.stack??"") ?? application;
 }
 export function exclusiveDuration(s: TimingSpan, spans: TimingSpan[], snapshot: number): number {
   const start = s.started ?? snapshot - s.ms;
@@ -123,8 +140,8 @@ function fingerprint(sql: string, caller?: Function): string {
   let site = "unknown";
   if (caller && typeof Error.captureStackTrace === "function") {
     const holder: { stack?: string } = {}, limit = Error.stackTraceLimit;
-    // Synchronous and restored before any user code/I/O: capture only the SQL caller, not a full expensive stack.
-    try { Error.stackTraceLimit = 1; Error.captureStackTrace(holder, caller); site = holder.stack?.split("\n")[1]?.trim() ?? site; }
+    // Synchronous and restored before user code/I/O; bounded to skip instrumentation.
+    try { Error.stackTraceLimit = 10; Error.captureStackTrace(holder, caller); site = holder.stack?.split("\n").slice(1).find(frame=>!/(?:^|[/\\])perf\.ts[:)]/.test(frame))?.trim() ?? site; }
     finally { Error.stackTraceLimit = limit; }
   } else site = new Error().stack?.split("\n")[3]?.trim() ?? site;
   const marker=/^\/\*perf-site:([^:]+):(\d+):(\d+):([^:]+):([0-9a-f]{8})\*\//.exec(sql);
@@ -148,7 +165,7 @@ function fingerprint(sql: string, caller?: Function): string {
     }
     if (catalog && (code.startsWith("site-") || catalog.text === normalized)) {
       if (sqlSources.size >= 512) sqlSources.clear();
-      const source=catalog.sites.length===1?catalog.sites[0]:undefined;
+      const source=catalog.sites.length===1&&catalog.sites[0]?.file!=="src/perf.ts"?catalog.sites[0]:undefined;
       sqlSources.set(value,{sqlCode:code,...(source?{source}:{})});
     }
   }

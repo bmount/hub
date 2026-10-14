@@ -20,12 +20,12 @@ export const agentSrcSlug = (agentId: string) => `${AGENT_SRC}.${agentId.toLower
 /** An active agent in this organization whose address is <org>.<name>@…, as everywhere else in Pimwell. */
 export async function agentByName(db: D1Database, tenant: Tenant, name: string): Promise<Identity | null> {
   // A reserved alias never falls through to a reused canonical name, even if its target is archived.
-  const alias = await db.prepare("SELECT identity_id FROM agent_source_alias WHERE tenant_id = ? AND alias = ?")
+  const alias = await db.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:23:23:agentByName:e5789e5d*/ SELECT identity_id FROM agent_source_alias WHERE tenant_id = ? AND alias = ?")
     .bind(tenant.id, name.toLowerCase()).first<{ identity_id: string }>();
-  if (alias) return db.prepare(`SELECT i.* FROM identity i JOIN membership m ON m.identity_id = i.id
+  if (alias) return db.prepare(`/*perf-site:src%2Fcode%2FagentSrc.ts:25:21:agentByName:d8fdc034*/ SELECT i.* FROM identity i JOIN membership m ON m.identity_id = i.id
     WHERE m.tenant_id = ? AND m.state = 'active' AND i.id = ? AND i.kind = 'agent' AND i.state = 'active'`)
     .bind(tenant.id, alias.identity_id).first<Identity>();
-  return db.prepare(`/*perf-site:src%2Fcode%2FagentSrc.ts:22:10:agentByName:b88b1bad*/ SELECT i.* FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ? AND m.state = 'active'
+  return db.prepare(`/*perf-site:src%2Fcode%2FagentSrc.ts:28:10:agentByName:b88b1bad*/ SELECT i.* FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ? AND m.state = 'active'
     WHERE i.kind = 'agent' AND i.state = 'active' AND substr(i.email, instr(i.email, '.') + 1, instr(i.email, '@') - instr(i.email, '.') - 1) = ?`)
     .bind(tenant.id, name.toLowerCase()).first<Identity>();
 }
@@ -50,7 +50,7 @@ export async function agentSrcGrant(env: Env, authorization: string | null, tena
   const access = agent ? agentSrcAccess(caller, agent) : null;
   if (!agent || !access) return "not_found";
   const slug = agentSrcSlug(agent.id);
-  let project = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:47:23:agentSrcGrant:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = ?").bind(caller.tenant.id, slug, AGENT_SRC).first<{ id: string; slug: string }>();
+  let project = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:53:23:agentSrcGrant:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = ?").bind(caller.tenant.id, slug, AGENT_SRC).first<{ id: string; slug: string }>();
   if (!project) {
     if (!access.write) return "not_found";
     project = await createAgentSrc(env, caller.tenant, agent, slug, now);
@@ -62,10 +62,10 @@ export async function agentSrcGrant(env: Env, authorization: string | null, tena
 async function createAgentSrc(env: Env, tenant: Tenant, agent: Identity, slug: string, now: number): Promise<{ id: string; slug: string }> {
   if (env.GIT_BACKEND !== "artifacts") throw new HubError(503, "unavailable", "agent source repositories need Artifacts storage");
   const id = ulid(now);
-  await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:59:9:createAgentSrc:2cbef356*/ INSERT INTO project (id, tenant_id, namespace_id, slug, kind, display_name, state, created_at) VALUES (?, ?, NULL, ?, ?, ?, 'active', ?) ON CONFLICT DO NOTHING")
+  await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:65:9:createAgentSrc:2cbef356*/ INSERT INTO project (id, tenant_id, namespace_id, slug, kind, display_name, state, created_at) VALUES (?, ?, NULL, ?, ?, ?, 'active', ?) ON CONFLICT DO NOTHING")
     .bind(id, tenant.id, slug, AGENT_SRC, `${agent.display_name} (agent source)`, now).run();
   // Two first pushes at once: whoever inserted first owns the row; the other uses it.
-  const project = (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:62:26:createAgentSrc:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = ?").bind(tenant.id, slug, AGENT_SRC).first<{ id: string; slug: string }>())!;
+  const project = (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:68:26:createAgentSrc:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = ?").bind(tenant.id, slug, AGENT_SRC).first<{ id: string; slug: string }>())!;
   const api = new ArtifactsRest(env), namespace = artifactNamespace(tenant.slug), ownership = repoOwnership(tenant.id, project.id);
   try {
     const info = await api.info(namespace, slug);
@@ -74,6 +74,6 @@ async function createAgentSrc(env: Env, tenant: Tenant, agent: Identity, slug: s
     if (!(error instanceof HubError) || error.status !== 404) throw error;
     await api.create(namespace, slug, ownership);
   }
-  await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:71:9:createAgentSrc:7ea63596*/ INSERT OR IGNORE INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(tenant.id, project.id, now).run();
+  await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FagentSrc.ts:77:9:createAgentSrc:7ea63596*/ INSERT OR IGNORE INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(tenant.id, project.id, now).run();
   return project;
 }

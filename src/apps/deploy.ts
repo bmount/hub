@@ -12,17 +12,17 @@ const SELECT = `SELECT d.id, p.slug AS project, d.script_name, d.version_id, d.t
 
 /** Latest reported production release, not a privileged live rollout check. */
 export function currentDeployStatement(ctx: Ctx, projectId: string, script: string) {
-  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fdeploy.ts:13:10:currentDeployStatement:59cfe804*/ ${SELECT} WHERE d.tenant_id = ? AND d.project_id = ? AND d.script_name = ? AND length(d.version_id) = 73
+  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fdeploy.ts:15:10:currentDeployStatement:59cfe804*/ ${SELECT} WHERE d.tenant_id = ? AND d.project_id = ? AND d.script_name = ? AND length(d.version_id) = 73
     AND CASE WHEN json_valid(d.message) THEN json_extract(d.message, '$.release') = 1 AND json_extract(d.message, '$.environment') = 'production' ELSE 0 END
     ORDER BY d.seen_at DESC, d.id DESC LIMIT 1`).bind(ctx.tenant!.id, projectId, script);
 }
 
 export function deployStatement(ctx: Ctx, id: string) {
-  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fdeploy.ts:19:10:deployStatement:92ad68f4*/ ${SELECT} WHERE d.id = ? AND d.tenant_id = ?`).bind(id, ctx.tenant!.id);
+  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fdeploy.ts:21:10:deployStatement:92ad68f4*/ ${SELECT} WHERE d.id = ? AND d.tenant_id = ?`).bind(id, ctx.tenant!.id);
 }
 
 export function deploysStatement(ctx: Ctx, project: string | null = null, siteId: string | null = null) {
-  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fdeploy.ts:23:10:deploysStatement:2020079f*/ ${SELECT} WHERE d.tenant_id = ? AND (? IS NULL OR p.slug = ?)
+  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fdeploy.ts:25:10:deploysStatement:2020079f*/ ${SELECT} WHERE d.tenant_id = ? AND (? IS NULL OR p.slug = ?)
     AND (? IS NULL OR EXISTS (SELECT 1 FROM site_app sa JOIN site s ON s.id = sa.site_id JOIN app_source a ON a.id = sa.app_id
       WHERE s.id = ? AND s.tenant_id = d.tenant_id AND s.project_id = d.project_id AND a.tenant_id = s.tenant_id AND a.project_id = s.project_id AND a.script_name = d.script_name))
     ORDER BY d.seen_at DESC, d.id DESC LIMIT 51`)
@@ -48,7 +48,7 @@ export type DeployWorkItem = { id: string; project: string; number: number; ref:
 export function deployWorkStatement(ctx: Ctx, row: DeployRow) {
   const url = `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/apps?d=${encodeURIComponent(row.id)}`;
   const commit = deployView(row).commitRef;
-  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fdeploy.ts:49:10:deployWorkStatement:e057da6b*/ SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,
+  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fdeploy.ts:51:10:deployWorkStatement:792d4aa3*/ SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,
       CASE WHEN w.source_kind = 'url' AND w.source_ref = ? THEN 'filed'
         WHEN EXISTS (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND l.target_kind = 'url' AND l.target_ref = ?) THEN 'linked'
         ELSE 'commit' END AS relationship

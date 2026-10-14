@@ -152,10 +152,10 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   if (project.kind === "repo" || project.kind === "workspace") {
     const mapped = await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:deleteProject:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).first();
     if (project.kind === "repo" && !mapped && ctx.env.ARDI_REPO_CREATE === "on") throw conflict("repository is not mapped to Artifacts; migrate it before deleting the project");
-    const repositories = (await db.prepare("SELECT name, storage_name FROM repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).all<{name: string; storage_name: string}>()).results;
+    const repositories = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:155:33:deleteProject:cf63d832*/ SELECT name, storage_name FROM repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).all<{name: string; storage_name: string}>()).results;
     if (mapped || repositories.length) {
       const api = new ArtifactsRest(ctx.env), ns = artifactNamespace(ctx.tenant!.slug);
-      const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:157:29:deleteProject:7181cbc4*/ SELECT id, namespace, shadow, replay_key FROM git_push WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id)
+      const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:158:29:deleteProject:7181cbc4*/ SELECT id, namespace, shadow, replay_key FROM git_push WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id)
         .all<{ id: string; namespace: string; shadow: string; replay_key: string }>()).results;
       for (const push of pushes) {
         if (push.namespace !== ns) throw conflict("repository staging ownership mismatch");
@@ -174,7 +174,7 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   }
 
   stmts.splice(1, 0, deletionEvent());
-  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:175:14:deleteProject:a535e921*/ DELETE FROM meta WHERE key = ?").bind(key));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:177:14:deleteProject:a535e921*/ DELETE FROM meta WHERE key = ?").bind(key));
   await db.batch(stmts);
   return { ok: true, slug: project.slug, counts };
 }

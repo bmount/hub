@@ -43,6 +43,7 @@ async function scan(dir) {
     if(['Conversation','Inbox'].includes(klass)) spans[`do.handler.${klass}.${method}`]=loc;
    }
    if(ts.isFunctionDeclaration(node) && node.name) functions[node.name.text]={file,line:source.getLineAndCharacterOfPosition(node.getStart(source)).line+1,fn:node.name.text};
+   if(ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && (ts.isArrowFunction(node.initializer)||ts.isFunctionExpression(node.initializer))) functions[node.name.text]={...location(node),fn:node.name.text};
    if(ts.isCallExpression(node)) {
     const callee=node.expression.getText(source), text=literal(node.arguments[0]);
     if(callee==='tracedInvocation') {const label=literal(node.arguments[2]);if(label)spans[label]=location(node);}

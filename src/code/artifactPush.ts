@@ -91,7 +91,7 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
   const shadow = `pimwell-stage-${id}`, replayKey = `git-push/${grant.tenant.id}/${grant.project.id}/${id}`;
   const db = env.HUB_DB, storage = env.GIT_PUSH_STAGING;
   api = api.withDeadline?.(300_000) ?? api;
-  await db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:93:9:artifactPush:9945174b*/ INSERT INTO git_push (id, tenant_id, project_id, identity_id, session_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'staging', ?)`)
+  await db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:94:9:artifactPush:9945174b*/ INSERT INTO git_push (id, tenant_id, project_id, identity_id, session_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'staging', ?)`)
     .bind(id, grant.tenant.id, grant.project.id, grant.identity.id, grant.session.id, namespace, repo, shadow, replayKey, JSON.stringify(updates), Date.now()).run();
   let disposable = true, phase = "repository fork";
   try {
@@ -125,7 +125,7 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
     }
     if (refused.size && capabilities.includes("atomic")) {
       const outcomes = updates.map(update => ({ ...update, outcome: "ng" as const, reason: refused.get(update.ref) ?? "atomic push rejected" }));
-      await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:127:13:artifactPush:9bdc73d9*/ UPDATE git_push SET state = 'refused', outcomes_json = ?, completed_at = ? WHERE id = ?").bind(JSON.stringify(outcomes), Date.now(), id).run();
+      await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:128:13:artifactPush:9bdc73d9*/ UPDATE git_push SET state = 'refused', outcomes_json = ?, completed_at = ? WHERE id = ?").bind(JSON.stringify(outcomes), Date.now(), id).run();
       return statusResponse(outcomes, capabilities);
     }
     // Revocation during staging must prevent publishing, without exposing the storage credential.
@@ -152,12 +152,12 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
       }
     }
     await indexCommitNodes(db, grant.tenant.id, grant.project.id, introduced, repoName);
-    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:154:11:artifactPush:7b8c0c72*/ UPDATE git_push SET commits_json = ? WHERE id = ?").bind(JSON.stringify(introduced), id).run();
+    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:155:11:artifactPush:7b8c0c72*/ UPDATE git_push SET commits_json = ? WHERE id = ?").bind(JSON.stringify(introduced), id).run();
     let actual: RefOutcome[] = [];
     if (publish.length) {
       const saved = await storage.get(replayKey);
       if (!saved) throw new HubError(503, "unavailable", "Git replay unavailable");
-      await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:159:13:artifactPush:3b6b741c*/ UPDATE git_push SET state = 'publishing' WHERE id = ?").bind(id).run();
+      await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:160:13:artifactPush:3b6b741c*/ UPDATE git_push SET state = 'publishing' WHERE id = ?").bind(id).run();
       phase = "publishing";
       disposable = false; // An ambiguous upstream response must retain the durable recovery record and pack.
       const canonical = await api.git(namespace, repo, "git-receive-pack", request, replaceCommands(saved.body, prefixBytes, publish, capabilities), true);
@@ -175,19 +175,19 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
     const state = actual.some(update => update.outcome === "unknown") || outcomes.some(update => update.outcome === "unknown") ? "unknown" : "complete";
     const accepted = new Set(actual.filter(update => update.outcome === "ok").map(update => update.ref));
     const commits = introduced.filter(commit => accepted.has(commit.ref));
-    const row = await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:177:23:artifactPush:4594633d*/ SELECT seq, identity_id FROM git_push WHERE id = ?").bind(id).first<{ seq: number; identity_id: string | null }>();
+    const row = await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:178:23:artifactPush:4594633d*/ SELECT seq, identity_id FROM git_push WHERE id = ?").bind(id).first<{ seq: number; identity_id: string | null }>();
     const now = Date.now();
-    const events = commits.map((commit, index) => db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:179:51:artifactPush:75c5e4bf*/ INSERT OR IGNORE INTO code_event (tenant_id, project_id, repo, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, ?, 'commit', ?, ?, ?, ?, ?, ?)`)
+    const events = commits.map((commit, index) => db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:180:51:artifactPush:a9a7d6f4*/ INSERT OR IGNORE INTO code_event (tenant_id, project_id, repo, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, ?, 'commit', ?, ?, ?, ?, ?, ?)`)
       .bind(grant.tenant.id, grant.project.id, repoName, 1_000_000_000_000 + row!.seq * 8192 + 4096 + index, row!.identity_id, grant.session.id, commit.ref, commit.hash, commit.summary, now));
     for (let offset = 0; offset < events.length; offset += 100) await db.batch(events.slice(offset, offset + 100));
-    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:182:11:artifactPush:0225ad0d*/ UPDATE git_push SET state = ?, outcomes_json = ?, published_json = ?, commits_json = ?, completed_at = ? WHERE id = ?").bind(state, JSON.stringify(outcomes), JSON.stringify(actual), JSON.stringify(commits), now, id).run();
+    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:183:11:artifactPush:0225ad0d*/ UPDATE git_push SET state = ?, outcomes_json = ?, published_json = ?, commits_json = ?, completed_at = ? WHERE id = ?").bind(state, JSON.stringify(outcomes), JSON.stringify(actual), JSON.stringify(commits), now, id).run();
     disposable = state === "complete";
     return statusResponse(outcomes, capabilities);
   } catch (error) {
     // Never claim success after a lost publishing response, or echo upstream prose/credentials.
     const reason = `${phase} ${disposable ? "failed; canonical refs not published by this attempt" : "outcome unknown"}; run git ls-remote and fetch before retrying; push ${id}`;
     const outcomes: RefOutcome[] = updates.map(update => ({ ...update, outcome: "ng", reason }));
-    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:189:11:artifactPush:9bdc73d9*/ UPDATE git_push SET state = ?, outcomes_json = ?, completed_at = ? WHERE id = ?").bind(disposable ? "refused" : "unknown", JSON.stringify(outcomes), Date.now(), id).run().catch(() => {});
+    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:190:11:artifactPush:9bdc73d9*/ UPDATE git_push SET state = ?, outcomes_json = ?, completed_at = ? WHERE id = ?").bind(disposable ? "refused" : "unknown", JSON.stringify(outcomes), Date.now(), id).run().catch(() => {});
     if (error instanceof HubError && error.status === 413) throw error;
     return statusResponse(outcomes, capabilities);
   } finally {

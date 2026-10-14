@@ -4,7 +4,7 @@ import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appsPage } from "../src/http/appsPages";
 import { sparkline, routeBreakdown } from "../src/http/performancePage";
-import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser, population, weightedMetrics, tripAttribution, interactionPhases, type PerformanceData } from "../src/apps/performance";
+import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser, population, weightedMetrics, routeAttribution, routeAttributionSQL, interactionPhases, type PerformanceData } from "../src/apps/performance";
 import { buildContext } from "../src/auth/context";
 import { tenantHash } from "../src/perf";
 import { SQL_CATALOG } from "../src/perfCatalog";
@@ -65,24 +65,6 @@ describe("sites", () => {
     const server=routeBreakdown(data,"docket").filter(r=>!r.name.startsWith("Browser"));
     expect(server.reduce((sum,r)=>sum+r.value,0)).toBeCloseTo(132);
     expect(server.find(r=>r.name==="D1 transport / queue")!.value).toBeLessThan(132);
-    const trips=tripAttribution([
-      {tenant:'private',request:'trip',label:'docket',kind:'request',name:'request',n:10,root_wall:1320,attributed:200},
-      {tenant:'private',request:'trip',label:'docket',kind:'span',name:'d1.batch',n:100,attributed:10000,known_wall:10000,execution:1000,execution_n:100},
-    ]);
-    expect(trips.reduce((sum,r)=>sum+Number(r.attributed),0)).toBe(1200);
-    expect(trips.find(r=>r.name==='d1.batch')!.attributed).toBe(1000);
-    expect(JSON.stringify(trips)).not.toContain('private');
-    const repeated=tripAttribution([
-      {tenant:'private',request:'trip',label:'docket',kind:'request',name:'request',n:10,root_wall:1320,attributed:200},
-      {tenant:'private',request:'trip',label:'docket',kind:'span',name:'d1.batch',span:1,n:100,attributed:4000},
-      {tenant:'private',request:'trip',label:'docket',kind:'span',name:'d1.batch',span:2,n:100,attributed:6000},
-    ]);
-    expect(repeated.find(r=>r.name==='d1.batch')!.attributed).toBe(1000);
-    const bounded=tripAttribution([
-      {tenant:'private',request:'trip',label:'docket',kind:'request',name:'request',n:1,root_wall:132,attributed:20},
-      {tenant:'private',request:'trip',label:'docket',kind:'span',name:'d1.batch',n:1,attributed:468.6},
-    ]);
-    expect(bounded.reduce((sum,r)=>sum+Number(r.attributed),0)).toBeCloseTo(132);
     const phases=interactionPhases([{tenant:'own',request:'r',label:'list.select',weight:10}],[
       {tenant:'own',request:'r',label:'list.select',phase:'fetch',mean:130},
       {tenant:'own',request:'r',label:'list.select',phase:'render',mean:50},
@@ -91,6 +73,59 @@ describe("sites", () => {
     ]);
     expect(phases).toEqual([{label:'list.select',phase:'fetch',mean:130,n:10},{label:'list.select',phase:'render',mean:50,n:10}]);
     expect(JSON.stringify(phases)).not.toContain('own');
+  });
+  it("keeps root gaps visible and caps each trip before aggregating route weights", () => {
+    const sql=routeAttributionSQL("blob1 = 'authorized' AND blob8 = '/mcp'");
+    expect(sql).toContain("GROUP BY tenant, request, label, name, kind, span");
+    expect(sql).toContain("GROUP BY tenant, request, label HAVING root_n > 0 ORDER BY at DESC LIMIT 200");
+    expect(sql).not.toContain("LIMIT 5000");expect(sql).toContain("blob1 = 'authorized'");
+    const breakdown=routeAttribution([
+      {label:'busy',root_n:10,root_wall:100,span_wall:200,d1_wall:200,d1_known_wall:200,d1_execution:40,d1_execution_n:2,d1_n:2},
+      {label:'busy',root_n:1,root_wall:100,span_wall:0},
+      {label:'/mcp',root_n:1,root_wall:101,span_wall:23,d1_wall:23,d1_n:1},
+      {label:'missing-root',root_n:0,root_wall:0,span_wall:100,d1_wall:100},
+    ]);
+    const data:PerformanceData={overview:[],spark:[],browser:[],histogram:[],splits:{},sql:[],exemplars:[],waterfall:[],comparison:[],triggers:[],breakdown};
+    const rare=routeBreakdown(data,'/mcp');
+    expect(rare.find(r=>r.name==='Unattributed server')?.value).toBe(78);
+    expect(rare.filter(r=>!r.name.startsWith('Browser')).reduce((n,r)=>n+r.value,0)).toBe(101);
+    const busy=routeBreakdown(data,'busy');
+    expect(busy.find(r=>r.name==='Unattributed server')?.value).toBeCloseTo(100/11);
+    expect(busy.filter(r=>!r.name.startsWith('Browser')).reduce((n,r)=>n+r.value,0)).toBeCloseTo(100);
+    expect(breakdown.some(r=>r.label==='missing-root')).toBe(false);
+    expect(JSON.stringify(breakdown)).not.toContain('request\":');
+    data.breakdown=[{label:'root-only',kind:'request',name:'request',n:1,root_wall:75,attributed:75}];
+    expect(routeBreakdown(data,'root-only').find(r=>r.name==='Unattributed server')?.value).toBe(75);
+  });
+  it("retains low-volume route bars while another route is inspected", async () => {
+    const w=await world();
+    await w.call(w.root.token,'app.register',{project:'pricebench',script:'pricebench'});
+    await w.call(w.pat.token,'site.register',{project:'pricebench',name:'prices.example.com',hostnames:['prices.example.com'],apps:['pricebench']});
+    const measured={...env,ARTIFACTS_ACCOUNT_ID:'a'.repeat(32),PERF_ANALYTICS_TOKEN:'test'};
+    const queries:string[]=[];clearPerformanceCache();
+    const mock=vi.spyOn(globalThis,'fetch').mockImplementation(async(_input,init)=>{
+      const sql=String(init?.body);queries.push(sql);
+      if(sql.includes('double17')) {
+        expect(sql).toContain('LIMIT 200');expect(sql).not.toContain('LIMIT 5000');
+        const label=sql.includes("blob8 = '/mcp'")?'/mcp':'/:project/docket';
+        return Response.json({data:[{label,root_n:1,root_wall:101,span_wall:23,d1_wall:23,d1_n:1}]});
+      }
+      if(sql.includes('AS mean')||sql.includes('intDiv')||sql.includes('AS schema')||sql.includes('SELECT blob15')||sql.includes('blob6 AS request')||sql.includes('IF(double1 < 10')||sql.includes('blob2 AS label')||sql.includes('blob3 AS label')||sql.includes('blob4 AS label')||sql.includes('blob11 AS label')) return Response.json({data:[]});
+      return Response.json({data:[{label:'/:project/docket',n:100,p50:101},{label:'/mcp',n:13,p50:101}]});
+    });
+    try {
+      const url=`https://${HOST}/apps?project=pricebench&site=prices.example.com&view=performance`;
+      const get=(suffix:string)=>appsPage(new Request(url+suffix,{headers:cookieHeaders(w.pat.token,HOST)}),measured);
+      const unselected=await (await get('')).text();
+      const selected=await (await get('&selected=%2F%3Aproject%2Fdocket')).text();
+      expect(unselected.match(/class="perf-stack"/g)).toHaveLength(2);
+      expect(selected.match(/class="perf-stack"/g)).toHaveLength(3); // two rows + inspector
+      expect(selected).toContain('Unattributed server: 78');
+      expect(selected).toContain('title="/:project/docket">/<wbr>:project/<wbr>docket');
+      expect(selected).not.toContain('overflow-wrap:anywhere');
+      expect(queries.filter(q=>q.includes('double17'))).toHaveLength(2); // reused on selection
+      expect(queries.some(q=>q.includes("blob8 = '/mcp'"))).toBe(true);
+    } finally {mock.mockRestore();clearPerformanceCache();}
   });
   it("carries a named repository through app registration, telemetry, releases and Site apps", async () => {
     const w = await world();
@@ -139,7 +174,7 @@ describe("sites", () => {
       else if(sql.includes("blob6 AS request")&&!sql.includes("double17")) data=[{request,version,colo:"DFW",duration:100,weight:1}];
       else if(sql.includes("SELECT blob15")) data=[{fingerprint:"01234567",code,source:JSON.stringify(location),version,...metric}];
       else if(sql.includes("IF(double1 < 10")) data=[{bucket:1,n:100}];
-      else if(sql.includes("double17")) data=[{label:"/:project",name:"request",kind:"request",attributed:1000,execution:0,n:100},{label:"/:project",name:"d1.first",kind:"span",attributed:2000,execution:500,known_wall:2000,execution_n:100,n:100}];
+      else if(sql.includes("double17")) data=[{label:"/:project",request,root_n:100,root_wall:30,span_wall:20,d1_wall:20,d1_execution:5,d1_known_wall:20,d1_execution_n:1,d1_n:1}];
       else if(sql.includes("intDiv")) data=[{label:"/:project",bucket:1,p50:20,n:50},{label:"/:project",bucket:2,p50:25,n:50}];
       else if(sql.includes("GROUP BY label, version")) data=[{label:"/:project",version,...metric},{label:"/:project",version:previous,...metric,p95:80}];
       else if(sql.includes("double2 AS label")) data=[{label:0,...metric},{label:1,...metric}];
@@ -178,9 +213,9 @@ describe("sites", () => {
       const outsider=await seedHuman("outsider@example.com"),rootOutsider=await seedHuman("global-root@example.com",{is_root:true});const before=sqls.length;
       expect((await get("",outsider.token)).status).toBe(404);expect(sqls).toHaveLength(before);
       expect((await get("",rootOutsider.token)).status).toBe(404);expect(sqls).toHaveLength(before);
-      expect((await get("",w.root.token)).status).toBe(200);expect(sqls).toHaveLength(before+1); // Unselected attribution has its own bounded population.
+      expect((await get("",w.root.token)).status).toBe(200);expect(sqls).toHaveLength(before); // Inspector selection shares the same per-route attribution.
       const other=await seedTenant("other");const foreign=await seedHuman("foreign@example.com",{memberships:[{tenant_id:other.id,role:"member"}]});
-      expect((await get("",foreign.token,"other.pimwell.test")).status).toBe(404);expect(sqls).toHaveLength(before+1);
+      expect((await get("",foreign.token,"other.pimwell.test")).status).toBe(404);expect(sqls).toHaveLength(before);
       expect((await appsPage(new Request(base.replace("project=pricebench","project=missing"),{headers:cookieHeaders(w.pat.token,HOST)}),measured)).status).toBe(404);
       const ctx={...await buildContext(new Request(base,{headers:cookieHeaders(w.pat.token,HOST)}),measured),playground:{scopes:["read"]}};
       const site=await ctx.db.prepare("SELECT s.*, 'pricebench' AS project FROM site s WHERE tenant_id = ?").bind(w.t.id).first<any>();

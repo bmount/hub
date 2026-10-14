@@ -9,7 +9,7 @@ import { conversationStub, inboxStub } from "../chat/stubs";
 /** Purge external stores before D1. Failures leave an archived organization retryable. */
 export async function purgeTenantStores(ctx: Ctx, tenant: Tenant): Promise<void> {
   const db = ctx.db, tid = tenant.id, bucket = ctx.env.GIT_PUSH_STAGING;
-  const repos = (await db.prepare("/*perf-site:src%2Fdb%2FtenantStores.ts:12:24:purgeTenantStores:2ef094d4*/ SELECT p.id, COALESCE(r.storage_name, p.slug) AS slug, COALESCE(r.project_id, g.project_id) AS mapped FROM project p LEFT JOIN git_repository g ON g.tenant_id = p.tenant_id AND g.project_id = p.id LEFT JOIN repository r ON r.project_id = p.id AND r.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND (p.kind = 'repo' OR r.project_id IS NOT NULL)")
+  const repos = (await db.prepare("/*perf-site:src%2Fdb%2FtenantStores.ts:12:24:purgeTenantStores:9ed386eb*/ SELECT p.id, COALESCE(r.storage_name, p.slug) AS slug, COALESCE(r.project_id, g.project_id) AS mapped FROM project p LEFT JOIN git_repository g ON g.tenant_id = p.tenant_id AND g.project_id = p.id LEFT JOIN repository r ON r.project_id = p.id AND r.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND (p.kind = 'repo' OR r.project_id IS NOT NULL)")
     .bind(tid).all<{ id: string; slug: string; mapped: string | null }>()).results;
   if (ctx.env.ARDI_REPO_CREATE === "on" && repos.some(r => !r.mapped)) throw conflict("repository is not mapped to Artifacts; migrate it before deleting the organization");
   const ns = artifactNamespace(tenant.slug);

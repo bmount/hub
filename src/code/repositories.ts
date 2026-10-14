@@ -10,17 +10,17 @@ export function repositoryName(name: string): string {
   return name;
 }
 export async function resolveRepository(db: D1Database, tenant: string, project: string, name?: string | null): Promise<Repository> {
-  const row = await db.prepare(`SELECT name, storage_name, is_default FROM repository WHERE tenant_id = ? AND project_id = ? AND ${name ? "name = ?" : "is_default = 1"}`)
+  const row = await db.prepare(`/*perf-site:src%2Fcode%2Frepositories.ts:13:21:resolveRepository:37cbca5a*/ SELECT name, storage_name, is_default FROM repository WHERE tenant_id = ? AND project_id = ? AND ${name ? "name = ?" : "is_default = 1"}`)
     .bind(tenant, project, ...(name ? [repositoryName(name)] : [])).first<Repository>();
   if (!row) throw notFound("no such repository");
   return row;
 }
 export async function createRepository(env: Env, tenant: {id: string; slug: string}, project: {id: string; slug: string}, name: string, now: number): Promise<Repository> {
   repositoryName(name);
-  const live = await env.HUB_DB.prepare("SELECT 1 FROM project WHERE tenant_id = ? AND id = ? AND state = 'active' AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'project_delete:v1:' || project.tenant_id || ':' || project.id)").bind(tenant.id, project.id).first();
+  const live = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Frepositories.ts:20:22:createRepository:960fad83*/ SELECT 1 FROM project WHERE tenant_id = ? AND id = ? AND state = 'active' AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'project_delete:v1:' || project.tenant_id || ':' || project.id)").bind(tenant.id, project.id).first();
   if (!live) throw conflict("project is archived or being deleted");
   if (env.GIT_BACKEND !== "artifacts") throw new HubError(503, "unavailable", "multiple repositories require Artifacts");
-  const existing = await env.HUB_DB.prepare("SELECT name, storage_name, is_default FROM repository WHERE tenant_id = ? AND project_id = ? AND name = ?").bind(tenant.id, project.id, name).first<Repository>();
+  const existing = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Frepositories.ts:23:26:createRepository:15cf98f2*/ SELECT name, storage_name, is_default FROM repository WHERE tenant_id = ? AND project_id = ? AND name = ?").bind(tenant.id, project.id, name).first<Repository>();
   if (existing) return existing;
   // Internal ids keep names disjoint from both old project names and staging repos.
   const storage = `repo-${(await sha256Hex(`${project.id}/${name}`)).slice(0, 48)}`, api = new ArtifactsRest(env), ns = artifactNamespace(tenant.slug);
@@ -32,6 +32,6 @@ export async function createRepository(env: Env, tenant: {id: string; slug: stri
     if (!(error instanceof HubError) || error.status !== 404) throw error;
     await api.create(ns, storage, ownership);
   }
-  await env.HUB_DB.prepare("INSERT OR IGNORE INTO repository (tenant_id, project_id, name, storage_name, is_default, created_at) SELECT ?, ?, ?, ?, NOT EXISTS(SELECT 1 FROM repository WHERE project_id = ? AND is_default = 1), ?").bind(tenant.id, project.id, name, storage, project.id, now).run();
+  await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Frepositories.ts:35:9:createRepository:4f21a48c*/ INSERT OR IGNORE INTO repository (tenant_id, project_id, name, storage_name, is_default, created_at) SELECT ?, ?, ?, ?, NOT EXISTS(SELECT 1 FROM repository WHERE project_id = ? AND is_default = 1), ?").bind(tenant.id, project.id, name, storage, project.id, now).run();
   return resolveRepository(env.HUB_DB, tenant.id, project.id, name);
 }

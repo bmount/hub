@@ -3,7 +3,7 @@
 import { situationReport } from "../src/http/situationPage";
 import { checkPerformance, runPerformanceChecks, type CheckTarget } from "../src/perf/checks";
 import { BUDGETS } from "../src/perf/budgets";
-import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, writeClientPoints, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, type TimingSpan } from "../src/perf";
+import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, writeClientPoints, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, applicationSource, type TimingSpan } from "../src/perf";
 import worker, { app } from "../src/index";
 import gitWorker from "../git-proxy/index";
 import { Conversation } from "../src/chat/conversationDO";
@@ -134,6 +134,15 @@ function collector() {
   return { points, measured, ctx, flush };
 }
 describe("request tracing guardrails", () => {
+  it("skips perf instrumentation when resolving the first application frame", async () => {
+    const stack='Error\n    at meteredD1 (src/perf.ts:210:5)\n    at get (src/perf.ts:203:5)\n    at buildContext (index.js:800:9)\n    at appsPage (index.js:900:9)';
+    expect(applicationSource(stack)).toMatchObject({file:'src/auth/context.ts',fn:'buildContext'});
+    expect(applicationSource('Error\n    at meteredD1 (index.js:200:5)\n    at uncataloguedFrame240 (index.js:300:5)')).toBeUndefined();
+    const trace=newTrace();
+    await withTrace(trace,()=>span('auth.buildContext',()=>span('d1.batch',()=>1)));
+    expect(trace.spans[1]!.source).toMatchObject({file:'src/auth/context.ts'});
+    expect(trace.spans[1]!.source?.file).not.toBe('src/perf.ts');
+  });
   it("exports source-defined locations and non-overlapping v2 timing, ignoring batch detail overlap", async () => {
     const make = (id:number,parent:number,started:number,ms:number,name="step"): TimingSpan => ({id,parent,started,ms,name,failed:false,finished:true});
     const root=make(0,0,10,100), a=make(1,0,20,40), b=make(2,0,40,40), detail=make(3,1,20,40,"d1.statement");

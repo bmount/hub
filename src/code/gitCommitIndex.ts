@@ -7,7 +7,7 @@ export async function indexCommitNodes(db: D1Database, tenantId: string, project
   const generations = new Map<string, number>(), needed = [...new Set(nodes.flatMap(node => node.parents))];
   for (let offset = 0; offset < needed.length; offset += 100) {
     const ids = needed.slice(offset, offset + 100);
-    const rows = (await db.prepare(`/*perf-site:src%2Fcode%2FgitCommitIndex.ts:10:25:indexCommitNodes:ab52df74*/ SELECT oid, generation FROM repository_commit WHERE tenant_id = ? AND project_id = ? AND repo = ? AND oid IN (${ids.map(() => "?").join(",")})`)
+    const rows = (await db.prepare(`/*perf-site:src%2Fcode%2FgitCommitIndex.ts:10:25:indexCommitNodes:399ab265*/ SELECT oid, generation FROM repository_commit WHERE tenant_id = ? AND project_id = ? AND repo = ? AND oid IN (${ids.map(() => "?").join(",")})`)
       .bind(tenantId, projectId, repo, ...ids).all<{ oid: string; generation: number }>()).results;
     for (const row of rows) generations.set(row.oid, row.generation);
   }
@@ -18,7 +18,7 @@ export async function indexCommitNodes(db: D1Database, tenantId: string, project
       if (node.parents.some(parent => !generations.has(parent))) continue;
       const generation = 1 + Math.max(0, ...node.parents.map(parent => generations.get(parent)!));
       generations.set(hash, generation);pending.delete(hash);progress = true;
-      ready.push(db.prepare(repo ? "INSERT OR IGNORE INTO repository_commit (tenant_id, project_id, repo, oid, tree_hash, parents_json, generation, commit_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)" : "/*perf-site:src%2Fcode%2FgitCommitIndex.ts:21:18:indexCommitNodes:1a6cc675*/ INSERT OR IGNORE INTO git_commit (tenant_id, project_id, oid, tree_hash, parents_json, generation, commit_time) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      ready.push(db.prepare("/*perf-site:src%2Fcode%2FgitCommitIndex.ts:21:18:indexCommitNodes:1be6cf51*/ " + (repo ? "INSERT OR IGNORE INTO repository_commit (tenant_id, project_id, repo, oid, tree_hash, parents_json, generation, commit_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)" : "/*perf-site:src%2Fcode%2FgitCommitIndex.ts:21:18:indexCommitNodes:1a6cc675*/ INSERT OR IGNORE INTO git_commit (tenant_id, project_id, oid, tree_hash, parents_json, generation, commit_time) VALUES (?, ?, ?, ?, ?, ?, ?)"))
         .bind(tenantId, projectId, ...(repo ? [repo] : []), hash, node.treeHash, JSON.stringify(node.parents), generation, node.committedAt));
     }
     if (!progress) throw new HubError(503, "unavailable", "repository history metadata is incomplete");

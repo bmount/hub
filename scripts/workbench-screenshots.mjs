@@ -76,7 +76,7 @@ try {
       else if(sql.includes('blob6 AS request')&&!sql.includes('double17')) data=[{request:rid,version,colo:'LHR',duration:180,weight:1}];
       else if(sql.includes('SELECT blob15')) data=[{fingerprint:'abcdef01',code,source,version,...metric}];
       else if(sql.includes('IF(double1 < 10')) data=[{bucket:1,n:60},{bucket:2,n:30},{bucket:4,n:20},{bucket:7,n:10}];
-      else if(sql.includes('double17')) data=[{label:'/:project/docket',name:'request',kind:'request',attributed:2400,execution:0,n:120},{label:'/:project/docket',name:'auth.buildContext',kind:'span',attributed:2400,execution:0,n:120},{label:'/:project/docket',name:'d1.first',kind:'span',attributed:12000,execution:2400,known_wall:12000,execution_n:120,n:120},{label:'/:project/docket',name:'do.stub.CONVERSATION.fetch',kind:'span',attributed:4800,execution:0,n:120}];
+      else if(sql.includes('double17')) data=[{label:'/:project/docket',request:rid,root_n:120,root_wall:180,span_wall:160,auth_wall:20,auth_n:1,d1_wall:100,d1_execution:20,d1_known_wall:100,d1_execution_n:1,d1_n:1,do_wall:40,do_n:1}];
       else if(sql.includes('intDiv')) data=Array.from({length:12},(_,i)=>({label,bucket:i,p50:30+i*4,n:10}));
       else if(sql.includes('GROUP BY label, version')) data=[{label,version,...metric},{label,version:previous,...metric,p95:140}];
       else if(sql.includes('double2 AS label')) data=[{label:0,...metric},{label:1,...metric,n:12,p95:350}];

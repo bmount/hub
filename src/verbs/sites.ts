@@ -18,7 +18,7 @@ export async function findSite(ctx: Ctx, name: string): Promise<SiteRow> {
 }
 
 export async function siteView(ctx: Ctx, row: SiteRow) {
-  const apps = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsites.ts:21:23:siteView:a61b46ab*/ SELECT a.id, a.script_name, a.state, a.repo FROM site_app sa JOIN app_source a ON a.id = sa.app_id
+  const apps = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsites.ts:21:23:siteView:5dd9f374*/ SELECT a.id, a.script_name, a.state, a.repo FROM site_app sa JOIN app_source a ON a.id = sa.app_id
     WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? ORDER BY a.script_name`)
     .bind(row.id, ctx.tenant!.id, row.project_id).all<{ id: string; script_name: string; state: string; repo: string }>()).results;
   const versions = apps.length ? await ctx.db.batch(apps.map(a => currentDeployStatement(ctx, row.project_id, a.script_name))) : [];

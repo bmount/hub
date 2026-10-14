@@ -56,10 +56,10 @@ export type PerfScope = {where:string;scripts:string[]};
 export async function performanceScope(ctx:Ctx, site:SiteRow, hours:number, onlyMyOrg=false):Promise<PerfScope> {
   if(!ctx.tenant || !ctx.identity || !ctx.role || site.tenant_id!==ctx.tenant.id || (ctx.mcpProject && ctx.mcpProject.id!==site.project_id)) throw notFound("no such site");
   // Recheck membership before cached reads; account-wide root powers do not substitute for it.
-  if(!await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:58:13:performanceScope:2d1e104e*/ SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(ctx.identity.id,ctx.tenant.id).first()) throw notFound("no such site");
-  const project=await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:59:23:performanceScope:e8c7cd55*/ SELECT id FROM project WHERE id = ? AND tenant_id = ? AND kind = 'repo' AND state = 'active'").bind(site.project_id,ctx.tenant.id).first();
+  if(!await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:59:13:performanceScope:2d1e104e*/ SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(ctx.identity.id,ctx.tenant.id).first()) throw notFound("no such site");
+  const project=await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:60:23:performanceScope:e8c7cd55*/ SELECT id FROM project WHERE id = ? AND tenant_id = ? AND kind = 'repo' AND state = 'active'").bind(site.project_id,ctx.tenant.id).first();
   if(!project) throw notFound("no such site");
-  const scripts=(await ctx.db.prepare(`/*perf-site:src%2Fapps%2Fperformance.ts:61:24:performanceScope:7a84f38e*/ SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
+  const scripts=(await ctx.db.prepare(`/*perf-site:src%2Fapps%2Fperformance.ts:62:24:performanceScope:7a84f38e*/ SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
     WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? AND a.state = 'active' ORDER BY a.script_name`).bind(site.id,ctx.tenant.id,site.project_id).all<{script_name:string}>()).results.map(r=>r.script_name);
   const hash=onlyMyOrg?await tenantHash(ctx.tenant.id,ctx.env.PERF_TENANT_KEY??ctx.env.HUB_INTERNAL_SECRET??ctx.env.HUB_SECRETS_KEY??""):"";
   if(onlyMyOrg&&!hash) throw new PerformanceUnavailable("Performance tenant identity is not configured.");
@@ -114,29 +114,37 @@ async function originClientSplits(query:(sql:string)=>Promise<PerfRow[]>,scope:s
     return [name,[...groups].map(([label,rows])=>({label,...sampleMetrics(rows)}))] as const;
   });
 }
-/** Detail and root indexes sample independently. Allocate each trip against its root,
- * then weight that allocation with the root's weight, never the detail's weight. */
-export function tripAttribution(rows:PerfRow[]):PerfRow[] {
-  if(!rows.some(r=>r.request)) return rows;
-  const trips=new Map<string,PerfRow[]>(), groups=new Map<string,PerfRow>();
-  for(const row of rows) {const key=String(row.tenant)+':'+String(row.request);trips.set(key,[...(trips.get(key)??[]),row]);}
-  for(const points of trips.values()) {
-    const root=points.find(r=>r.kind==='request');
-    if(!root||Number(root.n)<=0) continue;
-    const weight=Number(root.n),wall=Number(root.root_wall)/weight;
-    const total=points.reduce((sum,r)=>sum+Number(r.attributed)/Number(r.n),0);
+/** One row per complete trip, bounded separately for each route, not by span volume.
+ * WAE permits one subquery level: normalize per-span weights there, then sum per trip. */
+export function routeAttributionSQL(where:string):string {
+  const categories={auth:"name LIKE 'auth.%'",d1:"name LIKE 'd1.%'",do:"name LIKE 'do.%'",external:"(name LIKE 'fetch.%' OR name LIKE 'GIT_PROXY.%' OR name LIKE 'ARDI.%' OR name LIKE 'MAIL.%')",render:"name LIKE 'render.%'"};
+  const category=(condition:string)=>`SUM(IF(kind = 'span' AND ${condition}, attributed, 0.0))`;
+  const other=`NOT (${Object.values(categories).join(' OR ')})`;
+  const fields=[...Object.entries(categories).map(([key,condition])=>`${category(condition)} AS ${key}_wall`),
+    `${category(other)} AS other_wall`,
+    ...Object.entries({...categories,other}).filter(([key])=>key!=='d1').map(([key,condition])=>`SUM(IF(kind = 'span' AND ${condition}, 1.0, 0.0)) AS ${key}_n`),
+    ...['execution','known_wall','execution_n','n'].map(field=>`SUM(IF(kind = 'span' AND name LIKE 'd1.%', ${field==='n'?'1.0':field==='execution_n'?'execution_n * 1.0':field}, 0.0)) AS d1_${field}`)];
+  return `SELECT tenant, request, label, MAX(at) AS at, SUM(IF(kind = 'request', n * 1.0, 0.0)) AS root_n, SUM(IF(kind = 'request', wall, 0.0)) AS root_wall, SUM(IF(kind = 'span', attributed, 0.0)) AS span_wall, ${fields.join(', ')} FROM (
+      SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob14 AS name, blob7 AS kind, double3 AS span, MAX(timestamp) AS at, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS wall, SUM(double17 * _sample_interval) / SUM(_sample_interval) AS attributed, SUM(IF(double19 > 0, double19, 0.0) * _sample_interval) / SUM(_sample_interval) AS execution, SUM(IF(double19 >= 0, double17, 0.0) * _sample_interval) / SUM(_sample_interval) AS known_wall, SUM(IF(double19 >= 0, _sample_interval * 1.0, 0.0)) / SUM(_sample_interval) AS execution_n, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${where} AND double20 = 2 AND double18 = 0 AND blob7 IN ('request','span') AND blob14 != 'd1.statement' GROUP BY tenant, request, label, name, kind, span
+    ) GROUP BY tenant, request, label HAVING root_n > 0 ORDER BY at DESC LIMIT 200`;
+}
+export function routeAttribution(rows:PerfRow[]):PerfRow[] {
+  const groups=new Map<string,PerfRow>();
+  for(const trip of rows) {
+    const weight=Number(trip.root_n),wall=Number(trip.root_wall),total=Number(trip.span_wall);
+    if(!(weight>0)) continue;
     const scale=total>wall&&total>0?wall/total:1;
-    for(const row of points) {
-      const key=JSON.stringify([root.label,row.name,row.kind]);
-      const group=groups.get(key)??{label:root.label!,name:row.name!,kind:row.kind!,n:0,root_wall:0,attributed:0,execution:0,known_wall:0,execution_n:0};
-      for(const field of ['attributed','execution','known_wall']) group[field]=Number(group[field])+Number(row[field]??0)/Number(row.n)*scale*weight;
-      group.n=Number(group.n)+weight;
-      group.root_wall=Number(group.root_wall)+(row.kind==='request'?wall*weight:0);
-      group.execution_n=Number(group.execution_n)+Number(row.execution_n??0)/Number(row.n)*weight;
-      groups.set(key,group);
-    }
+    const key=String(trip.label),group=groups.get(key)??{label:key,n:0,root_wall:0};
+    group.n=Number(group.n)+weight;group.root_wall=Number(group.root_wall)+wall*weight;
+    for(const field of ['auth_wall','d1_wall','do_wall','external_wall','render_wall','other_wall','d1_execution','d1_known_wall']) group[field]=Number(group[field]??0)+Number(trip[field]??0)*scale*weight;
+    group.execution_n=Number(group.execution_n??0)+Number(trip.d1_execution_n??0)*weight;
+    for(const key of ['auth','d1','do','external','render','other']) group[`${key}_n`]=Number(group[`${key}_n`]??0)+Number(trip[`${key}_n`]??0)*weight;
+    groups.set(key,group);
   }
-  return [...groups.values()];
+  return [...groups.values()].flatMap(r=>[
+    {label:r.label!,kind:'request',name:'request',n:r.n!,root_wall:r.root_wall!,attributed:0},
+    ...Object.entries({auth:'auth.work',d1:'d1.work',do:'do.work',external:'fetch.work',render:'render.work',other:'other.work'}).filter(([key])=>Number(r[`${key}_n`])>0).map(([key,name])=>({label:r.label!,kind:'span',name,n:r[`${key}_n`]!,attributed:r[`${key}_wall`]!,...(key==='d1'?{execution:r.d1_execution!,known_wall:r.d1_known_wall!,execution_n:r.execution_n!}:{})})),
+  ]);
 }
 export function interactionPhases(ready:PerfRow[],phases:PerfRow[]):PerfRow[] {
   const groups=new Map<string,{label:string;phase:string;total:number;n:number}>(), recorded=new Map<string,number>();
@@ -160,14 +168,25 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   const filter=`${scope.where} AND ${population(s)}${versionFilter}${detailOnly&&s.selected?` AND ${dim} = ${quote(s.selected)}`:""}`;
   const query=(sql:string)=>analyticsQuery(ctx,sql);
   const bucket=s.hours===1?300:s.hours===24?7200:50400;
-  const [overview,spark,breakdown,browser,comparison]=await Promise.all([
+  const breakdown:PerfRow[]=[];
+  const [overview,spark,browser,comparison]=await Promise.all([
     query(`SELECT ${dim} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${filter} GROUP BY label ORDER BY total DESC LIMIT 200`),
     query(`SELECT ${dim} AS label, intDiv(toUInt32(timestamp), ${bucket}) AS bucket, quantileWeighted(0.5)(double1, _sample_interval) AS p50, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${filter} GROUP BY label, bucket ORDER BY label, bucket LIMIT 3000`),
-    s.kind==="routes" ? query(`SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob14 AS name, blob7 AS kind, double3 AS span, SUM(double1 * _sample_interval) AS root_wall, SUM(double17 * _sample_interval) AS attributed, SUM(IF(double19 > 0, double19, 0.0) * _sample_interval) AS execution, SUM(IF(double19 >= 0, double17, 0.0) * _sample_interval) AS known_wall, SUM(IF(double19 >= 0, _sample_interval, 0)) AS execution_n, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND double20 = 2 AND double18 = 0 AND blob7 IN ('request','span') AND blob14 != 'd1.statement'${s.version?` AND blob3 = ${quote(s.version)}`:""} ${s.selected?` AND blob8 = ${quote(s.selected)}`:""} GROUP BY tenant, request, label, name, kind, span ORDER BY request, kind, span LIMIT 5000`) : Promise.resolve([]),
     s.kind==="routes" ? query(`SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob7 AS kind, blob3 AS version, blob14 AS name, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND (blob7 = 'request' OR (blob7 = 'client' AND ((blob9 = 'page' AND blob14 IN ('network','render')) OR blob9 IN ('fetch','paint')))) GROUP BY tenant, request, label, kind, version, name, phase LIMIT 5000`) : Promise.resolve([]),
     s.kind==="deploys" && s.version && s.previous ? query(`SELECT blob8 AS label, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'request' AND blob3 IN (${quote(s.version)},${quote(s.previous)}) GROUP BY label, version ORDER BY label LIMIT 400`) : Promise.resolve([]),
   ]);
-  const result={...empty,overview,spark,breakdown:tripAttribution(breakdown),browser:pairedBrowser(browser,s.version),comparison};
+  if(s.kind==="routes") {
+    // Bound concurrency as well as result size. A busy route cannot evict a quiet route,
+    // and inspector selection never changes the list's attribution population.
+    let next=0;
+    await Promise.all(Array.from({length:Math.min(4,overview.length)},async()=>{
+      while(next<overview.length) {
+        const route=overview[next++]!;
+        breakdown.push(...await query(routeAttributionSQL(`${scope.where}${versionFilter} AND blob8 = ${quote(String(route.label))}`)));
+      }
+    }));
+  }
+  const result={...empty,overview,spark,breakdown:routeAttribution(breakdown),browser:pairedBrowser(browser,s.version),comparison};
   if(s.kind==="interactions") {
     const ready=await query(`SELECT blob5 AS tenant, blob6 AS request, blob14 AS label, _sample_interval AS weight, timestamp AS at FROM pimwell_perf WHERE ${filter} ORDER BY at DESC LIMIT 2000`);
     const readyScope=ready.filter(r=>/^[0-9a-f-]{36}$/.test(String(r.request))).map(r=>`(blob5 = ${quote(String(r.tenant??''))} AND blob6 = ${quote(String(r.request))})`).join(' OR ');

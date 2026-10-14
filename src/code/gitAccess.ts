@@ -47,7 +47,7 @@ export async function authorizeGit(env: Env, authorization: string | null, tenan
   const { identity, session, tenant, role } = caller;
   const [projectSlug, repoName, extra] = repo.split("/");
   if (extra !== undefined) return null;
-  const project = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FgitAccess.ts:47:25:authorizeGit:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind IN ('repo', 'workspace') AND state = 'active'")
+  const project = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FgitAccess.ts:50:25:authorizeGit:0211670a*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind IN ('repo', 'workspace') AND state = 'active'")
     .bind(tenant.id, projectSlug).first<{ id: string; slug: string }>();
   if (!project) return null;
   let repository;

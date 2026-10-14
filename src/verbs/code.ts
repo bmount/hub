@@ -25,7 +25,7 @@ export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false,
   if (allowAgentSrc && slug.startsWith("agent-src/")) {
     const agent = await agentByName(ctx.db, ctx.tenant!, slug.slice(10));
     if (!agent || !ctx.identity || !ctx.role || !agentSrcAccess({ identity: ctx.identity, role: ctx.role }, agent)) throw notFound("no such repository");
-    const source = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:27:26:repoProject:2b1609cf*/ SELECT id, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'agent-src'")
+    const source = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:28:26:repoProject:2b1609cf*/ SELECT id, display_name FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'agent-src'")
       .bind(ctx.tenant!.id, agentSrcSlug(agent.id)).first<{ id: string; display_name: string }>();
     if (!source) throw notFound("no such repository");
     return { ...source, slug };
@@ -35,7 +35,7 @@ export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false,
     const selected = await resolveRepository(ctx.db, ctx.tenant!.id, p.id, repo);
     return { ...p, slug: (ctx.mcpProject?.path ?? slug) + (selected.is_default ? "" : `/${selected.name}`) };
   }
-  if (p.kind !== "workspace" || !await ctx.db.prepare("SELECT 1 FROM repository WHERE tenant_id = ? AND project_id = ? AND is_default = 1").bind(ctx.tenant!.id, p.id).first()) requireProjectFeature(p, "repo");
+  if (p.kind !== "workspace" || !await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:38:40:repoProject:21aa2f20*/ SELECT 1 FROM repository WHERE tenant_id = ? AND project_id = ? AND is_default = 1").bind(ctx.tenant!.id, p.id).first()) requireProjectFeature(p, "repo");
   return { ...p, slug: ctx.mcpProject?.path ?? slug };
 }
 
@@ -50,7 +50,7 @@ function rev(v: string | null, fallback = "HEAD"): string {
 export async function whoPushed(ctx: Ctx, ids: Array<string | null>): Promise<Map<string, string>> {
   const u = [...new Set(ids.filter((x): x is string => !!x))].slice(0, 100);
   if (!u.length) return new Map();
-  const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:48:19:whoPushed:da2826d8*/ SELECT id, display_name FROM identity WHERE id IN (${u.map(() => "?").join(",")})`).bind(...u).all<{ id: string; display_name: string }>();
+  const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:53:19:whoPushed:da2826d8*/ SELECT id, display_name FROM identity WHERE id IN (${u.map(() => "?").join(",")})`).bind(...u).all<{ id: string; display_name: string }>();
   return new Map(r.results.map((x) => [x.id, x.display_name]));
 }
 
@@ -84,11 +84,11 @@ export async function afterCommit(ctx: Ctx, project_id: string, oid: string, com
         AND substr(?, 1, length(d.tag)) = lower(d.tag)))
     ORDER BY CASE WHEN ${fullVersion} THEN 0 ELSE 1 END, d.seen_at, d.id LIMIT 1`;
   const [shipped, since, errors] = await ctx.db.batch([
-    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:81:5:afterCommit:71a4dc57*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at,
+    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:87:5:afterCommit:71a4dc57*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at,
       CASE WHEN ${fullVersion} THEN 'full-commit' ELSE 'tag-prefix' END AS match ${matchingDeploy}`)
       .bind(project_id, ctx.tenant!.id, normalized, normalized),
-    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:84:5:afterCommit:0bb3acb1*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo' WHERE d.project_id = ? AND d.tenant_id = ? AND d.repo = '${repoFilter}' AND d.seen_at >= ? ORDER BY d.seen_at, d.id LIMIT 11`).bind(project_id, ctx.tenant!.id, commitMs),
-    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:85:5:afterCommit:f9bf1757*/ SELECT g.id, g.title, g.count, g.first_seen FROM app_error_group g
+    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:90:5:afterCommit:6a00ef3a*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo' WHERE d.project_id = ? AND d.tenant_id = ? AND d.repo = '${repoFilter}' AND d.seen_at >= ? ORDER BY d.seen_at, d.id LIMIT 11`).bind(project_id, ctx.tenant!.id, commitMs),
+    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:91:5:afterCommit:180a0685*/ SELECT g.id, g.title, g.count, g.first_seen FROM app_error_group g
       JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind = 'repo'
       WHERE g.project_id = ? AND g.tenant_id = ? AND COALESCE((SELECT s.repo FROM app_source s WHERE s.tenant_id = g.tenant_id AND s.project_id = g.project_id AND s.script_name = g.script_name), '') = '${repoFilter}' AND g.first_seen >= COALESCE(
         (SELECT d.seen_at ${matchingDeploy}), ?) ORDER BY g.first_seen, g.id LIMIT 11`)
@@ -308,7 +308,7 @@ export const repoSearch = defineVerb({
     limit: optInt(i, "limit", { min: 1, max: 200 }) ?? 50 }),
   run: async (ctx, p) => {
     const pr = await repoProject(ctx, p.project, false, p.repo);
-    const repos = p.repo ? [{ name: p.repo, is_default: pr.slug.includes("/") ? 0 : 1 }] : (await ctx.db.prepare("SELECT name, is_default FROM repository WHERE tenant_id = ? AND project_id = ? ORDER BY is_default DESC, name").bind(ctx.tenant!.id, pr.id).all<{ name: string; is_default: number }>()).results;
+    const repos = p.repo ? [{ name: p.repo, is_default: pr.slug.includes("/") ? 0 : 1 }] : (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:311:99:repoSearch.run:f0b43254*/ SELECT name, is_default FROM repository WHERE tenant_id = ? AND project_id = ? ORDER BY is_default DESC, name").bind(ctx.tenant!.id, pr.id).all<{ name: string; is_default: number }>()).results;
     if (!repos.length) repos.push({ name: "default", is_default: 1 });
     const results = [];
     for (const r of repos) {
@@ -357,7 +357,7 @@ export const repoList = defineVerb({
   run: async (ctx, p) => {
     if (p.project) await featureProject(ctx, p.project);
     const host = `${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN.toLowerCase()}`;
-    const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:323:25:repoList.run:602e7d9c*/ SELECT p.slug, COALESCE(r.name, p.display_name) AS name, COALESCE(r.is_default, 1) AS is_default FROM project p LEFT JOIN repository r ON r.project_id = p.id AND r.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND (p.kind = 'repo' OR (p.kind = 'workspace' AND r.project_id IS NOT NULL)) AND p.state = 'active' AND (? IS NULL OR p.id = ?) AND (? IS NULL OR p.slug = ?) AND (? IS NULL OR r.name = ?) ORDER BY p.slug, r.is_default DESC, r.name").bind(ctx.tenant!.id, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null, p.project, p.project, p.repo, p.repo).all<{ slug: string; name: string; is_default: number }>()).results;
+    const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:360:25:repoList.run:f8df3d52*/ SELECT p.slug, COALESCE(r.name, p.display_name) AS name, COALESCE(r.is_default, 1) AS is_default FROM project p LEFT JOIN repository r ON r.project_id = p.id AND r.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND (p.kind = 'repo' OR (p.kind = 'workspace' AND r.project_id IS NOT NULL)) AND p.state = 'active' AND (? IS NULL OR p.id = ?) AND (? IS NULL OR p.slug = ?) AND (? IS NULL OR r.name = ?) ORDER BY p.slug, r.is_default DESC, r.name").bind(ctx.tenant!.id, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null, p.project, p.project, p.repo, p.repo).all<{ slug: string; name: string; is_default: number }>()).results;
     const push = rank(ctx.role) >= rank("member");
     return {
       access: push ? "read and push (never force: history is kept)" : "read",
