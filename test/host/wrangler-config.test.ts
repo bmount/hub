@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, mkdirSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // @ts-expect-error Host-only release helper is JavaScript.
@@ -10,6 +10,36 @@ import { compatibleBindings, compatibleRuntime } from "../../scripts/release-bin
 import { buildLocalTestWranglerConfig, readWranglerConfig } from "../wrangler-test-config";
 
 describe("wrangler configuration", () => {
+  it("rolls back each Worker with its own non-versioned settings and refuses unknown targets", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rollback-"));
+    try {
+      writeFileSync(join(dir, "Makefile"), readFileSync("Makefile"));
+      mkdirSync(join(dir, "scripts/cf"), { recursive: true });
+      // Capture the actual recipe's arguments without credentials or a deployment.
+      writeFileSync(join(dir, "scripts/cf/with-deploy-token.sh"), '#!/bin/sh\nprintf "%s\\n" "$@"\n', { mode: 0o755 });
+      const version = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+      for (const [worker, config] of [
+        ["", "wrangler.jsonc"], ["pimwell-hub", "wrangler.jsonc"],
+        ["pimwell-git", "git-proxy/wrangler.jsonc"], ["pimwell-tail", "tail/wrangler.jsonc"],
+      ]) {
+        const result = spawnSync("make", ["--no-print-directory", "rollback", `VERSION=${version}`, `WORKER=${worker}`], { cwd: dir, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout.trim().split("\n")).toEqual([
+          "npx", "wrangler", "versions", "deploy", "-c", config!, "--name",
+          worker || "pimwell-hub", `${version}@100%`, "--yes",
+        ]);
+      }
+      for (const args of [["WORKER=unknown", `VERSION=${version}`], ["WORKER=pimwell-tail"]]) {
+        const result = spawnSync("make", ["--no-print-directory", "rollback", ...args], { cwd: dir, encoding: "utf8" });
+        expect(result.status).not.toBe(0);
+        expect(result.stdout).toBe("");
+      }
+      const tail = readWranglerConfig(join(process.cwd(), "tail/wrangler.jsonc"));
+      expect(tail.name).toBe("pimwell-tail");
+      expect(tail.tail_consumers ?? []).not.toContainEqual(expect.objectContaining({ service: "pimwell-tail" }));
+    } finally { rmSync(dir, { recursive: true }); }
+  });
+
   it("keeps bounded tracer CPU overhead below one millisecond (excluding native Analytics ingestion)", () => {
     const report = JSON.parse(execFileSync(process.execPath, ["scripts/perf-overhead.mjs"], { encoding: "utf8" }));
     for (const measurement of report.measurements) expect(measurement.overhead_cpu_ms).toBeLessThan(1);

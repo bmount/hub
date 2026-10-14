@@ -13,4 +13,10 @@ release:
 # Put a previous version back: make rollback VERSION=<version id from the release record> [WORKER=pimwell-git]
 rollback:
 	@test -n "$(VERSION)" || { echo "usage: make rollback VERSION=<version id>" >&2; exit 2; }
-	scripts/cf/with-deploy-token.sh npx wrangler versions deploy --name $(or $(WORKER),pimwell-hub) $(VERSION)@100% --yes
+	@case "$(or $(WORKER),pimwell-hub)" in \
+		pimwell-hub) config=wrangler.jsonc ;; \
+		pimwell-git) config=git-proxy/wrangler.jsonc ;; \
+		pimwell-tail) config=tail/wrangler.jsonc ;; \
+		*) echo "unknown rollback WORKER: $(WORKER)" >&2; exit 2 ;; \
+	esac; \
+	scripts/cf/with-deploy-token.sh npx wrangler versions deploy -c "$$config" --name "$(or $(WORKER),pimwell-hub)" "$(VERSION)@100%" --yes

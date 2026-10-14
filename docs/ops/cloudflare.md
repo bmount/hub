@@ -30,6 +30,8 @@ Pushing to `main` never deploys. A release is a separate step for whoever holds 
     make release                           # test current main; upload, deploy and smoke-check pimwell-hub, pimwell-git and pimwell-tail
     make rollback VERSION=<id> [WORKER=pimwell-git]   # put a previous version back (default pimwell-hub)
 
+`make rollback` selects `wrangler.jsonc`, `git-proxy/wrangler.jsonc`, or `tail/wrangler.jsonc` for `pimwell-hub` (the default), `pimwell-git`, or `pimwell-tail` respectively. Unknown targets are refused before Wrangler runs. This preserves each target’s non-versioned settings; the tail Worker must not inherit the hub’s tail consumer and attempt to tail itself.
+
 `make release` runs `scripts/release.mjs` from a clean checkout of `origin/main`. It reinstalls, typechecks and runs the full suite on that exact commit. Pimwell's three Workers ship from that commit: the hub, the Git proxy (`git-proxy/`, which shares `src/`) and the tail Worker (`tail/`). It uploads each with `--keep-vars`, and refuses to deploy any of them if any Worker's bindings, runtime or migrations changed. Only then does it deploy all three at 100% and smoke-check, including an anonymous Git request. Logs and a record (version, rollback version, smoke results) go to `~/.local/state/pimwell/releases/<commit>/`, or `$RELEASE_DIR`. It runs once per commit: if a record exists, read it instead of retrying. Migrations and binding changes are deployed by hand after review.
 
 The raw commands, for setup and repairs:
