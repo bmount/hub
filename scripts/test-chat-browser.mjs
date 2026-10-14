@@ -912,8 +912,10 @@ try {
     await expect(boardPage.locator('.closure-report h2')).toHaveText('Recorded closures by person');
     await expect(boardPage.getByRole('table',{name:'Recorded closures',exact:true}).locator('tbody tr')).toHaveCount(1);
     await expect(boardPage.getByRole('table',{name:'Recorded closures',exact:true}).locator('tbody td').last()).toHaveText('1');
-    await expect(boardPage.locator('#list > .lede')).toHaveAttribute('title', /including reopened items/);
-    await expect(boardPage.locator('#list > .lede')).toHaveAttribute('title', /Historical prose events are not attributed/);
+    const coverage = boardPage.locator('.closure-report small');
+    await expect(coverage).toHaveText('Unrecorded closures: 0');
+    await expect(coverage).toHaveAttribute('title', /including reopened items/);
+    await expect(coverage).toHaveAttribute('title', /Historical prose events are not attributed/);
     await expect(boardPage.locator('.closure-report img')).toHaveCount(0);
     await noOverflow(boardPage);
     await boardPage.locator('.closure-report').scrollIntoViewIfNeeded();
