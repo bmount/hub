@@ -53,6 +53,7 @@ export class Inbox extends DurableObject<Env> {
   #waiters = new Set<() => void>();
   #updateWaiters = new Set<() => void>();
   #socketJobs = new Map<WebSocket, Promise<void>>();
+  #socketPushJobs = new Map<WebSocket, Promise<void>>();
   #scheduledPushes = new Set<WebSocket>();
 
   #request(state: SocketState, method = 'getUpdates', params: Record<string, unknown> = {}): Request {
@@ -83,26 +84,26 @@ export class Inbox extends DurableObject<Env> {
     }
   }
 
-  #queue(ws: WebSocket, job: () => Promise<void>): Promise<void> {
-    const next = (this.#socketJobs.get(ws) ?? Promise.resolve()).then(job).catch(async () => {
+  #queue(ws: WebSocket, job: () => Promise<void>, jobs = this.#socketJobs): Promise<void> {
+    const next = (jobs.get(ws) ?? Promise.resolve()).then(job).catch(async () => {
       // Do not log retained authentication material or message contents.
       try { ws.close(1008, 'authentication or socket failure'); } catch { /* already closed */ }
       await this.webSocketClose(ws, 1008);
     });
-    this.#socketJobs.set(ws, next);
-    void next.then(() => { if (this.#socketJobs.get(ws) === next) this.#socketJobs.delete(ws); });
+    jobs.set(ws, next);
+    void next.then(() => { if (jobs.get(ws) === next) jobs.delete(ws); });
     return next;
   }
 
   /** One pending push per socket; it reads the latest durable head when it runs.
    * Clear before reading so an update arriving during the push schedules a successor. */
-  #schedulePush(ws: WebSocket): void {
+  #schedulePush(ws: WebSocket, initial = false): void {
     if (this.#scheduledPushes.has(ws)) return;
     this.#scheduledPushes.add(ws);
     this.ctx.waitUntil(this.#queue(ws, async () => {
       this.#scheduledPushes.delete(ws);
-      await this.#push(ws);
-    }));
+      await this.#push(ws, initial);
+    }, this.#socketPushJobs));
   }
 
   async #push(ws: WebSocket, initial = false): Promise<void> {
@@ -131,7 +132,8 @@ export class Inbox extends DurableObject<Env> {
       }
       if (initial || page.next_offset !== state.offset || updates.length) ws.send(JSON.stringify({ ok: true, result: { updates, next_offset: page.next_offset, has_more: page.has_more } }));
       state.offset = page.next_offset;
-      ws.serializeAttachment(state);
+      // Commands renew last_seen concurrently; only the push queue owns offset.
+      ws.serializeAttachment({ ...ws.deserializeAttachment() as SocketState, offset: state.offset });
       initial = false;
       if (!page.has_more) return;
     }
@@ -155,11 +157,9 @@ export class Inbox extends DurableObject<Env> {
     this.ctx.acceptWebSocket(pair[1]);
     pair[1].serializeAttachment(state);
     // Async work uses hibernatable sockets; no timers or parked long-polls.
-    this.ctx.waitUntil(this.#queue(pair[1], async () => {
-      pair[1].send(JSON.stringify({ type: 'connected', server_request_id: requestId() }));
-      await this.#push(pair[1], true);
-      this.ctx.waitUntil(this.#presence(state, 'online').catch(() => {}));
-    }));
+    pair[1].send(JSON.stringify({ type: 'connected', server_request_id: requestId() }));
+    this.#schedulePush(pair[1], true);
+    this.ctx.waitUntil(this.#presence(state, 'online').catch(() => {}));
     await this.#socketAlarm();
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -168,7 +168,8 @@ export class Inbox extends DurableObject<Env> {
     await this.#queue(ws, async () => {
       const state = ws.deserializeAttachment() as SocketState;
       const { ctx } = await this.#viewer(state);
-      state.last_seen = Date.now(); ws.serializeAttachment(state);
+      // A push may have advanced the cursor during authentication. Preserve it.
+      ws.serializeAttachment({ ...ws.deserializeAttachment() as SocketState, last_seen: Date.now() });
       let frame: Record<string, unknown>;
       try {
         if (typeof message !== 'string' || new TextEncoder().encode(message).length > 65536) throw new Error();

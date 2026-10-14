@@ -3,7 +3,7 @@
 import { situationReport } from "../src/http/situationPage";
 import { checkPerformance, runPerformanceChecks, type CheckTarget } from "../src/perf/checks";
 import { BUDGETS } from "../src/perf/budgets";
-import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, writeClientPoints, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, applicationSource, type TimingSpan } from "../src/perf";
+import { instrumentDurableObject, requestId, timedEnv, withTrace, newTrace, span, traceFields, writeTrace, writeClientPoints, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, applicationSource, type TimingSpan } from "../src/perf";
 import worker, { app } from "../src/index";
 import gitWorker from "../git-proxy/index";
 import { Conversation } from "../src/chat/conversationDO";
@@ -134,6 +134,25 @@ function collector() {
   return { points, measured, ctx, flush };
 }
 describe("request tracing guardrails", () => {
+  it('emits socket command request roots rather than internal RPC roots', async () => {
+    const c = collector();
+    class SocketProbe {
+      env = c.measured;
+      ctx = c.ctx;
+      async webSocketMessage() { return requestId(); }
+      async ordinaryRpc() { return requestId(); }
+    }
+    instrumentDurableObject(SocketProbe, 'SocketProbe');
+    const probe = new SocketProbe();
+    const command = await probe.webSocketMessage();
+    const rpc = await probe.ordinaryRpc();
+    await c.flush();
+    const root = c.points.find(p => p.blobs?.[5] === command && p.blobs?.[6] === 'request');
+    expect(root?.blobs?.[7]).toBe('do.handler.SocketProbe.webSocketMessage');
+    expect(root?.blobs?.[8]).toBe('websocket');
+    expect(root?.doubles?.[17]).toBe(0);
+    expect(c.points.some(p => p.blobs?.[5] === rpc && p.blobs?.[6] === 'rpc')).toBe(true);
+  });
   it("skips perf instrumentation when resolving the first application frame", async () => {
     const stack='Error\n    at meteredD1 (src/perf.ts:210:5)\n    at get (src/perf.ts:203:5)\n    at buildContext (index.js:800:9)\n    at appsPage (index.js:900:9)';
     expect(applicationSource(stack)).toMatchObject({file:'src/auth/context.ts',fn:'buildContext'});

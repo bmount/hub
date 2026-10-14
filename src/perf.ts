@@ -441,7 +441,13 @@ export function instrumentDurableObject(klass: { prototype: object }, name: stri
       if (context.getStore() && !inherited && !request) return span(`do.handler.${name}.${method}`, () => original.apply(this, args));
       const trace = request ? transferredTrace(request) : newTrace(`do.handler.${name}.${method}`);
       if (inherited) inheritTrace(trace, inherited);
-      else if (!request) { trace.kind = "rpc"; trace.route = `do.handler.${name}.${method}`; }
+      else if (!request) {
+        // Hibernatable socket messages are external commands, not inherited RPCs.
+        // Browser acknowledgement timings must join an actual request root.
+        trace.kind = method === "webSocketMessage" ? "request" : "rpc";
+        if (method === "webSocketMessage") trace.method = "websocket";
+        trace.route = `do.handler.${name}.${method}`;
+      }
       return withTrace(trace, async () => {
         try { return await span(`do.handler.${name}.${method}`, () => {
         const request = args[0] instanceof Request ? args[0] : null;

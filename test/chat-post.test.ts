@@ -43,13 +43,15 @@ describe("chat WebSocket stream", () => {
     }
     const excess = await SELF.fetch('https://acme.pimwell.test/chat/v1/ws', { headers: { authorization: `Bearer ${w.lead.token}`, upgrade: 'websocket' } });
     expect(excess.status).toBe(429);
-    const expireGrace = async () => inDO(box, async (obj: Inbox, state) => {
-      const pending = state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'socket_disconnect'").toArray()[0];
-      expect(pending).toBeDefined();
-      const value = JSON.parse(pending!.value); value.due = Date.now() - 1;
-      state.storage.sql.exec("UPDATE meta SET value = ? WHERE key = 'socket_disconnect'", JSON.stringify(value));
-      await obj.alarm();
-    });
+    const expireGrace = async () => {
+      await expect.poll(() => inDO(box, (_obj, state) => state.storage.sql.exec("SELECT 1 FROM meta WHERE key = 'socket_disconnect'").toArray().length), { timeout: 5000 }).toBe(1);
+      await inDO(box, async (obj: Inbox, state) => {
+        const pending = state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'socket_disconnect'").toArray()[0]!;
+        const value = JSON.parse(pending.value); value.due = Date.now() - 1;
+        state.storage.sql.exec("UPDATE meta SET value = ? WHERE key = 'socket_disconnect'", JSON.stringify(value));
+        await obj.alarm();
+      });
+    };
     sockets.pop()!.close(1000);
     await new Promise(resolve => setTimeout(resolve, 30));
     await expireGrace();
@@ -77,6 +79,8 @@ describe("chat WebSocket stream", () => {
     await next(f => f.type === 'connected');
     await next(f => f.result?.updates);
     const box = inboxStub(env, w.acme.id, w.scout.agent.identity.id);
+    const commandAt = Date.now();
+    ws.send(JSON.stringify({ request_id: 'during-burst', method: 'getMessages', params: { chat: { id: ch.project_id, kind: 'channel' } } }));
     const update = (id: string, body: string) => ({ key: crypto.randomUUID(), type: 'message', chat: { id, kind: 'channel' as const }, data: { body }, created_at: Date.now() });
     await box.deliverUpdates(w.acme.id, w.scout.agent.identity.id, [
       ...Array.from({ length: 20 }, (_, i) => update(ch.project_id, `burst-${i}`)),
@@ -85,11 +89,15 @@ describe("chat WebSocket stream", () => {
     const burst = await next(f => f.result?.updates.some((u: any) => u.data.body === 'burst-19'));
     expect(burst.result.updates.filter((u: any) => u.data.body?.startsWith('burst-')).map((u: any) => u.data.body)).toEqual(Array.from({ length: 20 }, (_, i) => `burst-${i}`));
     expect(burst.result.updates.some((u: any) => u.data.body === 'hidden-burst')).toBe(false);
+    expect((await next(f => f.request_id === 'during-burst')).ok).toBe(true);
     await env.HUB_DB.prepare('UPDATE conversation_member SET removed_at = ? WHERE tenant_id = ? AND conversation_id = ? AND identity_id = ?')
       .bind(Date.now(), w.acme.id, ch.project_id, w.scout.agent.identity.id).run();
     await box.deliverUpdates(w.acme.id, w.scout.agent.identity.id, [update(ch.project_id, 'revoked-burst'), update(other.project_id, 'still-readable')]);
     const later = await next(f => f.result?.updates.some((u: any) => u.data.body === 'still-readable'));
     expect(later.result.updates.some((u: any) => u.data.body === 'revoked-burst')).toBe(false);
+    const attachment = await inDO(box, (_o, state) => state.getWebSockets()[0]!.deserializeAttachment() as { offset: number; last_seen: number });
+    expect(attachment.offset).toBeGreaterThanOrEqual(later.result.next_offset);
+    expect(attachment.last_seen).toBeGreaterThanOrEqual(commandAt);
     ws.close(1000);
   });
 
