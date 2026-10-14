@@ -99,6 +99,24 @@ describe("Artifacts REST transport", () => {
   const account = "0".repeat(32), apiToken = "synthetic-api-credential";
   const configured = () => new ArtifactsRest({ ...env, ARTIFACTS_ACCOUNT_ID: account, ARTIFACTS_API_TOKEN: apiToken });
   const issued = () => ({ plaintext: `art_v1_${"a".repeat(40)}?expires=${Math.floor(Date.now() / 1000) + 300}`, expires_at: new Date(Date.now() + 300_000).toISOString() });
+  it("bounds large repository forks and native Git, including transient failure/retry", async () => {
+    const deadlines = vi.spyOn(AbortSignal, "timeout");
+    let fail = true;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      if (String(url).endsWith("/fork")) return Response.json({ success: true, result: {} });
+      if (String(url).endsWith("/tokens")) return Response.json({ success: true, result: issued() });
+      if (fail) { fail = false; throw new Error("private upstream detail"); }
+      return new Response("0000");
+    });
+    const api = configured();
+    await api.fork("acme", "site", "pimwell-stage-test");
+    expect(deadlines).toHaveBeenCalledWith(90_000);
+    const request = new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST" });
+    await expect(api.git("acme", "site", "git-receive-pack", request, null, true)).rejects.toThrow("git ls-remote");
+    expect(deadlines).toHaveBeenCalledWith(120_000);
+    expect((await api.git("acme", "site", "git-receive-pack", request, null, true)).status).toBe(200);
+  });
   it("uses separate namespaces, not concatenated organization and repository names", () => {
     const api = configured();
     expect(api.remote(artifactNamespace("red--blue"), "app")).toContain("/git/red--blue/app.git");
@@ -282,6 +300,30 @@ describe("Artifacts push recovery boundaries", () => {
     expect(result).toEqual({ cleaned: 3, failed: 0 });
     const rows = (await env.HUB_DB.prepare("SELECT state, replay_key FROM git_push ORDER BY id").all<{ state: string; replay_key: string }>()).results;
     expect(rows).toEqual([{ state: "complete", replay_key: "" }, { state: "refused", replay_key: "" }, { state: "staging", replay_key: "" }, { state: "publishing", replay_key: "r3" }, { state: "unknown", replay_key: "r4" }]);
+  });
+  it.each(["fork", "stage", "publish"])("reports %s failures with actionable readback and durable ambiguity", async failure => {
+    const { grant: g, git } = await grant(), r2 = bucket();
+    const body = join(packet(`${ZERO_OID} ${NEXT} refs/heads/main\0report-status side-band-64k\n`), flush, encode.encode("PACK"));
+    const api = {
+      async fork() { if (failure === "fork") throw new HubError(503, "unavailable", "secret upstream text"); },
+      async deleteTemporary() {},
+      async readCommit() { return { hash: NEXT }; },
+      async git(_ns: string, repo: string, tail: string, _request: Request, supplied: ReadableStream<Uint8Array> | null) {
+        if (tail === "info/refs") return new Response(join(packet(`${NEXT} refs/heads/main\n`), flush));
+        await new Response(supplied).arrayBuffer();
+        if (failure === "stage" || (failure === "publish" && repo === "site")) throw new HubError(503, "unavailable", "secret upstream text");
+        return new Response(join(packet("unpack ok\n"), packet("ok refs/heads/main\n"), flush));
+      },
+    };
+    const res = await artifactPush(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", headers: { authorization: basic(git.token) }, body }), { ...env, GIT_PUSH_STAGING: r2 }, g, api as any);
+    const outcomes = reportOutcomes(new Uint8Array(await res.arrayBuffer()), [{ oldOid: ZERO_OID, newOid: NEXT, ref: "refs/heads/main" }]);
+    expect(outcomes[0]!.outcome).toBe("ng");
+    expect(outcomes[0]!.reason).toContain("git ls-remote");
+    expect(outcomes[0]!.reason).not.toContain("secret");
+    const row = await env.HUB_DB.prepare("SELECT state, outcomes_json FROM git_push").first<{ state: string; outcomes_json: string }>();
+    expect(row!.state).toBe(failure === "publish" ? "unknown" : "refused");
+    expect(JSON.parse(row!.outcomes_json)[0].reason).toBe(outcomes[0]!.reason);
+    expect(r2.deleted.length).toBe(failure === "publish" ? 0 : 1);
   });
   it("does not create recovery rows for flush-only authenticated probes", async () => {
     const { grant: g } = await grant(), r2 = bucket(), api = { fork: vi.fn(), git: vi.fn() };

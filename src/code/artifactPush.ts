@@ -89,17 +89,20 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
   const id = crypto.randomUUID(), namespace = artifactNamespace(grant.tenant.slug), repo = grant.project.slug;
   const shadow = `pimwell-stage-${id}`, replayKey = `git-push/${grant.tenant.id}/${grant.project.id}/${id}`;
   const db = env.HUB_DB, storage = env.GIT_PUSH_STAGING;
+  api = api.withDeadline?.(300_000) ?? api;
   await db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:92:9:artifactPush:9945174b*/ INSERT INTO git_push (id, tenant_id, project_id, identity_id, session_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'staging', ?)`)
     .bind(id, grant.tenant.id, grant.project.id, grant.identity.id, grant.session.id, namespace, repo, shadow, replayKey, JSON.stringify(updates), Date.now()).run();
-  let disposable = true;
+  let disposable = true, phase = "repository fork";
   try {
     await api.fork(namespace, repo, shadow, `Pimwell temporary validation ${id}`);
+    phase = "staging";
     const [save, stage] = stream.tee();
     const [, staged] = await Promise.all([saveGitReplay(storage, replayKey, save), api.git(namespace, shadow, "git-receive-pack", request, stage, true)]);
     if (!staged.ok) throw new HubError(502, "unavailable", "Git staging failed");
     const stagedOutcomes = reportOutcomes(await responseBytes(staged), updates);
     if (stagedOutcomes.some(update => update.outcome !== "ok"))
       throw new HubError(409, "conflict", "Git could not stage every ref; fetch before retrying");
+    phase = "history validation";
     const publish: RefUpdate[] = [], refused = new Map<string, string>(), forks = new Map<string, string>();
     let defaultRef: Promise<string> | undefined;
     let calls = 0;
@@ -129,6 +132,7 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
     if (!current?.write || updates.some(update => !refAllowed(update.ref, current.refPrefixes)))
       throw new HubError(403, "forbidden", "Git access ended before publishing");
     const outcomes: RefOutcome[] = updates.map(update => ({ ...update, outcome: "ng", reason: refused.get(update.ref) }));
+    phase = "metadata validation";
     const refTargets = await advertisedCommitTargets(api, namespace, shadow, publish);
     const introduced: Array<CommitNode & { summary: string; ref: string }> = [];
     const visited = new Set<string>();
@@ -153,6 +157,7 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
       const saved = await storage.get(replayKey);
       if (!saved) throw new HubError(503, "unavailable", "Git replay unavailable");
       await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:155:13:artifactPush:3b6b741c*/ UPDATE git_push SET state = 'publishing' WHERE id = ?").bind(id).run();
+      phase = "publishing";
       disposable = false; // An ambiguous upstream response must retain the durable recovery record and pack.
       const canonical = await api.git(namespace, repo, "git-receive-pack", request, replaceCommands(saved.body, prefixBytes, publish, capabilities), true);
       if (!canonical.ok) throw new HubError(502, "unavailable", "Git publishing response unavailable; fetch before retrying");
@@ -178,8 +183,12 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
     disposable = state === "complete";
     return statusResponse(outcomes, capabilities);
   } catch (error) {
-    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:181:11:artifactPush:199f47bb*/ UPDATE git_push SET state = ?, completed_at = ? WHERE id = ?").bind(disposable ? "refused" : "unknown", Date.now(), id).run().catch(() => {});
-    throw error;
+    // Never claim success after a lost publishing response, or echo upstream prose/credentials.
+    const reason = `${phase} ${disposable ? "failed; canonical refs not published by this attempt" : "outcome unknown"}; run git ls-remote and fetch before retrying; push ${id}`;
+    const outcomes: RefOutcome[] = updates.map(update => ({ ...update, outcome: "ng", reason }));
+    await db.prepare("UPDATE git_push SET state = ?, outcomes_json = ?, completed_at = ? WHERE id = ?").bind(disposable ? "refused" : "unknown", JSON.stringify(outcomes), Date.now(), id).run().catch(() => {});
+    if (error instanceof HubError && error.status === 413) throw error;
+    return statusResponse(outcomes, capabilities);
   } finally {
     if (disposable) {
       await stream.cancel().catch(() => {});

@@ -100,10 +100,18 @@ async function looksLikeV2LsRefs(source: ReadableStream<Uint8Array> | null, enco
 
 export class ArtifactsRest {
   readonly account: string;
-  constructor(private env: Env) {
+  constructor(private env: Env, private deadline?: AbortSignal) {
     if (!env.ARTIFACTS_API_TOKEN || !env.ARTIFACTS_ACCOUNT_ID || !/^[a-f0-9]{32}$/.test(env.ARTIFACTS_ACCOUNT_ID))
       throw new HubError(503, "unavailable", "Artifacts is not configured");
     this.account = env.ARTIFACTS_ACCOUNT_ID;
+  }
+  /** Share one budget across fork, validation, publication and response-body reads. */
+  withDeadline(milliseconds: number): ArtifactsRest {
+    return new ArtifactsRest(this.env, AbortSignal.timeout(milliseconds));
+  }
+  private signal(milliseconds: number): AbortSignal {
+    const timeout = AbortSignal.timeout(milliseconds);
+    return this.deadline ? AbortSignal.any([this.deadline, timeout]) : timeout;
   }
   private base(namespace: string): string {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/.test(namespace)) throw new HubError(400, "bad_request", "invalid storage namespace");
@@ -113,15 +121,15 @@ export class ArtifactsRest {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(repo)) throw new HubError(400, "bad_request", "invalid Git repository");
     return `/repos/${encodeURIComponent(repo)}`;
   }
-  private async request(namespace: string, path: string, body?: unknown, method = body === undefined ? "GET" : "POST"): Promise<Response> {
+  private async request(namespace: string, path: string, body?: unknown, method = body === undefined ? "GET" : "POST", timeout = 20_000): Promise<Response> {
     let response: Response;
     try {
       response = await fetch(this.base(namespace) + path, {
-        method, redirect: "manual", signal: AbortSignal.timeout(20_000),
+        method, redirect: "manual", signal: this.signal(timeout),
         headers: { authorization: `Bearer ${this.env.ARTIFACTS_API_TOKEN}`, "content-type": "application/json" },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
-    } catch { throw new HubError(503, "unavailable", "Artifacts did not answer"); }
+    } catch { throw new HubError(503, "unavailable", `Artifacts ${path.endsWith("/fork") ? "repository fork" : method} did not answer within ${timeout / 1000}s`); }
     if (response.status === 404) throw new HubError(404, "not_found", "repository not found");
     if (!response.ok) throw await this.failure(response, method, path);
     return response;
@@ -135,8 +143,8 @@ export class ArtifactsRest {
     const operation = path === "/repos" && method === "POST" ? "create repository" : method;
     return new HubError(502, "unavailable", `Artifacts request failed (${operation}; HTTP ${response.status}${codes ? `; codes ${codes}` : ""}${/^[a-f0-9]{16,32}(?:-[A-Z]{3})?$/.test(ray) ? `; request ${ray}` : ""}). Check Artifacts availability and API token permissions.`);
   }
-  async call<T>(namespace: string, path: string, body?: unknown, method = body === undefined ? "GET" : "POST"): Promise<T> {
-    const response = await this.request(namespace, path, body, method);
+  async call<T>(namespace: string, path: string, body?: unknown, method = body === undefined ? "GET" : "POST", timeout = 20_000): Promise<T> {
+    const response = await this.request(namespace, path, body, method, timeout);
     const data = await response.json().catch(() => null) as { success?: boolean; result?: T } | null;
     if (data?.success !== true) throw await this.failure(response, method, path, data);
     return data.result as T;
@@ -151,7 +159,8 @@ export class ArtifactsRest {
   }
   async fork(namespace: string, repo: string, target: string, description?: string): Promise<void> {
     this.repoPath(target);
-    await this.call(namespace, this.repoPath(repo) + "/fork", { name: target, description, default_branch_only: false });
+    // A fork copies the existing object store, not just this push's delta.
+    await this.call(namespace, this.repoPath(repo) + "/fork", { name: target, description, default_branch_only: false }, "POST", 90_000);
   }
   /** Never delete a live repository without verifying its tenant/project ownership marker. */
   async deleteProject(namespace: string, repo: string, ownership: string): Promise<void> {
@@ -232,8 +241,8 @@ export class ArtifactsRest {
     const normalizeV2 = tail === "git-upload-pack" && request.method === "POST" && await looksLikeV2LsRefs(inspect, request.headers.get("content-encoding"));
     headers.set("authorization", `Bearer ${await this.repoToken(namespace, repo, write ? "write" : "read")}`);
     let response: Response;
-    try { response = await fetch(upstream, { method: request.method, headers, body, redirect: "manual" }); }
-    catch { throw new HubError(503, "unavailable", "Git storage did not answer"); }
+    try { response = await fetch(upstream, { method: request.method, headers, body, redirect: "manual", signal: this.signal(120_000) }); }
+    catch { throw new HubError(503, "unavailable", "Git storage did not answer within 120s; run git ls-remote before retrying"); }
     if (!normalizeV0 && !normalizeV2) return response;
     const [info, commits] = await Promise.all([this.info(namespace, repo), this.log(namespace, repo, "main", 1).catch(() => [])]);
     const branch = info.default_branch || "main", target = branch === "main" ? commits[0]?.hash : (await this.log(namespace, repo, branch, 1).catch(() => []))[0]?.hash;
