@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { analyticsQuery, type PerfRow } from "../apps/performance";
 import { ulid } from "../ids";
-import { BUDGETS, MIN_REGRESSION_SAMPLES, REGRESSION_RATIO } from "./budgets";
+import { BUDGETS, MIN_BUDGET_SAMPLES, MIN_REGRESSION_SAMPLES, REGRESSION_RATIO } from "./budgets";
 
 const quote = (s: string) => `'${s.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
 type Release = { id: string; version: string; commit: string | null; seen_at: number };
@@ -18,8 +18,10 @@ export async function checkPerformance(env: Env, target: CheckTarget, current: R
   let met = 0, measured = 0;
   const populations = [...BUDGETS, {id: "route", ms: Infinity, where: "blob7 = 'request' AND blob9 IN ('GET','POST','PUT','PATCH','DELETE','HEAD','OPTIONS')"}];
   for (const budget of populations) {
-    const rows = await query(`SELECT blob8 AS route, ${metrics} FROM pimwell_perf WHERE ${scope} AND ${range} AND blob3 = ${quote(current.version)} AND (${budget.where}) GROUP BY route LIMIT 1000`);
-    const baseline = previous ? await query(`SELECT blob8 AS route, ${metrics} FROM pimwell_perf WHERE ${scope} AND timestamp >= toDateTime(${Math.floor(Math.max(previous.seen_at,current.seen_at-3_600_000)/1000)}) AND timestamp < toDateTime(${Math.floor(current.seen_at/1000)}) AND blob3 = ${quote(previous.version)} AND (${budget.where}) GROUP BY route LIMIT 1000`) : [];
+    const synthetic = budget.id === "git";
+    const routeColumn = synthetic ? "concat(blob8, ' @', blob4)" : "blob8";
+    const rows = await query(`SELECT ${routeColumn} AS route, ${metrics} FROM pimwell_perf WHERE ${scope} AND ${range} AND blob3 = ${quote(current.version)} AND (${budget.where}) GROUP BY route LIMIT 1000`);
+    const baseline = previous ? await query(`SELECT ${routeColumn} AS route, ${metrics} FROM pimwell_perf WHERE ${scope} AND timestamp >= toDateTime(${Math.floor(Math.max(previous.seen_at,current.seen_at-3_600_000)/1000)}) AND timestamp < toDateTime(${Math.floor(current.seen_at/1000)}) AND blob3 = ${quote(previous.version)} AND (${budget.where}) GROUP BY route LIMIT 1000`) : [];
     if (budget.id !== "route" && rows.length) { measured++; if (rows.every(r => Number(r.p95) <= budget.ms)) met++; }
     for (const row of rows) {
       const route = String(row.route), old = baseline.find(r => r.route === row.route);
@@ -28,7 +30,13 @@ export async function checkPerformance(env: Env, target: CheckTarget, current: R
         if (budget.id === "route" && kind === "budget") continue;
         // Sparse or missing observations cannot resolve a regression.
         if (kind === "regression" && !regressionKnown) continue;
-        const failed = kind === "budget" ? Number(row.p95) > budget.ms : Number(row.p95) >= Number(old!.p95) * REGRESSION_RATIO;
+        let failed = kind === "budget" ? Number(row.samples) >= MIN_BUDGET_SAMPLES && Number(row.p95) > budget.ms : Number(row.p95) >= Number(old!.p95) * REGRESSION_RATIO;
+        if (synthetic && kind === "budget") {
+          const colo = route.slice(route.lastIndexOf(" @") + 2);
+          const runs = await query(`SELECT double1 AS duration, double16 AS at FROM pimwell_perf WHERE ${scope} AND ${range} AND blob3 = ${quote(current.version)} AND (${budget.where}) AND blob4 = ${quote(colo)} ORDER BY timestamp DESC LIMIT 2`);
+          // Distinct runs, not repeated checks of one observation.
+          failed = runs.length === 2 && Number(runs[0]!.at) > Number(runs[1]!.at) && runs.every(r => Number(r.duration) > budget.ms);
+        }
         const key = [target.site_id, target.script_name, kind, budget.id, route];
         const alert = await db.prepare("/*perf-site:src%2Fperf%2Fchecks.ts:33:29:checkPerformance:131189a6*/ SELECT a.situation_id, s.outcome FROM perf_alert a JOIN situation s ON s.id = a.situation_id WHERE a.site_id = ? AND a.script_name = ? AND a.kind = ? AND a.budget = ? AND a.route = ?").bind(...key).first<{situation_id:string;outcome:string|null}>();
         if (!failed) {
@@ -41,7 +49,7 @@ export async function checkPerformance(env: Env, target: CheckTarget, current: R
         const span = growth?.name ?? null, id = ulid(now), thread = ulid(now);
         const actor = await db.prepare("/*perf-site:src%2Fperf%2Fchecks.ts:42:29:checkPerformance:ed4a7206*/ SELECT id FROM identity WHERE id = 'perf-synthetic-member'").first<{id:string}>();
         if (!actor) throw new Error("Performance system identity missing");
-        const title = `Latency ${kind}: ${budget.id} ${route}`;
+        const title = `Latency ${kind}: ${budget.id} ${route} (${row.samples} samples)`;
         const report = `${title}\np95 ${row.p95} ms; budget ${budget.ms} ms; ${row.samples} retained samples. Previous p95 ${old?.p95 ?? 'unknown'} ms (${old?.samples ?? 0} retained samples).\nDeploy: [${current.id}](/apps?d=${encodeURIComponent(current.id)})\nCommit: ${current.commit ? `[${current.commit}](/${encodeURIComponent(target.project)}/code?c=${encodeURIComponent(current.commit)})` : 'unknown'}\nLargest span growth: ${span ?? 'unavailable'}${growth ? ` (${growth.delta} ms)` : ''}.\nVersion: ${current.version}. Site: ${target.name}; Worker: ${target.script_name}.`;
         await db.batch([
           db.prepare("/*perf-site:src%2Fperf%2Fchecks.ts:47:11:checkPerformance:4471ec87*/ INSERT INTO assistant_thread (id, tenant_id, identity_id, title, scopes, created_at, updated_at) VALUES (?, ?, ?, ?, 'read', ?, ?)").bind(thread,target.tenant_id,actor.id,title,now,now),

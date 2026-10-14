@@ -88,6 +88,34 @@ describe("latency budget situations", () => {
     expect(await env.HUB_DB.prepare("SELECT met FROM perf_budget_check").first("met")).toBe(0);
     expect(BUDGETS.map(b=>b.ms)).toEqual([300,500,800,1000,400,1000]);
   });
+  it("requires 30 retained samples and two distinct synthetic runs per colo", async () => {
+    const f = await fixture();
+    let samples = 29, durations = [1200], times = [2];
+    const query = async (sql: string) => {
+      if (sql.includes("AS duration")) {
+        expect(sql).toContain("blob4 = 'SIN'");
+        return durations.map((duration, i) => ({duration, at: times[i]!}));
+      }
+      if (sql.includes("blob11 = 'cookie'")) return [{route:"/docket",p95:500,samples}];
+      if (sql.includes("concat(blob8")) return [{route:"git-ls-remote @SIN",p95:1200,samples:2}];
+      return [];
+    };
+    const count = () => env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation WHERE outcome IS NULL").first("n");
+    await checkPerformance(env,f.target,f.current,null,f.now,query);
+    expect(await count()).toBe(0);
+    samples = 30;
+    await checkPerformance(env,f.target,f.current,null,f.now+1,query);
+    expect(await count()).toBe(1);
+    durations = [1200,1200]; times = [2,2];
+    await checkPerformance(env,f.target,f.current,null,f.now+2,query);
+    expect(await count()).toBe(1);
+    times = [2,1];
+    await checkPerformance(env,f.target,f.current,null,f.now+3,query);
+    expect(await count()).toBe(2);
+    samples = 4; durations = [1200,900];
+    await checkPerformance(env,f.target,f.current,null,f.now+4,query);
+    expect(await count()).toBe(0);
+  });
   it("does not call analytics before 30 minutes or within an hour of a successful check", async () => {
     const f = await fixture();
     await env.HUB_DB.prepare("INSERT INTO app_source (id,tenant_id,project_id,script_name,state,created_at) VALUES ('latency-app',?,?, 'pimwell-hub','active',?)").bind(f.target.tenant_id,f.target.project_id,f.now).run();

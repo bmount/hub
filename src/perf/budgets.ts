@@ -9,3 +9,4 @@ export const BUDGETS = [
 ] as const;
 export const REGRESSION_RATIO = 1.25;
 export const MIN_REGRESSION_SAMPLES = 200;
+export const MIN_BUDGET_SAMPLES = 30;
