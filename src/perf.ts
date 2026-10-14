@@ -1,20 +1,22 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Env } from "./env";
+import { SQL_CATALOG, SPAN_CATALOG, FUNCTION_CATALOG, type CodeSite } from "./perfCatalog.ts";
 
 export type Meter = { trips: number; statements: number; ms: number };
 export type TimingSpan = {
   name: string; id: number; parent: number; ms: number; failed: boolean; started?: number; finished?: boolean;
   fingerprint?: string; execution?: number; read?: number; written?: number; region?: string; primary?: boolean;
   provider?: string; model?: string; firstToken?: number;
+  source?: CodeSite; sqlCode?: string;
 };
 export type Trace = {
-  id: string; parent: number; kind: "request" | "rpc"; started: number; cold: boolean; spans: TimingSpan[]; next: number; other: number; otherMs: number; otherOpen: number; otherStarted: number;
+  id: string; parent: number; kind: "request" | "rpc"; started: number; at: number; cold: boolean; spans: TimingSpan[]; next: number; other: number; otherMs: number; otherOpen: number; otherStarted: number;
   route: string; method: string; auth: string; verb: string; tool: string; tenant: string; colo: string; status: number; ended?: number; pending: Set<Promise<unknown>>;
 };
 const context = new AsyncLocalStorage<{ trace: Trace; parent: number; entry?: TimingSpan }>();
 let cold = true;
 export function newTrace(method = "", colo = ""): Trace {
-  const trace: Trace = { id: crypto.randomUUID(), parent: 0, kind: "request", started: performance.now(), cold, spans: [], next: crypto.getRandomValues(new Uint32Array(1))[0]! * 1_000_000, other: 0, otherMs: 0, otherOpen: 0, otherStarted: 0,
+  const trace: Trace = { id: crypto.randomUUID(), parent: 0, kind: "request", started: performance.now(), at: Date.now(), cold, spans: [], next: crypto.getRandomValues(new Uint32Array(1))[0]! * 1_000_000, other: 0, otherMs: 0, otherOpen: 0, otherStarted: 0,
     route: "", method, auth: "anonymous", verb: "", tool: "", tenant: "", colo, status: 200, pending: new Set() };
   cold = false;
   return trace;
@@ -27,7 +29,10 @@ export function traceFields(fields: Partial<Pick<Trace, "route" | "auth" | "verb
 }
 export function spanFields(fields: Partial<TimingSpan>): void {
   const current = context.getStore();
-  if (current?.entry) Object.assign(current.entry, fields);
+  if (current?.entry) {
+    Object.assign(current.entry, fields);
+    if (fields.fingerprint) Object.assign(current.entry, sqlSources.get(fields.fingerprint) ?? {});
+  }
 }
 /** Only code-defined names; arguments/results never enter telemetry. Async context isolates concurrent requests. */
 const instrumented = new WeakSet<Function>();
@@ -42,7 +47,7 @@ export function span<T>(name: string, fn: () => T): T {
   if (!current) return fn();
   const { trace } = current;
   const started = performance.now(), id = ++trace.next;
-  const entry: TimingSpan = { name, id, parent: current.parent, ms: 0, failed: false, started, finished: false };
+  const entry: TimingSpan = { name, id, parent: current.parent, ms: 0, failed: false, started, finished: false, source: spanSource(name) };
   const retained = trace.spans.length < 199;
   if (retained) trace.spans.push(entry);
   else { trace.other++; trace.otherOpen++; trace.otherStarted += started; }
@@ -67,6 +72,21 @@ const REAL = new WeakMap<object, D1PreparedStatement>();
 const SQL = new WeakMap<object, string>();
 const fingerprints = new Map<string, string>();
 const normalizedSQL = new Map<string, string>();
+const sqlSources = new Map<string, {source?: CodeSite; sqlCode: string}>();
+function spanSource(name: string): CodeSite | undefined {
+  return SPAN_CATALOG[name] ?? FUNCTION_CATALOG[name.startsWith("d1.") ? "meteredD1" :
+    name.startsWith("fetch.") ? "installFetchTiming" : name.startsWith("do.handler.") ? "traceDurableClass" :
+    name.startsWith("do.stub.") ? "timedStub" : name.startsWith("do.") ? "traceStorage" :
+    /^(RATE|OAUTH_KV|MAIL|GIT_PUSH_STAGING|GIT_PROXY|ARDI)\./.test(name) ? "timedBinding" : "span"]; 
+}
+export function exclusiveDuration(s: TimingSpan, spans: TimingSpan[], snapshot: number): number {
+  const start = s.started ?? snapshot - s.ms;
+  const end = s.finished === false ? snapshot : start + s.ms;
+  const children = spans.filter(c => c.parent === s.id && c.name !== "d1.statement").map(c => [Math.max(start,c.started ?? start),Math.min(end,c.finished === false ? snapshot : (c.started ?? start)+c.ms)] as const).filter(([a,b]) => b>a).sort((a,b)=>a[0]-b[0]);
+  let covered=0, cursor=start;
+  for (const [a,b] of children) { covered += Math.max(0,b-Math.max(cursor,a)); cursor=Math.max(cursor,b); }
+  return Math.max(0,end-start-covered);
+}
 function fingerprint(sql: string, caller?: Function): string {
   // Literal values and comments are discarded before hashing. No SQL text is exported.
   let normalized = normalizedSQL.get(sql);
@@ -91,6 +111,13 @@ function fingerprint(sql: string, caller?: Function): string {
     value = (hash >>> 0).toString(16).padStart(8, "0");
     if (fingerprints.size >= 512) fingerprints.clear();
     fingerprints.set(key, value);
+    let codeHash = 2166136261;
+    for (let i=0;i<normalized.length;i++) codeHash=Math.imul(codeHash ^ normalized.charCodeAt(i),16777619);
+    const code=(codeHash>>>0).toString(16).padStart(8,"0"), catalog=SQL_CATALOG[code];
+    if (catalog?.text === normalized) {
+      if (sqlSources.size >= 512) sqlSources.clear();
+      sqlSources.set(value,{sqlCode:code,...(catalog.sites.length === 1 ? {source:catalog.sites[0]} : {})});
+    }
   }
   return value;
 }
@@ -147,7 +174,7 @@ export function meteredD1(db: D1Database, m: Meter): D1Database {
           const elapsed = performance.now() - t;
           for (let i = 0; i < stmts.length; i++) {
             // Statement metadata shares the measured batch trip; no fictitious individual round trips.
-            span("d1.statement", () => { spanFields({ fingerprint: SQL.get(stmts[i]!) ?? "unknown", ms: elapsed }); d1Meta(results[i]); });
+            span("d1.statement", () => { spanFields({ fingerprint: SQL.get(stmts[i]!) ?? "unknown", ms: elapsed, started: t }); d1Meta(results[i]); });
           }
           return results;
         } finally { m.trips++; m.statements += stmts.length; m.ms += performance.now() - t; }
@@ -263,7 +290,7 @@ export async function writeClientPoints(env: Parameters<typeof writeTrace>[0], t
 }
 
 const tenantHashes = new Map<string, string>();
-async function tenantHash(tenant: string, secret: string): Promise<string> {
+export async function tenantHash(tenant: string, secret: string): Promise<string> {
   if (!tenant || !secret) return "";
   const cacheKey = secret + ":" + tenant;
   const cached = tenantHashes.get(cacheKey);
@@ -286,10 +313,10 @@ export async function writeTrace(env: Pick<Env, "PERF" | "WORKER_VERSION" | "PER
     const write = (kind: string, s: TimingSpan) => env.PERF!.writeDataPoint({
       indexes: [version],
       blobs: [site, worker, version, trace.colo, tenant, trace.id, kind, trace.route, trace.method, `${Math.floor(trace.status/100)}xx`, trace.auth,
-        trace.verb, trace.tool, s.name, s.fingerprint ?? "", s.region ?? "", s.provider ?? "", s.model ?? ""],
-      doubles: [s.finished === false ? snapshot - s.started! : s.ms, +trace.cold, s.id, s.parent, +s.failed, s.execution ?? -1, s.read ?? -1, s.written ?? -1, s.primary === undefined ? -1 : +s.primary, s.firstToken ?? -1, kind === "other" ? trace.other : 1, 0, 0, s.finished === false ? 0 : 1],
+        trace.verb, trace.tool, s.name, s.fingerprint ?? "", s.region ?? "", s.provider ?? "", s.model ?? "", s.source ? JSON.stringify(s.source) : "", s.sqlCode ?? ""],
+      doubles: [s.finished === false ? snapshot - s.started! : s.ms, +trace.cold, s.id, s.parent, +s.failed, s.execution ?? -1, s.read ?? -1, s.written ?? -1, s.primary === undefined ? -1 : +s.primary, s.firstToken ?? -1, kind === "other" ? trace.other : 1, 0, 0, s.finished === false ? 0 : 1, Math.max(0,(s.started ?? trace.started)-trace.started), trace.at + ((s.started ?? trace.started)-trace.started), exclusiveDuration(s.name === "request" ? {...s,id:trace.parent} : s, trace.spans, snapshot), trace.kind === "rpc" ? 1 : 0, 0, 2],
     });
-    write(trace.kind, { name: "request", id: 0, parent: trace.parent, ms: (trace.ended ?? performance.now())-trace.started, failed: trace.status >= 500 });
+    write(trace.kind, { name: "request", id: 0, parent: trace.parent, started:trace.started, source:SPAN_CATALOG["request"] ?? FUNCTION_CATALOG["writeTrace"], ms: (trace.ended ?? performance.now())-trace.started, failed: trace.status >= 500 });
     for (const s of trace.spans) write("span", s);
     if (trace.other) {
       const ended = snapshot;

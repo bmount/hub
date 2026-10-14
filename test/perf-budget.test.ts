@@ -1,6 +1,6 @@
 // Performance budget (overnight plan 2, N4): every signed-in page stays within a fixed number of D1 round trips.
 // A batch is one round trip. If a page needs more, read in one batch, or record a ruling and raise its budget here.
-import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, deferredTrace, meteredD1, hasSpan } from "../src/perf";
+import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, deferredTrace, meteredD1, hasSpan, exclusiveDuration, type TimingSpan } from "../src/perf";
 import worker, { app } from "../src/index";
 import gitWorker from "../git-proxy/index";
 import { Conversation } from "../src/chat/conversationDO";
@@ -57,6 +57,21 @@ function collector() {
   return { points, measured, ctx, flush };
 }
 describe("request tracing guardrails", () => {
+  it("exports source-defined locations and non-overlapping v2 timing, ignoring batch detail overlap", async () => {
+    const make = (id:number,parent:number,started:number,ms:number,name="step"): TimingSpan => ({id,parent,started,ms,name,failed:false,finished:true});
+    const root=make(0,0,10,100), a=make(1,0,20,40), b=make(2,0,40,40), detail=make(3,1,20,40,"d1.statement");
+    expect(exclusiveDuration(root,[a,b,detail],110)).toBe(40);
+    expect(exclusiveDuration(a,[a,b,detail],110)).toBe(40);
+    const trace=newTrace(), c=collector();
+    await withTrace(trace, () => span("auth.buildContext", () => 1));
+    trace.ended=performance.now(); await writeTrace(c.measured,trace);
+    const point=c.points.find(p=>p.blobs?.[13]==="auth.buildContext")!;
+    expect(JSON.parse(point.blobs![18] as string)).toMatchObject({file:"src/auth/context.ts"});
+    expect(point.doubles![14]).toBeGreaterThanOrEqual(0);
+    expect(point.doubles![15]).toBeGreaterThanOrEqual(trace.at);
+    expect(point.doubles![16]).toBeGreaterThanOrEqual(0);
+    expect(point.doubles![19]).toBe(2);
+  });
   it("every registered verb, page route and public Durable Object method emits a span", async () => {
     const routes = app.routes.filter(r => !["*", "/*"].includes(r.path));
     expect(routes.length).toBeGreaterThan(100);

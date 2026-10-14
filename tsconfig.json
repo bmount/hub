@@ -9,7 +9,8 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "allowArbitraryExtensions": true
+    "allowArbitraryExtensions": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["src", "test", "vitest.config.ts"]
 }
