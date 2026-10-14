@@ -1,5 +1,6 @@
 // Performance budget (overnight plan 2, N4): every signed-in page stays within a fixed number of D1 round trips.
 // A batch is one round trip. If a page needs more, read in one batch, or record a ruling and raise its budget here.
+import { situationReport } from "../src/http/situationPage";
 import { checkPerformance, runPerformanceChecks, type CheckTarget } from "../src/perf/checks";
 import { BUDGETS } from "../src/perf/budgets";
 import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, writeClientPoints, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, type TimingSpan } from "../src/perf";
@@ -31,6 +32,14 @@ function trips(header: string | null): { trips: number; statements: number } {
 }
 
 describe("latency budget situations", () => {
+  it("renders code-generated deploy/commit links without accepting arbitrary HTML or URLs", () => {
+    const id = '01M4WQRWTK8D6R5NXC3RGVC1Y7', commit = 'a'.repeat(40);
+    const html = situationReport(`[${id}](/apps?d=${id})\n[${commit}](/pimwell/code?c=${commit})\n[x](javascript:alert(1))\n<img src=x onerror=alert(1)>`);
+    expect(html).toContain(`<a href="/apps?d=${id}">${id}</a>`);
+    expect(html).toContain(`<a href="/pimwell/code?c=${commit}">${commit}</a>`);
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain('<img');
+  });
   async function fixture() {
     const tenant = await seedTenant("acme");
     const project = await createProject(env.HUB_DB, {tenant_id:tenant.id,namespace_id:null,slug:"latency",kind:"repo",display_name:"Latency"},Date.now());
