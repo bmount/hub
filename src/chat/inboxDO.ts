@@ -148,7 +148,7 @@ export class Inbox extends DurableObject<Env> {
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     await this.#queue(ws, async () => {
       const state = ws.deserializeAttachment() as SocketState;
-      await this.#viewer(state);
+      const { ctx } = await this.#viewer(state);
       state.last_seen = Date.now(); ws.serializeAttachment(state);
       let frame: Record<string, unknown>;
       try {
@@ -167,7 +167,7 @@ export class Inbox extends DurableObject<Env> {
       if (typeof frame.request_id !== 'string' || frame.request_id.length > 64 || typeof frame.method !== 'string' || !methods.includes(frame.method) || !frame.params || typeof frame.params !== 'object' || Array.isArray(frame.params)) {
         ws.send(JSON.stringify({ request_id: typeof frame.request_id === 'string' ? frame.request_id.slice(0, 64) : null, ok: false, error: { code: 'bad_request' } })); return;
       }
-      const response = await handleChatApi(this.#request(state, frame.method, { ...frame.params as Record<string, unknown>, ...(frame.method === 'getUpdates' ? { timeout: 0 } : {}) }), this.env, p => this.ctx.waitUntil(p));
+      const response = await handleChatApi(this.#request(state, frame.method, { ...frame.params as Record<string, unknown>, ...(frame.method === 'getUpdates' ? { timeout: 0 } : {}) }), this.env, p => this.ctx.waitUntil(p), ctx);
       ws.send(JSON.stringify({ ...await response.json() as object, request_id: frame.request_id, server_request_id: requestId() }));
     });
   }

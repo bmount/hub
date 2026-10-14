@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { agentMcpAuth } from "../mcp/agentAuth";
 import { mcpAuth } from "../mcp/context";
+import { postMessage, type PostParams } from "../chat/post";
 import { API_TOKEN_PREFIX } from "../db/apiTokens";
 import { buildContext } from "../auth/context";
 import { readSessionToken } from "../auth/cookie";
@@ -37,9 +38,11 @@ export async function authenticateChat(request: Request, env: Env, waitUntil: (p
   return ctx;
 }
 
-export async function handleChatApi(request: Request, env: Env, waitUntil: (p: Promise<unknown>) => void): Promise<Response> {
+export async function handleChatApi(request: Request, env: Env, waitUntil: (p: Promise<unknown>) => void, authenticated?: Awaited<ReturnType<typeof authenticateChat>>): Promise<Response> {
   try {
-    let ctx = await authenticateChat(request, env, waitUntil);
+    // Inbox has already authenticated this individual command and checked its pinned
+    // tenant/identity. Reuse only that in-process context, never a client-supplied cache.
+    let ctx = authenticated ?? await authenticateChat(request, env, waitUntil);
     const v = viewerOf(ctx);
     const method = new URL(request.url).pathname.slice('/chat/v1/'.length);
     if (method === 'ws') {
@@ -130,7 +133,9 @@ export async function handleChatApi(request: Request, env: Env, waitUntil: (p: P
       return json({ ok: true, result });
     }
     const params = verb.parse({ c: ch.slug, body: input.text, msg: input.msg_id, reply_to: input.reply_to ?? wire.root, idempotency_key: input.client_id, after: input.after });
-    return json({ ok: true, result: await verb.run(ctx, params) });
+    return json({ ok: true, result: method === 'sendMessage'
+      ? await postMessage(ctx, params as PostParams, true)
+      : await verb.run(ctx, params) });
   } catch (e) {
     if (e instanceof HubError) return json({ ok: false, error: { code: e.reason === 'rate' ? 'rate_limited' : e.reason, message: e.detail ?? e.reason, ...e.data, ...(e.data?.retry_after !== undefined ? { retry_after_s: e.data.retry_after } : {}) } }, e.status);
     if (e instanceof SyntaxError) return json({ ok: false, error: { code: 'bad_request', message: 'invalid JSON' } }, 400);

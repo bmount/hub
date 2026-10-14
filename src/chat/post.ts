@@ -181,7 +181,7 @@ async function safeEvents(ctx: Ctx, ch: ChannelRow, author: Author, o: PostOk, k
   }
 }
 
-export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> {
+export async function postMessage(ctx: Ctx, p: PostParams, backgroundDelivery = false): Promise<PostResult> {
   const author = authorOf(ctx);
   if (p.after === null && (needsAfter(author) || p.response_to)) throw badRequest("after is required: pass the head from chat.read or chat.catchup");
   const shape = structure(p.body, p.refs);
@@ -219,9 +219,13 @@ export async function postMessage(ctx: Ctx, p: PostParams): Promise<PostResult> 
     tenant_id: ch.tenant_id, conversation_id: ch.project_id, now: ctx.now, author, policy, body: p.body, body_sha256: await sha256Hex(p.body),
     after: p.after, reply_to: p.reply_to, refs: x.resolved, mentions: x.mentions, wake_hop: reserve.wake_hop, thread_wake_hops: reserve.thread_wake_hops, idempotency_key: p.idempotency_key, audience, response, intent_fingerprint,
     update_recipients: await updateAudience(ctx.db, ch.tenant_id, ch.project_id, ch),
-  })) as PostOutcome;
+  }, backgroundDelivery)) as PostOutcome;
   if (o.refused !== null) throw await refusalError(ctx, author, ch, o);
-  if (!o.replayed) await safeEvents(ctx, ch, author, o, "chat.post");
+  if (!o.replayed) {
+    const logged = safeEvents(ctx, ch, author, o, "chat.post");
+    if (backgroundDelivery && ctx.waitUntil) ctx.waitUntil(logged);
+    else await logged;
+  }
   return result(ch, o, x.unresolved, x.not_waking);
 }
 

@@ -493,11 +493,22 @@ export class Conversation extends DurableObject<Env> {
     return this.#intentReplay(identity_id, "post", key, fingerprint, Date.now());
   }
 
-  async post(input: PostInput): Promise<PostOutcome> {
+  async post(input: PostInput, backgroundDelivery = false): Promise<PostOutcome> {
     this.#bind(input.tenant_id, input.conversation_id);
     const intent_fingerprint = input.intent_fingerprint ?? await postIntentFingerprint(input);
     const outcome = this.#storage.transactionSync(() => this.#post({ ...input, intent_fingerprint }));
-    await this.#drain();
+    if (!backgroundDelivery) {
+      await this.#drain();
+      return outcome;
+    }
+    // Acknowledgement means the artifact, intent ledger and delivery outboxes are durable,
+    // not that every recipient and the search index have answered. Persist recovery before
+    // starting delivery so eviction or a failed background drain cannot strand the send.
+    const due = Date.now() + 1000;
+    const alarm = await this.#storage.getAlarm();
+    if (alarm === null || alarm > due) await this.#storage.setAlarm(due);
+    await this.#storage.sync();
+    this.ctx.waitUntil(this.#drain());
     return outcome;
   }
 

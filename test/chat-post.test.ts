@@ -140,8 +140,10 @@ describe("chat WebSocket stream", () => {
     duplicateSocket.close(1000);
     await env.HUB_DB.prepare('UPDATE api_token SET revoked_at = ? WHERE id = ?').bind(Date.now(), w.scout.apiToken.id).run();
     const closed = new Promise<number>(resolve => agent.ws.addEventListener('close', event => resolve(event.code)));
-    agent.ws.send(JSON.stringify({ type: 'ping' }));
+    agent.ws.send(JSON.stringify({ request_id: 'revoked-command', method: 'sendMessage', params: { chat, text: 'must not commit after revocation', client_id: 'ws-revoked', after: message.data.seq } }));
     expect(await closed).toBe(1008);
+    const history = await chatHttp(w.lead.token, 'getMessages', { chat });
+    expect(history.body.result.messages.some((m: any) => m.body === 'must not commit after revocation')).toBe(false);
     resumed.close(1000);
   });
 });

@@ -42,6 +42,31 @@ afterEach(async () => {
 const items = async (id: string) => (await inboxStub(env, T, id).list(T, id, { after: 0, limit: 100, include_acked: true })).items;
 
 describe("Conversation: messages and versions", () => {
+  it("acknowledges a durable intent before delivery, with alarm recovery and no duplicate artifact", async () => {
+    const p = input(human("H1"), "durable acknowledgement", { idempotency_key: "ack-intent", mentions: [{ identity_id: "A1", kind: "agent" }] });
+    const snapshot = await inDO(conv(), async (o: Conversation, state) => {
+      const sent = ok(await o.post(p, true));
+      return {
+        sent,
+        alarm: await state.storage.getAlarm(),
+        artifact: state.storage.sql.exec("SELECT seq FROM artifact").toArray(),
+        intent: state.storage.sql.exec("SELECT key FROM idem").toArray(),
+        queued: state.storage.sql.exec("SELECT seq FROM index_outbox").toArray(),
+      };
+    });
+    expect(snapshot.alarm).not.toBeNull();
+    expect(snapshot.artifact).toEqual([{ seq: snapshot.sent.seq }]);
+    expect(snapshot.intent).toEqual([{ key: "post:ack-intent" }]);
+    expect(snapshot.queued).toEqual([{ seq: snapshot.sent.seq }]);
+    const status = await conv().postStatus(T, C, "H1", "ack-intent");
+    expect(status.record?.committed.msg_id).toBe(snapshot.sent.msg_id);
+    expect(ok(await conv().post(p)).replayed).toBe(true);
+    expect((await conv().post({ ...p, body: "changed", intent_fingerprint: "different" })).refused).toBe("conflict");
+    expect((await conv().post({ ...p, idempotency_key: "another" })).refused).toBe("duplicate");
+    await inDO(conv(), (o: Conversation) => o.alarm());
+    expect((await items("A1")).length).toBe(1);
+    expect(await conv().head(T, C)).toBe(snapshot.sent.seq);
+  });
   it("appends messages with per-conversation seqs and reads the newest page", async () => {
     const a = ok(await conv().post(input(human("H1"), "hello")));
     const b = ok(await conv().post(input(human("H2"), "second")));
