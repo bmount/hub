@@ -127,10 +127,19 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
     if (!String(e).includes("UNIQUE constraint failed: meta.key")) throw e;
   }
 
-  for (const id of channels) counts.message_versions = (counts.message_versions ?? 0) + await conversationStub(ctx.env, tid, id).purge(tid, id);
-  const mailIds = (await scoped(`SELECT id FROM inbound_mail WHERE tenant_id = ?1 AND project_id IN (${projects})`).all<{ id: string }>()).results.map(r => r.id);
-  const identities = (await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:130:29:deleteProject:5600b7bc*/ SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?`)
-    .bind(tid, tid).all<{ identity_id: string }>()).results;
+  // Owned channels are independent; settle both before purging inboxes so no
+  // conversation drain can recreate an inbox entry after its purge.
+  const conversations = await Promise.allSettled(channels.map(id => conversationStub(ctx.env, tid, id).purge(tid, id)));
+  for (const result of conversations) {
+    if (result.status === "rejected") throw result.reason;
+    counts.message_versions = (counts.message_versions ?? 0) + result.value;
+  }
+  const [mailResult, identityResult] = await db.batch([
+    scoped(`SELECT id FROM inbound_mail WHERE tenant_id = ?1 AND project_id IN (${projects})`),
+    db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:130:29:deleteProject:5600b7bc*/ SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?`).bind(tid, tid),
+  ]);
+  const mailIds = (mailResult!.results as { id: string }[]).map(r => r.id);
+  const identities = identityResult!.results as { identity_id: string }[];
   // Drain all workers even on failure: no purge may outlive this deletion attempt.
   let nextIdentity = 0;
   const purges = await Promise.allSettled(Array.from({ length: Math.min(10, identities.length) }, async () => {
