@@ -1,4 +1,4 @@
-import { resolveRepository } from "./repositories";
+import { repositoryName, type Repository } from "./repositories";
 import type { Env } from "../env";
 import { credentialUsable, rank, roleFor } from "../auth/context";
 import { touchSession } from "../db/sessions";
@@ -69,12 +69,15 @@ export async function authorizeGitRepository(env: Env, caller: GitCaller, repo: 
   const { identity, session, tenant, role } = caller;
   const [projectSlug, repoName, extra] = repo.split("/");
   if (extra !== undefined) return null;
-  const project = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FgitAccess.ts:72:25:authorizeGitRepository:0211670a*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind IN ('repo', 'workspace') AND state = 'active'")
-    .bind(tenant.id, projectSlug).first<{ id: string; slug: string }>();
-  if (!project) return null;
-  let repository;
-  try { repository = await resolveRepository(env.HUB_DB, tenant.id, project.id, repoName); }
-  catch { if (repoName) return null; }
+  try { if (repoName) repositoryName(repoName); } catch { return null; }
+  const row = await env.HUB_DB.prepare(`/*perf-site:src%2Fcode%2FgitAccess.ts:73:21:authorizeGitRepository:5682f843*/ SELECT p.id, p.slug, r.name, r.storage_name, r.is_default FROM project p
+    LEFT JOIN repository r ON r.tenant_id = p.tenant_id AND r.project_id = p.id AND ${repoName ? "r.name = ?" : "r.is_default = 1"}
+    WHERE p.tenant_id = ? AND p.slug = ? AND p.kind IN ('repo', 'workspace') AND p.state = 'active'`)
+    .bind(...(repoName ? [repoName] : []), tenant.id, projectSlug).first<{ id: string; slug: string } & { [K in keyof Repository]: Repository[K] | null }>();
+  if (!row || (repoName && !row.name)) return null;
+  const project = { id: row.id, slug: row.slug };
+  const repository = row.name && row.storage_name !== null && row.is_default !== null
+    ? { name: row.name, storage_name: row.storage_name, is_default: row.is_default } : undefined;
   if (session.kind === "git") await touchSession(env.HUB_DB, session, now);
   return { identity, session, tenant, project, repository, write: rank(role) >= rank("member") };
 }

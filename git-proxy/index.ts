@@ -16,12 +16,15 @@ installFetchTiming();
 async function dispatch(request: Request, env: ProxyEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url), host = classifyHost(request.headers.get("host") ?? url.host, env.HUB_DOMAIN);
     if (host.kind === "tenant" && GIT_PATH.test(url.pathname)) {
-      const tenant = await getTenantBySlug(env.HUB_DB, host.slug);
+      const agentSrc = url.pathname.startsWith("/agent-src/"), repo = url.pathname.slice(1, url.pathname.indexOf(".git/"));
+      // Routing metadata is independent; neither result authorizes repository access.
+      const [tenant, artifacts] = await Promise.all([
+        getTenantBySlug(env.HUB_DB, host.slug), agentSrc ? false : usesArtifacts(env, host.slug, repo),
+      ]);
       if (!tenant || tenant.state !== "active") return notFoundPage();
       traceFields({ tenant: tenant.id, auth: "git", route: "/:repo.git/*" });
-      if (url.pathname.startsWith("/agent-src/")) return env.GIT_BACKEND === "artifacts" ? artifactGit(request, env, tenant.slug) : notFoundPage();
-      const repo = url.pathname.slice(1, url.pathname.indexOf(".git/"));
-      if (await usesArtifacts(env, tenant.slug, repo)) return artifactGit(request, env, tenant.slug);
+      if (agentSrc) return env.GIT_BACKEND === "artifacts" ? artifactGit(request, env, tenant.slug) : notFoundPage();
+      if (artifacts) return artifactGit(request, env, tenant.slug);
       if (repo.includes("/")) return notFoundPage();
       return fencedLegacyGit(request, env, tenant.slug, repo);
     }

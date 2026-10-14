@@ -27,7 +27,9 @@ Agent source repositories retain their separate, narrower access rules.
 Git caller authorization reads the live session, tenant, identity, parent token,
 agent/operator memberships and operator in one D1 batch. The existing credential
 policy and role caps consume that request-local snapshot; none of those rows are
-cached between requests.
+cached between requests. Git routing overlaps its independent tenant/backend reads,
+and repository authorization resolves the active project and tenant-scoped storage
+mapping in one joined read.
 
 ## Reading, review and references
 
