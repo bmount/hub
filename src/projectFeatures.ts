@@ -3,7 +3,7 @@ import { badRequest } from "./errors";
 export type ProjectFeature = "docket" | "repo" | "wiki" | "knowledge" | "files" | "people";
 /** Project capabilities, shared by pages, verbs and project-scoped tool discovery. */
 export const PROJECT_FEATURES = {
-  repo: ["docket", "repo"],
+  repo: ["docket", "repo", "files"],
   tracker: ["docket"],
   wiki: ["wiki", "files"],
   workspace: ["docket", "wiki", "knowledge", "files", "people"],

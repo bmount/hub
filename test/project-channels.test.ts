@@ -20,7 +20,7 @@ const HOST = "acme.pimwell.test";
 
 describe("project kinds", () => {
   it("defines all capabilities in one table", () => {
-    expect(PROJECT_FEATURES).toEqual({ repo: ["docket", "repo"], tracker: ["docket"], wiki: ["wiki", "files"], workspace: ["docket", "wiki", "knowledge", "files", "people"] });
+    expect(PROJECT_FEATURES).toEqual({ repo: ["docket", "repo", "files"], tracker: ["docket"], wiki: ["wiki", "files"], workspace: ["docket", "wiki", "knowledge", "files", "people"] });
     expect(projectFeatures("channel")).toEqual([]);
     expect(() => requireProjectFeature({ slug: "docs", kind: "wiki" }, "repo")).toThrow("does not support Repository");
   });

@@ -4,7 +4,7 @@
 
 | Kind | Features |
 | --- | --- |
-| repo | Docket, repository |
+| repo | Docket, repository, files |
 | tracker | Docket |
 | wiki | Wiki pages, files |
 | workspace | Docket, wiki pages, knowledge base, files, people |

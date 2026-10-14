@@ -1,6 +1,6 @@
 # Project documents
 
-Workspace and wiki projects have a Files tab at `/<project>/documents`. Repository source browsing keeps its existing `/<project>/files` route. Readers can list, inspect history and download; members can upload to active projects. All access is tenant-scoped, with the same membership and credential checks as the API. Projects do not have a separate private-file ACL.
+Repository, workspace and wiki projects have a Files tab at `/<project>/documents`. Repository source browsing keeps its existing `/<project>/files` route. Readers can list, inspect history and download; members can upload to active projects. All access is tenant-scoped, with the same membership and credential checks as the API. Projects do not have a separate private-file ACL.
 
 ## Storage and limits
 

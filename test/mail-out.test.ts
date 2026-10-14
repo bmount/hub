@@ -402,7 +402,7 @@ describe("document mail", () => {
     expect((await w.call(cookieHeaders(reader.token, HOST), "doc.share", w.file)).status).toBe(403);
     expect((await w.call(w.pat, "doc.share", {...w.file, slug: "findings"})).status).toBe(400);
     expect((await w.call(w.pat, "doc.share", {...w.file, path: "missing.md"})).status).toBe(404);
-    expect((await w.call(w.pat, "doc.share", {...w.file, project: "site"})).status).toBe(400);
+    expect((await w.call(w.pat, "doc.share", {...w.file, project: "site"})).status).toBe(404);
     await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE tenant_id = ? AND slug = 'docs'").bind(w.t.id).run();
     expect((await w.call(w.pat, "doc.share", w.file)).status).toBe(409);
     expect(w.sent).toHaveLength(0);

@@ -284,6 +284,34 @@ describe("wiki pages", () => {
     expect((await SELF.fetch("https://blue.pimwell.test/guide/wiki/secret", {headers: cookieHeaders(outsider.token, "blue.pimwell.test")})).status).toBe(404);
     expect((await SELF.fetch("https://" + w.host + "/guide/wiki/secret")).status).toBe(404);
   });
+  it("attaches repo screenshots separately from code and denies outsiders", async () => {
+    const w = await world("repo");
+    const created = await (await w.post("work.create", {project: "guide", kind: "snag", title: "Acceptance"})).json() as any;
+    const item = created.result.item;
+    const ctx = await buildContext(new Request(`https://${w.host}/mcp`, {headers: bearer(w.member.token)}), env);
+    ctx.playground = {scopes: ["read", "write"]};
+    const params = {project: "guide", path: "evidence/screenshot.png", content_type: "image/png", expected_revision: 0, item_id: item.id, base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII="};
+    expect((await callTool(ctx, "file_put", params)).isError).toBeUndefined();
+    const file = await callTool(ctx, "file_get", {project: "guide", path: params.path});
+    expect(file.structuredContent).toMatchObject({file: {item_id: item.id}});
+    const url = "/guide/documents/download?path=evidence%2Fscreenshot.png&revision=1";
+    expect((await w.post("work.comment", {id: item.id, body: `![Acceptance](${url})`})).status).toBe(200);
+    const get = (path: string, token = w.reader.token) => SELF.fetch(`https://${w.host}${path}`, {headers: cookieHeaders(token, w.host)});
+    expect(await (await get(`/guide/w/${item.number}`)).text()).toContain(`<img src="${url.replace("&", "&amp;")}"`);
+    expect((await get("/guide/documents")).status).toBe(200);
+    const image = await get(url);
+    expect(image.status).toBe(200);
+    expect(image.headers.get("content-type")).toBe("image/png");
+    expect(image.headers.get("cache-control")).toBe("private, no-store");
+    expect((await w.post("file.put", {...params, path: "reader.png"}, w.reader.token)).status).toBe(403);
+    expect((await w.post("file.put", {...params, path: "missing.png", item_id: "00000000000000000000000000"})).status).toBe(404);
+    const outsider = await seedHuman("repo-outsider@example.com");
+    for (const path of [url, `/guide/w/${item.number}`, "/guide/documents"]) {
+      expect((await get(path, outsider.token)).status).not.toBe(200);
+      expect((await SELF.fetch(`https://${w.host}${path}`)).status).not.toBe(200);
+    }
+    expect((await w.post("file.get", {project: "guide", path: params.path}, outsider.token)).status).not.toBe(200);
+  });
   it("renders revision-pinned authenticated raster evidence authored over MCP and browser forms", async () => {
     const w = await world("workspace");
     const headers = cookieHeaders(w.member.token, w.host);
