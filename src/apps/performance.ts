@@ -138,6 +138,18 @@ export function tripAttribution(rows:PerfRow[]):PerfRow[] {
   }
   return [...groups.values()];
 }
+export function interactionPhases(ready:PerfRow[],phases:PerfRow[]):PerfRow[] {
+  const groups=new Map<string,{label:string;phase:string;total:number;n:number}>(), recorded=new Map<string,number>();
+  const keyFor=(p:PerfRow,phase:string)=>JSON.stringify([p.tenant??'',p.request,p.label,phase]);
+  for(const point of phases) {const key=keyFor(point,String(point.phase));recorded.set(key,Math.max(recorded.get(key)??0,Number(point.mean)));}
+  for(const point of ready) for(const phase of ['fetch','render','paint']) {
+    const mean=recorded.get(keyFor(point,phase)),weight=Number(point.weight);
+    if(mean===undefined||!(weight>0)) continue;
+    const key=String(point.label)+':'+phase,group=groups.get(key)??{label:String(point.label),phase,total:0,n:0};
+    group.total+=mean*weight;group.n+=weight;groups.set(key,group);
+  }
+  return [...groups.values()].map(g=>({label:g.label,phase:g.phase,mean:g.total/g.n,n:g.n}));
+}
 export type PerformanceData = {overview:PerfRow[];spark:PerfRow[];breakdown:PerfRow[];browser:PerfRow[];histogram:PerfRow[];splits:Record<string,PerfRow[]>;sql:PerfRow[];exemplars:PerfRow[];waterfall:PerfRow[];comparison:PerfRow[];triggers:PerfRow[]};
 export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, detailOnly=false):Promise<PerformanceData> {
   const scope=await performanceScope(ctx,site,s.hours,s.onlyMyOrg);
@@ -157,7 +169,10 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   ]);
   const result={...empty,overview,spark,breakdown:tripAttribution(breakdown),browser:pairedBrowser(browser,s.version),comparison};
   if(s.kind==="interactions") {
-    const phases=await query(`SELECT blob14 AS label, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'client' AND blob9 IN ('fetch','render','paint')${versionFilter} GROUP BY label, phase LIMIT 600`);
+    const ready=await query(`SELECT blob5 AS tenant, blob6 AS request, blob14 AS label, _sample_interval AS weight, timestamp AS at FROM pimwell_perf WHERE ${filter} ORDER BY at DESC LIMIT 2000`);
+    const readyScope=ready.filter(r=>/^[0-9a-f-]{36}$/.test(String(r.request))).map(r=>`(blob5 = ${quote(String(r.tenant??''))} AND blob6 = ${quote(String(r.request))})`).join(' OR ');
+    const phasePoints=readyScope?await query(`SELECT blob5 AS tenant, blob6 AS request, blob14 AS label, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'client' AND blob9 IN ('fetch','render','paint') AND (${readyScope})${versionFilter} GROUP BY tenant, request, label, phase LIMIT 5000`):[];
+    const phases=interactionPhases(ready,phasePoints);
     for(const row of overview) for(const phase of ['fetch','render','paint']) { const p=phases.find(p=>p.label===row.label&&p.phase===phase); if(p) row[phase]=p.mean!; }
   }
   if(!s.selected || !(s.kind==="deploys"?comparison:overview).some(r=>r.label===s.selected)) return result;

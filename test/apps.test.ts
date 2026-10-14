@@ -4,7 +4,7 @@ import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appsPage } from "../src/http/appsPages";
 import { sparkline, routeBreakdown } from "../src/http/performancePage";
-import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser, population, weightedMetrics, tripAttribution, type PerformanceData } from "../src/apps/performance";
+import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser, population, weightedMetrics, tripAttribution, interactionPhases, type PerformanceData } from "../src/apps/performance";
 import { buildContext } from "../src/auth/context";
 import { tenantHash } from "../src/perf";
 import { SQL_CATALOG } from "../src/perfCatalog";
@@ -83,6 +83,14 @@ describe("sites", () => {
       {tenant:'private',request:'trip',label:'docket',kind:'span',name:'d1.batch',n:1,attributed:468.6},
     ]);
     expect(bounded.reduce((sum,r)=>sum+Number(r.attributed),0)).toBeCloseTo(132);
+    const phases=interactionPhases([{tenant:'own',request:'r',label:'list.select',weight:10}],[
+      {tenant:'own',request:'r',label:'list.select',phase:'fetch',mean:130},
+      {tenant:'own',request:'r',label:'list.select',phase:'render',mean:50},
+      {tenant:'foreign',request:'r',label:'list.select',phase:'fetch',mean:1000},
+      {tenant:'own',request:'old',label:'list.select',phase:'fetch',mean:775},
+    ]);
+    expect(phases).toEqual([{label:'list.select',phase:'fetch',mean:130,n:10},{label:'list.select',phase:'render',mean:50,n:10}]);
+    expect(JSON.stringify(phases)).not.toContain('own');
   });
   it("carries a named repository through app registration, telemetry, releases and Site apps", async () => {
     const w = await world();
