@@ -4,7 +4,7 @@ import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appsPage } from "../src/http/appsPages";
 import { sparkline } from "../src/http/performancePage";
-import { clearPerformanceCache, performanceSelection, performanceScope } from "../src/apps/performance";
+import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser } from "../src/apps/performance";
 import { buildContext } from "../src/auth/context";
 import { tenantHash } from "../src/perf";
 import { SQL_CATALOG } from "../src/perfCatalog";
@@ -78,7 +78,7 @@ describe("sites", () => {
       else if(sql.includes("GROUP BY label, previous")) data=[{label:"/:project",previous:"/",...metric}];
       else if(sql.includes("AS mean")) data=[{request,label:"/:project",kind:"request",version,name:"request",phase:"GET",mean:30,n:100},{request,label:"/:project",kind:"client",version,name:"pane.swap",phase:"fetch",mean:120,n:100},{request,label:"/:project",kind:"client",version,name:"pane.swap",phase:"paint",mean:140,n:100}];
       else if(sql.includes("AS cold")) data=[{request,version,colo:"DFW",auth:"cookie",cold:0,weight:1}];
-      else if(sql.includes("SELECT blob6")) data=[{request,version,colo:"DFW",duration:100,weight:1}];
+      else if(sql.includes("blob6 AS request")) data=[{request,version,colo:"DFW",duration:100,weight:1}];
       else if(sql.includes("SELECT blob15")) data=[{fingerprint:"01234567",code,source:JSON.stringify(location),version,...metric}];
       else if(sql.includes("IF(double1 < 10")) data=[{bucket:1,n:100}];
       else if(sql.includes("double17")) data=[{label:"/:project",name:"request",kind:"request",attributed:1000,execution:0,n:100},{label:"/:project",name:"d1.first",kind:"span",attributed:2000,execution:500,known_wall:2000,execution_n:100,n:100}];
@@ -100,7 +100,11 @@ describe("sites", () => {
       expect(html).toContain("100 ms");expect(html).toContain("pricebench/files?ref="+"a".repeat(40));expect(html).toContain('id="inspector"');
       expect(html).not.toContain(measured.PERF_ANALYTICS_TOKEN);
       const hash=await tenantHash(w.t.id,measured.PERF_TENANT_KEY);
-      for(const sql of sqls) {expect(sql).toContain(`blob5 = '${hash}'`);expect(sql).toContain("blob1 = 'prices.example.com'");expect(sql).toContain("blob2 IN ('pricebench')");}
+      for(const sql of sqls) {expect(sql).not.toContain(`blob5 = '${hash}'`);expect(sql).toContain("blob1 = 'prices.example.com'");expect(sql).toContain("blob2 IN ('pricebench')");}
+      expect(html).toContain("All organizations");expect(html).toContain("Only my org");
+      const ownStart=sqls.length;const ownHtml=await (await get("&only_my_org=true&selected=%2F%3Aproject")).text();
+      expect(ownHtml).toContain('name="only_my_org" value="true"');
+      for(const sql of sqls.slice(ownStart)) expect(sql).toContain(`blob5 = '${hash}'`);
       const calls=sqls.length;await get("&selected=%2F%3Aproject");expect(sqls).toHaveLength(calls);
       const date=vi.spyOn(Date,"now").mockReturnValue(Date.now()+61_000);await get("&selected=%2F%3Aproject");date.mockRestore();expect(sqls.length).toBeGreaterThan(calls);
       expect((await (await get(`&kind=deploys&version=${version}&previous=${previous}`)).text()).replaceAll("\u00a0"," ")).toContain("+20 ms");
@@ -131,14 +135,67 @@ describe("sites", () => {
       expect((await callTool(ctx,"perf_statements",perfArgs)).structuredContent).toMatchObject({statements:[{fingerprint:"01234567",code,source:JSON.stringify(location)}]});
       expect((await callTool(ctx,"perf_exemplar",{...perfArgs,request})).structuredContent).toMatchObject({waterfall:[{request,kind:"request"},{request,kind:"client"}]});
       expect((await callTool(ctx,"perf_exemplar",{...perfArgs,request:previous})).structuredContent).toMatchObject({waterfall:[]});
-      for(const args of [{...perfArgs,hours:2},{...perfArgs,kind:"deploys"},{...perfArgs,version:"bad'"},{...perfArgs,request:"invalid"},{site:perfArgs.site}]) expect((await callTool(ctx,"perf_route",args)).isError).toBe(true);
+      for(const args of [{...perfArgs,only_my_org:"true"},{...perfArgs,hours:2},{...perfArgs,kind:"deploys"},{...perfArgs,version:"bad'"},{...perfArgs,request:"invalid"},{site:perfArgs.site}]) expect((await callTool(ctx,"perf_route",args)).isError).toBe(true);
       const queryCount=sqls.length;
-      for(const restricted of [{...ctx,mcpProject:{...w.p,id:"foreign",path:"foreign"}}, {...ctx,tenant:other}, {...ctx,identity:rootOutsider.identity,role:"root" as const}]) expect((await callTool(restricted,"perf_route",perfArgs)).isError).toBe(true);
+      for(const restricted of [{...ctx,mcpProject:{...w.p,id:"foreign",path:"foreign"}}, {...ctx,tenant:other}, {...ctx,identity:rootOutsider.identity,role:"root" as const}, {...ctx,identity:outsider.identity,role:"member" as const}]) expect((await callTool(restricted,"perf_route",perfArgs)).isError).toBe(true);
       expect(sqls).toHaveLength(queryCount);
       await ctx.db.prepare("UPDATE app_source SET state = 'disabled' WHERE tenant_id = ?").bind(w.t.id).run();
       const noCalls=sqls.length;expect(await (await get()).text()).toContain("No performance data yet");expect(sqls).toHaveLength(noCalls);
       expect(performanceSelection(new URLSearchParams())).toMatchObject({kind:"routes",hours:24});
-      for(const params of ["hours=2","kind=constructor","version=bad%27","request=invalid"]) expect(()=>performanceSelection(new URLSearchParams(params))).toThrow();
+      for(const params of ["only_my_org=1","hours=2","kind=constructor","version=bad%27","request=invalid"]) expect(()=>performanceSelection(new URLSearchParams(params))).toThrow();
+    } finally {mock.mockRestore();clearPerformanceCache();}
+  });
+  it("aggregates other organizations without exposing identities, separates population caches and keeps joins tenant-local", async () => {
+    const w=await world();
+    await w.call(w.root.token,"app.register",{project:"pricebench",script:"pricebench"});
+    await w.call(w.pat.token,"site.register",{project:"pricebench",name:"prices.example.com",hostnames:["prices.example.com"],apps:["pricebench"]});
+    const measured={...env,ARTIFACTS_ACCOUNT_ID:"a".repeat(32),PERF_ANALYTICS_TOKEN:"runtime-read-only",PERF_TENANT_KEY:"test-population-key"};
+    const own=await tenantHash(w.t.id,measured.PERF_TENANT_KEY), foreign="f".repeat(32), request="33333333-3333-4333-8333-333333333333";
+    const sqls:string[]=[];
+    clearPerformanceCache();
+    const mock=vi.spyOn(globalThis,"fetch").mockImplementation(async (_input,init)=>{
+      const sql=String(init?.body);sqls.push(sql);
+      expect(sql).toContain("blob1 = 'prices.example.com'");expect(sql).toContain("blob2 IN ('pricebench')");
+      expect(sql).not.toContain("foreign-secret-name");expect(sql).not.toContain(w.t.id);
+      const mine=sql.includes(`blob5 = '${own}'`), tenant=mine?own:foreign;
+      const metric={n:mine?10:110,p50:20,p95:100,p99:200,errors:0,total:mine?200:2200};
+      let data:Record<string,string|number>[]=[];
+      if(sql.includes("AS schema")) {expect(sql).toContain(`blob5 = '${tenant}'`);data=[{request,kind:"span",name:"d1.first",fingerprint:"abc123",duration:25,span:1,parent:0,started:1000,schema:2}];}
+      else if(sql.includes("ORDER BY duration DESC LIMIT 5")) data=[{tenant,request,duration:200,weight:1}];
+      else if(sql.includes("AS mean")) data=[{tenant:own,request,kind:"request",label:"/:project/docket",mean:20,n:10},{tenant:foreign,request,kind:"client",label:"/:project/docket",name:"network",phase:"page",mean:100,n:100}];
+      else if(sql.includes("AS cold")) data=[{tenant:own,request,colo:"DFW",auth:"cookie",cold:0,weight:1}];
+      else if(sql.includes("timestamp AS at")) data=[{tenant:foreign,request,duration:100,weight:1}];
+      else if(sql.includes("SELECT blob15")) data=[{fingerprint:"abc123",...metric}];
+      else if(sql.includes("GROUP BY label ORDER BY total")) data=[{label:sql.includes("blob14 AS label")?"pane.swap":"/:project/docket",...metric}];
+      return Response.json({data});
+    });
+    try {
+      const base=`https://${HOST}/apps?project=pricebench&site=prices.example.com&view=performance`;
+      const ctx={...await buildContext(new Request(base,{headers:cookieHeaders(w.pat.token,HOST)}),measured),playground:{scopes:["read"]}};
+      for(const name of ["perf_summary","perf_route","perf_exemplar","perf_statements","perf_compare"]) {
+        const args={site:"prices.example.com",...(name==="perf_compare"?{version:"current",previous:"previous"}:name==="perf_summary"?{}:{selected:"/:project/docket"})};
+        const all=await callTool(ctx,name,args), mine=await callTool(ctx,name,{...args,only_my_org:true});
+        expect(all.isError).not.toBe(true);expect(mine.isError).not.toBe(true);
+        expect(all.structuredContent).toMatchObject({only_my_org:false});expect(mine.structuredContent).toMatchObject({only_my_org:true});
+        if(name==="perf_summary") {
+          expect(all.structuredContent).toMatchObject({routes:[{n:110}]});expect(mine.structuredContent).toMatchObject({routes:[{n:10}]});
+        }
+        if(name==="perf_route") expect(all.structuredContent).toMatchObject({metrics:[{n:110}],browser:[]});
+        for(const secret of [foreign,own,w.t.id,"foreign-secret-name"]) {expect(JSON.stringify(all)).not.toContain(secret);expect(JSON.stringify(mine)).not.toContain(secret);}
+      }
+      const interaction=await callTool(ctx,"perf_route",{site:"prices.example.com",kind:"interactions",selected:"pane.swap"});
+      expect(interaction.structuredContent).toMatchObject({splits:{colo:[{label:"Unknown"}]}});
+      expect(sqls.some(sql=>sql.includes("SELECT blob15")&&sql.includes(`blob5 = '${foreign}'`))).toBe(true);
+      const page=await appsPage(new Request(base,{headers:cookieHeaders(w.pat.token,HOST)}),measured);
+      const html=await page.text();expect(html).toContain("110");expect(html).toContain("All organizations");
+      for(const secret of [foreign,own,"foreign-secret-name"]) expect(html).not.toContain(secret);
+      const calls=sqls.length;await callTool(ctx,"perf_summary",{site:"prices.example.com"});expect(sqls).toHaveLength(calls);
+      // Cached site-wide results do not bypass revoked membership.
+      await ctx.db.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ?").bind(w.pat.identity.id).run();
+      expect((await appsPage(new Request(base,{headers:cookieHeaders(w.pat.token,HOST)}),measured)).status).toBe(404);
+      expect((await callTool(ctx,"perf_summary",{site:"prices.example.com"})).isError).toBe(true);
+      expect(sqls).toHaveLength(calls);
+      expect(pairedBrowser([{tenant:own,request,kind:"request",label:"/:project/docket",mean:20,n:1},{tenant:foreign,request,kind:"client",phase:"page",name:"network",mean:100,n:1}])).toEqual([]);
     } finally {mock.mockRestore();clearPerformanceCache();}
   });
   it("does not expose upstream errors or credentials in the performance unavailable state", async () => {

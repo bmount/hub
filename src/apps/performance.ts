@@ -5,14 +5,16 @@ import { badRequest, notFound } from "../errors";
 
 export type PerfRow = Record<string,string|number>;
 export type PerfKind = "routes"|"verbs"|"tools"|"interactions"|"spinners"|"deploys";
-export type PerfSelection = {kind:PerfKind;hours:1|24|168;selected:string;version:string;previous:string;request:string};
+export type PerfSelection = {kind:PerfKind;hours:1|24|168;selected:string;version:string;previous:string;request:string;onlyMyOrg?:boolean};
 const dimensions = {routes:"blob8",verbs:"substring(blob14,6)",tools:"substring(blob14,5)",interactions:"blob14",spinners:"blob14",deploys:"blob8"} as const;
 export function performanceSelection(params:URLSearchParams):PerfSelection {
   const kind=params.get("kind")??"routes", hours=Number(params.get("hours")??24);
   if (!Object.hasOwn(dimensions,kind) || ![1,24,168].includes(hours)) throw badRequest("invalid performance view");
   const selected=params.get("selected")??"",version=params.get("version")??"",previous=params.get("previous")??"",request=params.get("request")??"";
   if(selected.length>200 || [version,previous].some(v=>v && !/^[a-zA-Z0-9-]{1,64}$/.test(v)) || (request && !/^[0-9a-f-]{36}$/.test(request))) throw badRequest("invalid performance selection");
-  return {kind:kind as PerfKind,hours:hours as 1|24|168,selected,version,previous,request};
+  const onlyMyOrg=params.get("only_my_org")??"false";
+  if(!["true","false"].includes(onlyMyOrg)) throw badRequest("invalid performance population");
+  return {kind:kind as PerfKind,hours:hours as 1|24|168,selected,version,previous,request,onlyMyOrg:onlyMyOrg==="true"};
 }
 export const weightedMetrics = `SUM(_sample_interval) AS n,
   quantileWeighted(0.5)(double1, _sample_interval) AS p50,
@@ -50,18 +52,18 @@ export async function analyticsQuery(ctx:Ctx, sql:string):Promise<PerfRow[]> {
 }
 export type PerfScope = {where:string;scripts:string[]};
 /** SQL credentials are account-wide; product authorization is checked before every cache lookup. */
-export async function performanceScope(ctx:Ctx, site:SiteRow, hours:number):Promise<PerfScope> {
+export async function performanceScope(ctx:Ctx, site:SiteRow, hours:number, onlyMyOrg=false):Promise<PerfScope> {
   if(!ctx.tenant || !ctx.identity || !ctx.role || site.tenant_id!==ctx.tenant.id || (ctx.mcpProject && ctx.mcpProject.id!==site.project_id)) throw notFound("no such site");
-  // Account-wide root powers are not a substitute for this view's membership boundary.
-  if(ctx.role==="root" && !await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:56:34:performanceScope:2d1e104e*/ SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(ctx.identity.id,ctx.tenant.id).first()) throw notFound("no such site");
-  const project=await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:57:23:performanceScope:e8c7cd55*/ SELECT id FROM project WHERE id = ? AND tenant_id = ? AND kind = 'repo' AND state = 'active'").bind(site.project_id,ctx.tenant.id).first();
+  // Recheck membership before cached reads; account-wide root powers do not substitute for it.
+  if(!await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:58:13:performanceScope:2d1e104e*/ SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(ctx.identity.id,ctx.tenant.id).first()) throw notFound("no such site");
+  const project=await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:59:23:performanceScope:e8c7cd55*/ SELECT id FROM project WHERE id = ? AND tenant_id = ? AND kind = 'repo' AND state = 'active'").bind(site.project_id,ctx.tenant.id).first();
   if(!project) throw notFound("no such site");
-  const scripts=(await ctx.db.prepare(`/*perf-site:src%2Fapps%2Fperformance.ts:59:24:performanceScope:7a84f38e*/ SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
+  const scripts=(await ctx.db.prepare(`/*perf-site:src%2Fapps%2Fperformance.ts:61:24:performanceScope:7a84f38e*/ SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
     WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? AND a.state = 'active' ORDER BY a.script_name`).bind(site.id,ctx.tenant.id,site.project_id).all<{script_name:string}>()).results.map(r=>r.script_name);
-  const hash=await tenantHash(ctx.tenant.id,ctx.env.PERF_TENANT_KEY??ctx.env.HUB_INTERNAL_SECRET??ctx.env.HUB_SECRETS_KEY??"");
-  if(!hash) throw new PerformanceUnavailable("Performance tenant identity is not configured.");
+  const hash=onlyMyOrg?await tenantHash(ctx.tenant.id,ctx.env.PERF_TENANT_KEY??ctx.env.HUB_INTERNAL_SECRET??ctx.env.HUB_SECRETS_KEY??""):"";
+  if(onlyMyOrg&&!hash) throw new PerformanceUnavailable("Performance tenant identity is not configured.");
   if(![1,24,168].includes(hours)) throw badRequest("invalid performance range");
-  return {scripts,where:`blob1 = ${quote(site.name)} AND blob5 = ${quote(hash)} AND blob2 IN (${scripts.length?scripts.map(quote).join(","):"''"}) AND timestamp > NOW() - INTERVAL '${hours}' HOUR`};
+  return {scripts,where:`blob1 = ${quote(site.name)} ${onlyMyOrg?`AND blob5 = ${quote(hash)} `:""}AND blob2 IN (${scripts.length?scripts.map(quote).join(","):"''"}) AND timestamp > NOW() - INTERVAL '${hours}' HOUR`};
 }
 export function population(selection:PerfSelection):string {
   const dim=dimensions[selection.kind];
@@ -72,9 +74,9 @@ export function population(selection:PerfSelection):string {
   return `blob7 = 'request' AND ${dim} != ''`;
 }
 export function pairedBrowser(rows:PerfRow[],version=""):PerfRow[] {
-  const roots=new Map(rows.filter(r=>r.kind==="request"&&(!version||r.version===version)).map(r=>[String(r.request),r]));
+  const roots=new Map(rows.filter(r=>r.kind==="request"&&(!version||r.version===version)).map(r=>[String(r.tenant??"")+":"+String(r.request),r]));
   const clients=new Map<string,PerfRow[]>();
-  for(const r of rows) if(r.kind==="client"&&roots.has(String(r.request))) {const key=String(r.request);clients.set(key,[...(clients.get(key)??[]),r]);}
+  for(const r of rows) if(r.kind==="client"&&roots.has(String(r.tenant??"")+":"+String(r.request))) {const key=String(r.tenant??"")+":"+String(r.request);clients.set(key,[...(clients.get(key)??[]),r]);}
   const groups=new Map<string,{label:string;phase:string;total:number;n:number}>();
   const add=(label:string,phase:string,value:number,n:number)=>{const key=label+":"+phase,g=groups.get(key)??{label,phase,total:0,n:0};g.total+=value*n;g.n+=n;groups.set(key,g);};
   for(const [request,points] of clients) {
@@ -96,14 +98,14 @@ export function sampleMetrics(rows:PerfRow[]):PerfRow {
   return {n,p50:quantile(0.5),p95:quantile(0.95),p99:quantile(0.99),errors:0,total:ordered.reduce((n,r)=>n+Number(r.duration)*Number(r.weight),0)};
 }
 async function originClientSplits(query:(sql:string)=>Promise<PerfRow[]>,scope:string,selected:string):Promise<Array<readonly [string,PerfRow[]]>> {
-  const points=await query(`SELECT blob6 AS request, double1 AS duration, timestamp AS at, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY at DESC LIMIT 2000`);
+  const points=await query(`SELECT blob5 AS tenant, blob6 AS request, double1 AS duration, timestamp AS at, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY at DESC LIMIT 2000`);
   const ids=[...new Set(points.map(r=>String(r.request)).filter(id=>/^[0-9a-f-]{36}$/.test(id)))];
-  const roots=ids.length?await query(`SELECT blob6 AS request, blob4 AS colo, blob3 AS version, blob11 AS auth, double2 AS cold, _sample_interval AS weight FROM pimwell_perf WHERE ${scope} AND blob7 = 'request' AND blob6 IN (${ids.map(quote).join(",")}) LIMIT 2000`):[];
-  const byRequest=new Map(roots.map(r=>[String(r.request),r]));
+  const roots=ids.length?await query(`SELECT blob5 AS tenant, blob6 AS request, blob4 AS colo, blob3 AS version, blob11 AS auth, double2 AS cold, _sample_interval AS weight FROM pimwell_perf WHERE ${scope} AND blob7 = 'request' AND blob6 IN (${ids.map(quote).join(",")}) LIMIT 2000`):[];
+  const byRequest=new Map(roots.map(r=>[String(r.tenant??"")+":"+String(r.request),r]));
   return ["colo","version","auth","isolate"].map(name=> {
     const groups=new Map<string,PerfRow[]>();
     for(const p of points) {
-      const root=byRequest.get(String(p.request)),label=root?String(root[name==="isolate"?"cold":name]??"Unknown"):"Unknown";
+      const root=byRequest.get(String(p.tenant??"")+":"+String(p.request)),label=root?String(root[name==="isolate"?"cold":name]??"Unknown"):"Unknown";
       groups.set(label,[...(groups.get(label)??[]),p]);
     }
     return [name,[...groups].map(([label,rows])=>({label,...sampleMetrics(rows)}))] as const;
@@ -111,7 +113,7 @@ async function originClientSplits(query:(sql:string)=>Promise<PerfRow[]>,scope:s
 }
 export type PerformanceData = {overview:PerfRow[];spark:PerfRow[];breakdown:PerfRow[];browser:PerfRow[];histogram:PerfRow[];splits:Record<string,PerfRow[]>;sql:PerfRow[];exemplars:PerfRow[];waterfall:PerfRow[];comparison:PerfRow[];triggers:PerfRow[]};
 export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, detailOnly=false):Promise<PerformanceData> {
-  const scope=await performanceScope(ctx,site,s.hours);
+  const scope=await performanceScope(ctx,site,s.hours,s.onlyMyOrg);
   const empty:PerformanceData={overview:[],spark:[],breakdown:[],browser:[],histogram:[],splits:{},sql:[],exemplars:[],waterfall:[],comparison:[],triggers:[]};
   if(!scope.scripts.length) return empty;
   const dim=dimensions[s.kind];
@@ -123,7 +125,7 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
     query(`SELECT ${dim} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${filter} GROUP BY label ORDER BY total DESC LIMIT 200`),
     query(`SELECT ${dim} AS label, intDiv(toUInt32(timestamp), ${bucket}) AS bucket, quantileWeighted(0.5)(double1, _sample_interval) AS p50, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${filter} GROUP BY label, bucket ORDER BY label, bucket LIMIT 3000`),
     s.kind==="routes" ? query(`SELECT blob8 AS label, blob14 AS name, blob7 AS kind, SUM(double17 * _sample_interval) AS attributed, SUM(IF(double19 > 0, double19, 0.0) * _sample_interval) AS execution, SUM(IF(double19 >= 0, double17, 0.0) * _sample_interval) AS known_wall, SUM(IF(double19 >= 0, _sample_interval, 0)) AS execution_n, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND double20 = 2 AND double18 = 0 AND blob7 IN ('request','span') AND blob14 != 'd1.statement'${s.version?` AND blob3 = ${quote(s.version)}`:""} GROUP BY label, name, kind LIMIT 2000`) : Promise.resolve([]),
-    s.kind==="routes" ? query(`SELECT blob6 AS request, blob8 AS label, blob7 AS kind, blob3 AS version, blob14 AS name, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND (blob7 = 'request' OR (blob7 = 'client' AND ((blob9 = 'page' AND blob14 IN ('network','render')) OR blob9 IN ('fetch','paint')))) GROUP BY request, label, kind, version, name, phase LIMIT 5000`) : Promise.resolve([]),
+    s.kind==="routes" ? query(`SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob7 AS kind, blob3 AS version, blob14 AS name, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND (blob7 = 'request' OR (blob7 = 'client' AND ((blob9 = 'page' AND blob14 IN ('network','render')) OR blob9 IN ('fetch','paint')))) GROUP BY tenant, request, label, kind, version, name, phase LIMIT 5000`) : Promise.resolve([]),
     s.kind==="deploys" && s.version && s.previous ? query(`SELECT blob8 AS label, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'request' AND blob3 IN (${quote(s.version)},${quote(s.previous)}) GROUP BY label, version ORDER BY label LIMIT 400`) : Promise.resolve([]),
   ]);
   const result={...empty,overview,spark,breakdown,browser:pairedBrowser(browser,s.version),comparison};
@@ -134,15 +136,17 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   const [hist,splitRows,exemplars,triggers]=await Promise.all([
     query(`SELECT ${histogram} AS bucket, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${selected} GROUP BY bucket ORDER BY bucket`),
     s.kind==="interactions"||s.kind==="spinners" ? originClientSplits(query,scope.where,selected) : Promise.all(Object.entries(splits).map(async ([name,column])=>[name,await query(`SELECT ${column} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label ORDER BY n * p50 DESC LIMIT 100`)] as const)),
-    query(`SELECT blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY duration DESC LIMIT 5`),
+    query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY duration DESC LIMIT 5`),
     s.kind==="spinners"?query(`SELECT blob8 AS label, blob19 AS previous, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label, previous ORDER BY total DESC LIMIT 20`):Promise.resolve([]),
   ]);
   const ids=exemplars.map(r=>String(r.request)).filter(id=>/^[0-9a-f-]{36}$/.test(id));
-  const statementScope=s.kind==="interactions"||s.kind==="spinners" ? `blob6 IN (${ids.length?ids.map(quote).join(","):"''"})` : `${s.kind==="verbs"?"blob12":s.kind==="tools"?"blob13":dim} = ${quote(s.selected)}`;
+  const exemplarScope=exemplars.filter(r=>ids.includes(String(r.request))).map(r=>`(blob6 = ${quote(String(r.request))}${r.tenant!==undefined?` AND blob5 = ${quote(String(r.tenant))}`:""})`).join(" OR ")||"blob6 = ''";
+  const statementScope=s.kind==="interactions"||s.kind==="spinners" ? `(${exemplarScope})` : `${s.kind==="verbs"?"blob12":s.kind==="tools"?"blob13":dim} = ${quote(s.selected)}`;
   result.sql=await query(`SELECT blob15 AS fingerprint, blob20 AS code, blob19 AS source, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'span' AND double14 = 1 AND blob15 != '' AND ${statementScope}${s.version&&s.kind!=="interactions"&&s.kind!=="spinners"?` AND blob3 = ${quote(s.version)}`:""} GROUP BY fingerprint, code, source, version ORDER BY p95 DESC LIMIT 20`);
-  result.histogram=hist;result.splits=Object.fromEntries(splitRows);result.exemplars=exemplars;result.triggers=triggers;
+  result.histogram=hist;result.splits=Object.fromEntries(splitRows);result.exemplars=exemplars.map(({tenant: _tenant,...row})=>row);result.triggers=triggers;
   const request=s.request ? ids.includes(s.request)?s.request:"" : ids[0]??"";
-  // Request IDs narrow an already-authorized scope; they never grant access to a foreign trace.
-  if(request) result.waterfall=await query(`SELECT blob6 AS request, blob7 AS kind, blob14 AS name, blob9 AS phase, IF(blob7 = 'client', blob20, blob19) AS source, IF(blob7 = 'client', '', blob20) AS code, blob15 AS fingerprint, blob3 AS version, blob2 AS worker, double1 AS duration, double3 AS span, double4 AS parent, double14 AS complete, double15 AS offset, double16 AS started, double20 AS schema, _sample_interval AS weight FROM pimwell_perf WHERE ${scope.where} AND blob6 = ${quote(request)} AND blob7 IN ('request','rpc','span','client','other') AND NOT (blob7 = 'client' AND blob14 = 'cls') ORDER BY started, span LIMIT 300`);
+  const exemplarTenant=exemplars.find(r=>r.request===request)?.tenant;
+  // Keep a client-supplied request ID within its exemplar tenant, even in site-wide views.
+  if(request) result.waterfall=await query(`SELECT blob6 AS request, blob7 AS kind, blob14 AS name, blob9 AS phase, IF(blob7 = 'client', blob20, blob19) AS source, IF(blob7 = 'client', '', blob20) AS code, blob15 AS fingerprint, blob3 AS version, blob2 AS worker, double1 AS duration, double3 AS span, double4 AS parent, double14 AS complete, double15 AS offset, double16 AS started, double20 AS schema, _sample_interval AS weight FROM pimwell_perf WHERE ${scope.where} AND blob6 = ${quote(request)}${exemplarTenant!==undefined?` AND blob5 = ${quote(String(exemplarTenant))}`:""} AND blob7 IN ('request','rpc','span','client','other') AND NOT (blob7 = 'client' AND blob14 = 'cls') ORDER BY started, span LIMIT 300`);
   return result;
 }

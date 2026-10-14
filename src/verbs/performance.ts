@@ -14,10 +14,11 @@ const descriptions = {
 };
 export const performanceVerbs = Object.entries(descriptions).map(([operation, description]) => defineVerb({
   name: `perf.${operation}`, kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: `${description} Same tenant membership, active code project and registered Worker boundaries as the Performance view. Durations are milliseconds; counts are sample-weighted.`,
+  summary: `${description} All organizations on this site by default; only_my_org restricts the population. Same owning organization membership, active code project and registered Worker boundaries as the Performance view. Durations are milliseconds; counts are sample-weighted.`,
   mcp: { scope: "read", destructive: false, title: `Performance ${operation}`, input: {
     type: "object", properties: {
       site: { type: "string", description: "Registered site name; discover with site_list." },
+      only_my_org: { type: "boolean", default: false, description: "Only the viewer’s organization; default includes every organization and unscoped traffic on this site." },
       hours: { type: "integer", enum: [1, 24, 168], default: 24 },
       ...(operation !== "summary" && operation !== "compare" ? { kind: { type: "string", enum: ["routes", "interactions", "verbs", "tools", "spinners"], default: "routes" }, selected: { type: "string", description: "Normalized route or interaction label." } } : {}),
       ...(operation !== "compare" ? { version: { type: "string" } } : { version: { type: "string" }, previous: { type: "string" } }),
@@ -31,7 +32,9 @@ export const performanceVerbs = Object.entries(descriptions).map(([operation, de
     if (i.hours !== undefined && (typeof i.hours !== "number" || ![1, 24, 168].includes(i.hours))) throw badRequest("invalid performance range");
     if (i.kind !== undefined && !["routes", "interactions", "verbs", "tools", "spinners"].includes(String(i.kind))) throw badRequest("invalid performance kind");
     for (const key of ["kind", "selected", "version", "previous", "request"]) if (i[key] !== undefined && typeof i[key] !== "string") throw badRequest(`${key} must be a string`);
+    if (i.only_my_org !== undefined && typeof i.only_my_org !== "boolean") throw badRequest("only_my_org must be a boolean");
     const params = new URLSearchParams();
+    if (i.only_my_org !== undefined) params.set("only_my_org", String(i.only_my_org));
     for (const key of ["hours", "kind", "selected", "version", "previous", "request"]) if (i[key] !== undefined) params.set(key, String(i[key]));
     if (operation === "compare") params.set("kind", "deploys");
     if (operation === "summary") { params.set("kind", "routes"); params.delete("selected"); }
@@ -42,7 +45,7 @@ export const performanceVerbs = Object.entries(descriptions).map(([operation, de
     const site = await findSite(ctx, p.site);
     try {
       const data = await readPerformance(ctx, site, p.selection, operation !== "summary" && operation !== "compare");
-      const context = { site: site.name, hours: p.selection.hours, kind: p.selection.kind, selected: p.selection.selected, version: p.selection.version, units: "milliseconds", note: "Sample-weighted observations; missing data is not zero latency. Breakdown and call sites require recorded telemetry. Interaction origin splits use up to 2000 recent points; statements use slow exemplars." };
+      const context = { site: site.name, only_my_org: !!p.selection.onlyMyOrg, hours: p.selection.hours, kind: p.selection.kind, selected: p.selection.selected, version: p.selection.version, units: "milliseconds", note: "Sample-weighted observations; missing data is not zero latency. Breakdown and call sites require recorded telemetry. Interaction origin splits use up to 2000 recent points; statements use slow exemplars." };
       if (operation === "summary") {
         const interactions = await readPerformance(ctx, site, { ...p.selection, kind: "interactions", selected: "" });
         return { ...context, routes: data.overview, interactions: interactions.overview };
