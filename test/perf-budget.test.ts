@@ -397,22 +397,25 @@ describe("isolated synthetic journeys", () => {
     expect(c.points.every(p=>p.blobs?.[6]==="synthetic")).toBe(true);
     expect(c.points[0]?.blobs?.slice(2,4)).toEqual(["synthetic-version","DFW"]);
   });
-  it.each(["new", "mapped", "missing-storage"])("avoids repeated fixture provisioning for %s while retaining storage repair", async mode => {
-    if (mode !== "new") await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id,project_id,imported_at) VALUES (?,'perf-synthetic-repo',0)").bind(SYNTHETIC_TENANT).run();
+  it.each(["new", "mapped", "missing-storage", "unmapped-backend", "healthy-unmapped"])("avoids repeated fixture provisioning for %s while retaining storage repair", async mode => {
+    if (["mapped", "missing-storage"].includes(mode)) await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id,project_id,imported_at) VALUES (?,'perf-synthetic-repo',0)").bind(SYNTHETIC_TENANT).run();
     const provision = vi.spyOn(ardi, "createRepo").mockResolvedValue();
+    const reads = vi.spyOn(env.HUB_DB, "prepare");
     let requests = 0;
     const exchange = vi.fn(async (url: string, init?: RequestInit) => {
       expect(url).toBe("https://perf-synthetic.pimwell.test/fixture.git/info/refs?service=git-upload-pack");
       expect(new Headers(init?.headers).get("authorization")).toBe("Basic synthetic-fixture-only");
       requests++;
-      if (mode === "missing-storage" && requests === 1) return new Response("missing", { status: 404 });
+      if (["new", "missing-storage", "unmapped-backend"].includes(mode) && requests === 1) return new Response("missing", { status: mode === "unmapped-backend" ? 503 : 404 });
       return new Response("001e# service=git-upload-pack\n00000000", { headers: { "content-type": "application/x-git-upload-pack-advertisement", "x-pimwell-colo": "DFW", "x-pimwell-version": "fixture-test" } });
     });
     try {
       expect(await gitLsRemote(env, exchange, "Basic synthetic-fixture-only", Date.now())).toEqual({ colo: "DFW", version: "fixture-test" });
-      expect(provision).toHaveBeenCalledTimes(mode === "mapped" ? 0 : 1);
-      expect(exchange).toHaveBeenCalledTimes(mode === "missing-storage" ? 2 : 1);
-      if (mode !== "mapped") {
+      const healthy = ["mapped", "healthy-unmapped"].includes(mode);
+      expect(provision).toHaveBeenCalledTimes(healthy ? 0 : 1);
+      expect(exchange).toHaveBeenCalledTimes(healthy ? 1 : 2);
+      if (healthy) expect(reads).not.toHaveBeenCalled();
+      if (!healthy) {
         expect(provision.mock.calls[0]![2]).toEqual({ identity_id: SYNTHETIC_MEMBER, tenant_id: SYNTHETIC_TENANT, org: "perf-synthetic", name: "fixture" });
         expect(typeof provision.mock.calls[0]![3]).toBe("number");
       }
@@ -428,10 +431,10 @@ describe("isolated synthetic journeys", () => {
   });
   it("runs the fixed browser/MCP/chat/Git journeys through live handlers and deletes ephemeral credentials", async () => {
     const c=collector(); let cookies="",current="",html="";
-    let intercept: ((request: any) => void) | undefined;
+    const browserRequests: string[] = [];
     const measured={...c.measured,SYNTHETIC_BROWSER:{} as Fetcher};
     const page={
-      setRequestInterception:async()=>{},on:(event: string, fn: (request: any) => void)=>{if(event === "request") intercept = fn;},setCookie:async(p:{value:string})=>{cookies="pmw_session="+p.value;},
+      setRequestInterception:async()=>{},on:()=>{},setCookie:async(p:{value:string})=>{cookies="pmw_session="+p.value;},
       goto:async(url:string)=>{
         current=url;
         const response=await app.fetch(new Request(url,{headers:{cookie:cookies}}),measured,c.ctx);
@@ -440,6 +443,7 @@ describe("isolated synthetic journeys", () => {
       },
       url:()=>current,$:async()=>html.includes("/assets/timing.")?{}:null,evaluate:async(_fn:unknown,url?:string,options?:RequestInit)=>{
         if(!url)return;
+        browserRequests.push(url);
         const response=await fetch(url,{...options,headers:{...options?.headers,cookie:cookies,...(new URL(url).pathname==="/mcp"?{}:{origin:new URL(url).origin})}});
         return {status:response.status,headers:Array.from(response.headers.entries()),body:await response.text()};
       }
@@ -450,6 +454,7 @@ describe("isolated synthetic journeys", () => {
     const originalFetch=globalThis.fetch;
     vi.spyOn(globalThis,"fetch").mockImplementation(async(input,init)=>{
       const request=input instanceof Request?input:new Request(input,init),url=new URL(request.url);
+      if(url.pathname.includes(".git/")) { expect(init?.redirect).toBe("manual"); }
       if(url.pathname.includes(".git/"))return new Response("001e# service=git-upload-pack\n00000000",{headers:{"content-type":"application/x-git-upload-pack-advertisement","x-pimwell-colo":"DFW","x-pimwell-version":"test-version"}});
       if(url.hostname.endsWith(".pimwell.test")||url.hostname==="pimwell.test")return app.fetch(request,measured,c.ctx);
       return originalFetch(input,init);
@@ -460,12 +465,7 @@ describe("isolated synthetic journeys", () => {
       const rows=(await env.HUB_DB.prepare("SELECT journey,failed FROM synthetic_run ORDER BY journey").all<{journey:string;failed:number}>()).results;
       expect(rows).toEqual([...SYNTHETIC_JOURNEYS].sort().map(journey=>({journey,failed:0})));
       expect(close).toHaveBeenCalledOnce();
-      const forwardedHeaders: Array<Record<string, string>> = [];
-      const check = (url: string) => intercept!({ url: () => url, headers: () => ({ "x-pimwell-synthetic": "discarded" }), continue: ({ headers }: { headers: Record<string, string> }) => { forwardedHeaders.push(headers); }, abort: () => {} });
-      check("https://perf-synthetic.pimwell.test/fixture.git/info/refs?service=git-upload-pack");
-      check("https://pimwell.test/login");
-      expect(Object.hasOwn(forwardedHeaders[0]!, "x-pimwell-synthetic")).toBe(false);
-      expect(Object.hasOwn(forwardedHeaders[1]!, "x-pimwell-synthetic")).toBe(true);
+      expect(browserRequests.some(url => url.includes(".git/info/refs"))).toBe(false);
       expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM oauth_grant WHERE identity_id = ?").bind(SYNTHETIC_MEMBER).first("n")).toBe(0);
       expect(await env.OAUTH_KV.list({prefix:"client:"})).toMatchObject({keys:[]});
     } finally {vi.restoreAllMocks();}

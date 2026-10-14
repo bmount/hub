@@ -77,16 +77,14 @@ function metadata(response: Response | null, env: Env): Pick<Observation,"versio
 
 /** Fixed fixture setup and the public exchange are both inside the Git journey timer. */
 export async function gitLsRemote(env: Env, journeyFetch: (url: string, init?: RequestInit) => Promise<Response>, authorization: string, now: number): Promise<Pick<Observation, "version" | "colo">> {
-  // A mapped fixture was already provisioned. The public Git handler still checks
-  // live storage ownership, so another provisioning info call/write is redundant.
-  const mapped = !!await env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:82:26:gitLsRemote:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = 'perf-synthetic-repo'").bind(SYNTHETIC_TENANT).first();
   const provision = () => createRepo(env, env.HUB_DB, { identity_id: SYNTHETIC_MEMBER, tenant_id: SYNTHETIC_TENANT, org: "perf-synthetic", name: "fixture" }, now);
-  if (!mapped) await provision();
   const exchange = () => journeyFetch(`https://perf-synthetic.${env.HUB_DOMAIN}/fixture.git/info/refs?service=git-upload-pack`, { headers: { authorization }, signal: AbortSignal.timeout(25_000) });
   let response = await exchange();
-  // Preserve recovery if storage disappeared behind a still-present local marker.
-  // Never retry permission/ownership failures with provisioning authority.
-  if (mapped && response.status === 404) {
+  // A successful public exchange already checked routing, caller and ownership.
+  // Only inspect provisioning state after an error: an unmapped new fixture may
+  // be fenced off from the retired backend with 503 rather than storage 404.
+  const missingMapping = response.status === 503 && !await env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:86:60:gitLsRemote:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = 'perf-synthetic-repo'").bind(SYNTHETIC_TENANT).first();
+  if (response.status === 404 || missingMapping) {
     await response.body?.cancel();await provision();response = await exchange();
   }
   if (!response.ok || !response.headers.get("content-type")?.includes("application/x-git-upload-pack-advertisement")) throw new Error("Synthetic Git failed");
@@ -114,11 +112,7 @@ export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<voi
     page.on("request", request => {
       const url = new URL(request.url());
       if (!([env.HUB_DOMAIN, `perf-synthetic.${env.HUB_DOMAIN}`].includes(url.hostname)) || url.protocol !== "https:") { void request.abort(); return; }
-      const headers: Record<string,string> = { ...request.headers() };
-      // Git already classifies this fixed tenant as synthetic. Its marker would
-      // repeat a live session lookup before the independently authorized exchange.
-      if (url.hostname === `perf-synthetic.${env.HUB_DOMAIN}` && url.pathname === "/fixture.git/info/refs") delete headers["x-pimwell-synthetic"];
-      else headers["x-pimwell-synthetic"] = web!.token;
+      const headers: Record<string,string> = { ...request.headers(), "x-pimwell-synthetic": web!.token };
       // Headless MCP clients have no Origin. Keep the server browser-origin policy unchanged.
       if (url.pathname === "/mcp") delete headers.origin;
       void request.continue({ headers });
@@ -173,15 +167,15 @@ export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<voi
     let posted = false;
     await observe("chat-post", async () => { const result = await api("chat.post", { c: "synthetic", body: `Synthetic check ${Math.floor(now/300_000)}`, idempotency_key: `synthetic-${Math.floor(now/300_000)}` }); posted = true; return result.info; });
     await observe("chat-read", async () => { const result = await api("chat.read", { c: "synthetic", limit: 1 }); if (!posted || !JSON.stringify(result.data).includes(`Synthetic check ${Math.floor(now/300_000)}`)) throw new Error("Synthetic read did not see post"); return result.info; });
-    await observe("git-ls-remote", () => gitLsRemote(env, journeyFetch, `Basic ${btoa("synthetic:"+git!.token)}`, now));
+    await observe("git-ls-remote", () => gitLsRemote(env, (url, options) => fetch(url, { ...options, redirect: "manual" }), `Basic ${btoa("synthetic:"+git!.token)}`, now));
   } catch { /* Setup failures are observations, never swallowed as a successful tick. */ }
   finally {
     try { await browser?.close(); } catch { /* credentials still expire */ }
     try { await mcp?.close(); } catch { /* D1 grant expiry is the authorization boundary */ }
     await env.HUB_DB.batch([
-      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:182:7:runSynthetic:3e8499a3*/ UPDATE event SET session_id = NULL WHERE identity_id = ?").bind(SYNTHETIC_MEMBER),
-      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:183:7:runSynthetic:ab06c962*/ DELETE FROM oauth_grant WHERE identity_id = ? AND (expires_at <= ? OR approved_by_session_id = ?)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? ""),
-      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:184:7:runSynthetic:7986d436*/ DELETE FROM session WHERE identity_id = ? AND (expires_at <= ? OR id IN (?, ?)) AND id NOT IN (SELECT session_id FROM oauth_grant)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? "", git?.id ?? ""),
+      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:176:7:runSynthetic:3e8499a3*/ UPDATE event SET session_id = NULL WHERE identity_id = ?").bind(SYNTHETIC_MEMBER),
+      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:177:7:runSynthetic:ab06c962*/ DELETE FROM oauth_grant WHERE identity_id = ? AND (expires_at <= ? OR approved_by_session_id = ?)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? ""),
+      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:178:7:runSynthetic:7986d436*/ DELETE FROM session WHERE identity_id = ? AND (expires_at <= ? OR id IN (?, ?)) AND id NOT IN (SELECT session_id FROM oauth_grant)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? "", git?.id ?? ""),
     ]);
     for (const journey of SYNTHETIC_JOURNEYS) if (!completed.has(journey)) await recordSynthetic(env, journey, { ...origin, duration: Math.max(0,Date.now()-now), failed: true });
   }
