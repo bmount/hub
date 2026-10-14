@@ -9,6 +9,31 @@ import { seedTenant } from "./helpers";
 const forwarded = (res: Response) => res.headers.get("x-ardi-stub") === "1";
 
 describe("git forwarding to Ardi", () => {
+  it("overlaps the hub tenant lookup with its independently authorizing Git service", async () => {
+    const tenant = await seedTenant("acme");
+    let release!: () => void;
+    const started = new Promise<void>(resolve => { release = resolve; });
+    const configured = { ...env,
+      HUB_DB: { prepare: () => ({ bind: () => ({ first: async () => { await started; return tenant; } }) }) },
+      GIT_PROXY: { fetch: async () => { release(); return new Response("Git service response"); } },
+    } as any;
+    const response = await forwardGit(new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack"), configured);
+    expect(await response!.text()).toBe("Git service response");
+  });
+  it("discards proxy responses and errors for missing or inactive tenants", async () => {
+    const tenant = await seedTenant("acme");
+    await env.HUB_DB.prepare("UPDATE tenant SET state='archived' WHERE id=?").bind(tenant.id).run();
+    let cancelled = 0;
+    const configured = { ...env, GIT_PROXY: { fetch: async () => new Response(new ReadableStream({ cancel() { cancelled++; } })) } } as any;
+    for (const host of ["acme", "missing"]) {
+      expect((await forwardGit(new Request(`https://${host}.pimwell.test/site.git/info/refs?service=git-upload-pack`), configured))!.status).toBe(404);
+    }
+    expect(cancelled).toBe(2);
+    configured.GIT_PROXY.fetch = async () => { throw new Error("proxy unavailable"); };
+    expect((await forwardGit(new Request("https://missing.pimwell.test/site.git/info/refs?service=git-upload-pack"), configured))!.status).toBe(404);
+    await env.HUB_DB.prepare("UPDATE tenant SET state='active' WHERE id=?").bind(tenant.id).run();
+    await expect(forwardGit(new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack"), configured)).rejects.toThrow("proxy unavailable");
+  });
   it("forwards info/refs on an active tenant host unchanged", async () => {
     await seedTenant("acme");
     const res = await SELF.fetch("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", {

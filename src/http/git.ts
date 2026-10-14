@@ -24,10 +24,22 @@ export async function forwardGit(request: Request, env: Env): Promise<Response |
   if (!isGitPath(url.pathname)) return null;
   const host = classifyHost(request.headers.get("host") ?? url.host, env.HUB_DOMAIN);
   if (host.kind !== "tenant") return null;
-  const tenant = await getTenantBySlug(env.HUB_DB, host.slug);
-  if (!tenant || tenant.state !== "active") return notFoundPage();
+  // The Git service independently checks the live tenant and caller. Overlap its
+  // work with the hub's routing/tracing lookup, but gate every returned response
+  // on this lookup too; an inactive tenant must not inherit a proxy response.
+  const [tenant, forwarded] = await Promise.all([
+    getTenantBySlug(env.HUB_DB, host.slug),
+    env.GIT_PROXY ? Promise.resolve().then(() => env.GIT_PROXY!.fetch(request)).then(response => ({ response }), error => ({ error })) : undefined,
+  ]);
+  if (!tenant || tenant.state !== "active") {
+    if (forwarded && "response" in forwarded) await forwarded.response.body?.cancel().catch(() => {});
+    return notFoundPage();
+  }
   traceFields({ tenant: tenant.id, auth: "git", route: "/:repo.git/*" });
-  if (env.GIT_PROXY) return env.GIT_PROXY.fetch(request);
+  if (forwarded) {
+    if ("error" in forwarded) throw forwarded.error;
+    return forwarded.response;
+  }
   // An agent's own source is only ever on Artifacts.
   if (url.pathname.startsWith("/agent-src/")) return env.GIT_BACKEND === "artifacts" ? artifactGit(request, env, tenant.slug) : notFoundPage();
   if (await usesArtifacts(env, tenant.slug, url.pathname.slice(1, url.pathname.indexOf(".git/")))) return artifactGit(request, env, tenant.slug);

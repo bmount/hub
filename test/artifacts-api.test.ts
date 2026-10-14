@@ -83,9 +83,10 @@ async function setup(role: "member" | "reader" = "member") {
 
 describe("Artifacts compatibility adapter", () => {
   it("reuses the live ownership metadata for HEAD normalization without log lookups", async () => {
-    const s = await setup();
+    const s = await setup(), batch = vi.spyOn(s.configured.HUB_DB, "batch");
     const response = await artifactGit(new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: s.auth } }), s.configured, "acme");
     expect(response.status).toBe(200);expect(await response.text()).toContain(`${hash(4)} HEAD`);
+    expect(batch).toHaveBeenCalledTimes(1);expect(batch.mock.calls[0]![0]).toHaveLength(8);
     expect(s.requests.filter(path => path.endsWith("/repos/site"))).toHaveLength(1);
     expect(s.requests.filter(path => path.endsWith("/log"))).toHaveLength(0);
     await clearArtifactTokensForTest(true);

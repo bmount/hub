@@ -24,12 +24,14 @@ permission before publishing. Non-default repositories use the same private
 staging, append-only history validation, rewrite preservation and protected
 branch/tag rules as the default. See [git-history.md](git-history.md).
 Agent source repositories retain their separate, narrower access rules.
-Git caller authorization reads the live session, tenant, identity, parent token,
-agent/operator memberships and operator in one D1 batch. The existing credential
+Git authorization reads the live session, tenant, identity, parent token,
+agent/operator memberships, operator, active project and tenant-scoped storage
+mapping in one D1 batch (caller-only reads omit the project lookup). The existing credential
 policy and role caps consume that request-local snapshot; none of those rows are
-cached between requests. Git routing overlaps its independent tenant/backend reads,
-and repository authorization resolves the active project and tenant-scoped storage
-mapping in one joined read.
+cached between requests. Git routing overlaps its independent tenant/backend reads.
+The hub overlaps its own tenant/tracing lookup with the Git service, which still
+independently validates the tenant and caller; the hub also checks its tenant
+result and discards any proxy response for a missing or inactive organization.
 
 ## Reading, review and references
 
