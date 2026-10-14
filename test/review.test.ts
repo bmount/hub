@@ -179,7 +179,7 @@ describe("recorded review/work evidence", () => {
     expect(page).not.toContain('<img src=x');
     expect(page).not.toContain("Moving-tip-only work");
     expect(page).not.toContain("Unrelated work");
-    expect(page).toContain("not proof that this work was reviewed, approved or completed");
+    expect(page).not.toContain("not proof that this work was reviewed, approved or completed");
     const { grant } = await seedGrant(w.t, reader);
     const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
     const mcp = await callTool(ctx, "review_read", { id: "site!1" });

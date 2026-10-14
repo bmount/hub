@@ -246,9 +246,9 @@ export async function permalinkPage(request: Request, env: Env, msgId: string): 
       .bind(msgId, msgId, pc.ctx.tenant!.id, ch.project_id, msgId, msgId)
       .all<{ id: string; project: string; number: number; kind: WorkKind; state: WorkState; title: string; relationship: "filed" | "linked" }>();
     const work = related.results.slice(0, 50);
-    const workHtml = `<h2>Recorded work</h2><p>Recorded associations do not prove that a message authorized, approved or completed the work.</p>
+    const workHtml = `<h2>Recorded work</h2>
 ${work.length ? `<table><tbody>${work.map(w => `<tr><td>${esc(w.project)}#${w.number}</td><td>${esc(KINDS[w.kind].name)}</td><td><a href="/${esc(encodeURIComponent(w.project))}/w/${w.number}">${esc(w.title)}</a></td><td>${esc(STATES[w.state])}</td><td>${w.relationship}</td></tr>`).join("")}</tbody></table>` : "<p>No work associations recorded for this message.</p>"}
-<p>${work.length} related work items shown${related.results.length > 50 ? "; capped at 50, more omitted" : "; complete for recorded associations"}.</p>`;
+<p>${work.length} related work items shown${related.results.length > 50 ? "; capped at 50, more omitted" : ""}.</p>`;
     const body = `<h1>#${esc(h.channel)} message #${h.seq}</h1>${NAV}<p><a href="/c/${esc(h.channel)}/t/${h.seq}">in context</a></p>${versions}${workHtml}`;
     return htmlResponse(page(`#${h.channel} #${h.seq}`, body, shellFor(pc.ctx, env, "chat")), 200, pc.extra);
   } catch (e) {

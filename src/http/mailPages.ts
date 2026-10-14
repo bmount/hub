@@ -81,7 +81,7 @@ ${rows.length ? kitTable("Mail", [{label:"To"},{label:"From",className:"hide-s"}
 ${inspectorSection("Message", [{label:"From",html:address(m.from_email)},{label:"To",html:address(m.to_address)},{label:"Attachments",html:atts.length ? atts.map(a => `${esc(a.filename ?? "unnamed")} (${esc(a.mime_type)}, ${a.size} bytes)`).join(", ") : "none"}])}
 ${release}
 ${workSection("Filed from this", relatedWork.filter(w => w.relationship === "filed"))}${workSection("Linked to this", relatedWork.filter(w => w.relationship === "linked"))}
-${relatedWork.length ? `<p class="lede">${relatedWorkCoverage.shown} related work items shown${relatedWorkCoverage.truncated ? `; capped at ${relatedWorkCoverage.limit}, more omitted` : "; complete for recorded associations"}. Recorded associations are not proof that this mail authorized the work.</p>` : ""}
+${relatedWork.length ? `<p class="lede">${relatedWorkCoverage.shown} related work items shown${relatedWorkCoverage.truncated ? `; capped at ${relatedWorkCoverage.limit}, more omitted` : ""}.</p>` : ""}
 ${toolbar("Message actions", (m.verdict === "admitted" && !m.recipient_id && ctx.identity.kind === "human" && rank(ctx.role) >= rank("member") && sendingOn && ctx.now - m.received_at <= 30 * 86_400_000 ? '<a class="button quiet" href="#reply">Reply</a>' : "") + propose)}
 ${intent.html}
 <pre class="mail-message-text">${esc(m.text)}</pre>

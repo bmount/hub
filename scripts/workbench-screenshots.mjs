@@ -259,6 +259,12 @@ try {
         await expect(page.locator('#explorer')).toContainText('Code');
         for (const repo of ['default','api','web']) await expect(page.locator(`#explorer a[href$="/sample/code?repo=${repo}"]`).first()).toBeVisible();
         await expect(page.locator('#explorer button[aria-label*="clone URL"]')).toHaveCount(3);
+        await expect(page.locator('#explorer a[href$="/sample/documents"]')).toContainText('Attachments');
+        const selectedRepo = new URL(page.url()).searchParams.get('repo') || 'default';
+        for (const repo of ['default','api','web']) {
+          const details = page.locator(`#explorer summary a[href$="/sample/code?repo=${repo}"]`).locator('..').locator('..');
+          if (['multiSidebar','multiCode','multiCommit','multiFiles','multiReviews'].includes(name)) expect(await details.evaluate(el => el.open), name+' '+page.url()+' '+repo+' expansion').toBe(repo === selectedRepo);
+        }
         if (name === 'multiSidebar' && viewport.width >= 1280) await page.locator('#explorer summary a[href$="/sample/code"]').evaluate(el => el.scrollIntoView({block:'start'}));
         if (name === 'multiItem') await expect(page.locator('#inspector a[href$="/sample/code?c='+ 'b'.repeat(40)+'&repo=api"]')).toContainText('sample/api@');
         if (name === 'multiCode') {
@@ -284,6 +290,24 @@ try {
         await expect(time).not.toContainText('UTC');
         await expect(time).toHaveAttribute('title', /.+/);
         await expect(time).not.toContainText(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/);
+      }
+      // Measure every word/number in rendered table cells, not just CSS declarations.
+      if (phase === 'after') {
+        const broken = await page.locator('td, th').evaluateAll(cells => cells.flatMap(cell => {
+          const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+          const failures = [];
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            for (const match of node.textContent.matchAll(/[\p{L}\p{N}_#]+/gu)) {
+              const range = document.createRange();
+              range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
+              const lines = new Set([...range.getClientRects()].filter(r => r.width && r.height).map(r => Math.round(r.top)));
+              if (lines.size > 1) failures.push(match[0]);
+            }
+          }
+          return failures;
+        }));
+        expect(broken, name+' mid-word table wrapping at '+label).toEqual([]);
       }
       await page.screenshot({path:path.join(artifacts,`${phase}-${name}-${label}.png`),fullPage:false});
       await flushTiming();

@@ -11,11 +11,11 @@ export const COMPONENTS_CSS = `
 .wb-toolbar{padding:var(--space-1) 0;border-bottom:var(--separator) solid var(--line);margin-bottom:var(--space-2);justify-content:space-between}
 .wb-filters{min-width:0;max-width:100%}.wb-filters .filters{margin:0}.wb-filters label{max-width:100%}.wb-filters select{max-width:200px}
 .wb-count{margin-left:var(--space-2);color:var(--muted);font-variant-numeric:tabular-nums}
-.wb-table-wrap{max-width:100%;overflow-x:auto}.wb-table{width:100%;border-collapse:collapse}
-.wb-table th{white-space:nowrap}.wb-table th,.wb-table td{height:var(--row-h);padding:3px var(--space-2);border-bottom:var(--separator) solid var(--line)}
+.wb-table-wrap{max-width:100%;overflow-x:auto}.wb-table{width:100%;border-collapse:collapse;table-layout:auto}
+.pane table th,.pane table td,.pane table th *,.pane table td *{overflow-wrap:normal;word-break:normal;hyphens:none}.perf-waterfall span{white-space:nowrap}.wb-table th{white-space:nowrap}.wb-table th,.wb-table td{height:var(--row-h);padding:3px var(--space-2);border-bottom:var(--separator) solid var(--line)}
 .pane{overflow-wrap:anywhere}
 .perf-stack{display:block;min-width:100px;margin-top:4px}.perf-spark{display:block}.perf-waterfall{padding:var(--space-2) 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.perf-waterfall strong,.perf-waterfall span,.perf-waterfall small{display:block}.perf-waterfall span,.perf-waterfall small{font-size:var(--fs-sm);color:var(--muted)}.perf-waterfall svg{display:block;margin:4px 0}#inspector h1 code{overflow-wrap:anywhere}#inspector pre{overflow-wrap:anywhere}
-.wb-code .wb-table{font-family:var(--mono)}.wb-code .wb-table td{padding:0 var(--space-2);height:auto;white-space:pre-wrap;overflow-wrap:anywhere}.wb-code code{font-size:var(--fs-sm);background:none;padding:0}.wb-code .ln{color:var(--faint);width:1%;white-space:nowrap!important;text-align:right;user-select:none}.wb-code .ins{background:var(--add-bg)}.wb-code .dl{background:var(--del-bg)}.wb-code .hunk{background:var(--sunk);color:var(--muted)}
+.wb-code .wb-table{font-family:var(--mono)}.wb-code .wb-table td{padding:0 var(--space-2);height:auto;white-space:pre;overflow-wrap:normal}.wb-code code{font-size:var(--fs-sm);background:none;padding:0}.wb-code .ln{color:var(--faint);width:1%;white-space:nowrap!important;text-align:right;user-select:none}.wb-code .ins{background:var(--add-bg)}.wb-code .dl{background:var(--del-bg)}.wb-code .hunk{background:var(--sunk);color:var(--muted)}
 .wb-table tr[aria-selected=true]{background:var(--accent-soft)}
 .wb-table tr[data-href]:hover{background:var(--sunk)}
 .wb-tree ul{list-style:none;padding:0;margin:0}

@@ -437,7 +437,7 @@ describe("deployment/work associations", () => {
     expect(page).toContain("&lt;img src=x onerror=&quot;evil()&quot;&gt;Commit evidence");
     expect(page).not.toContain('<img src=x');
     expect(page).not.toContain("Unsupported association");
-    expect(page).toContain("not proof of feature delivery");
+    expect(page).not.toContain("not proof of feature delivery");
     const { grant } = await seedGrant(w.t, reader);
     const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
     const mcp = await callTool(ctx, "deploy_read", { id });
@@ -538,7 +538,7 @@ describe("deployment record inspection", () => {
     expect(page).toContain(`href="/pricebench/code?c=${sha.toLowerCase()}"`);
     expect(page).toContain("&lt;/pre&gt;&lt;script&gt;evil()&lt;/script&gt;");
     expect(page).not.toContain('</pre><script>evil()');
-    expect(page).toContain("not proof of live rollout");
+    expect(page).not.toContain("not proof of live rollout");
     const { grant } = await seedGrant(w.t, reader);
     const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
     const mcp = await callTool(ctx, "deploy_read", { id });
@@ -739,7 +739,7 @@ describe("recorded app-error work evidence", () => {
     expect(page).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;Linked work");
     expect(page).not.toContain('<img src=x');
     expect(page).not.toContain("Unrelated work");
-    expect(page).toContain("Recorded associations do not prove these logs authorized the work");
+    expect(page).not.toContain("Recorded associations do not prove these logs authorized the work");
     const workPage = await (await SELF.fetch(`https://${HOST}/pricebench/w/${filed.number}`, { headers: cookieHeaders(reader.token, HOST) })).text();
     expect(workPage).toContain(`<a href="${w.url}">Recorded URL</a>`);
     const { grant } = await seedGrant(w.t, reader);

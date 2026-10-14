@@ -44,7 +44,7 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
     if (!el) return;
     try {
       var state = JSON.parse(sessionStorage.getItem(explorerKey(el)) || "null");
-      if (state) { $$("details", el).forEach(function (d) { var key = branchKey(d); if (Object.prototype.hasOwnProperty.call(state.branches, key)) d.open = state.branches[key]; }); el.scrollTop = state.top; }
+      if (state) { $$("details", el).forEach(function (d) { var key = branchKey(d); if (!new URL(key, location.href).searchParams.has("repo") && Object.prototype.hasOwnProperty.call(state.branches, key)) d.open = state.branches[key]; }); el.scrollTop = state.top; }
     } catch (e) {}
     if (el.getAttribute("data-in-project") === "1") document.cookie = "pmw_project=" + encodeURIComponent(el.getAttribute("data-preference") + ":" + el.getAttribute("data-project")) + "; Path=/; SameSite=Lax; Secure";
   }

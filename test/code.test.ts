@@ -92,8 +92,8 @@ describe("recorded commit/work evidence", () => {
     const code = await (await get(`/site/code?repo=api&c=${B}`)).text();
     expect(code).toContain('Copy api clone URL');
     expect(code).toContain('https://acme.pimwell.test/site/api.git');
-    expect(code).toContain('default · default');
-    expect(code.indexOf('default · default')).toBeLessThan(code.indexOf('Copy api clone URL'));
+    expect(code).toContain('site</a><small class="quiet">default</small>');
+    expect(code.indexOf('site</a><small class="quiet">default</small>')).toBeLessThan(code.indexOf('Copy api clone URL'));
     expect(code).toContain('href="/site/files?repo=api"');
     expect(code).toContain('name="repo" value="api"');
     expect(code).toContain('action="/api/repo.create"');
@@ -143,7 +143,7 @@ describe("recorded commit/work evidence", () => {
     expect(page).toContain("&lt;img src=x onerror=&quot;evil()&quot;&gt;Commit work");
     expect(page).not.toContain('<img src=x');
     expect(page).not.toContain("Unsupported");
-    expect(page).toContain("do not prove that this commit completes, reviews or approves the work");
+    expect(page).not.toContain("do not prove that this commit completes, reviews or approves the work");
     const { grant } = await seedGrant(w.t, reader);
     const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
     const mcp = await callTool(ctx, "repo_commit", { project: "site", oid: B });
@@ -181,7 +181,7 @@ describe("recorded commit/work evidence", () => {
     expect(capped.relatedWorkCoverage).toEqual({ limit: 50, shown: 50, truncated: true });
     expect((capped.relatedWork as Array<{ id: string }>).map(r => r.id)).toEqual(Array.from({ length: 50 }, (_, n) => `work-${String(50 - n).padStart(3, "0")}`));
     const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
-    expect(page).toContain("capped at 50, more omitted");
+    expect(page).toContain("Showing 50; more omitted");
     expect(page).not.toContain("private-project");
     expect(page).not.toContain("private-channel");
     const ctx = await buildContext(new Request(`https://${HOST}/`, { headers: w.h }), env);
@@ -253,7 +253,7 @@ describe("recorded commit deployment evidence", () => {
     expect(page).toContain("Exact&lt;script&gt;evil()&lt;/script&gt;");
     expect(page).not.toContain("Exact<script>");
     expect(page).not.toContain("<dt>Shipped</dt>");
-    expect(page).toContain("do not prove live rollout");
+    expect(page).not.toContain("do not prove live rollout");
   });
 
   it("reports empty, exactly full and truncated samples with stable ties and invalid rows excluded before limits", async () => {
@@ -281,7 +281,7 @@ describe("recorded commit deployment evidence", () => {
     expect(capped.since.map(d => d.script)).toEqual(Array.from({ length: 10 }, (_, n) => `row-${String(n).padStart(3, "0")}`));
     expect(capped.errors.map(g => g.id)).toEqual(capped.since.map(d => d.script));
     const page = await (await SELF.fetch(`https://${HOST}/site/code?c=${B}`, { headers: w.h })).text();
-    expect(page.match(/capped at 10, more omitted/g)).toHaveLength(2);
+    expect(page.match(/More omitted/g)).toHaveLength(2);
     expect(page).not.toContain("row-100");
   });
 });

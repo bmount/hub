@@ -67,7 +67,7 @@ describe("mail and work evidence navigation", () => {
     const inspector = page.slice(page.indexOf('id="inspector"'));
     expect(inspector).not.toContain("Unrelated task");
     expect(inspector.match(/>Filed task<\/a>/g)).toHaveLength(1);
-    expect(page).toContain("not proof that this mail authorized the work");
+    expect(page).not.toContain("not proof that this mail authorized the work");
     const { grant } = await seedGrant(w.t, w.pat);
     const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read"], { now: Date.now(), ip: "203.0.113.1" });
     const result = await callTool(ctx, "mail_read", { id });

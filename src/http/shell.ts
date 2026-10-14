@@ -117,7 +117,7 @@ function projectExplorer(ctx: Ctx, env: Env): string {
     const q = `?repo=${encodeURIComponent(r.name)}`;
     const clone = `https://${ctx.tenant!.slug}.${env.HUB_DOMAIN}/${p.path}${r.is_default ? "" : `/${r.name}`}.git`;
     const repoNode = (label: string, view: string): TreeNode => ({label, href:`${base}/${view}${q}`, current: pathname === `${base}/${view}` && (url.searchParams.get("repo") === r.name || (!url.searchParams.has("repo") && !!r.is_default))});
-    return {...repoNode(r.name + (r.is_default ? " · default" : ""), "code"), expanded:true,
+    return {...repoNode(r.is_default && r.name === "default" ? p.path.split("/").pop()! : r.name, "code"), badge: r.is_default ? "default" : undefined, expanded: url.searchParams.get("repo") === r.name || (!url.searchParams.has("repo") && !!r.is_default),
       afterHtml:`<div class="project-endpoints"><div><code id="repo-clone-${i}" title="${esc(clone)}">${esc(clone)}</code><button type="button" class="quiet" data-copy="#repo-clone-${i}" aria-label="Copy ${esc(r.name)} clone URL">⧉</button></div></div>`,
       children:[repoNode("Files", "files"),repoNode("Commits", "code"),repoNode("Reviews", "reviews")]};
   })});
@@ -127,7 +127,7 @@ function projectExplorer(ctx: Ctx, env: Env): string {
   }
   if (features.includes("wiki")) nodes.push(node("Wiki", `${base}/wiki`, p.wiki));
   if (features.includes("knowledge")) nodes.push({...node("Knowledge base and research", `${base}/wiki`, p.wiki), expanded: true, children: [node("Knowledge base", `${base}/wiki`, p.wiki - p.research), node("Research", `${base}/wiki?view=research`, p.research)]});
-  if (features.includes("files")) nodes.push(node("Files", `${base}/documents`, p.files));
+  if (features.includes("files")) nodes.push(node(features.includes("repo") || p.repositories?.length ? "Attachments" : "Files", `${base}/documents`, p.files));
   if (features.includes("people")) nodes.push(node("Contacts and graph", `${base}/contacts`, p.contacts));
   nodes.push({...node("Channels", "/c", p.channels.length), expanded: true, children: p.channels.sort((a,b)=>a.display_name.localeCompare(b.display_name,undefined,{numeric:true})).map(c => node(c.display_name, `/c/${encodeURIComponent(c.slug)}`, c.count))});
   const address = `${ctx.tenant!.slug}.${p.path.replace("/", ".")}@${env.HUB_DOMAIN}`;
