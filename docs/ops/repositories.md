@@ -33,6 +33,16 @@ Agent source repositories retain their separate, narrower access rules.
 is supplied. Search matches carry the repository; the overall limit bounds the
 combined matching-line result, with per-repository results and coverage included.
 
+Artifacts file views use one request-local authorized repository read for directory
+identification and file retrieval. Immutable commit metadata, trees and bounded
+file contents are cached with account, tenant ID, project ID and storage repository
+in the key. Full-commit file/directory results can skip upstream resolution on a
+warm hit, but only after a fresh caller and repository-mapping check. Cold reads
+verify the storage ownership marker; indexed commits can supply their root tree.
+Branches, tags and HEAD are resolved afresh, never cached as immutable revisions.
+Browser readers reuse their current live authorization rather than minting a second
+Git credential. Agent-source repositories retain their narrower live grant checks.
+
 Commit references are `<project>@<full-sha>` for the default and
 `<project>/<name>@<full-sha>` otherwise. Push sync tracks named repositories
 independently and links commit mentions of `<project>#<number>` to work items,

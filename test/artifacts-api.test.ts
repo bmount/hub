@@ -13,7 +13,11 @@ import { packet } from "../src/code/gitProtocol";
 import { seedHuman, seedTenant } from "./helpers";
 import { createHash } from "node:crypto";
 import { deflateSync } from "node:zlib";
-import { searchFiles } from "../src/verbs/code";
+import { repoFile, searchFiles } from "../src/verbs/code";
+import { buildContext } from "../src/auth/context";
+import { runVerb } from "../src/verbs/dispatch";
+import type { VerbDef } from "../src/verbs/table";
+import { bearer, cookieHeaders, seedAgent } from "./helpers";
 
 const hash = (n: number) => n.toString(16).padStart(40, "0");
 const account = "0".repeat(32);
@@ -39,6 +43,7 @@ async function setup(role: "member" | "reader" = "member") {
   let description = owned;
   const requests: string[] = [];
   let uploadPack: Uint8Array | null = null;
+  let head = hash(4);
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = new URL(String(input));requests.push(url.pathname);
     if (url.pathname.endsWith("/git-upload-pack") && uploadPack) {
@@ -47,7 +52,7 @@ async function setup(role: "member" | "reader" = "member") {
       return new Response(uploadPack);
     }
     if (url.hostname.endsWith(".artifacts.cloudflare.net")) return new Response(concat(packet("# service=git-upload-pack\n"), new TextEncoder().encode("0000"),
-      packet(`${hash(4)} HEAD\0symref=HEAD:refs/heads/main\n`), packet(`${hash(4)} refs/heads/main\n`), packet(`${hash(50)} refs/tags/v1\n`), packet(`${hash(4)} refs/tags/v1^{}\n`), new TextEncoder().encode("0000")));
+      packet(`${head} HEAD\0symref=HEAD:refs/heads/main\n`), packet(`${head} refs/heads/main\n`), packet(`${hash(50)} refs/tags/v1\n`), packet(`${hash(4)} refs/tags/v1^{}\n`), new TextEncoder().encode("0000")));
     if (url.pathname.endsWith("/tokens")) return Response.json({ success: true, result: { plaintext: "opaque-synthetic-token", expires_at: new Date(Date.now() + 300_000).toISOString() } });
     if (/\/repos\/(site|site-secondary)$/.test(url.pathname)) { const name = url.pathname.split("/").at(-1)!; return Response.json({ success: true, result: { name, remote: remote.replace("site.git", `${name}.git`), description, default_branch: "main", read_only: false } }); }
     if (url.pathname.endsWith("/log")) {
@@ -55,12 +60,23 @@ async function setup(role: "member" | "reader" = "member") {
       return Response.json({ success: true, result: [commits.get(url.searchParams.get("ref")!)].filter(Boolean) });
     }
     if (url.pathname.includes("/commit/")) return Response.json({ success: true, result: commits.get(url.pathname.split("/").at(-1)!) });
+    if (url.pathname.includes("/tree/")) {
+      const sub = url.pathname.endsWith(hash(200));
+      return Response.json({ success: true, result: sub
+        ? [{ name: "nested.txt", hash: hash(302), type: "blob", mode: "100644" }]
+        : [{ name: "README.md", hash: hash(300), type: "blob", mode: "100644" },
+          { name: "src", hash: hash(200), type: "tree", mode: "40000" },
+          { name: "binary", hash: hash(301), type: "blob", mode: "100644" }] });
+    }
     if (url.pathname.endsWith("/file")) {
-      expect(url.searchParams.get("ref")).toBe(hash(4));return new Response("Synthetic file\n");
+      return new Response(url.searchParams.get("path") === "binary" ? new Uint8Array([0, 1, 2])
+        : url.pathname.includes("site-secondary") ? "Secondary file\n"
+        : url.searchParams.get("ref") === hash(2) ? "New head\n" : "Synthetic file\n");
     }
     throw new Error("unexpected synthetic request");
   });
   return { tenant, human, project, configured, auth, fetch, requests, setDescription(value: string) { description = value; },
+    setHead(value: string) { head = value; },
     serve(commit: ArtifactCommit, response: Uint8Array) { commits.set(commit.hash, commit);uploadPack = response; },
     read: <T>(verb: string, body: Record<string, unknown> = {}) => artifactRead<T>(configured, "acme", auth, verb, { repo: "site", ...body }) };
 }
@@ -100,6 +116,61 @@ describe("Artifacts compatibility adapter", () => {
   });
   it.each(["HEAD", "refs/heads/main", "refs/tags/v1"])("resolves %s to an immutable commit before reading files", async revision => {
     const s = await setup();expect((await s.read<{ content_b64: string; size: number }>("file.show", { rev: revision, path: "README.md" })).result).toEqual({ content_b64: btoa("Synthetic file\n"), size: 15 });
+  });
+  it("combines directory detection and retrieval, caching immutable reads behind fresh grants", async () => {
+    const s = await setup();
+    const file = await s.read("file.read", { rev: hash(4), path: "README.md" });
+    expect(file.result).toEqual({ content_b64: btoa("Synthetic file\n"), size: 15 });
+    expect(s.requests.filter(p => p.endsWith("/log") || p.endsWith("/info/refs"))).toHaveLength(0);
+    expect(s.requests.filter(p => p.includes("/tree/"))).toHaveLength(1);
+    const dir = await s.read<{ entries: unknown[] }>("file.read", { rev: hash(4), path: "src" });
+    expect(dir.result.entries).toEqual([{ name: "nested.txt", oid: hash(302), mode: "100644", kind: "blob" }]);
+    const nested = await s.read("file.read", { rev: hash(4), path: "src/nested.txt" });
+    expect(nested.result).toEqual(file.result);
+    const count = s.requests.length;
+    for (let i = 0; i < 100; i++) expect(await s.read("file.read", { rev: hash(4), path: i % 2 ? "src" : "README.md" })).toEqual(i % 2 ? dir : file);
+    expect(s.requests).toHaveLength(count);
+    await expect(s.read("file.read", { rev: hash(4), path: "src/../README.md" })).rejects.toMatchObject({ status: 400 });
+    await expect(s.read("file.read", { rev: hash(4), path: "missing" })).rejects.toMatchObject({ status: 404 });
+    const before = s.requests.length;
+    await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ?").bind(s.human.identity.id).run();
+    await expect(s.read("file.read", { rev: hash(4), path: "README.md" })).rejects.toMatchObject({ status: 403 });
+    expect(s.requests).toHaveLength(before);
+  });
+  it("never caches branch or HEAD resolution and scopes equal SHAs to their repository and tenant", async () => {
+    const s = await setup();
+    const old = await s.read("file.read", { rev: "HEAD", path: "README.md" });
+    s.setHead(hash(2));
+    const fresh = await s.read("file.read", { rev: "HEAD", path: "README.md" });
+    expect(fresh.result).toEqual({ content_b64: btoa("New head\n"), size: 9 });
+    expect(fresh.result).not.toEqual(old.result);
+    await env.HUB_DB.prepare("INSERT INTO repository (tenant_id, project_id, name, storage_name, is_default, created_at) VALUES (?, ?, 'secondary', 'site-secondary', 0, ?)").bind(s.tenant.id, s.project.id, Date.now()).run();
+    const named = await s.read("file.read", { repo: "site/secondary", rev: hash(4), path: "README.md" });
+    expect(named.result).toEqual({ content_b64: btoa("Secondary file\n"), size: 15 });
+    await seedTenant("foreign");
+    const count = s.requests.length;
+    await expect(artifactRead(s.configured, "foreign", s.auth, "file.read", { repo: "site", rev: hash(4), path: "README.md" })).rejects.toMatchObject({ status: 403 });
+    await env.HUB_DB.prepare("UPDATE session SET revoked_at = ? WHERE id = ?").bind(Date.now(), (await authorizeGit(s.configured, s.auth, "acme", "site"))!.session.id).run();
+    await expect(s.read("file.read", { rev: hash(4), path: "README.md" })).rejects.toMatchObject({ status: 403 });
+    expect(s.requests).toHaveLength(count);
+  });
+  it("shares the hub's live caller for repo_file without minting another credential; operator revocation denies warm hits", async () => {
+    const s = await setup();
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(s.tenant.id, s.project.id, Date.now()).run();
+    const bot = await seedAgent(s.tenant, s.human.identity, "reader", "reader");
+    const call = async (headers: Record<string, string>, path = "README.md") => {
+      const ctx = await buildContext(new Request("https://acme.pimwell.test/", { headers }), s.configured);
+      return runVerb(ctx, repoFile as VerbDef<unknown, unknown>, { project: "site", ref: hash(4), path });
+    };
+    expect(await call(cookieHeaders(s.human.token, "acme.pimwell.test"))).toMatchObject({ text: "Synthetic file\n", binary: false });
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM ardi_cred").first()).toBeNull();
+    expect(await call(bearer(bot.token))).toMatchObject({ text: "Synthetic file\n", binary: false });
+    expect(await call(bearer(bot.token), "binary")).toMatchObject({ binary: true, size: 3 });
+    const count = s.requests.length;
+    await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ?").bind(s.human.identity.id).run();
+    await expect(call(bearer(bot.token))).rejects.toMatchObject({ status: 404 });
+    await expect(call(cookieHeaders(s.human.token, "acme.pimwell.test"))).rejects.toMatchObject({ status: 404 });
+    expect(s.requests).toHaveLength(count);
   });
   it("keeps raw annotated tag targets in refs, without showing peeled pseudo-refs", async () => {
     const s = await setup();const result = await s.read<{ refs: Array<{ name: string; target: string }> }>("refs.list");

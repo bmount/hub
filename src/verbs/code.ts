@@ -11,7 +11,7 @@ import { optBool, optInt, optString, reqString } from "./params";
 import { badRequest, notFound } from "../errors";
 import type { Ctx } from "../auth/context";
 import { DATA_NOTE, cleanText } from "../mcp/render";
-import { codeRead, OID_RE, REF_RE, type ArdiChange, type ArdiCommit, type ArdiEntry, type ArdiRef } from "../code/ardi";
+import { codeFile, codeRead, OID_RE, REF_RE, type ArdiChange, type ArdiCommit, type ArdiEntry, type ArdiRef } from "../code/ardi";
 import { decode, diffText, unified, type FileDiff } from "../code/diff";
 import type { SnapshotFile } from "../code/gitPack";
 import { commitWorkStatement, commitWorkResults, type CommitWorkItem } from "../work/commitEvidence";
@@ -204,16 +204,11 @@ export const repoFile = defineVerb({
   run: async (ctx, p) => {
     const pr = await repoProject(ctx, p.project, true, p.repo);
     const at = rev(p.ref);
-    // A directory if the parent lists it as a tree (or it is the root).
-    const parent = p.path.includes("/") ? p.path.slice(0, p.path.lastIndexOf("/")) : "";
-    const name = p.path.slice(p.path.lastIndexOf("/") + 1);
-    const isDir = !p.path || (await codeRead<{ entries: ArdiEntry[] }>(ctx, "tree.list", { repo: pr.slug, rev: at, ...(parent ? { path: parent } : {}) })).result.entries.some((e) => e.name === name && e.kind === "tree");
-    if (isDir) {
-      const entries = (await codeRead<{ entries: ArdiEntry[] }>(ctx, "tree.list", { repo: pr.slug, rev: at, ...(p.path ? { path: p.path } : {}) })).result.entries;
-      return { project: pr.slug, path: p.path, ref: at, entries: entries.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "tree" ? -1 : 1)) };
-    }
-    const f = await fileAt(ctx, pr.slug, at, p.path);
-    return { project: pr.slug, path: p.path, ref: at, ...f };
+    const f = await codeFile(ctx, pr.slug, at, p.path);
+    if ("entries" in f) return { project: pr.slug, path: p.path, ref: at,
+      entries: f.entries.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === "tree" ? -1 : 1)) };
+    return { project: pr.slug, path: p.path, ref: at,
+      ...(f.size > MAX_BYTES ? { text: null, binary: false } : decode(f.content_b64)), size: f.size };
   },
 });
 

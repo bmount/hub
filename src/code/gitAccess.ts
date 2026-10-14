@@ -44,6 +44,11 @@ export async function gitCaller(env: Env, authorization: string | null, tenantSl
 export async function authorizeGit(env: Env, authorization: string | null, tenantSlug: string, repo: string, now = Date.now()): Promise<GitGrant | null> {
   const caller = await gitCaller(env, authorization, tenantSlug, now);
   if (!caller) return null;
+  return authorizeGitRepository(env, caller, repo, now);
+}
+
+/** Resolve repository access using a caller already authorized in this request. */
+export async function authorizeGitRepository(env: Env, caller: GitCaller, repo: string, now = Date.now()): Promise<GitGrant | null> {
   const { identity, session, tenant, role } = caller;
   const [projectSlug, repoName, extra] = repo.split("/");
   if (extra !== undefined) return null;

@@ -9,7 +9,8 @@ import type { Ctx } from "../auth/context";
 import { HubError } from "../errors";
 import { open, seal } from "../models/secretbox";
 import { createGitSession, createRepoCreateSession, revokeSession } from "../db/sessions";
-import { artifactRead } from "./artifactRead";
+import { artifactRead, artifactReadAuthorized } from "./artifactRead";
+import { authorizeGitRepository } from "./gitAccess";
 import { ArtifactsRest, artifactNamespace } from "./artifactsRest";
 import { repoOwnership } from "./artifactPush";
 import { usesArtifacts } from "./gitBackend";
@@ -73,6 +74,32 @@ export async function codeAuth(ctx: Ctx): Promise<string> {
 /** Read code as this caller: the repository is the project's slug. */
 export async function codeRead<T>(ctx: Ctx, verb: string, body: Record<string, unknown>): Promise<ArdiPage<T>> {
   return ardiCall<T>(ctx.env, ctx.tenant!.slug, await codeAuth(ctx), verb, body);
+}
+
+export type RepositoryFile = { entries: ArdiEntry[] } | { content_b64: string; size: number };
+
+/** One authorized Artifacts read; retain the legacy host's directory/file protocol. */
+export async function codeFile(ctx: Ctx, repo: string, at: string, path: string): Promise<RepositoryFile> {
+  const org = ctx.tenant!.slug;
+  if (repo.startsWith("agent-src/"))
+    return (await artifactRead<RepositoryFile>(ctx.env, org, await codeAuth(ctx), "file.read", { repo, rev: at, path })).result;
+  if (await usesArtifacts(ctx.env, org, repo)) {
+    // buildContext already checked the live session, tenant, membership and agent operator.
+    // Do not introspect a second credential (or mint a git session for browser readers).
+    if (!ctx.identity || !ctx.session || !ctx.role || (ctx.identity.kind === "agent" &&
+      (ctx.session.kind !== "agent_run" || !(ctx.authKind === "bearer" && ctx.bearerToken || ctx.agentMcp))))
+      throw new HubError(403, "forbidden", "Git access unavailable");
+    const grant = await authorizeGitRepository(ctx.env, { identity: ctx.identity, session: ctx.session, tenant: ctx.tenant!, role: ctx.role }, repo, ctx.now);
+    if (!grant) throw new HubError(403, "forbidden", "Git access unavailable");
+    return (await artifactReadAuthorized<RepositoryFile>(ctx.env, org, grant, "file.read", { repo, rev: at, path })).result;
+  }
+  const auth = await codeAuth(ctx);
+  const read = <T>(verb: string, body: Record<string, unknown>) => ardiCall<T>(ctx.env, org, auth, verb, { repo, rev: at, ...body });
+  const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const isDir = !path || (await read<{ entries: ArdiEntry[] }>("tree.list", { path: parent })).result.entries.some(e => e.name === name && e.kind === "tree");
+  return isDir ? (await read<{ entries: ArdiEntry[] }>("tree.list", { path })).result
+    : (await read<{ content_b64: string; size: number }>("file.show", { path })).result;
 }
 
 /**

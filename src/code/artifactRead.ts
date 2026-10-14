@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { HubError } from "../errors";
 import { ArtifactsRest, artifactNamespace, type ArtifactCommit } from "./artifactsRest";
-import { authorizeGit } from "./gitAccess";
+import { authorizeGit, type GitGrant } from "./gitAccess";
 import { agentSrcGrant } from "./agentSrc";
 import { repoOwnership } from "./artifactPush";
 import { parseAdvertisedRefs } from "./gitProtocol";
@@ -24,9 +24,40 @@ export async function artifactRead<T>(env: Env, org: string, authorization: stri
   if (!grant || typeof grant === "string") throw requested.startsWith("agent-src/")
     ? new HubError(404, "not_found", "repository not found")
     : new HubError(403, "forbidden", "Git access unavailable");
+  return artifactReadAuthorized<T>(env, org, grant, verb, body);
+}
+
+/** Internal only: the hub may share the live grant it obtained for this request. */
+export async function artifactReadAuthorized<T>(env: Env, org: string, grant: GitGrant, verb: string, body: Record<string, unknown>): Promise<ArdiPage<T>> {
   const repo = grant.repository?.storage_name ?? grant.project.slug;
   const repoName = grant.repository && !grant.repository.is_default ? grant.repository.name : "";
-  const api = new ArtifactsRest(env), namespace = artifactNamespace(org), info = await api.info(namespace, repo);
+  const api = new ArtifactsRest(env), namespace = artifactNamespace(org);
+  // Content-addressed data is safe to reuse only after this request's live grant. Include
+  // the account and ownership IDs so a reused storage name cannot inherit another repo's data.
+  const cacheKey = (kind: string, hash: string, path = "") => new Request(`https://code-immutable.internal/${encodeURIComponent(JSON.stringify([api.account, grant.tenant.id, grant.project.id, repo, kind, hash, path]))}`);
+  const immutable = async <V>(kind: string, hash: string, load: () => Promise<V>, path = ""): Promise<V> => {
+    const key = cacheKey(kind, hash, path);
+    const hit = await caches.default.match(key);
+    if (hit) return await hit.json() as V;
+    const value = await load();
+    await caches.default.put(key, Response.json(value, { headers: { "cache-control": "max-age=604800" } }));
+    return value;
+  };
+  const revision = String(body.rev ?? body.ref ?? "HEAD"), path = String(body.path ?? "");
+  if (path.split("/").some(segment => segment === "." || segment === "..")) throw new HubError(400, "bad_request", "invalid repository path");
+  // These results were populated only after checking the storage ownership marker.
+  // A live repository mapping is still mandatory on every hit; refs and HEAD never hit here.
+  if (verb === "file.read" && /^[0-9a-f]{40}$/.test(revision)) {
+    const hit = await caches.default.match(cacheKey("read", revision, path));
+    if (hit) return { result: await hit.json() as T, next: null };
+  }
+  const [info, indexedRoot] = await Promise.all([
+    api.info(namespace, repo),
+    verb === "file.read" && /^[0-9a-f]{40}$/.test(revision)
+      ? env.HUB_DB.prepare("SELECT tree_hash FROM repository_commit WHERE tenant_id = ? AND project_id = ? AND repo = ? AND oid = ?")
+        .bind(grant.tenant.id, grant.project.id, repoName, revision).first<{ tree_hash: string }>()
+      : null,
+  ]);
   if (info.description !== repoOwnership(grant.tenant.id, grant.project.id)) throw new HubError(503, "unavailable", "repository migration is not ready");
   const page = (result: unknown, next: string | null = null) => ({ result: result as T, next });
   const metadata = async (commit: ArtifactCommit): Promise<ArdiCommit> => {
@@ -37,7 +68,7 @@ export async function artifactRead<T>(env: Env, org: string, authorization: stri
       summary: commit.message.split("\n")[0] ?? "", message: commit.message, principal: by?.identity_id ?? null, session: by?.session_id ?? null,
       trailer_principal: null, trailer_session: null };
   };
-  const at = String(body.rev ?? body.ref ?? "HEAD");
+  const at = revision;
   let refList: Promise<ArdiRef[]> | null = null;
   const resolve = async (revision: string): Promise<string> => {
     let target = revision;
@@ -48,12 +79,16 @@ export async function artifactRead<T>(env: Env, org: string, authorization: stri
       const found = all.find(ref => ref.name === name) ?? (!name.startsWith("refs/") ? all.find(ref => ref.name === `refs/heads/${name}`) ?? all.find(ref => ref.name === `refs/tags/${name}`) : undefined);
       if (!found) throw new HubError(404, "not_found", "revision not found");target = all.find(ref => ref.name === `${found.name}^{}`)?.target ?? found.target;
     }
-    const commit = (await api.log(namespace, repo, target, 1))[0];
+    const commit = await immutable("commit", target, async () => {
+      const result = (await api.log(namespace, repo, target, 1))[0];
+      if (!result) throw new HubError(404, "not_found", "revision not found");
+      return result;
+    });
     if (!commit) throw new HubError(404, "not_found", "revision not found");return commit.hash;
   };
   const treeCache = new Map<string, ArtifactsTreeEntry[]>();
   const tree = async (hash: string) => {
-    if (!treeCache.has(hash)) treeCache.set(hash, await api.tree(namespace, repo, hash));return treeCache.get(hash)!;
+    if (!treeCache.has(hash)) treeCache.set(hash, await immutable("tree", hash, () => api.tree(namespace, repo, hash)));return treeCache.get(hash)!;
   };
   const pathEntry = async (root: string, path: string): Promise<ArtifactsTreeEntry | null> => {
     let current = root;
@@ -94,13 +129,27 @@ export async function artifactRead<T>(env: Env, org: string, authorization: stri
     return result;
   };
   if (verb === "refs.list") return page({ refs: (await refs(api, namespace, repo)).filter(ref => !ref.name.endsWith("^{}")) });
-  if (verb === "file.show") return page(await api.file(namespace, repo, await resolve(at), String(body.path ?? "")));
-  if (verb === "tree.list") {
-    const commit = (await api.log(namespace, repo, await resolve(at), 1))[0];if (!commit) throw new HubError(404, "not_found", "revision not found");
-    const entry = await pathEntry(commit.treeHash, String(body.path ?? ""));
-    if (!entry || entry.type !== "tree") throw new HubError(404, "not_found", "directory not found");
-    return page({ entries: (await tree(entry.hash)).map(item => ({ name: item.name, oid: item.hash, mode: item.mode,
-      kind: item.type === "tree" ? "tree" : item.type === "gitlink" ? "commit" : "blob" } satisfies ArdiEntry)) });
+  if (verb === "file.show") {
+    const oid = await resolve(at), path = String(body.path ?? "");
+    if (path.split("/").some(segment => segment === "." || segment === "..")) throw new HubError(400, "bad_request", "invalid repository path");
+    return page(await immutable("file", oid, () => api.file(namespace, repo, oid, path), path));
+  }
+  if (verb === "file.read" || verb === "tree.list") {
+    const oid = indexedRoot ? at : await resolve(at);
+    const root = indexedRoot?.tree_hash ?? (await immutable("commit", oid, async () => {
+      const result = (await api.log(namespace, repo, oid, 1))[0];
+      if (!result) throw new HubError(404, "not_found", "revision not found");
+      return result;
+    })).treeHash;
+    const read = async () => {
+      const entry = await pathEntry(root, path);
+      if (verb === "file.read" && entry && entry.type !== "tree")
+        return immutable("file", oid, () => api.file(namespace, repo, oid, path), path);
+      if (!entry || entry.type !== "tree") throw new HubError(404, "not_found", "directory not found");
+      return { entries: (await tree(entry.hash)).map(item => ({ name: item.name, oid: item.hash, mode: item.mode,
+        kind: item.type === "tree" ? "tree" : item.type === "gitlink" ? "commit" : "blob" } satisfies ArdiEntry)) };
+    };
+    return page(verb === "file.read" ? await immutable("read", oid, read, path) : await read());
   }
   if (verb === "snapshot") {
     // A commit's files never change, so one fetch per commit serves every later search of it.
