@@ -95,7 +95,22 @@ const rollbacks = () => targets.map((t) => `make rollback WORKER=${t.worker} VER
 save();
 for (const t of targets) {
   console.log(`Deploying ${t.worker} ${t.version}…`);
-  run('npx', ['wrangler', 'versions', 'deploy', '-c', WORKERS.find(w => w.name === t.worker).config, '--name', t.worker, `${t.version}@100%`, '--yes'], { log: `deploy-${t.worker}.log`, failure: `deploying ${t.worker} failed; check production before anything else (${rollbacks()})` });
+  const args = ['wrangler', 'versions', 'deploy', '-c', WORKERS.find(w => w.name === t.worker).config, '--name', t.worker, `${t.version}@100%`, '--yes'];
+  let output = '';
+  for (let attempt = 0; ; attempt++) {
+    const result = spawnSync('npx', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+    output += (result.stdout ?? '') + (result.stderr ?? '');
+    writeFileSync(join(dir, `deploy-${t.worker}.log`), output);
+    if (result.status === 0) break;
+    // Wrangler reads the uploaded version again before writing a deployment. A 100146
+    // refusal at that read is safe to retry; never retry an ambiguous deployment write.
+    const missingVersion = /requested Worker version could not be found/.test(result.stderr ?? '') && /code: 100146/.test(result.stderr ?? '');
+    if (!missingVersion || attempt >= 5) fail(`deploying ${t.worker} failed; check production before anything else (${rollbacks()}); see ${join(dir, `deploy-${t.worker}.log`)}`);
+    const current = (await api(t.worker, '/deployments')).deployments[0];
+    if (current.id !== t.before_deployment) fail(`${t.worker} deployment changed after refusal; reconcile ${join(dir, 'record.json')} before retrying`);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    await api(t.worker, `/versions/${t.version}`, { newlyUploaded: true });
+  }
   for (let i = 0; i < 6 && !t.deployment; i++) {
     const d = (await api(t.worker, '/deployments')).deployments[0];
     if (d.versions.length === 1 && d.versions[0].version_id === t.version && d.versions[0].percentage === 100) { t.deployment = d.id; t.deployed_at = Date.parse(d.created_on); }
