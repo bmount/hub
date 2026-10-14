@@ -1,6 +1,14 @@
 import { getIdentityById } from "../db/identities";
 import { getMembership } from "../db/memberships";
-import type { Identity } from "../db/types";
+import type { Identity, Membership } from "../db/types";
+
+/** Live rows read together by a request; never cached between requests. */
+export type AgentCredentialState = {
+  parent: { identity_id: string; tenant_id: string; revoked_at: number | null } | null;
+  own: Membership | null;
+  operator: Identity | null;
+  operatorMembership: Membership | null;
+};
 
 /** The operator is an active human who is root or holds an active membership (any role) in the tenant. */
 export async function operatorActiveIn(db: D1Database, operator_id: string | null, tenant_id: string): Promise<boolean> {
@@ -13,14 +21,17 @@ export async function operatorActiveIn(db: D1Database, operator_id: string | nul
 }
 
 /** An agent credential is usable while the agent is active, its parent token (for runs) is unrevoked, and its operator is live. */
-export async function agentCredentialOk(db: D1Database, agent: Identity, tenant_id: string, parent_token_id: string | null): Promise<boolean> {
+export async function agentCredentialOk(db: D1Database, agent: Identity, tenant_id: string, parent_token_id: string | null, live?: AgentCredentialState): Promise<boolean> {
   if (agent.kind !== "agent" || agent.state !== "active") return false;
   if (parent_token_id !== null) {
-    const t = await db.prepare("/*perf-site:src%2Fauth%2Fagent.ts:19:21:agentCredentialOk:f899664f*/ SELECT identity_id, tenant_id, revoked_at FROM api_token WHERE id = ?")
+    const t = live ? live.parent : await db.prepare("/*perf-site:src%2Fauth%2Fagent.ts:27:42:agentCredentialOk:f899664f*/ SELECT identity_id, tenant_id, revoked_at FROM api_token WHERE id = ?")
       .bind(parent_token_id).first<{ identity_id: string; tenant_id: string; revoked_at: number | null }>();
     if (!t || t.revoked_at !== null || t.identity_id !== agent.id || t.tenant_id !== tenant_id) return false;
   }
-  const own = await getMembership(db, agent.id, tenant_id);
-  if (!own || own.state !== "active") return false;
-  return operatorActiveIn(db, agent.operator_id, tenant_id);
+  const own = live ? live.own : await getMembership(db, agent.id, tenant_id);
+  if (!own || own.state !== "active" || own.identity_id !== agent.id || own.tenant_id !== tenant_id) return false;
+  if (!live) return operatorActiveIn(db, agent.operator_id, tenant_id);
+  const op = live.operator, membership = live.operatorMembership;
+  return !!op && op.id === agent.operator_id && op.kind === "human" && op.state === "active"
+    && (op.is_root === 1 || (!!membership && membership.identity_id === op.id && membership.tenant_id === tenant_id && membership.state === "active"));
 }

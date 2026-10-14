@@ -24,6 +24,10 @@ permission before publishing. Non-default repositories use the same private
 staging, append-only history validation, rewrite preservation and protected
 branch/tag rules as the default. See [git-history.md](git-history.md).
 Agent source repositories retain their separate, narrower access rules.
+Git caller authorization reads the live session, tenant, identity, parent token,
+agent/operator memberships and operator in one D1 batch. The existing credential
+policy and role caps consume that request-local snapshot; none of those rows are
+cached between requests.
 
 ## Reading, review and references
 

@@ -2,6 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { introspect } from "../src/http/internal";
 import { credentialUsable } from "../src/auth/context";
+import { gitCaller } from "../src/code/gitAccess";
 import { createGitSession, GIT_SESSION_TTL_S, getSessionById, revokeSession } from "../src/db/sessions";
 import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
@@ -23,6 +24,44 @@ async function setup() {
   const git = await createGitSession(env.HUB_DB, { identity_id: human.identity.id, tenant_id: acme.id, label: "laptop" }, Date.now());
   return { acme, blue, human, git };
 }
+
+describe("batched Git caller authorization", () => {
+  it.each([
+    ["agent inactive", "UPDATE identity SET state='archived' WHERE id=?", "agent"],
+    ["agent membership ended", "UPDATE membership SET state='archived' WHERE identity_id=?", "agent"],
+    ["parent revoked", "UPDATE api_token SET revoked_at=1 WHERE id=?", "parent"],
+    ["parent belongs to another identity", "UPDATE api_token SET identity_id=(SELECT id FROM identity WHERE kind='human' LIMIT 1) WHERE id=?", "parent"],
+    ["parent belongs to another tenant", "UPDATE api_token SET tenant_id=(SELECT id FROM tenant WHERE slug='blue') WHERE id=?", "parent"],
+    ["operator inactive", "UPDATE identity SET state='archived' WHERE id=?", "operator"],
+    ["operator not human", "UPDATE identity SET kind='agent' WHERE id=?", "operator"],
+    ["operator membership ended", "UPDATE membership SET state='archived' WHERE identity_id=?", "operator"],
+    ["session revoked", "UPDATE session SET revoked_at=1 WHERE id=?", "session"],
+    ["session expired", "UPDATE session SET expires_at=1 WHERE id=?", "session"],
+    ["session not pinned", "UPDATE session SET tenant_id=(SELECT id FROM tenant WHERE slug='blue') WHERE id=?", "session"],
+    ["browser credential", "UPDATE session SET kind='browser' WHERE id=?", "session"],
+    ["parent missing", "UPDATE session SET parent_token_id=NULL WHERE id=?", "session"],
+    ["tenant inactive", "UPDATE tenant SET state='archived' WHERE id=?", "tenant"],
+  ])("rechecks %s on every call", async (_label, sql, key) => {
+    const { acme, human } = await setup(), agent = await seedAgent(acme, human.identity);
+    const ids: Record<string, string> = { agent: agent.agent.identity.id, parent: agent.apiToken.id, operator: human.identity.id, session: agent.session.id, tenant: acme.id };
+    const auth = `Basic ${btoa(`git:${agent.token}`)}`;
+    expect((await gitCaller(env, auth, "acme"))?.role).toBe("member");
+    // Valid rows for another org must never rescue a tenant-pinned credential.
+    expect(await gitCaller(env, auth, "blue")).toBeNull();
+    await env.HUB_DB.prepare(sql!).bind(ids[key!]!).run();
+    expect(await gitCaller(env, auth, "acme")).toBeNull();
+  });
+  it("keeps the agent capped at its live operator role and checks Git sessions live", async () => {
+    const { acme, human, git } = await setup(), agent = await seedAgent(acme, human.identity);
+    const auth = `Basic ${btoa(`git:${agent.token}`)}`, humanAuth = `Basic ${btoa(`git:${git.token}`)}`;
+    expect((await gitCaller(env, humanAuth, "acme"))?.identity.id).toBe(human.identity.id);
+    expect(await gitCaller(env, humanAuth, "blue")).toBeNull();
+    await env.HUB_DB.prepare("UPDATE membership SET role='reader' WHERE identity_id=?").bind(human.identity.id).run();
+    expect((await gitCaller(env, auth, "acme"))?.role).toBe("reader");
+    await env.HUB_DB.prepare("UPDATE membership SET state='archived' WHERE identity_id=?").bind(human.identity.id).run();
+    expect(await gitCaller(env, humanAuth, "acme")).toBeNull();
+  });
+});
 
 describe("git sessions", () => {
   it("are pinned to one tenant, last 90 days, and have no parent token", async () => {

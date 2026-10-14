@@ -9,7 +9,7 @@ import { readSessionToken } from "./cookie";
 import { sha256Hex } from "../ids";
 import { noteCtx } from "../log";
 import { API_TOKEN_PREFIX, getApiTokenByToken } from "../db/apiTokens";
-import { agentCredentialOk } from "./agent";
+import { agentCredentialOk, type AgentCredentialState } from "./agent";
 import type { LiveGrant } from "../db/oauthGrants";
 import type { ApiToken, Identity, Membership, Role, Session, Tenant } from "../db/types";
 
@@ -97,7 +97,7 @@ export function roleFor(identity: Identity | null, membership: Membership | null
  */
 export const credentialUsable: typeof credentialUsableImpl = (...args) => span("auth.credentialUsable", () => credentialUsableImpl(...args));
 async function credentialUsableImpl(
-  db: D1Database, identity: Identity, session: Session | null, apiToken: ApiToken | null, tenant: Tenant | null, via: "http" | "mcp" | "introspect" = "http",
+  db: D1Database, identity: Identity, session: Session | null, apiToken: ApiToken | null, tenant: Tenant | null, via: "http" | "mcp" | "introspect" = "http", live?: AgentCredentialState,
 ): Promise<boolean> {
   if (identity.state !== "active") return false;
   // System-minted fixture credentials can never acquire authority in a real organization.
@@ -120,7 +120,7 @@ async function credentialUsableImpl(
   if (session && session.kind !== "agent_run") return false;
   const pinned = session ? session.tenant_id : apiToken ? apiToken.tenant_id : null;
   if (!tenant || pinned !== tenant.id) return false;
-  return agentCredentialOk(db, identity, tenant.id, session ? session.parent_token_id : null);
+  return agentCredentialOk(db, identity, tenant.id, session ? session.parent_token_id : null, live);
 }
 
 export const buildContext: typeof buildContextImpl = (...args) => span("auth.buildContext", () => buildContextImpl(...args));
