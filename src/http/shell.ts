@@ -71,7 +71,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
   return { brandHref: hub, org: null, me, tip: tipFor(key), breadcrumb: [{label: "Pimwell", href: "/"}, {label: ({sessions:"Sessions",models:"Models and keys",orgs:"Organizations",apps:"Apps"} as Record<string,string>)[key] ?? nav.find(n => n.section === active)?.label ?? active, href: new URL(ctx.pageUrl ?? hub).pathname, current: true}], nav: nav.map((n) => ({ href: n.href, label: n.label, active: n.href === new URL(ctx.pageUrl ?? hub).pathname })) };
 }
 
-const VIEW_LABELS: Record<string, string> = { docket: "Docket", graph: "Graph", frontier: "Frontier", w: "Docket", board: "Board", status: "Status", code: "Repository and code", files: "Code files", reviews: "Reviews", wiki: "Wiki", documents: "Files", contacts: "Contacts and graph", c: "Chat", mail: "Mail", attention: "Needs me", people: "People and agents", assistant: "Assistant", apps: "Apps", usage: "AI usage", situations: "Situations", admin: "Admin", search: "Search", new: "File work", archive: "Archive", planned: "Coming" };
+const VIEW_LABELS: Record<string, string> = { docket: "Docket", graph: "Graph", frontier: "Frontier", w: "Docket", board: "Board", status: "Status", code: "Code", files: "Files", reviews: "Reviews", wiki: "Wiki", documents: "Files", contacts: "Contacts and graph", c: "Chat", mail: "Mail", attention: "Needs me", people: "People and agents", assistant: "Assistant", apps: "Apps", usage: "AI usage", situations: "Situations", admin: "Admin", search: "Search", new: "File work", archive: "Archive", planned: "Coming" };
 
 function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
   const url = new URL(ctx.pageUrl ?? "https://pimwell.com/"), segments = url.pathname.split("/").filter(Boolean);
@@ -113,7 +113,14 @@ function projectExplorer(ctx: Ctx, env: Env): string {
   const url = new URL(ctx.pageUrl ?? "https://pimwell.com/"), pathname = url.pathname;
   const node = (label: string, href: string, count?: number): TreeNode => ({label, href, count, current: pathname === href.split("#")[0] && (!href.includes("#") || url.hash === href.slice(href.indexOf("#")))});
   if (features.includes("docket")) nodes.push({...node("Docket", `${base}/docket`, p.open), expanded: true, children: [node("Graph", `${base}/graph`), node("Frontier", `${base}/frontier`), node("Board", `${base}/board`, p.open), node("Status", `${base}/status`, p.open)]});
-  if (features.includes("repo")) nodes.push({...node("Repository and code", `${base}/code`), expanded: true, children: [node("Code files", `${base}/files`), node("Reviews", `${base}/reviews`, p.reviews), node("Deploys", `/apps?project=${encodeURIComponent(p.path)}#deploys`, p.deploys)]});
+  if (features.includes("repo") || p.repositories?.length) nodes.push({...node("Code", `${base}/code`), expanded: true, children: (p.repositories ?? []).slice().sort((a,b) => b.is_default-a.is_default || a.name.localeCompare(b.name)).map((r,i) => {
+    const q = `?repo=${encodeURIComponent(r.name)}`;
+    const clone = `https://${ctx.tenant!.slug}.${env.HUB_DOMAIN}/${p.path}${r.is_default ? "" : `/${r.name}`}.git`;
+    const repoNode = (label: string, view: string): TreeNode => ({label, href:`${base}/${view}${q}`, current: pathname === `${base}/${view}` && (url.searchParams.get("repo") === r.name || (!url.searchParams.has("repo") && !!r.is_default))});
+    return {...repoNode(r.name + (r.is_default ? " · default" : ""), "code"), expanded:true,
+      afterHtml:`<div class="project-endpoints"><div><code id="repo-clone-${i}" title="${esc(clone)}">${esc(clone)}</code><button type="button" class="quiet" data-copy="#repo-clone-${i}" aria-label="Copy ${esc(r.name)} clone URL">⧉</button></div></div>`,
+      children:[repoNode("Files", "files"),repoNode("Commits", "code"),repoNode("Reviews", "reviews")]};
+  })});
   for (const site of p.sites ?? []) {
     const q = `/apps?project=${encodeURIComponent(p.path)}&site=${encodeURIComponent(site.name)}`;
     nodes.push({...node(`Site: ${site.name}`, `${q}&view=performance`), expanded: true, children: ["performance","errors","deploys"].map(view => ({...node(view[0]!.toUpperCase() + view.slice(1), `${q}&view=${view}`), current: pathname === "/apps" && url.searchParams.get("site") === site.name && url.searchParams.get("view") === view}))});

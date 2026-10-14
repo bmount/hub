@@ -60,10 +60,10 @@ export function kitList(label: string, rows: { html: string; href?: string; sele
   return kitTable(label, [{label}], rows.map(r => ({href: r.href, selected: r.selected, cells: [{html: r.html}]})));
 }
 
-export type TreeNode = KitLink & { children?: TreeNode[]; expanded?: boolean };
+export type TreeNode = KitLink & { children?: TreeNode[]; expanded?: boolean; afterHtml?: string };
 /** Native details keeps the row link distinct from its expansion chevron. */
 export function kitTree(label: string, nodes: TreeNode[]): string {
-  const branch = (items: TreeNode[]): string => `<ul>${items.map(n => `<li>${n.children ? `<details${n.expanded ? " open" : ""}><summary><span class="wb-chevron" aria-hidden="true">›</span>${kitLink(n)}</summary>${branch(n.children)}</details>` : kitLink(n)}</li>`).join("")}</ul>`;
+  const branch = (items: TreeNode[]): string => `<ul>${items.map(n => `<li>${n.children ? `<details${n.expanded ? " open" : ""}><summary><span class="wb-chevron" aria-hidden="true">›</span>${kitLink(n)}</summary>${n.afterHtml ?? ""}${branch(n.children)}</details>` : kitLink(n)}</li>`).join("")}</ul>`;
   return `<nav class="wb-tree" aria-label="${esc(label)}">${branch(nodes)}</nav>`;
 }
 

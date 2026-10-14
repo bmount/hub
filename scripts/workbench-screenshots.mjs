@@ -139,6 +139,10 @@ try {
   const mailId = id(), assistantId = id();
   await verb(member, 'review.request', {project:'sample',branch:'topic',title:'Keep navigation visible',summary:'Synthetic review of the workbench.',reviewers:['peer@example.test']});
   const sampleId = await db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'sample'").bind(tenant).first('id');
+  await db.prepare("INSERT INTO repository (tenant_id,project_id,name,storage_name,is_default,created_at) VALUES (?,?,'default','sample',1,?)").bind(tenant,sampleId,now).run();
+  for (const name of ['api','web']) await db.prepare("INSERT INTO repository (tenant_id,project_id,name,storage_name,is_default,created_at) VALUES (?,?,?,?,0,?)").bind(tenant,sampleId,name,`sample/${name}`,now).run();
+  await verb(member,'work.link',{id:'sample#2',target_kind:'commit',target_ref:'sample/api@'+'b'.repeat(40),note:'Synthetic non-default repository commit'});
+  await verb(member,'review.request',{project:'sample',repo:'api',branch:'topic',title:'Review the API repository',reviewers:['peer@example.test']});
   await db.prepare("INSERT INTO app_deploy (id,tenant_id,project_id,script_name,version_id,tag,message,seen_at) VALUES (?,?,?,?,?,?,?,?)").bind('synthetic-deploy',tenant,sampleId,'sample-worker','b'.repeat(40),'workbench','Synthetic deploy record; not a live rollout.',now).run();
   await db.prepare("INSERT INTO site (id,tenant_id,project_id,name,hostnames,created_at) VALUES ('performance-site',?,?, 'workbench.example.com','[\"workbench.example.com\"]',?)").bind(tenant,sampleId,now).run();
   for(const [i,version] of ['22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111'].entries()) {
@@ -175,7 +179,7 @@ try {
   await db.prepare("INSERT INTO app_error_group (id,tenant_id,project_id,script_name,fingerprint,kind,title,last_message,count,first_seen,last_seen) VALUES (?,?,?,'sample-worker','synthetic-error','exception','Workbench request failed','Synthetic exception for design evidence',3,?,?)").bind('synthetic-error',tenant,sampleId,now,now).run();
   await db.prepare("INSERT INTO situation (id,tenant_id,identity_id,thread_id,title,question,report,created_at) VALUES (?,?,?,?,'Investigate the workbench','Why did the workbench request fail?','Synthetic report: inspect the recorded error group.',?)").bind('synthetic-situation',tenant,viewerId,assistantId,now).run();
   browser = await chromium.launch({headless: true});
-  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', person:'/people/dev%40example.test', agent:'/people/acme.build%40pimwell.test', connect:'/people?connect=1', invite:'/people?invite=1', appGroup:'/apps?g=synthetic-error', situations:'/situations', situation:'/situations?s=synthetic-situation', usagePerson:'/usage?days=30&who=dev%40example.test', mailSettings:'/mail?addresses=1', mailRecipients:'/mail/recipients', account:'https://pimwell.test/me', sessions:'https://pimwell.test/me/sessions', models:'https://pimwell.test/admin/models', orgs:'https://pimwell.test/admin/orgs', adminApps:'https://pimwell.test/admin/apps', newProject:'/projects/new', intent:'/do', chatDirectory:'/c', chatInbox:'/inbox', assistantNew:'/assistant', contactNew:'/knowledge/contacts?new=1', upload:'/knowledge/documents?upload=1', wikiNew:'/knowledge/wiki?new=1', skill:'/skills/start-here', skills:'/skills', tools:'/assistant/tools', archive:'/archive', organizations:'https://pimwell.test/', newWork:'/new?project=sample', search:'/search?q=workbench', performance:'/apps?project=sample&site=workbench.example.com&view=performance', performanceRoute:'/apps?project=sample&site=workbench.example.com&view=performance&selected=%2F%3Aproject%2Fdocket', performanceVerb:'/apps?project=sample&site=workbench.example.com&view=performance&kind=verbs', performanceTool:'/apps?project=sample&site=workbench.example.com&view=performance&kind=tools', performanceInteraction:'/apps?project=sample&site=workbench.example.com&view=performance&kind=interactions&selected=pane.swap', performanceSpinner:'/apps?project=sample&site=workbench.example.com&view=performance&kind=spinners&selected=pane.swap', performanceDeploy:'/apps?project=sample&site=workbench.example.com&view=performance&kind=deploys'};
+  const pages = {multiSidebar:'/sample/code?repo=api', multiCode:'/sample/code?repo=api', multiCommit:'/sample/code?repo=api&c='+'b'.repeat(40), multiFiles:'/sample/files?repo=web&f=app.ts', multiItem:'/sample/w/2', multiReviews:'/sample/reviews?repo=api', home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', person:'/people/dev%40example.test', agent:'/people/acme.build%40pimwell.test', connect:'/people?connect=1', invite:'/people?invite=1', appGroup:'/apps?g=synthetic-error', situations:'/situations', situation:'/situations?s=synthetic-situation', usagePerson:'/usage?days=30&who=dev%40example.test', mailSettings:'/mail?addresses=1', mailRecipients:'/mail/recipients', account:'https://pimwell.test/me', sessions:'https://pimwell.test/me/sessions', models:'https://pimwell.test/admin/models', orgs:'https://pimwell.test/admin/orgs', adminApps:'https://pimwell.test/admin/apps', newProject:'/projects/new', intent:'/do', chatDirectory:'/c', chatInbox:'/inbox', assistantNew:'/assistant', contactNew:'/knowledge/contacts?new=1', upload:'/knowledge/documents?upload=1', wikiNew:'/knowledge/wiki?new=1', skill:'/skills/start-here', skills:'/skills', tools:'/assistant/tools', archive:'/archive', organizations:'https://pimwell.test/', newWork:'/new?project=sample', search:'/search?q=workbench', performance:'/apps?project=sample&site=workbench.example.com&view=performance', performanceRoute:'/apps?project=sample&site=workbench.example.com&view=performance&selected=%2F%3Aproject%2Fdocket', performanceVerb:'/apps?project=sample&site=workbench.example.com&view=performance&kind=verbs', performanceTool:'/apps?project=sample&site=workbench.example.com&view=performance&kind=tools', performanceInteraction:'/apps?project=sample&site=workbench.example.com&view=performance&kind=interactions&selected=pane.swap', performanceSpinner:'/apps?project=sample&site=workbench.example.com&view=performance&kind=spinners&selected=pane.swap', performanceDeploy:'/apps?project=sample&site=workbench.example.com&view=performance&kind=deploys'};
   const phase = process.env.WORKBENCH_PHASE || 'before';
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
@@ -226,6 +230,31 @@ try {
       expect(response.status(), name).toBe(200);
       await page.locator('main').waitFor();
       expect(browserErrors, name+' browser errors').toEqual([]);
+      if (name.startsWith('multi')) {
+        await expect(page.locator('#explorer')).toContainText('Code');
+        for (const repo of ['default','api','web']) await expect(page.locator(`#explorer a[href$="/sample/code?repo=${repo}"]`).first()).toBeVisible();
+        await expect(page.locator('#explorer button[aria-label*="clone URL"]')).toHaveCount(3);
+        if (name === 'multiSidebar' && viewport.width >= 1280) await page.locator('#explorer summary a[href$="/sample/code"]').evaluate(el => el.scrollIntoView({block:'start'}));
+        if (name === 'multiItem') await expect(page.locator('#inspector a[href$="/sample/code?c='+ 'b'.repeat(40)+'&repo=api"]')).toContainText('sample/api@');
+        if (name === 'multiCode') {
+          await expect(page.locator('#list input[name="repo"]')).toHaveValue('api');
+          await page.locator('#list summary').filter({hasText:'New repository'}).click();
+          await expect(page.locator('#list form[action="/api/repo.create"] input[name="name"]')).toBeVisible();
+          await page.locator('#list form[action="/api/repo.create"] input[name="name"]').fill('cli');
+          await page.locator('#list summary').filter({hasText:'New repository'}).click();
+          await page.locator('#list a').filter({hasText:'Keep navigation visible'}).click();
+          await expect(page).toHaveURL(/repo=api.*c=b{40}/);
+          await expect(page.locator('#inspector')).toContainText('Keep navigation visible');
+          await page.goBack();
+          await expect(page).toHaveURL(/\/sample\/code\?repo=api$/);
+          await expect(page.locator('main.panes')).toHaveClass(/one/);
+        }
+        if (name === 'multiFiles') await expect(page.locator('#inspector a').filter({hasText:'History'})).toHaveAttribute('href',/repo=web/);
+        if (name === 'multiReviews') {
+          await expect(page.locator('#list')).toContainText('Review the API repository');
+          await expect(page.locator('#list')).not.toContainText('Synthetic review of the workbench');
+        }
+      }
       for (const time of await page.locator('time[data-local-time]').all()) {
         await expect(time).not.toContainText('UTC');
         await expect(time).toHaveAttribute('title', /.+/);
@@ -660,8 +689,8 @@ try {
         await expect(titleEdit.locator('input[name=title]')).toHaveValue('Keep project navigation visible');
         await expect(page.locator('#inspector summary')).not.toContainText(['Edit ']);
         await page.goto(base+'/sample/docket');
-        const repository = page.locator('#explorer details').filter({has:page.locator('summary',{hasText:'Repository and code'})});
-        await repository.locator('.wb-chevron').click();
+        const repository = page.locator('#explorer details').filter({has:page.locator('summary a[href$="/sample/code"]')});
+        await repository.locator('.wb-chevron').first().click();
         await expect(repository).not.toHaveAttribute('open');
         await page.reload();
         await expect(repository).not.toHaveAttribute('open');
@@ -704,9 +733,9 @@ try {
       if (viewport.width >= 1280) {
         await page.locator('#explorer a').filter({hasText:/^Board/}).click();
         await expect(page).toHaveURL(/\/sample\/board\?filter=navigation$/);
-        await page.locator('#explorer details').filter({has:page.locator('summary', {hasText:'Repository and code'})}).evaluate(el => { el.open = true; });
-        await page.locator('#explorer a').filter({hasText:/^Code files/}).click();
-        await expect(page).toHaveURL(/\/sample\/files\?filter=navigation$/);
+        await page.locator('#explorer details').filter({has:page.locator('summary a[href*="/sample/code"]:not([href*="repo="])')}).evaluate(el => { el.open = true; });
+        await page.locator('#explorer a[href*="/sample/files?repo=default"]').click();
+        await expect(page).toHaveURL(/\/sample\/files\?repo=default&filter=navigation$/);
         await page.goBack();
         await expect(page).toHaveURL(/\/sample\/board\?filter=navigation$/);
         await page.goBack();

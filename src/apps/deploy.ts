@@ -1,8 +1,10 @@
 import type { Ctx } from "../auth/context";
 import type { WorkKind, WorkState } from "../work/names";
 
-export type DeployRow = { id: string; project: string; script_name: string; version_id: string; tag: string | null; message: string | null; seen_at: number; commit_project: string | null };
+export type DeployRow = { repo?: string; repository_count?: number; default_repository?: string; id: string; project: string; script_name: string; version_id: string; tag: string | null; message: string | null; seen_at: number; commit_project: string | null };
 const SELECT = `SELECT d.id, p.slug AS project, d.script_name, d.version_id, d.tag, d.message, d.seen_at, d.repo,
+  (SELECT COUNT(*) FROM repository r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id) AS repository_count,
+  (SELECT name FROM repository r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id AND r.is_default = 1) AS default_repository,
   CASE WHEN p.kind IN ('repo', 'workspace') AND NOT EXISTS
     (SELECT 1 FROM project other WHERE other.tenant_id = p.tenant_id AND other.slug = p.slug AND other.kind = 'repo' AND other.id <> p.id)
     THEN p.slug || CASE WHEN d.repo = '' THEN '' ELSE '/' || d.repo END ELSE NULL END AS commit_project
@@ -38,7 +40,7 @@ export function deployView(row: DeployRow) {
     if (metadata?.release === 1 && row.version_id === `${metadata.version}:${metadata.deployment}` && metadata.commit === row.tag) release = metadata;
   } catch { /* Legacy messages are plain text. */ }
   return { deploy, release, commitRef: oid ? `${commit_project}@${oid}` : null,
-    commitHref: oid ? `/${encodeURIComponent(commit_project!)}/code?c=${oid}` : null };
+    commitHref: oid ? `/${encodeURIComponent(row.project)}/code?c=${oid}${row.repo ? `&repo=${encodeURIComponent(row.repo)}` : ""}` : null };
 }
 
 export type DeployWorkItem = { id: string; project: string; number: number; ref: string; kind: WorkKind; state: WorkState; title: string; relationship: "filed" | "linked" | "commit" };

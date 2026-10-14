@@ -313,7 +313,7 @@ describe("the workbench", () => {
     expect(explorer).not.toContain('href="/c/notes-chat"');
     expect(explorer).not.toContain("Repository and code");
     const repo = await (await w.get("/site/docket")).text();
-    expect(repo).toContain("Repository and code");
+    expect(repo).toContain('href="/site/code">Code');
     expect(repo.slice(repo.indexOf('id="explorer"'), repo.indexOf('<a class="scrim"'))).not.toContain("Wiki");
     await env.HUB_DB.prepare("UPDATE wiki_revision SET deleted = 1 WHERE project_id = ? AND slug = 'guide' AND revision = 2").bind(notes!.id).run();
     await env.HUB_DB.prepare("UPDATE file_revision SET deleted = 1 WHERE project_id = ? AND revision = 2").bind(notes!.id).run();

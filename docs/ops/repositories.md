@@ -47,6 +47,32 @@ App declaration checks read that repository, telemetry-derived deployments inher
 it from their registered app, and Site app records expose it. Deployment commit
 references and commit/deploy associations retain the repository.
 
+## Workbench
+
+The project explorer's Code branch lists repositories default-first, each with
+Files, Commits, Reviews and a copyable clone URL. The Code toolbar's quiet
+New repository disclosure posts an inline name to `repo.create`; readers cannot
+create repositories. Workspaces with an attached repository get the same branch.
+
+Code and file views use `/<project>/code?repo=<name>` and
+`/<project>/files?repo=<name>`. Commit selection (`c`), file selection (`f`),
+directory (`path`), branch (`ref`) and pagination retain that repository.
+Review URLs also carry `repo`, and their lists filter by repository. Omitted
+repository parameters select the default, preserving old single-repository URLs.
+Pane keys include the repository so equal SHAs or filenames cannot reuse another
+repository's inspector. Item commit links and deploy destinations use these URLs;
+repository-qualified commit references retain their existing syntax.
+
+Review search results, review lists, app rows and deploy rows show short
+repository names when the project has more than one repository. Recorded full
+commit references remain explicit evidence rather than shortened labels.
+
+The workbench audit includes a synthetic three-repository project with named
+commit, file, review and item-link views. Run it with
+`WORKBENCH_PHASE=after WORKBENCH_PAGES=multiCode,multiCommit,multiFiles,multiItem,multiReviews node scripts/workbench-screenshots.mjs`.
+It exercises repository-preserving selection/history and clone controls at
+1440, 1920 and phone sizes without production credentials or network access.
+
 ## Storage and deletion
 
 `repository` maps `(project_id, name)` to an internal Artifacts `storage_name`.

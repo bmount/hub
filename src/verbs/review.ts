@@ -132,12 +132,14 @@ export const reviewRequest = defineVerb({
 
 type Listed = { slug: string; number: number; title: string; branch: string; base: string; status: string; author: string; updated_at: number; mine: number };
 
-export function reviewListStatement(ctx: Ctx, project: string | null, open: boolean) {
-  return ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:135:10:reviewListStatement:1c5a8046*/ SELECT ${projectPathSql()} AS slug, r.number, r.title, r.branch, r.base, r.status, i.display_name AS author, r.updated_at,
+export function reviewListStatement(ctx: Ctx, project: string | null, open: boolean, repo: string | null = null) {
+  return ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:135:10:reviewListStatement:1c5a8046*/ SELECT ${projectPathSql()} AS slug, r.repo,
+      (SELECT COUNT(*) FROM repository rp WHERE rp.project_id = p.id AND rp.tenant_id = p.tenant_id) AS repository_count,
+      (SELECT name FROM repository rp WHERE rp.project_id = p.id AND rp.tenant_id = p.tenant_id AND rp.is_default = 1) AS default_repository, r.number, r.title, r.branch, r.base, r.status, i.display_name AS author, r.updated_at,
       EXISTS (SELECT 1 FROM review_reviewer x WHERE x.review_id = r.id AND x.identity_id = ? AND x.verdict IS NULL) AS mine
     FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id AND p.kind IN ('repo', 'workspace') JOIN identity i ON i.id = r.author_id
-    WHERE r.tenant_id = ? AND (? IS NULL OR (${projectPathSql()}) = ?) AND (? = 0 OR r.status <> 'closed') ORDER BY mine DESC, r.updated_at DESC LIMIT 100`)
-    .bind(ctx.identity!.id, ctx.tenant!.id, project, project, open ? 1 : 0);
+    WHERE r.tenant_id = ? AND (? IS NULL OR (${projectPathSql()}) = ?) AND (? = 0 OR r.status <> 'closed') AND (? IS NULL OR r.repo = ?) ORDER BY mine DESC, r.updated_at DESC LIMIT 100`)
+    .bind(ctx.identity!.id, ctx.tenant!.id, project, project, open ? 1 : 0, repo, repo);
 }
 
 export const reviewList = defineVerb({

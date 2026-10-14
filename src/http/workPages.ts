@@ -220,8 +220,8 @@ function workLinkHtml(l: WorkLink): string {
   else if (!/\s/.test(l.target_ref)) {
     const name = "([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)";
     if (l.target_kind === "commit") {
-      const m = new RegExp(`^${name}@([0-9a-fA-F]{40})$`).exec(l.target_ref);
-      if (m) href = `/${m[1]}/code?c=${m[2]!.toLowerCase()}`;
+      const m = new RegExp(`^${name}(?:/${name})?@([0-9a-fA-F]{40})$`).exec(l.target_ref);
+      if (m) href = `/${m[1]}/code?c=${m[3]!.toLowerCase()}${m[2] ? `&repo=${encodeURIComponent(m[2])}` : ""}`;
     } else if (l.target_kind === "item") {
       const m = new RegExp(`^${name}#([1-9][0-9]{0,7})$`).exec(l.target_ref);
       if (m) href = `/${m[1]}/w/${m[2]}`;
@@ -273,7 +273,7 @@ ${canWrite ? `<form class="wb-comment" method="post" action="/api/work.comment">
 <form method="post" action="/api/work.link"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
 <label>Kind <select name="target_kind"><option value="commit">Commit</option><option value="item">Work item</option><option value="mail">Mail</option><option value="message">Message</option><option value="event">Event</option><option value="url">HTTPS URL</option></select></label>
 <label>Reference <input name="target_ref" required maxlength="500" aria-describedby="work-link-help"></label>
-<p id="work-link-help" class="lede">Commit: project@full-commit-id. Work item: project#number. Mail, message or event: its recorded ID. URL: an absolute HTTPS address without credentials.</p>
+<p id="work-link-help" class="lede">Commit: project@full-commit-id (or project/repository@full-commit-id). Work item: project#number. Mail, message or event: its recorded ID. URL: an absolute HTTPS address without credentials.</p>
 <label>Note (optional) <input name="note" maxlength="500"></label>
 <p class="lede">Adding the same kind and reference again keeps the original link and note.</p>
 <button type="submit">Add link</button></form></details>` : "";

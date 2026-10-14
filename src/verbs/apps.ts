@@ -86,7 +86,9 @@ export const appApprove = defineVerb({
 type AppRow = { script_name: string; project: string; repo: string; state: string; last_event_at: number | null; requests: number; errors: number; groups: number; last_deploy: string | null };
 
 export function appsStatement(db: D1Database, tenant_id: string, now: number) {
-  return db.prepare(`/*perf-site:src%2Fverbs%2Fapps.ts:86:10:appsStatement:a03d37c0*/ SELECT s.script_name, p.slug AS project, s.repo, s.state, s.last_event_at,
+  return db.prepare(`/*perf-site:src%2Fverbs%2Fapps.ts:86:10:appsStatement:a03d37c0*/ SELECT s.script_name, p.slug AS project, s.repo,
+      (SELECT COUNT(*) FROM repository r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id) AS repository_count,
+      (SELECT name FROM repository r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id AND r.is_default = 1) AS default_repository, s.state, s.last_event_at,
       COALESCE((SELECT SUM(requests) FROM app_stat x WHERE x.script_name = s.script_name AND x.tenant_id = s.tenant_id AND x.hour >= ?), 0) AS requests,
       COALESCE((SELECT SUM(errors) FROM app_stat x WHERE x.script_name = s.script_name AND x.tenant_id = s.tenant_id AND x.hour >= ?), 0) AS errors,
       (SELECT COUNT(*) FROM app_error_group g WHERE g.script_name = s.script_name AND g.tenant_id = s.tenant_id AND g.project_id = s.project_id AND g.last_seen >= ?) AS groups,
