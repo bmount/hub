@@ -2,6 +2,7 @@
 // them for a year, and any change gets a new name. Pages link them instead of inlining them.
 import { THEME_CSS } from "./theme";
 import { COMPONENTS_CSS } from "./styles";
+import { CLIENT_TIMING_JS } from "./clientTimingScript";
 import { WORKBENCH_JS } from "./workbenchScript";
 import { CHAT_PRESENCE_JS } from "./chatPresenceScript";
 import { CHAT_LIVE_JS } from "./chatLiveScript";
@@ -22,6 +23,7 @@ const css = THEME_CSS + COMPONENTS_CSS;
 const landingJs = /<script>([\s\S]*?)<\/script>/.exec(intro)![1]!;
 export const ASSETS = {
   css: { path: `/assets/app.${hash(css)}.css`, body: css, type: "text/css; charset=utf-8" },
+  timing: { path: `/assets/timing.${hash(CLIENT_TIMING_JS)}.js`, body: CLIENT_TIMING_JS, type: "text/javascript; charset=utf-8" },
   js: { path: `/assets/wb.${hash(WORKBENCH_JS)}.js`, body: WORKBENCH_JS, type: "text/javascript; charset=utf-8" },
   chatLive: { path: `/assets/chatlive.${hash(CHAT_LIVE_JS)}.js`, body: CHAT_LIVE_JS, type: "text/javascript; charset=utf-8" },
   presence: { path: `/assets/presence.${hash(CHAT_PRESENCE_JS)}.js`, body: CHAT_PRESENCE_JS, type: "text/javascript; charset=utf-8" },

@@ -90,7 +90,7 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
 <div class="assist-top">${toolbar("Assistant actions", `<a data-chat-link href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}" aria-current="page">Chat</a><a data-tools-link href="/assistant/tools${thread ? `?t=${esc(thread.id)}` : ""}">Tools</a><a href="/assistant">+ New chat</a>`)}</div>
 
 <div id="chatlog" class="chatlog" aria-live="polite">${log || welcome}</div>
-<form id="ask" class="composer" autocomplete="off" data-org="${esc(org)}">
+<form id="ask" data-perf="assistant.send" class="composer" autocomplete="off" data-org="${esc(org)}">
 <input type="hidden" name="thread" value="${esc(thread?.id ?? "")}">
 <div class="box"><textarea data-voice name="text" rows="1"${askNow ? ` data-autoask="${esc(askNow)}"` : ""} required maxlength="8000" aria-label="Your message" placeholder="Ask anything about ${esc(org)}…"></textarea><button type="submit" class="send" aria-label="Send">↑</button></div>
 <div class="mode" role="radiogroup" aria-label="What the assistant may do">
@@ -98,7 +98,7 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
 <label><input type="radio" name="scopes" value="write"${scopes === "write" ? " checked" : ""}> Can also make changes</label>
 </div>
 </form></div>
-<script src="${ASSETS.assistant.path}"></script>`;
+<script defer src="${ASSETS.assistant.path}"></script>`;
   const inspector = `<a class="back" data-assistant-return href="/assistant${thread ? `?t=${esc(thread.id)}` : ""}">‹ Conversation</a><h1>Assistant</h1><h2>Your conversations</h2><div class="wb-list-no-heading">${threads.length ? kitList("Conversations", threads.map(t => ({href:`/assistant?t=${t.id}`,selected:t.id === thread?.id,html:`<a href="/assistant?t=${esc(t.id)}">${esc(t.title)}</a>${t.scopes === "write" ? " · can change things" : ""}`}))) : '<p class="lede">Your private conversations appear here.</p>'}</div>`;
   const showList = new URL(request.url).searchParams.get("list") === "1";
   const shell = shellFor(ctx, env, "playground", "assistant")!;

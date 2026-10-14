@@ -17,6 +17,7 @@ await mkdir(artifacts, { recursive: true });
 const host = 'acme.pimwell.test';
 const base = `https://${host}`;
 let mf, browser, cacheBrowser, cacheServer, chatClient;
+const perfPoints = [];
 let counter = 0;
 const id = () => String(++counter).padStart(26, '0');
 const now = Date.now();
@@ -34,6 +35,7 @@ try {
       headers.set('host', headers.get('x-local-browser-host') || 'acme.pimwell.test');
       headers.delete('x-local-browser-host');
       const url = new URL(request.url); url.host = headers.get('host'); url.protocol = 'https:';
+      env = {...env, PERF: {writeDataPoint(point) { ctx.waitUntil(env.PERF_SINK.fetch('https://perf.invalid', {method:'POST',body:JSON.stringify(point)})); }}};
       return worker.fetch(new Request(url, new Request(request, { headers })), env, ctx);
     }};
   `);
@@ -47,7 +49,7 @@ try {
     bindings: { HUB_DOMAIN: 'pimwell.test', ARDI_REPO_CREATE: 'off', HUB_SECRETS_KEY: randomBytes(32).toString('base64') },
     d1Databases: ['HUB_DB'], r2Buckets: ['GIT_PUSH_STAGING'], kvNamespaces: ['RATE', 'OAUTH_KV'],
     durableObjects: { CONVERSATION: { className: 'Conversation', useSQLite: true }, INBOX: { className: 'Inbox', useSQLite: true } },
-    serviceBindings: { ARDI: async request => {
+    serviceBindings: { PERF_SINK: async request => { perfPoints.push(await request.json()); return new Response(null,{status:204}); }, ARDI: async request => {
       // Synthetic git host only; never sends a request outside this process.
       const body = await request.json(), verb = new URL(request.url).pathname.split('/api/')[1];
       const a = 'a'.repeat(40), b = 'b'.repeat(40);
@@ -181,6 +183,13 @@ try {
     const page = await ctx.newPage();
     const browserErrors = [];
     page.on('pageerror', error => browserErrors.push(error.message));
+    async function flushTiming() {
+      await page.evaluate(() => { Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'}); document.dispatchEvent(new Event('visibilitychange')); Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'}); });
+    }
+    async function joinedPoint(id, predicate) {
+      await expect.poll(() => perfPoints.some(p => p.blobs[6] === 'client' && p.blobs[5] === id && predicate(p)), {timeout:10000}).toBe(true);
+      await expect.poll(() => perfPoints.some(p => p.blobs[5] === id && ['request','rpc'].includes(p.blobs[6])), {timeout:10000}).toBe(true);
+    }
     let searchPosition;
     for (const [name, route] of Object.entries(pages).filter(([name]) => !process.env.WORKBENCH_PAGES || process.env.WORKBENCH_PAGES.split(',').includes(name))) {
       if (name === 'attention') await db.prepare('UPDATE attention SET done_at = NULL WHERE tenant_id = ?').bind(tenant).run();
@@ -194,6 +203,8 @@ try {
         await expect(time).not.toContainText(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/);
       }
       await page.screenshot({path:path.join(artifacts,`${phase}-${name}-${label}.png`),fullPage:false});
+      await flushTiming();
+      await joinedPoint(response.headers()['x-request-id'], p => p.blobs[13] === 'navigation' && p.blobs[8] === 'page');
       manifest.push({phase,name,route,viewport,file:`${phase}-${name}-${label}.png`});
       if (phase === 'after') {
         // One menu control per width: the Menu link below 1280 px, the sidebar toggle at and above it.
@@ -709,6 +720,33 @@ try {
       await expect(page.locator('main.panes')).toHaveClass('panes one');
       await verb(member, 'member.set_role', {email:'peer@example.test', role:'member'});
       console.log(`Shell and master–detail browser acceptance passed at ${viewport.width}px (single sidebar, selection and inline edits).`);
+    }
+    if (viewport.width === 1440) {
+      await page.goto(base+'/sample/docket');
+      const selectResponse = page.waitForResponse(r => new URL(r.url()).pathname === '/sample/w/2' && r.request().resourceType() === 'fetch');
+      await page.locator('#list tr[data-href="/sample/w/2"] a').first().click();
+      const selection = await selectResponse;
+      await expect(page.locator('#inspector h1')).toContainText('Keep project navigation visible');
+      await page.waitForTimeout(50);
+      await flushTiming();
+      const selectId = selection.headers()['x-request-id'];
+      for (const name of ['navigation','pane.swap','inspector.open']) await joinedPoint(selectId,p => p.blobs[13] === name);
+      await joinedPoint(selectId,p => p.blobs[8] === 'spinner');
+      await joinedPoint(selectId,p => ['docket.select','list.select'].includes(p.blobs[13]) && p.blobs[8] === 'paint');
+      // A real server mutation, not a manufactured browser event.
+      await page.goto(base+'/new?project=sample');
+      await page.locator('input[name=title]').fill('Timing audit fixture');
+      const submitResponse = page.waitForResponse(r => r.request().method() === 'POST' && r.request().resourceType() === 'fetch');
+      await page.locator('#list button[type=submit]').click();
+      const submitted = await submitResponse;
+      await expect(page).toHaveURL(/\/sample\/w\/\d+$/);
+      await page.waitForTimeout(50);
+      await flushTiming();
+      const submitId = submitted.headers()['x-request-id'];
+      await joinedPoint(submitId,p => p.blobs[13] === 'form.submit' && p.blobs[8] === 'fetch');
+      await joinedPoint(submitId,p => p.blobs[8] === 'spinner');
+      await db.prepare("DELETE FROM work_item WHERE project_id = ? AND title = 'Timing audit fixture'").bind(sampleId).run();
+      console.log('Browser timing navigation, pane, form, paint and spinner joins passed.');
     }
     await ctx.close();
   }

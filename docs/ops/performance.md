@@ -44,7 +44,7 @@ Every point uses **index1 = Worker version UUID**. Identity is repeated in blobs
 | 4 | Request `cf.colo` (propagated to internal calls and WebSocket attachments) |
 | 5 | Keyed tenant hash |
 | 6 | Server request ID |
-| 7 | Kind: `request`, `rpc`, `span`, `other`, `invocation` |
+| 7 | Kind: `request`, `rpc`, `span`, `other`, `invocation`, `client` |
 | 8 | Executed route template, or code-defined event name |
 | 9 | HTTP method, or event kind |
 | 10 | Status class (`2xx`, etc.) |
@@ -106,4 +106,34 @@ WHERE index1 = 'worker-version-uuid' AND blob7 = 'invocation'
 GROUP BY worker
 ```
 
-Guardrails in `test/perf-budget.test.ts` enumerate every registered route, verb and public Durable Object method, assert actual span emission, cover both scheduled handlers, exercise page/API/MCP/git/chat collection and check content/credential exclusion, nesting, failures, D1 metadata and the cap. The existing deadline tests ensure tracing does not change cancellation/timer behavior. `node scripts/perf-overhead.mjs` measures warmed CPU-only overhead against fake I/O at ordinary, capped and overflowing span counts; the host suite asserts <1 ms. This isolates tracer/serialization cost and explicitly excludes native Analytics Engine ingestion; live native invocation CPU provides the production cross-check. Browser, synthetic collection and authorized product querying are separate quest items.
+Guardrails in `test/perf-budget.test.ts` enumerate every registered route, verb and public Durable Object method, assert actual span emission, cover both scheduled handlers, exercise page/API/MCP/git/chat collection and check content/credential exclusion, nesting, failures, D1 metadata and the cap. The existing deadline tests ensure tracing does not change cancellation/timer behavior. `node scripts/perf-overhead.mjs` measures warmed CPU-only overhead against fake I/O at ordinary, capped and overflowing span counts; the host suite asserts <1 ms. This isolates tracer/serialization cost and explicitly excludes native Analytics Engine ingestion; live native invocation CPU provides the production cross-check. Browser collection is described below; synthetic collection and authorized product querying are separate quest items.
+
+## Browser timing
+
+The signed-in frame loads a content-hashed collector before its deferred pane clients. Existing `/client/slow` error grouping is unchanged. `POST /client/timing` accepts only a same-origin browser-cookie session (and tenant membership on tenant hosts); it accepts no client-supplied tenant, version, identity or source. Apex account pages use an empty tenant dimension. The existing KV limiter allows 120 batches/minute **per session**, not per identity; its eventual-consistency limits apply here too. Each request is bounded to 32 KiB and 100 points. The client keeps at most 300 unsent points, drains batches of 100 with `sendBeacon` on pagehide/hidden visibility, and also drains at the high-water mark. Delivery is best-effort and never blocks or retries product writes.
+
+Every point has exactly six keys: `path`, `previous` (route templates), `name`, `phase` (fixed labels), `request` (server UUID) and `duration` (finite 0–3,600,000). No URL queries, project/channel/person names, text, selectors, form fields or message contents enter the wire format. Navigation response `Server-Timing: request;desc="<UUID>"` mirrors `X-Request-ID` so Navigation Timing can read it without an extra fetch. Enhanced fetches use `X-Request-ID`; their paint/fetch/indicator points join that response. Input-only work, aborted/unacknowledged waits and responses without readable headers retain the initiating page's server ID, **not an invented ID for an unseen response**. Client IDs/measurements are untrusted observations; join server data by authorized tenant as well as request ID.
+
+### Fixed allowlists
+
+Markup is marked `data-perf`; the collector supplies fixed defaults for native forms, table rows, links, inline inspector disclosures and search inputs, including replacement panes. Assistant and chat composers carry explicit names. Only the following names are accepted:
+
+- Page: `navigation`, `dns`, `connect`, `tls`, `ttfb`, `response`, `dom.interactive`, `load`, `lcp`, `cls`, `longtask`.
+- Interaction: `list.select`, `docket.select`, `pane.swap`, `form.submit`, `inspector.open`, `chat.send`, `assistant.send`, `search`.
+- Live/voice: `chat.connect`, `chat.reconnect`, `presence.connect`, `presence.reconnect`, `assistant.first-token`, `voice.transcribe`, `voice.correct`.
+- Phases: `page`, `paint`, `fetch`, `spinner`, `connection`, `first-token`.
+- Routes: `/`, `/docket`, `/people`, `/apps`, `/jump`, `/search`, `/assistant`, `/assistant/tools`, `/assistant/chat`, `/do`, `/new`, `/attention`, `/mail`, `/mail/:message`, `/mail/recipients`, `/c`, `/c/:channel`, `/c/:channel/t/:number`, `/inbox`, `/usage`, `/situations`, `/archive`, `/skills`, `/skills/:skill`, `/projects/new`, `/me`, `/me/sessions`, `/admin/:section`, `/people/:person`, `/:project`, `/:project/docket`, `/:project/w/:number`, `/:project/graph`, `/:project/frontier`, `/:project/board`, `/:project/status`, `/:project/code`, `/:project/files`, `/:project/reviews`, `/:project/reviews/:number`, `/:project/wiki`, `/:project/wiki/:slug`, `/:project/documents`, `/:project/contacts`, `/:project/contacts/:entity`, `/api/:verb`, `/voice/:operation`, `/chat/v1/ws`, `/other`.
+
+`src/clientTiming.ts` is the shared server/browser vocabulary. New labels must be added there and here, never inferred from visible/user text.
+
+### Interpretation and joins
+
+Client points reuse the v1 identity columns and `double1` for the measurement. For kind `client`, **blob8** is the client route template, **blob9** is the phase, **blob14** is the allowlisted name, and **blob19** is the previous route template. **blob6** is the joined server request ID, never the beacon POST's ID. `double10` also holds first-token availability for `first-token` points; other server-only fields retain their unavailable/default values. Version/colo describe the receiving hub invocation; a delayed beacon can cross a deployment boundary, so use the joined server point for the origin response's version/colo. Never sum overlapping phases or shared chat/presence measurements.
+
+DNS/connect/TLS/TTFB/response are Navigation Timing differences. DOM interactive and load are offsets from navigation start. LCP is the latest available candidate offset; CLS is unitless (the maximum session window: 1 s gaps, 5 s maximum), not milliseconds. Vitals belong to the original document/server ID even after enhanced pane changes. CLS/LCP snapshots may be sent again after visibility resumes; use their maximum per document request, not their sum. Long tasks are individual durations where supported. Unsupported observer APIs omit those measurements rather than report a fabricated zero.
+
+Input-to-next-paint uses Event Timing where available (16 ms threshold), otherwise a task after requestAnimationFrame. Pane readiness uses the same post-frame fallback, from the initiating fetch start. Native same-origin links/forms carry only an allowlisted action and bounded timestamp across navigation in sessionStorage, joining the destination document's ID; their fetch duration is navigation responseEnd. BFCache restoration has zero network duration and reuses its document's server ID. Enhanced navigation separately records fetch/body/render completion, the progress cursor's visible wait, and the new route plus previous template. Inline submit controls, Assistant thinking dots, live chat send controls and voice busy indicators also record their waits and triggering action. An aborted wait without a response can only join its initiating document.
+
+Chat and socket presence share one authenticated WebSocket. Its first `connected` frame carries the upgrade's server request ID (also in the response header); connect/reconnect points measure attempt-to-authenticated-readiness, excluding reconnect backoff. Chat command acknowledgements carry their server invocation ID for send/indicator joins, distinct from the client's command correlation ID. The current Assistant is non-streaming: first-token means first decoded reply text availability, not first transport byte. Telemetry does not clone/consume extra response bodies or alter cancellation deadlines.
+
+`npm run test:browser:workbench` exercises every audit view at three widths, checks accepted navigation beacons against captured server points, and explicitly joins pane selection, form submission, input paint and spinner points. Endpoint tests cover exact keys/labels, bounds, auth, tenant pseudonyms and independent session quotas.

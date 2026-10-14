@@ -1,4 +1,4 @@
-import { timedStorage, timedEnv, instrumentDurableObject, traceColo, traceFields } from "../perf";
+import { timedStorage, timedEnv, instrumentDurableObject, traceColo, traceFields, requestId } from "../perf";
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { bindOnce, storedBinding } from "./bound";
@@ -137,6 +137,7 @@ export class Inbox extends DurableObject<Env> {
     pair[1].serializeAttachment(state);
     // Async work uses hibernatable sockets; no timers or parked long-polls.
     this.ctx.waitUntil(this.#queue(pair[1], async () => {
+      pair[1].send(JSON.stringify({ type: 'connected', server_request_id: requestId() }));
       await this.#push(pair[1], true);
       await this.#presence(state, 'online').catch(() => {});
     }));
@@ -167,7 +168,7 @@ export class Inbox extends DurableObject<Env> {
         ws.send(JSON.stringify({ request_id: typeof frame.request_id === 'string' ? frame.request_id.slice(0, 64) : null, ok: false, error: { code: 'bad_request' } })); return;
       }
       const response = await handleChatApi(this.#request(state, frame.method, { ...frame.params as Record<string, unknown>, ...(frame.method === 'getUpdates' ? { timeout: 0 } : {}) }), this.env, p => this.ctx.waitUntil(p));
-      ws.send(JSON.stringify({ ...await response.json() as object, request_id: frame.request_id }));
+      ws.send(JSON.stringify({ ...await response.json() as object, request_id: frame.request_id, server_request_id: requestId() }));
     });
   }
 

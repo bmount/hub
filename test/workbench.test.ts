@@ -5,6 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import { address, localTime, timeText, naturalName, plural } from "../src/html";
 import { WORKBENCH_JS } from "../src/workbenchScript";
 import { clientSlow } from "../src/http/clientSlow";
+import { clientTiming } from "../src/http/clientTiming";
+import { timingPath, TIMING_PATHS } from "../src/clientTiming";
+import { createBrowserSession } from "../src/db/sessions";
 import { createProject } from "../src/db/projects";
 import { addAgentMember, createChannel } from "../src/db/chat";
 import { apiPost, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
@@ -148,6 +151,53 @@ describe("the workbench", () => {
     const response = await SELF.fetch("https://other.pimwell.test/client/slow", { method: "POST", headers: { ...cookieHeaders(outsider.token, "other.pimwell.test"), origin: "https://other.pimwell.test", "x-pimwell-client": "1" }, body: JSON.stringify(payload) });
     expect(response.status).toBe(204);
     expect(await env.HUB_DB.prepare("SELECT count(*) AS n FROM app_event").first()).toEqual({ n: 2 });
+  });
+
+  it("validates timing batches, joins IDs and isolates the authenticated tenant", async () => {
+    const w = await world();
+    const points: Parameters<AnalyticsEngineDataset["writeDataPoint"]>[0][] = [];
+    const measured = {...env, WORKER_VERSION:{id:"test-version",tag:"",timestamp:""}, PERF:{writeDataPoint:(p: Parameters<AnalyticsEngineDataset["writeDataPoint"]>[0]) => points.push(p)} as unknown as AnalyticsEngineDataset};
+    const request = crypto.randomUUID();
+    const payload = [{path:"/:project/docket",previous:"/",name:"docket.select",phase:"paint",request,duration:12.5}];
+    async function send(body: unknown = payload, headers: Record<string,string> = {}) {
+      const pending: Promise<unknown>[] = [];
+      const res = await clientTiming(new Request(`https://${HOST}/client/timing`,{method:"POST",headers:{...w.h,origin:`https://${HOST}`,...headers},body:JSON.stringify(body)}),measured,p=>pending.push(p));
+      await Promise.all(pending); return res;
+    }
+    expect((await send()).status).toBe(204);
+    expect(points).toHaveLength(1);
+    expect(points[0]!.blobs).toEqual(["pimwell.com","pimwell-hub","test-version","",expect.stringMatching(/^[0-9a-f]{32}$/),request,"client","/:project/docket","paint","","cookie","","","docket.select","","","","","/"]);
+    expect(points[0]!.doubles?.[0]).toBe(12.5);
+    for (const change of [{path:"/secret?q=mail"},{previous:"/private"},{name:"secret"},{phase:"secret"},{request:"secret"},{duration:-1},{duration:3600001},{duration:null},{text:"private"},{tenant:w.t.id},{version:"spoof"}]) expect((await send([{...payload[0],...change}])).status).toBe(400);
+    for (const body of [null,{},[],Array(101).fill(payload[0]),["x"], "x".repeat(33000)]) expect((await send(body)).status).toBe(400);
+    for (const headers of [{origin:"https://evil.test"},{cookie:""},{cookie:"",authorization:`Bearer ${w.pat.token}`}] as Record<string,string>[]) expect((await send(payload,headers)).status).toBe(403);
+    expect(points).toHaveLength(1);
+    for (const path of ["/sample/wiki/private?q=mail","/sample/reviews/42","/c/private/t/2","/people/private@example.test","/admin/models","/me/sessions"]) {
+      const template = timingPath(path); expect(TIMING_PATHS).toContain(template); expect(template).not.toContain("private");
+    }
+    const foreign = await seedTenant("other");
+    const outsider = await seedHuman("outsider@example.com",{memberships:[{tenant_id:foreign.id,role:"member"}]});
+    const pending: Promise<unknown>[] = [];
+    expect((await clientTiming(new Request("https://other.pimwell.test/client/timing",{method:"POST",headers:{...cookieHeaders(outsider.token,"other.pimwell.test"),origin:"https://other.pimwell.test"},body:JSON.stringify(payload)}),measured,p=>pending.push(p))).status).toBe(204);
+    await Promise.all(pending);
+    expect(points[1]!.blobs?.[4]).not.toBe(points[0]!.blobs?.[4]);
+  });
+
+  it("rate limits timing per browser session, not identity, and bounds each batch", async () => {
+    const w = await world();
+    const clock = vi.spyOn(Date,"now").mockReturnValue(Date.now());
+    const body = JSON.stringify([{path:"/",previous:"/other",name:"navigation",phase:"page",request:crypto.randomUUID(),duration:1}]);
+    const send = async (token = w.pat.token) => {
+      const pending: Promise<unknown>[] = [];
+      const res = await clientTiming(new Request(`https://${HOST}/client/timing`,{method:"POST",headers:{...cookieHeaders(token,HOST),origin:`https://${HOST}`},body}),env,p=>pending.push(p));
+      await Promise.all(pending); return res;
+    };
+    try {
+      for (let n=0;n<120;n++) expect((await send()).status).toBe(204);
+      expect((await send()).status).toBe(429);
+      const another = await createBrowserSession(env.HUB_DB,w.pat.identity.id,Date.now());
+      expect((await send(another.token)).status).toBe(204);
+    } finally { clock.mockRestore(); }
   });
 
   it("caps browser-report examples and rate-limits each signed-in identity", async () => {

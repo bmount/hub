@@ -58,12 +58,13 @@ export const ASSISTANT_JS = String.raw`
     var w = add("assistant", '<div class="thinking"><i></i><i></i><i></i> Looking through ' + esc(f.dataset.org) + "…</div>");
     var btn = f.querySelector(".send"); btn.disabled = true;
     var fail = function (why) { w.innerHTML = '<p class="err">Not done: ' + esc(why) + '</p><button type="button" class="quiet" data-retry="' + esc(t) + '">Try again</button>'; };
+    var perfOp = window.pimwellTiming && window.pimwellTiming.start("assistant.send");
     var controller = new AbortController(), started = performance.now(); active = controller;
     var timer = setTimeout(function () { controller.abort(); }, 60000);
     var stopped = new Promise(function (_, reject) { controller.signal.addEventListener("abort", function () { reject(new Error("Assistant request stopped")); }, { once: true }); });
     Promise.race([stopped, fetch("/assistant/chat", { method: "POST", credentials: "same-origin", signal: controller.signal, headers: { "content-type": "application/json", "x-pimwell-playground": "1" },
       body: JSON.stringify({ thread: f.thread.value || null, text: t, scopes: f.scopes.value }) })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })])
+      .then(function (r) { if (perfOp) window.pimwellTiming.response(perfOp, r); return r.json().then(function (j) { if (perfOp && r.ok) window.pimwellTiming.point("assistant.first-token", "first-token", performance.now() - started, perfOp.id); return { ok: r.ok, j: j }; }); })])
       .then(function (x) {
         if (controller.signal.aborted || performance.now() - started >= 60000) { controller.abort(); throw new Error("Assistant response overdue"); }
         bindThread(x.j.thread, t);
@@ -71,7 +72,7 @@ export const ASSISTANT_JS = String.raw`
         w.innerHTML = fmt(x.j.reply) + steps(x.j.steps); w.scrollIntoView({ block: "end", behavior: "smooth" });
       })
       .catch(function () { fail("the response did not arrive. Actions may have completed; check before trying again"); })
-      .finally(function () { clearTimeout(timer); active = null; pending = false; btn.disabled = false; if (!coarse && f.isConnected) f.text.focus(); });
+      .finally(function () { if (perfOp) window.pimwellTiming.end(perfOp, true); clearTimeout(timer); active = null; pending = false; btn.disabled = false; if (!coarse && f.isConnected) f.text.focus(); });
   }
   f.addEventListener("submit", function (e) {
     e.preventDefault(); if (pending) return;

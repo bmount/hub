@@ -131,7 +131,7 @@ function channelMessages(slug: string, messages: MsgJson[], readSeq: number | un
 
 function compose(action: string, head: number, draft: string, notice: string, label: string): string {
   const note = notice ? `<p role="status"><strong>${esc(notice)}</strong></p>` : "";
-  return `${note}<form class="channel-compose" method="post" action="${esc(action)}"><input type="hidden" name="after" value="${head}">`
+  return `${note}<form class="channel-compose" data-perf="chat.send" method="post" action="${esc(action)}"><input type="hidden" name="after" value="${head}">`
     + `<label for="chat-body">${esc(label === "Reply" ? "Reply in thread" : "Message channel")}</label><textarea id="chat-body" data-voice name="body" rows="4" cols="60" maxlength="8192" required>${esc(draft)}</textarea><button type="submit">${esc(label)}</button></form>`;
 }
 

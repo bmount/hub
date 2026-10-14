@@ -205,6 +205,7 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
     init = init || {};
     var controller = init.controller || new AbortController(); delete init.controller;
     init.signal = controller.signal;
+    var perfOp = init.perfOp || window.pimwellTiming.start(); delete init.perfOp;
     var started = performance.now(), phase = "headers", status = null, timedOut = false, rejectWait;
     var stop = new Promise(function (_, reject) { rejectWait = reject; });
     function aborted() { rejectWait(new Error("Request aborted")); }
@@ -215,6 +216,7 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
       if (controller.signal.aborted) throw new Error("Request aborted");
     }
     var operation = fetch(url, init).then(function (res) {
+      window.pimwellTiming.response(perfOp, res);
       check(); status = res.status; phase = "body";
       return read(res, function (next) { check(); phase = next; });
     }).then(function (value) { check(); return value; });
@@ -225,7 +227,7 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
     }, function (error) {
       if (timedOut || !controller.signal.aborted) report(url, performance.now() - started, phase, timedOut ? "timeout" : "failure", status);
       throw error;
-    }).finally(function () { clearTimeout(timer); controller.signal.removeEventListener("abort", aborted); });
+    }).finally(function () { window.pimwellTiming.end(perfOp, !!perfOp.spinner); clearTimeout(timer); controller.signal.removeEventListener("abort", aborted); });
   }
   function navigationNotice(url, failed) {
     var note = $("#wb-navigation");
@@ -245,6 +247,7 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
     opts = opts || {};
     var init = { method: opts.method || "GET", credentials: "same-origin", headers: { "x-workbench": "1" } };
     if (opts.body) { init.body = opts.body; init.headers["content-type"] = "application/x-www-form-urlencoded"; }
+    var perfOp = window.pimwellTiming.start(); perfOp.spinner = true; init.perfOp = perfOp;
     var mine = ++busy;
     clearTimeout(timer); if (searchController) { searchController.abort(); searchController = null; }
     if (activeNavigation) activeNavigation.abort();
@@ -269,6 +272,7 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
         }
         var destination = new URL(res.url || url, location.href); destination.hash = new URL(url, location.href).hash;
         swap(doc, destination.href, opts.push !== false, init.method !== "GET");
+        window.pimwellTiming.navigate(destination.href, perfOp);
       });
     }).then(function () { if (mine === busy) { var note = $("#wb-navigation"); if (note) note.remove(); } })
       .catch(function () { if (init.method !== "GET") ambiguous(); else if (mine === busy) navigationNotice(url, true); })
@@ -330,7 +334,8 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
   function inline(f) {
     var body = {}; new FormData(f).forEach(function (v, k) { if (k.charAt(0) !== "_") body[k] = v; });
     var btn = f.querySelector("button[type=submit]"); if (btn) btn.disabled = true;
-    request(f.getAttribute("action"), { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) }, function (r) { return r.json(); })
+    var perfOp = window.pimwellTiming.start("form.submit"); perfOp.spinner = !!btn;
+    request(f.getAttribute("action"), { perfOp: perfOp, method: "POST", credentials: "same-origin", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(body) }, function (r) { return r.json(); })
       .then(function (j) {
         var note = document.createElement("p"); note.className = "lede";
         if (j.ok) {
@@ -474,7 +479,8 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
     function say(t, cls) { st.textContent = t; st.className = "voicestate" + (cls ? " " + cls : ""); }
     function post(url, body, headers) {
       headers = headers || {}; headers["x-pimwell-voice"] = "1";
-      return request(url, { method: "POST", credentials: "same-origin", headers: headers, body: body }, function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }, function () { return { ok: false, j: {} }; }); });
+      var perfOp = window.pimwellTiming.start(url === "/voice/transcribe" ? "voice.transcribe" : "voice.correct"); perfOp.spinner = true;
+      return request(url, { perfOp: perfOp, method: "POST", credentials: "same-origin", headers: headers, body: body }, function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }, function () { return { ok: false, j: {} }; }); });
     }
     function meter(me) {
       if (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) return;

@@ -14,6 +14,7 @@ export const CHAT_LIVE_JS = String.raw`(() => {
   let ws, offset = 0, closed = false, reconnect, heartbeat, expiry, refreshing = false, again = false;
   let pending = null, sendTimeout, adoptPending = false, typingAt = 0, lastSeen = Date.now();
   const transient = new Map();
+  let connectedOnce = false, connectionStarted = 0;
   function renderSignals() {
     signals.replaceChildren();
     for (const [key, value] of transient) {
@@ -24,8 +25,10 @@ export const CHAT_LIVE_JS = String.raw`(() => {
   async function refresh(adopt = false) {
     if (refreshing) { again = true; adoptPending = adoptPending || adopt; return; }
     refreshing = true;
+    const perfOp = window.pimwellTiming && window.pimwellTiming.start('pane.swap');
     try {
       const response = await fetch(location.href, { cache: 'no-store', redirect: 'error' });
+      if (perfOp) window.pimwellTiming.response(perfOp, response);
       if (!response.ok) throw Error();
       const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
       if (closed) return;
@@ -41,7 +44,7 @@ export const CHAT_LIVE_JS = String.raw`(() => {
       // Keep the write's original read-before-write watermark while a draft exists.
       if (nextHead && currentHead && (!body.value || adopt)) currentHead.value = nextHead.value;
     } catch { status.textContent = 'Could not refresh messages. Use Refresh to recover.'; }
-    finally { refreshing = false; if (again && !closed) { again = false; const adoptNext = adoptPending; adoptPending = false; refresh(adoptNext); } }
+    finally { if (perfOp) window.pimwellTiming.end(perfOp, false); refreshing = false; if (again && !closed) { again = false; const adoptNext = adoptPending; adoptPending = false; refresh(adoptNext); } }
   }
   function command(method, params, request_id = crypto.randomUUID()) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
@@ -50,14 +53,27 @@ export const CHAT_LIVE_JS = String.raw`(() => {
   function connect() {
     if (closed) return;
     const url = new URL('/chat/v1/ws', location.origin); url.protocol = 'wss:'; url.searchParams.set('offset', offset);
+    connectionStarted = performance.now();
     ws = new WebSocket(url);
     ws.onopen = () => { lastSeen = Date.now(); status.textContent = 'Live'; };
     ws.onmessage = event => {
       lastSeen = Date.now();
       let frame; try { frame = JSON.parse(event.data); } catch { return; }
+      if (frame.type === 'connected') {
+        if (window.pimwellTiming) {
+          window.pimwellTiming.point(connectedOnce ? 'chat.reconnect' : 'chat.connect', 'connection', performance.now() - connectionStarted, frame.server_request_id);
+          window.pimwellTiming.point(connectedOnce ? 'presence.reconnect' : 'presence.connect', 'connection', performance.now() - connectionStarted, frame.server_request_id);
+        }
+        connectedOnce = true; return;
+      }
       if (frame.request_id) {
         if (pending && frame.request_id === pending.request_id) {
-          const sent = pending; pending = null; clearTimeout(sendTimeout); form.querySelector('button[type="submit"]').disabled = false;
+          const sent = pending; pending = null;
+          if (sent.perfOp && frame.server_request_id) {
+            window.pimwellTiming.response(sent.perfOp, {headers:{get: () => frame.server_request_id}});
+            window.pimwellTiming.end(sent.perfOp, true);
+          }
+          clearTimeout(sendTimeout); form.querySelector('button[type="submit"]').disabled = false;
           if (frame.ok) { sessionStorage.removeItem('chat-send-intent:' + chat.id); if (body.value === sent.text) body.value = ''; refresh(); }
           else { sessionStorage.removeItem('chat-send-intent:' + chat.id); status.textContent = 'Not sent: ' + frame.error.code + '. Review messages before submitting again.'; refresh(frame.error.code === 'stale_view'); }
         }
@@ -84,7 +100,7 @@ export const CHAT_LIVE_JS = String.raw`(() => {
     };
     ws.onclose = () => {
       transient.clear(); renderSignals();
-      if (pending) { clearTimeout(sendTimeout); pending = null; form.querySelector('button[type="submit"]').disabled = false; status.textContent = 'Send outcome unknown. Draft kept; reconcile before resending.'; }
+      if (pending) { if (pending.perfOp) window.pimwellTiming.end(pending.perfOp, true); clearTimeout(sendTimeout); pending = null; form.querySelector('button[type="submit"]').disabled = false; status.textContent = 'Send outcome unknown. Draft kept; reconcile before resending.'; }
       else if (!closed) status.textContent = 'Reconnecting…';
       if (!closed) reconnect = setTimeout(connect, 2000 + Math.random() * 3000);
     };
@@ -102,16 +118,20 @@ export const CHAT_LIVE_JS = String.raw`(() => {
     // Retain exact intent before delivery, including when the reply is lost.
     try { sessionStorage.setItem('chat-send-intent:' + chat.id, JSON.stringify(pending)); }
     catch { pending = null; status.textContent = 'Not sent: intent storage unavailable. Use the ordinary form after disconnecting.'; return; }
+    pending.perfOp = window.pimwellTiming && window.pimwellTiming.start('chat.send');
     form.querySelector('button[type="submit"]').disabled = true;
     command('sendMessage', pending.params, pending.request_id);
     sendTimeout = setTimeout(() => {
       if (!pending) return;
+      if (pending.perfOp) window.pimwellTiming.end(pending.perfOp, true);
       pending = null; form.querySelector('button[type="submit"]').disabled = false;
       status.textContent = 'Send outcome unknown. Draft kept; reconcile before resending.'; refresh();
     }, 15000);
   }
   function stop(clear = true) {
     closed = true; clearTimeout(reconnect); clearTimeout(sendTimeout); clearInterval(heartbeat); clearInterval(expiry);
+    if (pending && pending.perfOp) window.pimwellTiming.end(pending.perfOp, true);
+    pending = null;
     if (ws) { ws.onclose = null; ws.close(); }
     if (form) form.removeEventListener('submit', submit);
     if (body) body.removeEventListener('input', typing);

@@ -247,6 +247,21 @@ export function installFetchTiming(): void {
   }) as typeof fetch;
 }
 
+export function requestId(): string { return context.getStore()?.trace.id ?? ""; }
+
+export async function writeClientPoints(env: Parameters<typeof writeTrace>[0], tenantId: string, colo: string, points: import("./clientTiming").ClientPoint[]): Promise<void> {
+  if (!env.PERF) return;
+  try {
+    const tenant = await tenantHash(tenantId, env.PERF_TENANT_KEY ?? env.HUB_INTERNAL_SECRET ?? env.HUB_SECRETS_KEY ?? "");
+    const version = env.WORKER_VERSION?.id ?? "unknown";
+    for (const p of points) env.PERF.writeDataPoint({
+      indexes: [version],
+      blobs: ["pimwell.com", "pimwell-hub", version, colo, tenant, p.request, "client", p.path, p.phase, "", "cookie", "", "", p.name, "", "", "", "", p.previous],
+      doubles: [p.duration, 0, 0, 0, 0, -1, -1, -1, -1, p.phase === "first-token" ? p.duration : -1, 1, 0, 0, 1],
+    });
+  } catch { /* best-effort: never fail the product */ }
+}
+
 const tenantHashes = new Map<string, string>();
 async function tenantHash(tenant: string, secret: string): Promise<string> {
   if (!tenant || !secret) return "";

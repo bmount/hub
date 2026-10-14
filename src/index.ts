@@ -1,4 +1,5 @@
 import { clientSlow } from "./http/clientSlow";
+import { clientTiming } from "./http/clientTiming";
 import { situationsPage } from "./http/situationPage";
 import { statusPage } from "./http/statusPage";
 import { boardPage } from "./http/boardPage";
@@ -89,7 +90,7 @@ app.use("*", async (c, next) => {
   trace.ended = performance.now();
   const headers = new Headers(c.res.headers);
   headers.set("x-request-id", trace.id);
-  headers.set("server-timing", serverTiming(Date.now() - started, meter, trace));
+  headers.set("server-timing", serverTiming(Date.now() - started, meter, trace) + `, request;desc="${trace.id}"`);
   c.res = new Response(c.res.body, { status: c.res.status, statusText: c.res.statusText, headers,
     ...(c.res.webSocket ? { webSocket: c.res.webSocket } : {}) });
   c.executionCtx.waitUntil(deferredTrace(rawEnv, trace));
@@ -111,6 +112,7 @@ app.use("*", async (c, next) => {
 /** Hono types its execution context separately from workers-types; at runtime it is the Worker's own. */
 const workerCtx = (c: unknown): ExecutionContext => c as ExecutionContext;
 
+app.post("/client/timing", (c) => clientTiming(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.post("/client/slow", (c) => clientSlow(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
 app.get("/healthz", (c) => c.text("ok"));
 // What an agent reads when its person says "set up pimwell.com" (skill: onboard). Public: it holds no secrets.

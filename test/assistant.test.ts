@@ -103,7 +103,7 @@ describe("the Assistant", () => {
     const w = await world();
     const page = await (await SELF.fetch(`https://${HOST}/assistant`, { headers: cookieHeaders(w.pat.token, HOST) })).text();
     expect(page).not.toContain("<script>");
-    expect(page).toContain(`<script src="${ASSETS.assistant.path}"></script>`);
+    expect(page).toContain(`<script defer src="${ASSETS.assistant.path}"></script>`);
     const script = await SELF.fetch(`https://${HOST}${ASSETS.assistant.path}`);
     expect(script.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
     expect(() => new Function(ASSETS.assistant.body)).not.toThrow();
