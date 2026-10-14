@@ -288,9 +288,26 @@ describe("Artifacts code snapshots", () => {
     expect(first.result.files.map((f) => [f.path, f.binary])).toEqual([["a.ts", false], ["logo.png", true], ["src/b.ts", false], ["src/c.ts", false]]);
     expect(first.result.files[2]!.text).toBe(first.result.files[3]!.text);
     expect(first.result.files[2]!.text).toContain("needle again");
+    s.requests.length = 0;
     const again = await s.read<{ files: unknown[] }>("snapshot", { rev: commit.hash });
     expect(again.result.files).toEqual(first.result.files);
-    expect(s.requests.filter((path) => path.endsWith("/git-upload-pack"))).toHaveLength(1);
+    expect(s.requests).toEqual([]);
+    expect(s.requests.filter((path) => path.endsWith("/git-upload-pack"))).toHaveLength(0);
+  });
+
+  it("resolves symbolic refs freshly without a commit log, and shares their verified snapshot with immutable reads", async () => {
+    const s = await setup(), { response, commit } = syntheticSnapshot();
+    s.serve(commit, response);s.setHead(commit.hash);
+    const first = await s.read("snapshot", { rev: "main" });
+    expect(s.requests.some(path => path.endsWith("/log"))).toBe(false);
+    s.requests.length = 0;
+    expect(await s.read("snapshot", { rev: "HEAD" })).toEqual(first);
+    expect(s.requests.some(path => path.endsWith("/info/refs"))).toBe(true);
+    expect(s.requests.some(path => path.endsWith("/git-upload-pack"))).toBe(false);
+    s.setHead(hash(999));
+    await expect(s.read("snapshot", { rev: "main" })).rejects.toMatchObject({ status: 502 });
+    s.setDescription("another owner");
+    await expect(s.read("snapshot", { rev: "main" })).rejects.toMatchObject({ status: 503 });
   });
 
   it("checks the caller's access before answering from the cache", async () => {

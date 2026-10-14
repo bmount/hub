@@ -89,7 +89,7 @@ export function refAllowed(ref: string, prefixes?: string[]): boolean {
 
 export type AdvertisedRef = { name: string; target: string };
 
-export function parseAdvertisedRefs(bytes: Uint8Array): AdvertisedRef[] {
+export function parseAdvertisedRefs(bytes: Uint8Array, includeHead = false): AdvertisedRef[] {
   const result: AdvertisedRef[] = [];
   for (let position = 0; position < bytes.length;) {
     if (bytes.length - position < 4) throw new Error("truncated refs");
@@ -97,8 +97,8 @@ export function parseAdvertisedRefs(bytes: Uint8Array): AdvertisedRef[] {
     if (!length) continue;
     if (position + length - 4 > bytes.length) throw new Error("truncated refs");
     const line = decode.decode(bytes.subarray(position, position + length - 4)).split("\0")[0]!.trim();position += length - 4;
-    const match = /^([0-9a-f]{40}) (refs\/[^\s]+)$/.exec(line);
-    if (match) result.push({ name: match[2]!, target: match[1]! });
+    const match = /^([0-9a-f]{40}) (refs\/[^\s]+|HEAD)$/.exec(line);
+    if (match && (includeHead || match[2] !== "HEAD")) result.push({ name: match[2]!, target: match[1]! });
   }
   return result;
 }

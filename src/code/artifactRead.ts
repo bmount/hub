@@ -12,7 +12,7 @@ async function refs(api: ArtifactsRest, namespace: string, repo: string): Promis
   const request = new Request(`https://git.internal/${repo}.git/info/refs?service=git-upload-pack`);
   const response = await api.git(namespace, repo, "info/refs", request, null, false);
   if (!response.ok) throw new HubError(502, "unavailable", "Git refs unavailable");
-  try { return parseAdvertisedRefs(new Uint8Array(await response.arrayBuffer())); }
+  try { return parseAdvertisedRefs(new Uint8Array(await response.arrayBuffer()), true); }
   catch { throw new HubError(502, "unavailable", "invalid Git refs"); }
 }
 
@@ -51,12 +51,29 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
     const hit = await caches.default.match(cacheKey("read", revision, path));
     if (hit) return { result: await hit.json() as T, next: null };
   }
+  if (verb === "snapshot" && /^[0-9a-f]{40}$/.test(revision)) {
+    const hit = await caches.default.match(cacheKey("snapshot", revision));
+    if (hit) return { result: { oid: revision, files: await hit.json() } as T, next: null };
+  }
+  const snapshotRefs = verb === "snapshot" && !/^[0-9a-f]{40}$/.test(revision) ? await refs(api, namespace, repo) : null;
+  const findRef = (all: ArdiRef[], name: string) => {
+    const found = all.find(ref => ref.name === name) ?? (!name.startsWith("refs/") ? all.find(ref => ref.name === `refs/heads/${name}`) ?? all.find(ref => ref.name === `refs/tags/${name}`) : undefined);
+    return found ? all.find(ref => ref.name === `${found.name}^{}`)?.target ?? found.target : null;
+  };
+  if (snapshotRefs) {
+    const oid = findRef(snapshotRefs, revision);
+    if (oid) {
+      const hit = await caches.default.match(cacheKey("snapshot", oid));
+      if (hit) return { result: { oid, files: await hit.json() } as T, next: null };
+    }
+  }
   const [info, indexedRoot] = await Promise.all([
     api.info(namespace, repo),
     verb === "file.read" && /^[0-9a-f]{40}$/.test(revision)
       ? env.HUB_DB.prepare("SELECT tree_hash FROM repository_commit WHERE tenant_id = ? AND project_id = ? AND repo = ? AND oid = ?")
         .bind(grant.tenant.id, grant.project.id, repoName, revision).first<{ tree_hash: string }>()
       : null,
+    snapshotRefs,
   ]);
   if (info.description !== repoOwnership(grant.tenant.id, grant.project.id)) throw new HubError(503, "unavailable", "repository migration is not ready");
   const page = (result: unknown, next: string | null = null) => ({ result: result as T, next });
@@ -73,12 +90,15 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
   const resolve = async (revision: string): Promise<string> => {
     let target = revision;
     if (!/^[0-9a-f]{40}$/.test(revision)) {
-      refList ??= refs(api, namespace, repo);
+      refList ??= snapshotRefs ? Promise.resolve(snapshotRefs) : refs(api, namespace, repo);
       const all = await refList;
       const name = revision === "HEAD" ? `refs/heads/${info.default_branch}` : revision;
-      const found = all.find(ref => ref.name === name) ?? (!name.startsWith("refs/") ? all.find(ref => ref.name === `refs/heads/${name}`) ?? all.find(ref => ref.name === `refs/tags/${name}`) : undefined);
-      if (!found) throw new HubError(404, "not_found", "revision not found");target = all.find(ref => ref.name === `${found.name}^{}`)?.target ?? found.target;
+      const found = findRef(all, name);
+      if (!found) throw new HubError(404, "not_found", "revision not found");target = found;
     }
+    // Snapshot decoding verifies the requested commit itself; a log round trip adds
+    // no coverage, and cached snapshots have already passed that verification.
+    if (verb === "snapshot") return target;
     const commit = await immutable("commit", target, async () => {
       const result = (await api.log(namespace, repo, target, 1))[0];
       if (!result) throw new HubError(404, "not_found", "revision not found");
@@ -128,7 +148,7 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
     }
     return result;
   };
-  if (verb === "refs.list") return page({ refs: (await refs(api, namespace, repo)).filter(ref => !ref.name.endsWith("^{}")) });
+  if (verb === "refs.list") return page({ refs: (await refs(api, namespace, repo)).filter(ref => ref.name !== "HEAD" && !ref.name.endsWith("^{}")) });
   if (verb === "file.show") {
     const oid = await resolve(at), path = String(body.path ?? "");
     if (path.split("/").some(segment => segment === "." || segment === "..")) throw new HubError(400, "bad_request", "invalid repository path");
@@ -153,7 +173,7 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
   }
   if (verb === "snapshot") {
     // A commit's files never change, so one fetch per commit serves every later search of it.
-    const oid = await resolve(at), key = new Request(`https://code-snapshot.internal/${grant.project.id}/${oid}`);
+    const oid = await resolve(at), key = cacheKey("snapshot", oid);
     const hit = await caches.default.match(key);
     if (hit) return page({ oid, files: await hit.json() });
     const request = new Request(`https://git.internal/${repo}.git/git-upload-pack`, { method: "POST", headers: { "content-type": "application/x-git-upload-pack-request", "git-protocol": "version=2" } });
