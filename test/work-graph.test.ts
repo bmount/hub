@@ -3,6 +3,8 @@ import { env, SELF } from "cloudflare:test";
 // @ts-expect-error The no-build Node CLI is shared with this transport test.
 import { runCli, parseArgs } from "../bin/cli.mjs";
 import { listVerbs } from "../src/verbs/table";
+import { workRead } from "../src/verbs/work";
+import type { Ctx } from "../src/auth/context";
 import { rpcBody } from "./oauth-helpers";
 import { describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
@@ -144,6 +146,16 @@ describe("work graph acceptance", () => {
     for (const id of [a.ref, holder.ref, expired.ref]) await w.ok(await w.call.pat("work.resources", { id, resources: ["database"] }));
     await w.ok(await w.call.pat("work.claim", { id: holder.ref }));
     await env.HUB_DB.prepare("UPDATE work_item SET state = 'doing', owner_id = ?, lease_until = 1 WHERE id = ?").bind(w.pat.identity.id, expired.item.id).run();
+    let batches = 0;
+    const ctx = { env, db: { prepare: env.HUB_DB.prepare.bind(env.HUB_DB), batch: async (statements: D1PreparedStatement[]) => {
+      batches++; return env.HUB_DB.batch(statements);
+    } } as D1Database, tenant: w.t, now: Date.now(), ip: "test", host: { kind: "tenant", slug: "acme" },
+      identity: w.pat.identity, session: null, apiToken: null, role: "member", authKind: "cookie", staleCookie: false } as Ctx;
+    for (const input of [{ id: a.ref }, { id: a.item.id }, { project: "site", number: a.item.number }]) {
+      batches = 0;
+      expect((await workRead.run(ctx, input)).item.id).toBe(a.item.id);
+      expect(batches).toBe(1);
+    }
     const compare = async () => {
       const now = Date.now();
       const focused = graphFrom(await env.HUB_DB.batch(itemGraphStatements(env.HUB_DB, w.t.id, a.item.id, now)));

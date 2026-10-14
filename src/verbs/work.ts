@@ -9,7 +9,7 @@ import { badRequest, conflict, notFound, HubError } from "../errors";
 import { recordEvent } from "../db/events";
 import { getIdentityByEmail } from "../db/identities";
 import { getMembership } from "../db/memberships";
-import { claimWork, createWork, getWork, getWorkByNumber, linkWork, listLinksStatement, listWorkStatement, updateWork, type WorkItem, type WorkLink } from "../db/work";
+import { claimWork, createWork, getWork, getWorkByNumber, linkWork, listWorkStatement, updateWork, type WorkItem, type WorkLink } from "../db/work";
 import { DOCKET, KINDS, STATES, kindOf, labelled, type WorkKind, type WorkState } from "../work/names";
 import { DATA_NOTE, cleanText, cutText } from "../mcp/render";
 import { changeDeps, graphFrom, graphStatements, itemGraphStatements } from "../work/graphEdit";
@@ -198,36 +198,37 @@ export const workList = defineVerb({
   },
 });
 
-/** Resolve the item and its project together; keep itemRef's project/tenant checks. */
-async function readItemRef(ctx: Ctx, i: Record<string, unknown>): Promise<WorkItem> {
+/** An indexed item selector reused inside the detail snapshot. */
+function itemReadTarget(ctx: Ctx, i: Record<string, unknown>) {
   const id = optString(i, "id", { max: 80 });
   const match = id?.match(/^([a-z0-9-]+(?:\/[a-z0-9-]+)?)#(\d+)$/);
   const path = match?.[1] ?? (!id ? optString(i, "project", { max: 127 }) : null);
   const number = match ? Number(match[2]) : !id ? optInt(i, "number", { min: 1, max: 10_000_000 }) : null;
   if (!id && (!path || !number)) throw badRequest("give id, or project and number");
   let where: string;
-  let args: unknown[];
+  let locator: string | null;
+  let namespace: string | null = null;
   if (path) {
     const scoped = ctx.mcpProject;
     const normalized = path.trim().toLowerCase();
     if (scoped && normalized !== scoped.slug && normalized !== scoped.path) throw notFound("no such project");
     const parts = (scoped?.path ?? normalized).split("/");
     if (parts.length > 2 || parts.some(p => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(p) || p.length > 63)) throw notFound("no such project");
-    where = `p.slug = ? AND ${parts.length === 2 ? "p.namespace_id = (SELECT id FROM namespace WHERE tenant_id = ? AND slug = ?)" : "p.namespace_id IS NULL"} AND w.number = ?`;
-    args = [parts.at(-1)!, ...(parts.length === 2 ? [ctx.tenant!.id, parts[0]!] : []), number];
+    where = "p.slug = ?2 AND ((?4 IS NULL AND p.namespace_id IS NULL) OR p.namespace_id = (SELECT id FROM namespace WHERE tenant_id = ?1 AND slug = ?4)) AND w.number = ?5";
+    locator = parts.at(-1)!;
+    namespace = parts.length === 2 ? parts[0]! : null;
   } else {
-    where = "w.id = ?";
-    args = [id];
+    where = "w.id = ?2 AND ?4 IS NULL AND ?5 IS NULL";
+    locator = id;
   }
-  const row = await ctx.db.prepare(`SELECT w.*, p.kind AS project_kind, ${projectPathSql()} AS project_slug
-    FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id
-    WHERE w.tenant_id = ? AND p.kind NOT IN ('channel', 'agent-src') AND ${where}`)
-    .bind(ctx.tenant!.id, ...args).first<WorkItem & { project_kind: string; project_slug: string }>();
-  if (!row) return itemRef(ctx, i); // Preserve missing-project and unsupported-feature errors.
-  if (ctx.mcpProject && row.project_id !== ctx.mcpProject.id) throw notFound("no such item");
-  requireProjectFeature({ kind: row.project_kind, slug: row.project_slug }, "docket");
-  const { project_kind: _kind, project_slug: _slug, ...item } = row;
-  return item;
+  return {
+    cte: `WITH clock AS (SELECT ?3 AS now, ?6 AS scoped_project), target AS (
+      SELECT w.*, p.kind AS project_kind, ${projectPathSql()} AS project_slug
+      FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id
+      WHERE w.tenant_id = ?1 AND p.kind NOT IN ('channel', 'agent-src') AND ${where}
+    )`,
+    bindings: [ctx.tenant!.id, locator, ctx.now, namespace, number, ctx.mcpProject?.id ?? null],
+  };
 }
 
 export const workRead = defineVerb({
@@ -252,18 +253,24 @@ export const workRead = defineVerb({
   },
   parse: (i) => i,
   run: async (ctx, i) => {
-    const item = await readItemRef(ctx, i);
-    // All independent details share one snapshot and one D1 round trip.
-    const [projectRows, parentRows, childRows, commentRows, linkRows, ...graph] = await ctx.db.batch([
-      ctx.db.prepare(`SELECT ${projectPathSql()} AS slug FROM project p WHERE p.id = ?`).bind(item.project_id),
-      ctx.db.prepare("SELECT * FROM work_item WHERE tenant_id = ? AND id = ?").bind(ctx.tenant!.id, item.parent_id),
-      listWorkStatement(ctx.db, ctx.tenant!.id, { parent_id: item.id, project_id: ctx.mcpProject?.id ?? null, limit: 200, states: [] }),
-      ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fwork.ts:227:29:workRead.run:0cf0d7f6*/ SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author FROM work_comment c JOIN identity i ON i.id = c.author_id
-        WHERE c.item_id = ? ORDER BY c.created_at LIMIT 200`).bind(item.id),
-      listLinksStatement(ctx.db, item.id),
-      ...itemGraphStatements(ctx.db, ctx.tenant!.id, item.id, ctx.now),
+    const target = itemReadTarget(ctx, i);
+    const statement = (sql: string) => ctx.db.prepare(`${target.cte} ${sql}`).bind(...target.bindings);
+    // Resolution and independent details share one snapshot and one D1 round trip.
+    const [itemRows, parentRows, childRows, commentRows, linkRows, ...graph] = await ctx.db.batch([
+      statement("SELECT * FROM target"),
+      statement("SELECT * FROM work_item WHERE tenant_id = ?1 AND id = (SELECT parent_id FROM target)"),
+      statement(`SELECT w.* FROM work_item w WHERE w.tenant_id = ?1 AND w.parent_id = (SELECT id FROM target)
+        AND (?6 IS NULL OR w.project_id = ?6) ORDER BY w.updated_at DESC, w.id DESC LIMIT 200`),
+      statement(`/*perf-site:src%2Fverbs%2Fwork.ts:227:29:workRead.run:0cf0d7f6*/ SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author FROM work_comment c JOIN identity i ON i.id = c.author_id
+        WHERE c.item_id = (SELECT id FROM target) ORDER BY c.created_at LIMIT 200`),
+      statement("SELECT * FROM work_link WHERE item_id = (SELECT id FROM target) ORDER BY created_at"),
+      ...itemGraphStatements(ctx.db, ctx.tenant!.id, "", ctx.now, target),
     ]);
-    const project = (projectRows!.results[0] as { slug: string } | undefined)?.slug ?? "?";
+    const row = itemRows!.results[0] as (WorkItem & { project_kind: string; project_slug: string }) | undefined;
+    if (!row) { await itemRef(ctx, i); throw notFound("no such item"); }
+    if (ctx.mcpProject && row.project_id !== ctx.mcpProject.id) throw notFound("no such item");
+    requireProjectFeature({ kind: row.project_kind, slug: row.project_slug }, "docket");
+    const { project_kind: _kind, project_slug: project, ...item } = row;
     const parent = parentRows!.results[0] as WorkItem | undefined;
     const children = childRows!.results as WorkItem[];
     const comments = commentRows!.results as Array<{ id: string; body: string; created_at: number; reply_to: string | null; author: string }>;

@@ -28,25 +28,30 @@ export function graphStatements(db: D1Database, tenant_id: string): D1PreparedSt
 /** One item's incident edges and resource holders, not the unrelated tenant graph.
  * Keep cross-project neighbors for organization reads; MCP's project guard still refuses crossing graphs.
  */
-export function itemGraphStatements(db: D1Database, tenant_id: string, item_id: string, now: number): D1PreparedStatement[] {
-  const related = `WITH related(id) AS (
-    SELECT ? UNION SELECT prereq_id FROM work_dep WHERE tenant_id = ? AND dependent_id = ?
-    UNION SELECT dependent_id FROM work_dep WHERE tenant_id = ? AND prereq_id = ?
+export function itemGraphStatements(db: D1Database, tenant_id: string, item_id: string, now: number,
+  target?: { cte: string; bindings: unknown[] }): D1PreparedStatement[] {
+  const id = target ? "(SELECT id FROM target)" : "?2";
+  const prefix = target ? `${target.cte}, ` : "WITH ";
+  const bindings = target?.bindings ?? [tenant_id, item_id, now];
+  const related = `${prefix}related(id) AS (
+    SELECT ${id} UNION SELECT prereq_id FROM work_dep WHERE tenant_id = ?1 AND dependent_id = ${id}
+    UNION SELECT dependent_id FROM work_dep WHERE tenant_id = ?1 AND prereq_id = ${id}
     UNION SELECT r.item_id FROM work_resource r JOIN work_item h ON h.id = r.item_id
-      WHERE r.tenant_id = ? AND r.name IN (SELECT name FROM work_resource WHERE tenant_id = ? AND item_id = ?)
-      AND h.tenant_id = ? AND h.state = 'doing' AND h.owner_id IS NOT NULL AND h.lease_until >= ?
+      WHERE r.tenant_id = ?1 AND r.name IN (SELECT name FROM work_resource WHERE tenant_id = ?1 AND item_id = ${id})
+      AND h.tenant_id = ?1 AND h.state = 'doing' AND h.owner_id IS NOT NULL AND h.lease_until >= ?3
   )`;
   return [
     db.prepare("SELECT 0 AS rev"),
     db.prepare(`${related} SELECT w.id, w.kind, w.state, w.owner_id, w.lease_until, w.priority, w.estimate, w.created_at, w.title, w.project_id,
       (${projectPathSql()}) || '#' || w.number AS ref, o.email AS owner_email
       FROM related JOIN work_item w ON w.id = related.id JOIN project p ON p.id = w.project_id LEFT JOIN identity o ON o.id = w.owner_id
-      WHERE w.tenant_id = ?`).bind(item_id, tenant_id, item_id, tenant_id, item_id, tenant_id, tenant_id, item_id, tenant_id, now, tenant_id),
-    db.prepare("SELECT prereq_id, dependent_id FROM work_dep WHERE tenant_id = ? AND (prereq_id = ? OR dependent_id = ?)").bind(tenant_id, item_id, item_id),
-    db.prepare(`SELECT item_id, name, mode FROM work_resource WHERE tenant_id = ? AND
-      (item_id = ? OR (name IN (SELECT name FROM work_resource WHERE tenant_id = ? AND item_id = ?)
-      AND item_id IN (SELECT id FROM work_item WHERE tenant_id = ? AND state = 'doing' AND owner_id IS NOT NULL AND lease_until >= ?)))`)
-      .bind(tenant_id, item_id, tenant_id, item_id, tenant_id, now),
+      WHERE w.tenant_id = ?1`).bind(...bindings),
+    db.prepare(`${target ? target.cte : "WITH clock AS (SELECT ?3)"} SELECT prereq_id, dependent_id FROM work_dep
+      WHERE tenant_id = ?1 AND (prereq_id = ${id} OR dependent_id = ${id})`).bind(...bindings),
+    db.prepare(`${target ? target.cte : "WITH clock AS (SELECT ?3)"} SELECT item_id, name, mode FROM work_resource WHERE tenant_id = ?1 AND
+      (item_id = ${id} OR (name IN (SELECT name FROM work_resource WHERE tenant_id = ?1 AND item_id = ${id})
+      AND item_id IN (SELECT id FROM work_item WHERE tenant_id = ?1 AND state = 'doing' AND owner_id IS NOT NULL AND lease_until >= ?3)))`)
+      .bind(...bindings),
   ];
 }
 
