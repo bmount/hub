@@ -1,4 +1,4 @@
-import { ArtifactsRest, artifactNamespace, type ArtifactCommit } from "./artifactsRest";
+import { ArtifactsRest, artifactNamespace, validationRepository, type ArtifactCommit } from "./artifactsRest";
 import type { GitGrant } from "./gitAccess";
 import { authorizeGit } from "./gitAccess";
 import { protectGitHistory } from "./gitHistory";
@@ -29,7 +29,7 @@ async function responseBytes(response: Response): Promise<Uint8Array> {
 }
 
 async function advertisedCommitTargets(api: ArtifactsRest, namespace: string, repo: string, updates: RefUpdate[]): Promise<Map<string, string>> {
-  const response = await api.git(namespace, repo, "info/refs", new Request(`https://git.internal/${repo}.git/info/refs?service=git-upload-pack`), null, false);
+  const response = await api.git(namespace, repo, "info/refs", new Request(`https://git.internal/${repo}.git/info/refs?service=git-upload-pack`), null, false, false);
   if (!response.ok) throw new HubError(502, "unavailable", "Git refs unavailable");
   let refs;
   try { refs = parseAdvertisedRefs(new Uint8Array(await response.arrayBuffer())); }
@@ -88,19 +88,25 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
   }
   const id = crypto.randomUUID(), namespace = artifactNamespace(grant.tenant.slug), repo = grant.repository?.storage_name ?? grant.project.slug;
   const repoName = grant.repository && !grant.repository.is_default ? grant.repository.name : "";
-  const shadow = `pimwell-stage-${id}`, replayKey = `git-push/${grant.tenant.id}/${grant.project.id}/${id}`;
+  const shadow = await validationRepository(repo), replayKey = `git-push/${grant.tenant.id}/${grant.project.id}/${id}`;
   const db = env.HUB_DB, storage = env.GIT_PUSH_STAGING;
   api = api.withDeadline?.(300_000) ?? api;
   await db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:94:9:artifactPush:9945174b*/ INSERT INTO git_push (id, tenant_id, project_id, identity_id, session_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'staging', ?)`)
     .bind(id, grant.tenant.id, grant.project.id, grant.identity.id, grant.session.id, namespace, repo, shadow, replayKey, JSON.stringify(updates), Date.now()).run();
   let disposable = true, phase = "repository fork";
   try {
-    await api.fork(namespace, repo, shadow, `Pimwell temporary validation ${id}`);
+    await api.prepareValidation(namespace, repo, shadow, repoOwnership(grant.tenant.id, grant.project.id));
     phase = "staging";
-    const [save, stage] = stream.tee();
-    const [, staged] = await Promise.all([saveGitReplay(storage, replayKey, save), api.git(namespace, shadow, "git-receive-pack", request, stage, true)]);
+    // Private tag refs accept commit and annotated-tag objects alike. No concurrent attempt can change them.
+    const stagedUpdates = updates.filter(update => update.newOid !== ZERO_OID).map((update, index) => ({
+      oldOid: ZERO_OID, newOid: update.newOid, ref: `refs/tags/pimwell-stage-${id}/${index}`,
+    }));
+    const [save, stage] = stagedUpdates.length ? stream.tee() : [stream, null];
+    const [, staged] = await Promise.all([saveGitReplay(storage, replayKey, save), stagedUpdates.length
+      ? api.git(namespace, shadow, "git-receive-pack", request, replaceCommands(stage!, prefixBytes, stagedUpdates, capabilities), true)
+      : new Response(packet("unpack ok\n"))]);
     if (!staged.ok) throw new HubError(502, "unavailable", "Git staging failed");
-    const stagedOutcomes = reportOutcomes(await responseBytes(staged), updates);
+    const stagedOutcomes = reportOutcomes(await responseBytes(staged), stagedUpdates);
     if (stagedOutcomes.some(update => update.outcome !== "ok"))
       throw new HubError(409, "conflict", "Git could not stage every ref; fetch before retrying");
     phase = "history validation";
@@ -125,7 +131,7 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
     }
     if (refused.size && capabilities.includes("atomic")) {
       const outcomes = updates.map(update => ({ ...update, outcome: "ng" as const, reason: refused.get(update.ref) ?? "atomic push rejected" }));
-      await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:128:13:artifactPush:9bdc73d9*/ UPDATE git_push SET state = 'refused', outcomes_json = ?, completed_at = ? WHERE id = ?").bind(JSON.stringify(outcomes), Date.now(), id).run();
+      await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:134:13:artifactPush:9bdc73d9*/ UPDATE git_push SET state = 'refused', outcomes_json = ?, completed_at = ? WHERE id = ?").bind(JSON.stringify(outcomes), Date.now(), id).run();
       return statusResponse(outcomes, capabilities);
     }
     // Revocation during staging must prevent publishing, without exposing the storage credential.
@@ -134,7 +140,9 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
       throw new HubError(403, "forbidden", "Git access ended before publishing");
     const outcomes: RefOutcome[] = updates.map(update => ({ ...update, outcome: "ng", reason: refused.get(update.ref) }));
     phase = "metadata validation";
-    const refTargets = await advertisedCommitTargets(api, namespace, shadow, publish);
+    const stagedTargets = stagedUpdates.length ? await advertisedCommitTargets(api, namespace, shadow, stagedUpdates) : new Map<string, string>();
+    const targetsByOid = new Map(stagedUpdates.map(update => [update.newOid, stagedTargets.get(update.ref)!]));
+    const refTargets = new Map(publish.map(update => [update.ref, targetsByOid.get(update.newOid)]));
     const introduced: Array<CommitNode & { summary: string; ref: string }> = [];
     const visited = new Set<string>();
     for (const update of publish) {
@@ -152,12 +160,12 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
       }
     }
     await indexCommitNodes(db, grant.tenant.id, grant.project.id, introduced, repoName);
-    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:155:11:artifactPush:7b8c0c72*/ UPDATE git_push SET commits_json = ? WHERE id = ?").bind(JSON.stringify(introduced), id).run();
+    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:163:11:artifactPush:7b8c0c72*/ UPDATE git_push SET commits_json = ? WHERE id = ?").bind(JSON.stringify(introduced), id).run();
     let actual: RefOutcome[] = [];
     if (publish.length) {
       const saved = await storage.get(replayKey);
       if (!saved) throw new HubError(503, "unavailable", "Git replay unavailable");
-      await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:160:13:artifactPush:3b6b741c*/ UPDATE git_push SET state = 'publishing' WHERE id = ?").bind(id).run();
+      await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:168:13:artifactPush:3b6b741c*/ UPDATE git_push SET state = 'publishing' WHERE id = ?").bind(id).run();
       phase = "publishing";
       disposable = false; // An ambiguous upstream response must retain the durable recovery record and pack.
       const canonical = await api.git(namespace, repo, "git-receive-pack", request, replaceCommands(saved.body, prefixBytes, publish, capabilities), true);
@@ -175,26 +183,27 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
     const state = actual.some(update => update.outcome === "unknown") || outcomes.some(update => update.outcome === "unknown") ? "unknown" : "complete";
     const accepted = new Set(actual.filter(update => update.outcome === "ok").map(update => update.ref));
     const commits = introduced.filter(commit => accepted.has(commit.ref));
-    const row = await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:178:23:artifactPush:4594633d*/ SELECT seq, identity_id FROM git_push WHERE id = ?").bind(id).first<{ seq: number; identity_id: string | null }>();
+    const row = await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:186:23:artifactPush:4594633d*/ SELECT seq, identity_id FROM git_push WHERE id = ?").bind(id).first<{ seq: number; identity_id: string | null }>();
     const now = Date.now();
-    const events = commits.map((commit, index) => db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:180:51:artifactPush:a9a7d6f4*/ INSERT OR IGNORE INTO code_event (tenant_id, project_id, repo, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, ?, 'commit', ?, ?, ?, ?, ?, ?)`)
+    const events = commits.map((commit, index) => db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:188:51:artifactPush:a9a7d6f4*/ INSERT OR IGNORE INTO code_event (tenant_id, project_id, repo, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, ?, 'commit', ?, ?, ?, ?, ?, ?)`)
       .bind(grant.tenant.id, grant.project.id, repoName, 1_000_000_000_000 + row!.seq * 8192 + 4096 + index, row!.identity_id, grant.session.id, commit.ref, commit.hash, commit.summary, now));
     for (let offset = 0; offset < events.length; offset += 100) await db.batch(events.slice(offset, offset + 100));
-    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:183:11:artifactPush:0225ad0d*/ UPDATE git_push SET state = ?, outcomes_json = ?, published_json = ?, commits_json = ?, completed_at = ? WHERE id = ?").bind(state, JSON.stringify(outcomes), JSON.stringify(actual), JSON.stringify(commits), now, id).run();
+    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:191:11:artifactPush:0225ad0d*/ UPDATE git_push SET state = ?, outcomes_json = ?, published_json = ?, commits_json = ?, completed_at = ? WHERE id = ?").bind(state, JSON.stringify(outcomes), JSON.stringify(actual), JSON.stringify(commits), now, id).run();
     disposable = state === "complete";
     return statusResponse(outcomes, capabilities);
   } catch (error) {
     // Never claim success after a lost publishing response, or echo upstream prose/credentials.
     const reason = `${phase} ${disposable ? "failed; canonical refs not published by this attempt" : "outcome unknown"}; run git ls-remote and fetch before retrying; push ${id}`;
     const outcomes: RefOutcome[] = updates.map(update => ({ ...update, outcome: "ng", reason }));
-    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:190:11:artifactPush:9bdc73d9*/ UPDATE git_push SET state = ?, outcomes_json = ?, completed_at = ? WHERE id = ?").bind(disposable ? "refused" : "unknown", JSON.stringify(outcomes), Date.now(), id).run().catch(() => {});
+    await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:198:11:artifactPush:9bdc73d9*/ UPDATE git_push SET state = ?, outcomes_json = ?, completed_at = ? WHERE id = ?").bind(disposable ? "refused" : "unknown", JSON.stringify(outcomes), Date.now(), id).run().catch(() => {});
     if (error instanceof HubError && error.status === 413) throw error;
     return statusResponse(outcomes, capabilities);
   } finally {
     if (disposable) {
       await stream.cancel().catch(() => {});
       await storage.delete(replayKey).catch(() => {});
-      await api.deleteTemporary(namespace, shadow, id).catch(() => {});
+      // Cached validation objects/private refs stay reachable for future thin packs and ambiguous recovery.
+      // The owned cache is deleted together with its canonical repository.
     }
   }
 }

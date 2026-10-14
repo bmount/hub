@@ -98,6 +98,11 @@ async function looksLikeV2LsRefs(source: ReadableStream<Uint8Array> | null, enco
   return false;
 }
 
+export async function validationRepository(repo: string): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(repo));
+  return `pimwell-cache-${Array.from(new Uint8Array(hash)).map(byte => byte.toString(16).padStart(2, "0")).join("").slice(0, 40)}`;
+}
+
 export class ArtifactsRest {
   readonly account: string;
   constructor(private env: Env, private deadline?: AbortSignal) {
@@ -162,11 +167,31 @@ export class ArtifactsRest {
     // A fork copies the existing object store, not just this push's delta.
     await this.call(namespace, this.repoPath(repo) + "/fork", { name: target, description, default_branch_only: false }, "POST", 90_000);
   }
+  /** Reuse objects, never refs: each incoming attempt writes its own private validation refs. */
+  async prepareValidation(namespace: string, repo: string, target: string, ownership: string): Promise<void> {
+    if (target !== await validationRepository(repo)) throw new HubError(400, "bad_request", "invalid validation repository");
+    const description = `${ownership} validation cache for ${repo}`;
+    try {
+      const info = await this.info(namespace, target);
+      if (info.description !== description) throw new HubError(409, "conflict", "validation repository ownership mismatch");
+      return;
+    } catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
+    // Concurrent first pushes may race to create the same cache. Only a verified owned result is usable.
+    await this.fork(namespace, repo, target, description).catch(() => {});
+    if ((await this.info(namespace, target)).description !== description)
+      throw new HubError(409, "conflict", "validation repository ownership mismatch");
+  }
   /** Never delete a live repository without verifying its tenant/project ownership marker. */
   async deleteProject(namespace: string, repo: string, ownership: string): Promise<void> {
     try {
       const info = await this.info(namespace, repo);
       if (info.description !== ownership) throw new HubError(409, "conflict", "repository ownership mismatch; nothing deleted");
+      const cache = await validationRepository(repo);
+      try {
+        const cached = await this.info(namespace, cache);
+        if (cached.description !== `${ownership} validation cache for ${repo}`) throw new HubError(409, "conflict", "validation repository ownership mismatch; nothing deleted");
+        await this.call(namespace, this.repoPath(cache), undefined, "DELETE");
+      } catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
       await this.call(namespace, this.repoPath(repo), undefined, "DELETE");
     } catch (error) {
       // A retry after a lost response must be safe.
@@ -227,7 +252,7 @@ export class ArtifactsRest {
     tokens.set(key, { plaintext: result.plaintext, expires });
     return result.plaintext;
   }
-  async git(namespace: string, repo: string, tail: string, request: Request, body: ReadableStream<Uint8Array> | null, write: boolean): Promise<Response> {
+  async git(namespace: string, repo: string, tail: string, request: Request, body: ReadableStream<Uint8Array> | null, write: boolean, normalizeHead = true): Promise<Response> {
     if (!["info/refs", "git-upload-pack", "git-receive-pack"].includes(tail)) throw new HubError(400, "bad_request", "invalid Git operation");
     const url = new URL(request.url), upstream = new URL(`${this.remote(namespace, repo)}/${tail}`);
     upstream.search = url.search;
@@ -237,8 +262,8 @@ export class ArtifactsRest {
     }
     let inspect: ReadableStream<Uint8Array> | null = null;
     if (tail === "git-upload-pack" && request.method === "POST" && body) [body, inspect] = body.tee();
-    const normalizeV0 = tail === "info/refs" && url.searchParams.get("service") === "git-upload-pack";
-    const normalizeV2 = tail === "git-upload-pack" && request.method === "POST" && await looksLikeV2LsRefs(inspect, request.headers.get("content-encoding"));
+    const normalizeV0 = normalizeHead && tail === "info/refs" && url.searchParams.get("service") === "git-upload-pack";
+    const normalizeV2 = normalizeHead && tail === "git-upload-pack" && request.method === "POST" && await looksLikeV2LsRefs(inspect, request.headers.get("content-encoding"));
     headers.set("authorization", `Bearer ${await this.repoToken(namespace, repo, write ? "write" : "read")}`);
     let response: Response;
     try { response = await fetch(upstream, { method: request.method, headers, body, redirect: "manual", signal: this.signal(120_000) }); }

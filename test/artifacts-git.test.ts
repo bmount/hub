@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { artifactNamespace, ArtifactsRest, clearArtifactTokensForTest } from "../src/code/artifactsRest";
+import { artifactNamespace, ArtifactsRest, clearArtifactTokensForTest, validationRepository } from "../src/code/artifactsRest";
 import { artifactPush } from "../src/code/artifactPush";
 import { authorizeGit } from "../src/code/gitAccess";
 import { saveGitReplay } from "../src/code/gitReplay";
@@ -117,6 +117,28 @@ describe("Artifacts REST transport", () => {
     expect(deadlines).toHaveBeenCalledWith(120_000);
     expect((await api.git("acme", "site", "git-receive-pack", request, null, true)).status).toBe(200);
   });
+  it("reuses only an owned validation cache and reconciles concurrent first-fork creation", async () => {
+    const api = configured(), cache = await validationRepository("site"), owner = "Pimwell tenant t project p";
+    let exists = false, description = `${owner} validation cache for site`, forks = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const path = String(url);
+      if (path.endsWith("/fork")) {
+        forks++;exists = true;
+        expect(JSON.parse(init!.body as string)).toMatchObject({ name: cache, description });
+        // Another request won the create race; the readback must still establish ownership.
+        return Response.json({ success: false }, { status: 409 });
+      }
+      expect(path.endsWith(`/repos/${cache}`)).toBe(true);
+      return exists ? Response.json({ success: true, result: { name: cache, remote: api.remote("acme", cache), description } }) : new Response(null, { status: 404 });
+    });
+    await api.prepareValidation("acme", "site", cache, owner);
+    await api.prepareValidation("acme", "site", cache, owner);
+    expect(forks).toBe(1);
+    description = "foreign repository";
+    await expect(api.prepareValidation("acme", "site", cache, owner)).rejects.toThrow("ownership mismatch");
+    await expect(api.prepareValidation("acme", "other", cache, owner)).rejects.toThrow("invalid validation repository");
+    expect(forks).toBe(1);
+  });
   it("uses separate namespaces, not concatenated organization and repository names", () => {
     const api = configured();
     expect(api.remote(artifactNamespace("red--blue"), "app")).toContain("/git/red--blue/app.git");
@@ -186,6 +208,7 @@ describe("Artifacts REST transport", () => {
     const api = configured(), ownership = "Pimwell tenant tid project pid";
     let exists = true;
     const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url).includes("/repos/pimwell-cache-")) return new Response(null, { status: 404 });
       expect(String(url)).toBe(`https://api.cloudflare.com/client/v4/accounts/${account}/artifacts/namespaces/acme/repos/site`);
       if (!exists) return new Response("", { status: 404 });
       if (init?.method === "DELETE") { exists = false; return Response.json({ success: true, result: {} }); }
@@ -196,6 +219,28 @@ describe("Artifacts REST transport", () => {
     await api.deleteProject("acme", "site", ownership);
     await api.deleteProject("acme", "site", ownership);
     expect(fake.mock.calls.filter(c => c[1]?.method === "DELETE")).toHaveLength(1);
+  });
+  it("deletes an owned validation cache with its repository, never a foreign cache", async () => {
+    const api = configured(), owner = "Pimwell tenant t project p", cache = await validationRepository("site");
+    const deleted: string[] = [];let foreign = true;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const repo = String(url).split("/").at(-1)!;
+      if (init?.method === "DELETE") { deleted.push(repo);return Response.json({ success: true, result: {} }); }
+      return Response.json({ success: true, result: { name: repo, remote: api.remote("acme", repo), description: repo === "site" ? owner : foreign ? "not ours" : `${owner} validation cache for site` } });
+    });
+    await expect(api.deleteProject("acme", "site", owner)).rejects.toThrow("ownership mismatch");
+    expect(deleted).toEqual([]);foreign = false;
+    await api.deleteProject("acme", "site", owner);
+    expect(deleted).toEqual([cache, "site"]);
+  });
+  it("does not normalize HEAD or make metadata round trips for internal validation adverts", async () => {
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+      if (String(url).endsWith("/tokens")) return Response.json({ success: true, result: issued() });
+      if (String(url).includes("/info/refs?")) return new Response(flush);
+      throw new Error("unexpected metadata request");
+    });
+    await configured().git("acme", "site", "info/refs", new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack"), null, false, false);
+    expect(fake).toHaveBeenCalledTimes(2);
   });
   it("does not include upstream error messages or credentials in errors", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ success: false, errors: [{ message: apiToken }] }, { status: 403 }));
@@ -305,18 +350,26 @@ describe("Artifacts push recovery boundaries", () => {
     const rows = (await env.HUB_DB.prepare("SELECT state, replay_key FROM git_push ORDER BY id").all<{ state: string; replay_key: string }>()).results;
     expect(rows).toEqual([{ state: "complete", replay_key: "" }, { state: "refused", replay_key: "" }, { state: "staging", replay_key: "" }, { state: "publishing", replay_key: "r3" }, { state: "unknown", replay_key: "r4" }]);
   });
+  it("expires replay data without deleting the shared validation cache", async () => {
+    const id = crypto.randomUUID(), shadow = await validationRepository("site"), now = Date.now(), r2 = bucket();
+    await env.HUB_DB.prepare("INSERT INTO git_push (id, tenant_id, project_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, 'deleted-tenant', 'deleted-project', 'acme', 'site', ?, 'replay', '[]', 'complete', ?)").bind(id, shadow, now - 25 * 3600_000).run();
+    const fake = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("cache must not be deleted"));
+    expect(await cleanupGitStages({ ...env, ARTIFACTS_ACCOUNT_ID: account, ARTIFACTS_API_TOKEN: apiToken, GIT_PUSH_STAGING: r2 }, now)).toEqual({ cleaned: 1, failed: 0 });
+    expect(fake).not.toHaveBeenCalled();expect(r2.deleted).toEqual(["replay"]);
+  });
   it.each(["fork", "stage", "publish"])("reports %s failures with actionable readback and durable ambiguity", async failure => {
     const { grant: g, git } = await grant(), r2 = bucket();
     const body = join(packet(`${ZERO_OID} ${NEXT} refs/heads/main\0report-status side-band-64k\n`), flush, encode.encode("PACK"));
     const api = {
-      async fork() { if (failure === "fork") throw new HubError(503, "unavailable", "secret upstream text"); },
+      async prepareValidation() { if (failure === "fork") throw new HubError(503, "unavailable", "secret upstream text"); },
       async deleteTemporary() {},
       async readCommit() { return { hash: NEXT }; },
       async git(_ns: string, repo: string, tail: string, _request: Request, supplied: ReadableStream<Uint8Array> | null) {
         if (tail === "info/refs") return new Response(join(packet(`${NEXT} refs/heads/main\n`), flush));
         await new Response(supplied).arrayBuffer();
         if (failure === "stage" || (failure === "publish" && repo === "site")) throw new HubError(503, "unavailable", "secret upstream text");
-        return new Response(join(packet("unpack ok\n"), packet("ok refs/heads/main\n"), flush));
+        const ref = repo === "site" ? "refs/heads/main" : `refs/tags/pimwell-stage-${(await env.HUB_DB.prepare("SELECT id FROM git_push").first<{ id: string }>())!.id}/0`;
+        return new Response(join(packet("unpack ok\n"), packet(`ok ${ref}\n`), flush));
       },
     };
     const res = await artifactPush(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", headers: { authorization: basic(git.token) }, body }), { ...env, GIT_PUSH_STAGING: r2 }, g, api as any);
@@ -329,6 +382,44 @@ describe("Artifacts push recovery boundaries", () => {
     expect(JSON.parse(row!.outcomes_json)[0].reason).toBe(outcomes[0]!.reason);
     expect(r2.deleted.length).toBe(failure === "publish" ? 0 : 1);
   });
+  it("isolates concurrent validation refs while retaining canonical old-OID compare-and-swap", async () => {
+    const { grant: g } = await grant(), r2 = bucket(), tips = [oid(21), oid(22)];
+    let canonical = OID;
+    const staged = new Map<string, string>(), publications: Array<{ oldOid: string; newOid: string; ref: string }> = [];
+    const api = {
+      async prepareValidation(_ns: string, repo: string, shadow: string, ownership: string) {
+        expect(repo).toBe("site");expect(shadow).toBe(await validationRepository("site"));
+        expect(ownership).toBe(`Pimwell tenant ${g.tenant.id} project ${g.project.id}`);
+      },
+      async log(_ns: string, _repo: string, hash: string) { return [{ hash, parents: [OID] }]; },
+      async readCommit(_ns: string, repo: string, hash: string) {
+        if (hash === OID) return { hash };
+        if (repo === "site") throw new HubError(404, "not_found", "missing");
+        return { hash, treeHash: oid(23), parents: [OID], committedAt: 1, message: "new" };
+      },
+      async git(_ns: string, repo: string, tail: string, _request: Request, supplied: ReadableStream<Uint8Array> | null) {
+        if (tail === "info/refs") return new Response(join(...Array.from(staged, ([ref, hash]) => packet(`${hash} ${ref}\n`)), flush));
+        const parsed = await peekCommands(supplied!);await new Response(parsed.stream).arrayBuffer();
+        const u = parsed.updates[0]!;
+        if (repo !== "site") {
+          expect(u.oldOid).toBe(ZERO_OID);expect(u.ref).toMatch(/^refs\/tags\/pimwell-stage-/);
+          expect(staged.has(u.ref)).toBe(false);staged.set(u.ref, u.newOid);
+          return new Response(join(packet("unpack ok\n"), packet(`ok ${u.ref}\n`), flush));
+        }
+        publications.push(u);
+        const accepted = canonical === u.oldOid;if (accepted) canonical = u.newOid;
+        return new Response(join(packet("unpack ok\n"), packet(`${accepted ? "ok" : "ng"} ${u.ref}${accepted ? "" : " stale old OID"}\n`), flush));
+      },
+    };
+    await indexCommitNodes(env.HUB_DB, g.tenant.id, g.project.id, [{ hash: OID, treeHash: oid(24), parents: [], committedAt: 0 }]);
+    const outcomes = await Promise.all(tips.map(async tip => {
+      const body = join(packet(`${OID} ${tip} refs/heads/main\0report-status\n`), flush, encode.encode("PACK"));
+      const response = await artifactPush(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", body }), { ...env, GIT_PUSH_STAGING: r2 }, g, api as any, async () => g);
+      return reportOutcomes(new Uint8Array(await response.arrayBuffer()), [{ oldOid: OID, newOid: tip, ref: "refs/heads/main" }])[0]!.outcome;
+    }));
+    expect(outcomes.sort()).toEqual(["ng", "ok"]);expect(staged.size).toBe(2);
+    expect(publications.map(u => [u.oldOid, u.ref])).toEqual([[OID, "refs/heads/main"], [OID, "refs/heads/main"]]);
+  });
   it("does not create recovery rows for flush-only authenticated probes", async () => {
     const { grant: g } = await grant(), r2 = bucket(), api = { fork: vi.fn(), git: vi.fn() };
     const res = await artifactPush(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", body: flush }), { ...env, GIT_PUSH_STAGING: r2 }, g, api as any);
@@ -340,7 +431,7 @@ describe("Artifacts push recovery boundaries", () => {
     const body = join(packet(`${old} ${rewritten} refs/heads/main\0report-status\n`), flush, encode.encode("PACK"));
     let publishedRef = "";
     const api = {
-      async fork() {},
+      async prepareValidation() {},
       async deleteTemporary() {},
       async log(_ns: string, _repo: string, ref: string) { return [{ hash: ref, parents: [] }]; },
       async readCommit(_ns: string, repo: string, hash: string) {
@@ -348,10 +439,10 @@ describe("Artifacts push recovery boundaries", () => {
         if (hash !== rewritten) throw new HubError(404, "not_found", "missing");
         return { hash, treeHash: oid(6), parents: [], committedAt: 50, message: "preserved\n", author: { name: "a", email: "a@example.invalid" }, committer: { name: "c", email: "c@example.invalid" }, authoredAt: 50 };
       },
-      async git(_ns: string, _repo: string, tail: string, _request: Request, supplied: ReadableStream<Uint8Array> | null) {
+      async git(_ns: string, repo: string, tail: string, _request: Request, supplied: ReadableStream<Uint8Array> | null) {
         if (tail === "info/refs") return new Response(join(packet(`${rewritten} refs/heads/main\n`), flush));
         const parsed = await peekCommands(supplied!);await new Response(parsed.stream).arrayBuffer();
-        publishedRef = parsed.updates[0]!.ref;
+        if (!repo.startsWith("pimwell-cache-")) publishedRef = parsed.updates[0]!.ref;
         return new Response(join(packet("unpack ok\n"), ...parsed.updates.map(u => packet(`ok ${u.ref}\n`)), flush));
       },
     };
@@ -371,7 +462,7 @@ describe("Artifacts push recovery boundaries", () => {
     const body = join(...deletions.map(([ref, old], i) => packet(`${old} ${ZERO_OID} ${ref}${i === 0 ? "\0report-status delete-refs" : ""}\n`)), flush);
     const published: string[] = [];
     const api = {
-      async fork() {}, async deleteTemporary() {},
+      async prepareValidation() {}, async deleteTemporary() {},
       async info() { return { default_branch: "main" }; },
       async log(_ns: string, repo: string, ref: string) { return repo === "site" && ref === "main" ? [{ hash: tip, parents: [root] }] : []; },
       async readCommit() { throw new HubError(404, "not_found", "missing"); },
@@ -398,7 +489,7 @@ describe("Artifacts push recovery boundaries", () => {
     const body = join(packet(`${ZERO_OID} ${tagObject} refs/tags/v1\0report-status\n`), packet(`${ZERO_OID} ${change} refs/changes/1\n`), flush, encode.encode("PACK"));
     const commits = new Map([[tagCommit, { parents: [parent], message: "tagged\n", committedAt: 30 }], [parent, { parents: [], message: "parent\n", committedAt: 20 }], [change, { parents: [], message: "change\n", committedAt: 40 }]]);
     const api = {
-      async fork() {},
+      async prepareValidation() {},
       async deleteTemporary() {},
       async log() { return []; },
       async readCommit(_ns: string, repo: string, hash: string) {
@@ -407,7 +498,10 @@ describe("Artifacts push recovery boundaries", () => {
         return { hash, treeHash: oid(Number.parseInt(hash.at(-1)!, 16) + 20), parents: c.parents, committedAt: c.committedAt, message: c.message, author: { name: "a", email: "a@example.invalid" }, committer: { name: "c", email: "c@example.invalid" }, authoredAt: c.committedAt };
       },
       async git(_ns: string, repo: string, tail: string, request: Request, supplied: ReadableStream<Uint8Array> | null) {
-        if (tail === "info/refs") return new Response(join(packet(`${tagObject} refs/tags/v1\n`), packet(`${tagCommit} refs/tags/v1^{}\n`), packet(`${change} refs/changes/1\n`), flush));
+        if (tail === "info/refs") {
+          const id = (await env.HUB_DB.prepare("SELECT id FROM git_push").first<{ id: string }>())!.id;
+          return new Response(join(packet(`${tagObject} refs/tags/pimwell-stage-${id}/0\n`), packet(`${tagCommit} refs/tags/pimwell-stage-${id}/0^{}\n`), packet(`${change} refs/tags/pimwell-stage-${id}/1\n`), flush));
+        }
         const parsed = await peekCommands(supplied!);await new Response(parsed.stream).arrayBuffer();
         return new Response(join(packet("unpack ok\n"), ...parsed.updates.map(u => packet(`ok ${u.ref}\n`)), flush));
       },

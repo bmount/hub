@@ -24,24 +24,28 @@ async function world() {
   const bot = await seedAgent(tenant, operator.identity, "bot");
   const configured = { ...env, GIT_BACKEND: "artifacts" as const, ARTIFACTS_ACCOUNT_ID: account, ARTIFACTS_API_TOKEN: "synthetic-control-credential" };
   const repos = new Map<string, string>(), created: string[] = [];
-  const pushed = "7".repeat(40), published: string[] = [];
+  const pushed = "7".repeat(40), published: string[] = [], stagedRefs: string[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = new URL(String(input));
     if (url.hostname.endsWith(".artifacts.cloudflare.net")) {
       const repo = /\/([^/]+)\.git\//.exec(url.pathname)![1]!;
       if (url.pathname.endsWith("/git-receive-pack")) {
-        // Staging into the temporary fork, then publishing to the real repository: both accept every ref.
+        // Staging into the owned cache, then publishing to the real repository: both accept every ref.
         const parsed = await peekCommands(new Response(init!.body as BodyInit).body!);await new Response(parsed.stream).arrayBuffer();
-        if (!repo.startsWith("pimwell-stage-")) published.push(...parsed.updates.map((u) => u.ref));
+        if (!repo.startsWith("pimwell-cache-")) published.push(...parsed.updates.map((u) => u.ref));
+        else stagedRefs.push(...parsed.updates.map(u => u.ref));
         return new Response(new Uint8Array([...packet("unpack ok\n"), ...parsed.updates.flatMap((u) => [...packet(`ok ${u.ref}\n`)]), ...new TextEncoder().encode("0000")]));
       }
-      const tip = repo.startsWith("pimwell-stage-") ? pushed : "1".repeat(40);
-      return new Response(new Uint8Array([...packet("# service=git-upload-pack\n"), ...new TextEncoder().encode("0000"), ...packet(`${tip} refs/heads/main\n`), ...new TextEncoder().encode("0000")]));
+      const refs = repo.startsWith("pimwell-cache-") ? stagedRefs.map(ref => `${pushed} ${ref}\n`) : [`${"1".repeat(40)} refs/heads/main\n`];
+      return new Response(new Uint8Array([...packet("# service=git-upload-pack\n"), ...new TextEncoder().encode("0000"), ...refs.flatMap(ref => [...packet(ref)]), ...new TextEncoder().encode("0000")]));
     }
-    if (url.pathname.endsWith("/fork")) return Response.json({ success: true, result: {} });
+    if (url.pathname.endsWith("/fork")) {
+      const body = JSON.parse(String(init!.body));repos.set(body.name, body.description);
+      return Response.json({ success: true, result: {} });
+    }
     if (url.pathname.includes("/log")) return Response.json({ success: true, result: [{ hash: pushed, parents: [] }] });
     if (url.pathname.includes("/commit/")) {
-      if (!url.pathname.includes("pimwell-stage-")) return new Response("missing", { status: 404 });
+      if (!url.pathname.includes("pimwell-cache-")) return new Response("missing", { status: 404 });
       return Response.json({ success: true, result: { hash: pushed, treeHash: "8".repeat(40), parents: [], message: "Start\n", author: { name: "a", email: "a@example.invalid" }, committer: { name: "a", email: "a@example.invalid" }, authoredAt: 1, committedAt: 1 } });
     }
     if (url.pathname.endsWith("/tokens")) return Response.json({ success: true, result: { plaintext: "opaque-synthetic-token", expires_at: new Date(Date.now() + 300_000).toISOString() } });
@@ -51,8 +55,6 @@ async function world() {
       return Response.json({ success: true, result: { name: body.name } });
     }
     const name = decodeURIComponent(url.pathname.split("/repos/")[1] ?? "");
-    // The temporary staging fork exists in storage for the length of a push.
-    if (name.startsWith("pimwell-stage-")) return Response.json({ success: true, result: { name, remote: `https://${account}.artifacts.cloudflare.net/git/acme/${name}.git`, description: `Pimwell temporary validation ${name.slice(14)}`, default_branch: "main", read_only: false } });
     if (!repos.has(name)) return new Response("missing", { status: 404 });
     return Response.json({ success: true, result: { name, remote: `https://${account}.artifacts.cloudflare.net/git/acme/${name}.git`, description: repos.get(name), default_branch: "main", read_only: false } });
   });
