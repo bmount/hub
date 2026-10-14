@@ -475,7 +475,42 @@ describe("project deletion from the web", () => {
       expect(await w.count("repository_sync", "project_id", made.project.id)).toBe(0);
       expect(deletion).toHaveBeenCalledWith("acme", "tmp-repo", `Pimwell tenant ${w.tenant.id} project ${made.project.id}`);
       expect((await env.HUB_DB.prepare("SELECT kind, identity_id FROM event WHERE target_id = ?").bind(made.project.id).all()).results).toEqual([{kind: "project.deleted", identity_id: w.bot.agent.identity.id}]);
-    } finally { deletion.mockRestore(); }
+    } finally { deletion.mockRestore();temporary.mockRestore(); }
+  });
+
+  it("project_delete cleans proven incomplete forks without replay data, but refuses foreign metadata even with proof", async () => {
+    const w = await world(), headers = bearer(w.bot.token);
+    const ctx = await buildContext(new Request(`https://${w.host}/`, {headers}), env);
+    const made = await projectCreate.run(ctx, projectCreate.parse({slug: "tmp-failed-fork", kind: "repo", display_name: "Failed fork"})) as {project: {id: string}};
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(w.tenant.id, made.project.id, Date.now()).run();
+    const account = "0".repeat(32), id = crypto.randomUUID(), temporary = `pimwell-stage-${id}`, cache = `pimwell-cache-${"b".repeat(40)}`, owner = `Pimwell tenant ${w.tenant.id} project ${made.project.id}`;
+    ctx.env = {...env, ARTIFACTS_ACCOUNT_ID: account, ARTIFACTS_API_TOKEN: "synthetic-test-token"};
+    await env.HUB_DB.prepare("INSERT INTO git_push (id, tenant_id, project_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, ?, ?, 'acme', 'tmp-failed-fork', ?, '', '[]', 'refused', ?)").bind(id, w.tenant.id, made.project.id, temporary, Date.now()).run();
+    for (const [target, description] of [[temporary, `Pimwell temporary validation ${id}`], [cache, `${owner} validation cache for tmp-failed-fork`]]) {
+      await env.HUB_DB.prepare("INSERT INTO artifact_fork_ownership VALUES (?, 'acme', ?, 'tmp-failed-fork', ?, 'reserved', ?)").bind(account, target, description, Date.now()).run();
+    }
+    let mismatch = true;
+    const deleted: string[] = [];
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const target = String(url).split("/").pop()!;
+      if (init?.method === "DELETE") { deleted.push(target);return new Response(null, {status: 202}); }
+      if (target === temporary && mismatch) return Response.json({success: true, result: {name: target, remote: `https://${account}.artifacts.cloudflare.net/git/acme/${target}.git`, description: "foreign"}});
+      if (target === temporary || target === cache) return Response.json({errors: [{code: 10303}]}, {status: 409});
+      if (target === "tmp-failed-fork") return Response.json({success: true, result: {name: target, remote: `https://${account}.artifacts.cloudflare.net/git/acme/${target}.git`, description: owner}});
+      return new Response(null, {status: 404});
+    });
+    try {
+      await expect(projectDelete.run(ctx, projectDelete.parse({project: "tmp-failed-fork"}))).rejects.toThrow("ownership mismatch");
+      expect(deleted).toEqual([]);
+      expect(await w.count("project", "id", made.project.id)).toBe(1);
+      mismatch = false;
+      const result = await projectDelete.run(ctx, projectDelete.parse({project: "tmp-failed-fork"}));
+      expect(result.counts.repositories).toBe(1);
+      expect(deleted).toEqual([temporary, cache, "tmp-failed-fork"]);
+      expect(await w.count("project", "id", made.project.id)).toBe(0);
+      // Durable tombstones outlive cascading D1 deletion so scheduled cleanup can reconcile 202.
+      expect((await env.HUB_DB.prepare("SELECT proof FROM artifact_fork_ownership").all()).results).toEqual([{proof: "deleting"}, {proof: "deleting"}]);
+    } finally { fake.mockRestore(); }
   });
 
   it("covers every D1 table with a project_id column, or a reasoned exemption", async () => {

@@ -119,25 +119,123 @@ describe("Artifacts REST transport", () => {
   });
   it("reuses only an owned validation cache and reconciles concurrent first-fork creation", async () => {
     const api = configured(), cache = await validationRepository("site"), owner = "Pimwell tenant t project p";
-    let exists = false, description = `${owner} validation cache for site`, forks = 0;
+    let exists = false, physical = cache, description = `${owner} validation cache for site`, forks = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       const path = String(url);
       if (path.endsWith("/fork")) {
         forks++;exists = true;
-        expect(JSON.parse(init!.body as string)).toMatchObject({ name: cache, description });
+        physical = JSON.parse(init!.body as string).name;
+        expect(physical).toMatch(/^pimwell-cache-[0-9a-f]{40}$/);
+        expect(physical).not.toBe(cache);
+        expect(JSON.parse(init!.body as string)).toMatchObject({ description });
         // Another request won the create race; the readback must still establish ownership.
         return Response.json({ success: false }, { status: 409 });
       }
-      expect(path.endsWith(`/repos/${cache}`)).toBe(true);
-      return exists ? Response.json({ success: true, result: { name: cache, remote: api.remote("acme", cache), description } }) : new Response(null, { status: 404 });
+      const target = path.split("/").pop()!;
+      return exists && target === physical ? Response.json({ success: true, result: { name: physical, remote: api.remote("acme", physical), description } }) : new Response(null, { status: 404 });
     });
-    await api.prepareValidation("acme", "site", cache, owner);
-    await api.prepareValidation("acme", "site", cache, owner);
+    expect(await api.prepareValidation("acme", "site", cache, owner)).toBe(physical);
+    expect(await api.prepareValidation("acme", "site", cache, owner)).toBe(physical);
     expect(forks).toBe(1);
     description = "foreign repository";
     await expect(api.prepareValidation("acme", "site", cache, owner)).rejects.toThrow("ownership mismatch");
     await expect(api.prepareValidation("acme", "other", cache, owner)).rejects.toThrow("invalid validation repository");
     expect(forks).toBe(1);
+  });
+  it("atomically selects one cache for concurrent first pushes and preserves ready evidence", async () => {
+    const api = configured(), legacy = await validationRepository("site"), owner = "Pimwell tenant t project p", description = `${owner} validation cache for site`;
+    const repos = new Set<string>();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const target = String(url).split("/").pop()!;
+      if (target === "fork") {
+        repos.add(JSON.parse(init!.body as string).name);
+        return Response.json({success: true, result: {}});
+      }
+      return repos.has(target) ? Response.json({success: true, result: {name: target, remote: api.remote("acme", target), description}}) : new Response(null, {status: 404});
+    });
+    const targets = await Promise.all([api.prepareValidation("acme", "site", legacy, owner), configured().prepareValidation("acme", "site", legacy, owner)]);
+    expect(new Set(targets).size).toBe(1);
+    expect(repos.size).toBe(1);
+    expect(await env.HUB_DB.prepare("SELECT proof FROM artifact_fork_ownership").first()).toEqual({proof: "ready"});
+    expect(await configured().cleanupIncompleteValidation("acme", "site", owner)).toBe(false);
+  });
+  it("durably reserves unique temporary forks before a lost creation response and cleans 409/10303 idempotently", async () => {
+    const api = configured(), id = crypto.randomUUID(), target = `pimwell-stage-${id}`, description = `Pimwell temporary validation ${id}`;
+    let exists = false;
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url).endsWith("/fork")) {
+        expect(await env.HUB_DB.prepare("SELECT proof FROM artifact_fork_ownership WHERE target = ?").bind(target).first()).toMatchObject({ proof: "reserved" });
+        exists = true;throw new Error("lost response");
+      }
+      if (init?.method === "DELETE") return new Response(null, { status: 202 });
+      return exists ? Response.json({ errors: [{ code: 10303 }] }, { status: 409 }) : new Response(null, { status: 404 });
+    });
+    await expect(api.fork("acme", "site", target, description)).rejects.toThrow("did not answer");
+    // A fresh adapter uses durable evidence, not isolate memory or readable metadata.
+    await configured().deleteTemporary("acme", target, id);
+    await configured().deleteTemporary("acme", target, id);
+    expect(fake.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(2);
+    exists = false;
+    await configured().deleteTemporary("acme", target, id);
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM artifact_fork_ownership WHERE target = ?").bind(target).first()).toBeNull();
+  });
+  it.each(["unowned", "namespace", "account", "description", "readable-mismatch", "mapping-mismatch", "other-code", "other-status"])("refuses incomplete temporary cleanup with %s evidence", async kind => {
+    const api = configured(), id = crypto.randomUUID(), target = `pimwell-stage-${id}`, description = `Pimwell temporary validation ${id}`;
+    if (kind !== "unowned") await env.HUB_DB.prepare("INSERT INTO artifact_fork_ownership VALUES (?, ?, ?, 'site', ?, 'reserved', ?)")
+      .bind(kind === "account" ? "f".repeat(32) : account, kind === "namespace" ? "other" : "acme", target, kind === "description" ? "foreign" : description, Date.now()).run();
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      if (init?.method === "DELETE") throw new Error("must not delete");
+      if (kind === "readable-mismatch" || kind === "mapping-mismatch") return Response.json({ success: true, result: { name: target, remote: kind === "mapping-mismatch" ? api.remote("other", target) : api.remote("acme", target), description: "foreign" } });
+      return Response.json({ errors: [{ code: kind === "other-code" ? 10304 : 10303 }] }, { status: kind === "other-status" ? 503 : 409 });
+    });
+    await expect(api.deleteTemporary("acme", target, id)).rejects.toThrow();
+    expect(fake.mock.calls.every(([, init]) => init?.method !== "DELETE")).toBe(true);
+  });
+  it("never reserves an existing temporary target or guesses ownership from a push row", async () => {
+    const api = configured(), id = crypto.randomUUID(), target = `pimwell-stage-${id}`;
+    const fake = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ errors: [{ code: 10303 }] }, { status: 409 }));
+    await expect(api.fork("acme", "site", target, `Pimwell temporary validation ${id}`)).rejects.toThrow();
+    expect(fake).toHaveBeenCalledTimes(1);
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM artifact_fork_ownership").first()).toBeNull();
+    await expect(api.deleteTemporary("acme", "site", id)).rejects.toThrow("not a temporary");
+  });
+  it("deletes accepted incomplete caches even when the canonical repo is already absent, but rejects unproven caches", async () => {
+    const api = configured(), cache = await validationRepository("site"), owner = "Pimwell tenant t project p", description = `${owner} validation cache for site`;
+    let accepted = false;
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (String(url).endsWith("/fork")) { accepted = true;return Response.json({ success: true, result: {} }); }
+      if (init?.method === "DELETE") return new Response(null, { status: 202 });
+      if (String(url).endsWith(`/repos/${cache}`)) return Response.json({ errors: [{ code: 10303 }] }, { status: 409 });
+      return new Response(null, { status: 404 });
+    });
+    await expect(api.deleteProject("acme", "site", owner)).rejects.toThrow();
+    expect(fake.mock.calls.every(([, init]) => init?.method !== "DELETE")).toBe(true);
+    await api.fork("acme", "site", cache, description);
+    expect(accepted).toBe(true);
+    await configured().deleteProject("acme", "site", owner);
+    expect(fake.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
+    await expect(configured().deleteProject("acme", "site", "other owner")).rejects.toThrow();
+  });
+  it("records a randomized shared-cache reservation before a timed-out fork and blocks reuse during deletion", async () => {
+    const api = configured(), legacy = await validationRepository("site"), owner = "Pimwell tenant t project p";
+    const id = crypto.randomUUID();
+    await env.HUB_DB.prepare("INSERT INTO git_push (id, tenant_id, project_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, 't', 'p', 'acme', 'site', ?, '', '[]', 'staging', ?)").bind(id, legacy, Date.now()).run();
+    let physical = "", deleted = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const target = String(url).split("/").pop()!;
+      if (target === "fork") {
+        physical = JSON.parse(init!.body as string).name;
+        expect(await env.HUB_DB.prepare("SELECT target, proof FROM artifact_fork_ownership").first()).toEqual({ target: physical, proof: "reserved" });
+        expect(await env.HUB_DB.prepare("SELECT shadow FROM git_push WHERE id = ?").bind(id).first()).toEqual({ shadow: physical });
+        throw new Error("lost response");
+      }
+      if (init?.method === "DELETE") { expect(target).toBe(physical);deleted = true;return new Response(null, { status: 202 }); }
+      return target === physical ? Response.json({ errors: [{ code: 10303 }] }, { status: 409 }) : new Response(null, { status: 404 });
+    });
+    await expect(api.prepareValidation("acme", "site", legacy, owner, id)).rejects.toThrow("10303");
+    await configured().deleteProject("acme", "site", owner);
+    expect(deleted).toBe(true);
+    await expect(configured().prepareValidation("acme", "site", legacy, owner)).rejects.toThrow("cleanup pending");
   });
   it("uses separate namespaces, not concatenated organization and repository names", () => {
     const api = configured();
@@ -483,6 +581,28 @@ describe("Artifacts push recovery boundaries", () => {
     const fake = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("cache must not be deleted"));
     expect(await cleanupGitStages({ ...env, ARTIFACTS_ACCOUNT_ID: account, ARTIFACTS_API_TOKEN: apiToken, GIT_PUSH_STAGING: r2 }, now)).toEqual({ cleaned: 1, failed: 0 });
     expect(fake).not.toHaveBeenCalled();expect(r2.deleted).toEqual(["replay"]);
+  });
+  it.each(["refused", "unknown", "fresh", "ready", "orphan"])("cleans only abandoned incomplete cache reservations: %s", async state => {
+    const id = crypto.randomUUID(), cache = `pimwell-cache-${"a".repeat(40)}`, now = Date.now(), r2 = bucket(), owner = "Pimwell tenant t project p";
+    await env.HUB_DB.prepare("INSERT INTO artifact_fork_ownership VALUES (?, 'acme', ?, 'site', ?, ?, ?)")
+      .bind(account, cache, `${owner} validation cache for site`, state === "ready" ? "ready" : "reserved", now - 25 * 3600_000).run();
+    if (state !== "orphan") await env.HUB_DB.prepare("INSERT INTO git_push (id, tenant_id, project_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, 't', 'p', 'acme', 'site', ?, 'replay', '[]', ?, ?)")
+      .bind(id, cache, state === "unknown" ? "unknown" : "refused", state === "fresh" ? now : now - 25 * 3600_000).run();
+    const deleted: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      if (init?.method === "DELETE") { deleted.push(String(url));return new Response(null, { status: 202 }); }
+      return Response.json({ errors: [{ code: 10303 }] }, { status: 409 });
+    });
+    const result = await cleanupGitStages({ ...env, ARTIFACTS_ACCOUNT_ID: account, ARTIFACTS_API_TOKEN: apiToken, GIT_PUSH_STAGING: r2 }, now);
+    expect(result.failed).toBe(0);
+    expect(deleted).toHaveLength(state === "refused" || state === "orphan" ? 1 : 0);
+    if (state === "unknown" || state === "fresh") expect(r2.deleted).toHaveLength(0);
+    if (deleted.length) {
+      // No replay/push record is needed to retry an asynchronous/lost deletion acknowledgement.
+      vi.mocked(globalThis.fetch).mockResolvedValue(new Response(null, { status: 404 }));
+      await cleanupGitStages({ ...env, ARTIFACTS_ACCOUNT_ID: account, ARTIFACTS_API_TOKEN: apiToken, GIT_PUSH_STAGING: r2 }, now);
+      expect(await env.HUB_DB.prepare("SELECT 1 FROM artifact_fork_ownership").first()).toBeNull();
+    }
   });
   it.each(["fork", "stage", "publish"])("reports %s failures with actionable readback and durable ambiguity", async failure => {
     const { grant: g, git } = await grant(), r2 = bucket();

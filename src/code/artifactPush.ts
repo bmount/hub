@@ -88,14 +88,15 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
   }
   const id = crypto.randomUUID(), namespace = artifactNamespace(grant.tenant.slug), repo = grant.repository?.storage_name ?? grant.project.slug;
   const repoName = grant.repository && !grant.repository.is_default ? grant.repository.name : "";
-  const shadow = await validationRepository(repo), replayKey = `git-push/${grant.tenant.id}/${grant.project.id}/${id}`;
+  let shadow = await validationRepository(repo);
+  const replayKey = `git-push/${grant.tenant.id}/${grant.project.id}/${id}`;
   const db = env.HUB_DB, storage = env.GIT_PUSH_STAGING;
   api = api.withDeadline?.(300_000) ?? api;
   await db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:94:9:artifactPush:9945174b*/ INSERT INTO git_push (id, tenant_id, project_id, identity_id, session_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'staging', ?)`)
     .bind(id, grant.tenant.id, grant.project.id, grant.identity.id, grant.session.id, namespace, repo, shadow, replayKey, JSON.stringify(updates), Date.now()).run();
   let disposable = true, phase = "repository fork";
   try {
-    await api.prepareValidation(namespace, repo, shadow, repoOwnership(grant.tenant.id, grant.project.id));
+    shadow = await api.prepareValidation(namespace, repo, shadow, repoOwnership(grant.tenant.id, grant.project.id), id) ?? shadow;
     phase = "staging";
     // Private tag refs accept commit and annotated-tag objects alike. No concurrent attempt can change them.
     const stagedUpdates = updates.filter(update => update.newOid !== ZERO_OID).map((update, index) => ({

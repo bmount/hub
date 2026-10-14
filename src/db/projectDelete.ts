@@ -2,7 +2,7 @@ import type { Ctx } from "../auth/context";
 import type { Project } from "./types";
 import { conflict, HubError } from "../errors";
 import { conversationStub, inboxStub } from "../chat/stubs";
-import { ArtifactsRest, artifactNamespace, validationRepository } from "../code/artifactsRest";
+import { ArtifactsRest, artifactNamespace, isValidationCache } from "../code/artifactsRest";
 import { repoOwnership } from "../code/artifactPush";
 import { ulid } from "../ids";
 
@@ -159,11 +159,11 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
         .all<{ id: string; namespace: string; repo: string; shadow: string; replay_key: string }>()).results;
       for (const push of pushes) {
         if (push.namespace !== ns) throw conflict("repository staging ownership mismatch");
+        try { if (!isValidationCache(push.shadow)) await api.deleteTemporary(ns, push.shadow, push.id); }
+        catch (e) { if (!(e instanceof HubError) || e.status !== 404) throw e; }
         if (push.replay_key) {
           if (!bucket) throw new HubError(503, "unavailable", "git staging storage unavailable");
           if (!push.replay_key.startsWith(`git-push/${tid}/${project.id}/`)) throw conflict("repository replay ownership mismatch");
-          try { if (push.shadow !== await validationRepository(push.repo)) await api.deleteTemporary(ns, push.shadow, push.id); }
-          catch (e) { if (!(e instanceof HubError) || e.status !== 404) throw e; }
           await bucket.delete(push.replay_key);
         }
       }

@@ -12,6 +12,8 @@ export type ArtifactCommit = {
   committer: { name: string; email: string };
   authoredAt: number; committedAt: number; message: string;
 };
+class IncompleteArtifactRepository extends HubError {}
+
 type ScopedToken = { plaintext: string; expires: number; cacheKey?: string };
 const tokens = new Map<string, ScopedToken>();
 export async function clearArtifactTokensForTest(memoryOnly = false): Promise<void> {
@@ -131,6 +133,8 @@ async function looksLikeV2LsRefs(source: ReadableStream<Uint8Array> | null, enco
   return false;
 }
 
+export function isValidationCache(target: string): boolean { return /^pimwell-cache-[0-9a-f]{40}$/.test(target); }
+
 export async function validationRepository(repo: string): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(repo));
   return `pimwell-cache-${Array.from(new Uint8Array(hash)).map(byte => byte.toString(16).padStart(2, "0")).join("").slice(0, 40)}`;
@@ -179,7 +183,8 @@ export class ArtifactsRest {
     const codes = Array.isArray(errors) ? errors.slice(0, 5).map(e => e?.code).filter(c => typeof c === "number" && Number.isSafeInteger(c)).join(",") : "";
     const ray = response.headers.get("cf-ray") ?? "";
     const operation = path === "/repos" && method === "POST" ? "create repository" : method;
-    return new HubError(502, "unavailable", `Artifacts request failed (${operation}; HTTP ${response.status}${codes ? `; codes ${codes}` : ""}${/^[a-f0-9]{16,32}(?:-[A-Z]{3})?$/.test(ray) ? `; request ${ray}` : ""}). Check Artifacts availability and API token permissions.`);
+    const ErrorType = method === "GET" && response.status === 409 && Array.isArray(errors) && errors.length === 1 && errors[0]?.code === 10303 ? IncompleteArtifactRepository : HubError;
+    return new ErrorType(502, "unavailable", `Artifacts request failed (${operation}; HTTP ${response.status}${codes ? `; codes ${codes}` : ""}${/^[a-f0-9]{16,32}(?:-[A-Z]{3})?$/.test(ray) ? `; request ${ray}` : ""}). Check Artifacts availability and API token permissions.`);
   }
   async call<T>(namespace: string, path: string, body?: unknown, method = body === undefined ? "GET" : "POST", timeout = 20_000): Promise<T> {
     const response = await this.request(namespace, path, body, method, timeout);
@@ -196,48 +201,150 @@ export class ArtifactsRest {
     await this.call(namespace, "/repos", { name: repo, description, default_branch: "main" });
     await this.invalidateRepoTokens(namespace, repo);
   }
+  private async rememberFork(namespace: string, source: string, target: string, description: string, proof: "reserved" | "accepted" | "ready"): Promise<void> {
+    await this.env.HUB_DB.prepare("INSERT INTO artifact_fork_ownership (account, namespace, target, source, description, proof, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account, namespace, target) DO UPDATE SET proof = CASE WHEN artifact_fork_ownership.proof IN ('ready', 'deleting') THEN artifact_fork_ownership.proof ELSE excluded.proof END WHERE source = excluded.source AND description = excluded.description")
+      .bind(this.account, namespace, target, source, description, proof, Date.now()).run();
+  }
+  private async ownsFork(namespace: string, target: string, description: string, reserved = false): Promise<boolean> {
+    const row = await this.env.HUB_DB.prepare("SELECT description, proof FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND target = ?")
+      .bind(this.account, namespace, target).first<{ description: string; proof: string }>();
+    return row?.description === description && (row.proof === "accepted" || row.proof === "ready" || row.proof === "deleting" || (reserved && row.proof === "reserved"));
+  }
   async fork(namespace: string, repo: string, target: string, description?: string): Promise<void> {
     this.repoPath(target);
+    const id = target.slice("pimwell-stage-".length);
+    const temporary = target === `pimwell-stage-${id}` && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id) && description === `Pimwell temporary validation ${id}`;
+    if (temporary) {
+      // An unguessable, absent target can be reserved before a request whose response may be lost.
+      try { await this.info(namespace, target);throw new HubError(409, "conflict", "temporary repository already exists"); }
+      catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
+      await this.rememberFork(namespace, repo, target, description!, "reserved");
+    }
     // A fork copies the existing object store, not just this push's delta.
     await this.call(namespace, this.repoPath(repo) + "/fork", { name: target, description, default_branch_only: false }, "POST", 90_000);
+    if (description) await this.rememberFork(namespace, repo, target, description, "accepted");
+  }
+  private async deleteOwnedFork(namespace: string, target: string, description: string, reserved = false, source = target): Promise<void> {
+    try {
+      try {
+        const info = await this.info(namespace, target);
+        if (info.description !== description) throw new HubError(409, "conflict", "validation repository ownership mismatch; nothing deleted");
+        await this.rememberFork(namespace, source, target, description, "accepted");
+      } catch (error) {
+        if (!(error instanceof IncompleteArtifactRepository) || !await this.ownsFork(namespace, target, description, reserved)) throw error;
+      }
+      // Tombstone before the request: a lost delete response remains retryable and cannot be reused.
+      await this.env.HUB_DB.prepare("UPDATE artifact_fork_ownership SET proof = 'deleting' WHERE account = ? AND namespace = ? AND target = ? AND description = ?")
+        .bind(this.account, namespace, target, description).run();
+      // Asynchronous deletion can acknowledge without a JSON body. Keep proof until absence is confirmed.
+      const response = await this.request(namespace, this.repoPath(target), undefined, "DELETE");
+      if (response.status !== 202 && response.status !== 204) {
+        const data = await response.json().catch(() => null) as { success?: boolean } | null;
+        if (data?.success !== true) throw await this.failure(response, "DELETE", this.repoPath(target), data);
+      }
+    } catch (error) {
+      if (!(error instanceof HubError) || error.status !== 404) throw error;
+      await this.env.HUB_DB.prepare("DELETE FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND target = ?").bind(this.account, namespace, target).run();
+    }
   }
   /** Reuse objects, never refs: each incoming attempt writes its own private validation refs. */
-  async prepareValidation(namespace: string, repo: string, target: string, ownership: string): Promise<void> {
+  async prepareValidation(namespace: string, repo: string, target: string, ownership: string, pushId?: string): Promise<string> {
     if (target !== await validationRepository(repo)) throw new HubError(400, "bad_request", "invalid validation repository");
     const description = `${ownership} validation cache for ${repo}`;
+    let stored = await this.env.HUB_DB.prepare("SELECT target FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
+      .bind(this.account, namespace, repo, description).first<{ target: string }>();
+    if (!stored) {
+      try {
+        const info = await this.info(namespace, target);
+        if (info.description !== description) throw new HubError(409, "conflict", "validation repository ownership mismatch");
+        return target; // Preserve existing deterministic caches; never guess a legacy ownership backfill.
+      } catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
+      const unique = `pimwell-cache-${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().slice(0, 8)}`;
+      try { await this.info(namespace, unique);throw new HubError(409, "conflict", "validation target already exists"); }
+      catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
+      // Atomic reservation makes concurrent first pushes select the same unguessable physical target.
+      await this.env.HUB_DB.prepare("INSERT OR IGNORE INTO artifact_fork_ownership VALUES (?, ?, ?, ?, ?, 'reserved', ?)")
+        .bind(this.account, namespace, unique, repo, description, Date.now()).run();
+      stored = await this.env.HUB_DB.prepare("SELECT target FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
+        .bind(this.account, namespace, repo, description).first<{ target: string }>();
+    }
+    target = stored!.target;
+    if (await this.env.HUB_DB.prepare("SELECT 1 FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND target = ? AND proof = 'deleting'")
+      .bind(this.account, namespace, target).first()) throw new HubError(409, "conflict", "validation repository cleanup pending");
+    if (!isValidationCache(target)) throw new HubError(409, "conflict", "validation repository mapping mismatch");
+    if (pushId) await this.env.HUB_DB.prepare("UPDATE git_push SET shadow = ? WHERE id = ? AND namespace = ? AND repo = ?")
+      .bind(target, pushId, namespace, repo).run();
     try {
       const info = await this.info(namespace, target);
       if (info.description !== description) throw new HubError(409, "conflict", "validation repository ownership mismatch");
-      return;
+      await this.rememberFork(namespace, repo, target, description, "ready");
+      return target;
     } catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
-    // Concurrent first pushes may race to create the same cache. Only a verified owned result is usable.
     await this.fork(namespace, repo, target, description).catch(() => {});
     if ((await this.info(namespace, target)).description !== description)
       throw new HubError(409, "conflict", "validation repository ownership mismatch");
+    await this.rememberFork(namespace, repo, target, description, "ready");
+    return target;
   }
   /** Never delete a live repository without verifying its tenant/project ownership marker. */
   async deleteProject(namespace: string, repo: string, ownership: string): Promise<void> {
+    let exists = true;
     try {
       const info = await this.info(namespace, repo);
       if (info.description !== ownership) throw new HubError(409, "conflict", "repository ownership mismatch; nothing deleted");
-      const cache = await validationRepository(repo);
-      try {
-        const cached = await this.info(namespace, cache);
-        if (cached.description !== `${ownership} validation cache for ${repo}`) throw new HubError(409, "conflict", "validation repository ownership mismatch; nothing deleted");
-        await this.call(namespace, this.repoPath(cache), undefined, "DELETE");
-      } catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
-      await this.call(namespace, this.repoPath(repo), undefined, "DELETE");
     } catch (error) {
-      // A retry after a lost response must be safe.
       if (!(error instanceof HubError) || error.status !== 404) throw error;
+      exists = false;
+    }
+    const cache = await validationRepository(repo);
+    await this.deleteOwnedFork(namespace, cache, `${ownership} validation cache for ${repo}`, false, repo);
+    const stored = await this.env.HUB_DB.prepare("SELECT target FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
+      .bind(this.account, namespace, repo, `${ownership} validation cache for ${repo}`).first<{ target: string }>();
+    if (stored && stored.target !== cache) {
+      if (!isValidationCache(stored.target)) throw new HubError(409, "conflict", "validation repository mapping mismatch");
+      await this.deleteOwnedFork(namespace, stored.target, `${ownership} validation cache for ${repo}`, true, repo);
+    }
+    if (exists) {
+      try {
+        const response = await this.request(namespace, this.repoPath(repo), undefined, "DELETE");
+        if (response.status !== 202 && response.status !== 204) {
+          const data = await response.json().catch(() => null) as { success?: boolean } | null;
+          if (data?.success !== true) throw await this.failure(response, "DELETE", this.repoPath(repo), data);
+        }
+      } catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
     }
     await this.invalidateRepoTokens(namespace, repo);
   }
+  /** Routine cleanup may remove a failed cache, but never a readable shared object store. */
+  async cleanupIncompleteValidation(namespace: string, repo: string, ownership: string): Promise<boolean> {
+    const description = `${ownership} validation cache for ${repo}`;
+    const stored = await this.env.HUB_DB.prepare("SELECT target, proof FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
+      .bind(this.account, namespace, repo, description).first<{ target: string; proof: string }>();
+    if (!stored || stored.proof === "ready" || !isValidationCache(stored.target)) return false;
+    const cache = stored.target;
+    if (stored.proof === "deleting") {
+      await this.deleteOwnedFork(namespace, cache, description, cache !== await validationRepository(repo), repo);
+      return true;
+    }
+    try {
+      const info = await this.info(namespace, cache);
+      if (info.description !== description) throw new HubError(409, "conflict", "validation repository ownership mismatch");
+      await this.rememberFork(namespace, repo, cache, description, "ready");
+      return false;
+    }
+    catch (error) {
+      if (error instanceof HubError && error.status === 404) {
+        await this.deleteOwnedFork(namespace, cache, description, false, repo);
+        return true;
+      }
+      if (!(error instanceof IncompleteArtifactRepository)) throw error;
+    }
+    await this.deleteOwnedFork(namespace, cache, description, cache !== await validationRepository(repo), repo);
+    return true;
+  }
   async deleteTemporary(namespace: string, repo: string, id: string): Promise<void> {
-    if (repo !== `pimwell-stage-${id}` || !/^[0-9a-f-]{36}$/.test(id)) throw new HubError(400, "bad_request", "not a temporary repository");
-    const info = await this.info(namespace, repo);
-    if (info.description !== `Pimwell temporary validation ${id}`) throw new HubError(409, "conflict", "temporary repository ownership mismatch");
-    await this.call(namespace, this.repoPath(repo), undefined, "DELETE");
+    if (repo !== `pimwell-stage-${id}` || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)) throw new HubError(400, "bad_request", "not a temporary repository");
+    await this.deleteOwnedFork(namespace, repo, `Pimwell temporary validation ${id}`, true);
   }
   async log(namespace: string, repo: string, ref: string, limit = 1000, offset = 0): Promise<ArtifactCommit[]> {
     return this.call(namespace, this.repoPath(repo) + `/log?${new URLSearchParams({ ref, limit: String(limit), offset: String(offset) })}`);
