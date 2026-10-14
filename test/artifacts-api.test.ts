@@ -28,7 +28,7 @@ function concat(...parts: Uint8Array[]): Uint8Array {
   const bytes = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));let offset = 0;
   for (const part of parts) { bytes.set(part, offset);offset += part.length; }return bytes;
 }
-afterEach(() => { vi.restoreAllMocks();clearArtifactTokensForTest(); });
+afterEach(async () => { vi.restoreAllMocks();await clearArtifactTokensForTest(); });
 
 async function setup(role: "member" | "reader" = "member") {
   const tenant = await seedTenant("acme"), human = await seedHuman("caller@example.invalid", { memberships: [{ tenant_id: tenant.id, role }] });
@@ -88,10 +88,16 @@ describe("Artifacts compatibility adapter", () => {
     expect(response.status).toBe(200);expect(await response.text()).toContain(`${hash(4)} HEAD`);
     expect(s.requests.filter(path => path.endsWith("/repos/site"))).toHaveLength(1);
     expect(s.requests.filter(path => path.endsWith("/log"))).toHaveLength(0);
+    await clearArtifactTokensForTest(true);
     s.setDescription("foreign ownership");s.requests.length = 0;
     const denied = await artifactGit(new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: s.auth } }), s.configured, "acme");
     expect(denied.status).toBe(503);
     expect(s.requests.some(path => path.includes("/git/"))).toBe(false);
+    const caller = await authorizeGit(s.configured, s.auth, "acme", "site");
+    await env.HUB_DB.prepare("UPDATE session SET revoked_at=1 WHERE id=?").bind(caller!.session.id).run();
+    s.requests.length = 0;
+    const revoked = await artifactGit(new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: s.auth } }), s.configured, "acme");
+    expect(revoked.status).toBe(401);expect(s.requests).toHaveLength(0);
   });
   it("routes named repositories with isolated history and attribution while preserving the default", async () => {
     const s = await setup();

@@ -2,6 +2,8 @@ import { instrumentMethods } from "../perf";
 import type { Env } from "../env";
 import { HubError } from "../errors";
 import { packet } from "./gitProtocol";
+import { sha256Hex } from "../ids";
+import { seal, open } from "../models/secretbox";
 
 export type ArtifactRepo = { name: string; remote: string; description: string | null; default_branch: string; read_only: boolean };
 export type ArtifactCommit = {
@@ -10,8 +12,23 @@ export type ArtifactCommit = {
   committer: { name: string; email: string };
   authoredAt: number; committedAt: number; message: string;
 };
-const tokens = new Map<string, { plaintext: string; expires: number }>();
-export function clearArtifactTokensForTest(): void { tokens.clear(); }
+type ScopedToken = { plaintext: string; expires: number; cacheKey?: string };
+const tokens = new Map<string, ScopedToken>();
+export async function clearArtifactTokensForTest(memoryOnly = false): Promise<void> {
+  const keys = [...tokens.values()].flatMap(token => token.cacheKey ? [token.cacheKey] : []);
+  tokens.clear();
+  if (!memoryOnly) await Promise.all(keys.map(key => caches.default.delete(key).catch(() => false)));
+}
+function rememberToken(key: string, token: ScopedToken): void {
+  if (tokens.size >= 256) {
+    for (const [name, cached] of tokens) if (cached.expires <= Date.now() + 30_000) tokens.delete(name);
+    if (tokens.size >= 256) tokens.delete(tokens.keys().next().value!);
+  }
+  tokens.set(key, token);
+}
+function validToken(token: ScopedToken): boolean {
+  return typeof token.plaintext === "string" && /^[\x21-\x7e]{1,2048}$/.test(token.plaintext) && Number.isFinite(token.expires) && token.expires > Date.now();
+}
 
 export function artifactNamespace(tenant: string): string {
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(tenant)) throw new HubError(400, "bad_request", "invalid Git organization");
@@ -214,6 +231,9 @@ export class ArtifactsRest {
       if (!(error instanceof HubError) || error.status !== 404) throw error;
     }
     for (const key of tokens.keys()) if (key.startsWith(`${this.account}/${namespace}/${repo}/`)) tokens.delete(key);
+    await Promise.all((["read", "write"] as const).map(async scope => {
+      try { await caches.default.delete((await this.tokenCache(namespace, repo, scope)).url); } catch { /* Best-effort eviction; tokens still expire. */ }
+    }));
   }
   async deleteTemporary(namespace: string, repo: string, id: string): Promise<void> {
     if (repo !== `pimwell-stage-${id}` || !/^[0-9a-f-]{36}$/.test(id)) throw new HubError(400, "bad_request", "not a temporary repository");
@@ -252,21 +272,39 @@ export class ArtifactsRest {
     this.base(namespace);this.repoPath(repo);
     return `https://${this.account}.artifacts.cloudflare.net/git/${namespace}/${repo}.git`;
   }
+  private async tokenCache(namespace: string, repo: string, scope: "read" | "write"): Promise<{ key: string; url: string; secret: string }> {
+    this.base(namespace);this.repoPath(repo);
+    // Edge caches span isolates. Seal credentials and bind both the cache key and
+    // decrypted payload to the account, API credential, namespace, repo and scope.
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`Artifacts scoped token cache v1:${this.env.ARTIFACTS_API_TOKEN}`)));
+    const secret = btoa(String.fromCharCode(...digest));
+    const id = await sha256Hex(`${this.account}/${namespace}/${repo}/${scope}/${secret}`);
+    return { key: `${this.account}/${namespace}/${repo}/${scope}/${id}`, url: `https://pimwell-artifacts-token.invalid/v1/${id}`, secret };
+  }
   async repoToken(namespace: string, repo: string, scope: "read" | "write"): Promise<string> {
-    this.repoPath(repo);
-    const key = `${this.account}/${namespace}/${repo}/${scope}`;
-    const cached = tokens.get(key);
+    const cache = await this.tokenCache(namespace, repo, scope);
+    const cached = tokens.get(cache.key);
     if (cached && cached.expires > Date.now() + 30_000) return cached.plaintext;
+    try {
+      const hit = await caches.default.match(cache.url);
+      if (hit) {
+        const token = JSON.parse(await open(cache.secret, await hit.json())) as ScopedToken & { context: string };
+        if (token.context === cache.key && validToken(token) && token.expires > Date.now() + 30_000) {
+          rememberToken(cache.key, { plaintext: token.plaintext, expires: token.expires, cacheKey: cache.url });
+          return token.plaintext;
+        }
+      }
+    } catch { /* A missing, corrupt or unavailable edge cache is only a miss. */ }
     const result = await this.call<{ plaintext: string; expires_at: string }>(namespace, "/tokens", { repo, scope, ttl: 300 });
-    const expires = Date.parse(result.expires_at);
-    if (typeof result.plaintext !== "string" || !/^[\x21-\x7e]{1,2048}$/.test(result.plaintext) || !Number.isFinite(expires) || expires <= Date.now())
-      throw new HubError(502, "unavailable", "Artifacts token unavailable");
-    if (tokens.size >= 256) {
-      for (const [name, token] of tokens) if (token.expires <= Date.now() + 30_000) tokens.delete(name);
-      if (tokens.size >= 256) tokens.delete(tokens.keys().next().value!);
-    }
-    tokens.set(key, { plaintext: result.plaintext, expires });
-    return result.plaintext;
+    const token = { plaintext: result.plaintext, expires: Date.parse(result.expires_at), cacheKey: cache.url };
+    if (!validToken(token)) throw new HubError(502, "unavailable", "Artifacts token unavailable");
+    rememberToken(cache.key, token);
+    const ttl = Math.floor((token.expires - Date.now() - 30_000) / 1000);
+    if (ttl > 0) try {
+      const encrypted = await seal(cache.secret, JSON.stringify({ plaintext: token.plaintext, expires: token.expires, context: cache.key }));
+      await caches.default.put(cache.url, Response.json(encrypted, { headers: { "cache-control": `max-age=${Math.min(ttl, 270)}` } }));
+    } catch { /* Cache availability never controls Git authorization or storage. */ }
+    return token.plaintext;
   }
   async git(namespace: string, repo: string, tail: string, request: Request, body: ReadableStream<Uint8Array> | null, write: boolean, normalizeHead = true, headInfo?: ArtifactRepo): Promise<Response> {
     if (!["info/refs", "git-upload-pack", "git-receive-pack"].includes(tail)) throw new HubError(400, "bad_request", "invalid Git operation");

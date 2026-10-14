@@ -28,7 +28,7 @@ async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
 const command = (ref = update.ref, oldOid = OID, newOid = NEXT) => `${oldOid} ${newOid} ${ref}`;
 const flush = encode.encode("0000");
 
-afterEach(() => { vi.restoreAllMocks(); clearArtifactTokensForTest(); });
+afterEach(async () => { vi.restoreAllMocks(); await clearArtifactTokensForTest(); });
 
 describe("Git receive-pack parsing", () => {
   it("parses commands split at every byte and replays the exact original bytes", async () => {
@@ -155,6 +155,65 @@ describe("Artifacts REST transport", () => {
     expect(fake).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fake.mock.calls[0]![1]!.body as string)).toEqual({ repo: "site", scope: "read", ttl: 300 });
     expect(JSON.parse(fake.mock.calls[1]![1]!.body as string).scope).toBe("write");
+  });
+  it("shares only sealed, scoped tokens across isolates and rotates with the API credential", async () => {
+    let issuedCount = 0;
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ success: true, result: { plaintext: `opaque-${++issuedCount}`, expires_at: new Date(Date.now() + 300_000).toISOString() } }));
+    const cache = caches.default, original = cache.put.bind(cache), writes: Array<{ key: RequestInfo | URL; body: string }> = [];
+    vi.spyOn(cache, "put").mockImplementation(async (key, response) => { writes.push({ key, body: await response.clone().text() });await original(key, response); });
+    const api = configured();
+    expect(await api.repoToken("acme", "site", "read")).toBe("opaque-1");
+    expect(writes[0]!.body).not.toContain("opaque-1");expect(writes[0]!.body).not.toContain(apiToken);
+    expect(Object.keys(JSON.parse(writes[0]!.body)).sort()).toEqual(["ciphertext", "iv"]);
+    await clearArtifactTokensForTest(true);
+    expect(await api.repoToken("acme", "site", "read")).toBe("opaque-1");expect(fake).toHaveBeenCalledTimes(1);
+    expect(await api.repoToken("acme", "site", "write")).toBe("opaque-2");
+    expect(await api.repoToken("blue", "site", "read")).toBe("opaque-3");
+    expect(await api.repoToken("acme", "other", "read")).toBe("opaque-4");
+    const rotated = new ArtifactsRest({ ...env, ARTIFACTS_ACCOUNT_ID: account, ARTIFACTS_API_TOKEN: "rotated-private-api-credential" });
+    expect(await rotated.repoToken("acme", "site", "read")).toBe("opaque-5");
+    const otherAccount = new ArtifactsRest({ ...env, ARTIFACTS_ACCOUNT_ID: "1".repeat(32), ARTIFACTS_API_TOKEN: apiToken });
+    expect(await otherAccount.repoToken("acme", "site", "read")).toBe("opaque-6");
+    // Even a valid write-scope envelope copied to the read key cannot grant read authority.
+    await original(writes[0]!.key, new Response(writes[1]!.body, { headers: { "cache-control": "max-age=270" } }));
+    await clearArtifactTokensForTest(true);
+    expect(await api.repoToken("acme", "site", "read")).toBe("opaque-7");
+    // Clean every scoped entry exercised above after simulating a separate isolate.
+    for (const write of writes) await cache.delete(write.key);
+  });
+  it("ignores corrupt, expired and unavailable edge token caches", async () => {
+    const cache = caches.default, original = cache.put.bind(cache);
+    let cacheKey: RequestInfo | URL | undefined, issuedCount = 0;
+    vi.spyOn(cache, "put").mockImplementation(async (key, response) => { cacheKey = key;await original(key, response); });
+    const fake = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ success: true, result: { plaintext: `opaque-${++issuedCount}`, expires_at: new Date(Date.now() + 300_000).toISOString() } }));
+    const api = configured();
+    await api.repoToken("acme", "site", "read");
+    await clearArtifactTokensForTest(true);
+    await original(cacheKey!, Response.json({ iv: "bad", ciphertext: "not valid ciphertext" }, { headers: { "cache-control": "max-age=270" } }));
+    expect(await api.repoToken("acme", "site", "read")).toBe("opaque-2");
+    await clearArtifactTokensForTest(true);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 280_000);
+    expect(await api.repoToken("acme", "site", "read")).toBe("opaque-3");
+    await clearArtifactTokensForTest(true);
+    vi.spyOn(cache, "match").mockRejectedValue(new Error("cache unavailable"));
+    vi.mocked(cache.put).mockRejectedValue(new Error("cache unavailable"));
+    expect(await api.repoToken("acme", "site", "read")).toBe("opaque-4");
+    expect(fake).toHaveBeenCalledTimes(4);
+  });
+  it("evicts both scoped edge tokens when an owned project repository is deleted", async () => {
+    const api = configured(), owner = "Pimwell tenant t project p";
+    let count = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
+      const text = String(url);
+      if (text.endsWith("/tokens")) return Response.json({ success: true, result: { plaintext: `opaque-${++count}`, expires_at: new Date(Date.now() + 300_000).toISOString() } });
+      if (text.includes("/repos/pimwell-cache-")) return new Response(null, { status: 404 });
+      if (init?.method === "DELETE") return Response.json({ success: true, result: {} });
+      return Response.json({ success: true, result: { name: "site", remote: api.remote("acme", "site"), description: owner } });
+    });
+    await api.repoToken("acme", "site", "read");await api.repoToken("acme", "site", "write");
+    await api.deleteProject("acme", "site", owner);
+    expect(await api.repoToken("acme", "site", "read")).toBe("opaque-3");
+    expect(await api.repoToken("acme", "site", "write")).toBe("opaque-4");
   });
   it("does not send client credentials, cookies, or claimed identities to storage", async () => {
     const token = issued();

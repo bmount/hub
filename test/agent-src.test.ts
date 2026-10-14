@@ -14,7 +14,7 @@ import { packet, peekCommands, ZERO_OID } from "../src/code/gitProtocol";
 import { apiPost, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const account = "0".repeat(32);
-afterEach(() => { vi.restoreAllMocks(); clearArtifactTokensForTest(); });
+afterEach(async () => { vi.restoreAllMocks(); await clearArtifactTokensForTest(); });
 
 async function world() {
   const tenant = await seedTenant("acme");
