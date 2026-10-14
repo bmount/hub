@@ -27,7 +27,7 @@ const cache=new Map<string,{until:number;rows:PerfRow[];bytes:number}>();
 let cacheBytes=0;
 export function clearPerformanceCache():void {cache.clear();cacheBytes=0;}
 export class PerformanceUnavailable extends Error {}
-export async function analyticsQuery(ctx:Ctx, sql:string):Promise<PerfRow[]> {
+export async function analyticsQuery(ctx:Pick<Ctx,"env">, sql:string):Promise<PerfRow[]> {
   const account=ctx.env.ARTIFACTS_ACCOUNT_ID, token=ctx.env.PERF_ANALYTICS_TOKEN;
   if(!account || !/^[0-9a-f]{32}$/.test(account) || !token) throw new PerformanceUnavailable("Performance reporting is not connected.");
   for(const [key,value] of cache) if(value.until<=Date.now()) {cache.delete(key);cacheBytes-=value.bytes;}

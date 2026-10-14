@@ -1,5 +1,7 @@
 // Performance budget (overnight plan 2, N4): every signed-in page stays within a fixed number of D1 round trips.
 // A batch is one round trip. If a page needs more, read in one batch, or record a ruling and raise its budget here.
+import { checkPerformance, runPerformanceChecks, type CheckTarget } from "../src/perf/checks";
+import { BUDGETS } from "../src/perf/budgets";
 import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, writeClientPoints, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, type TimingSpan } from "../src/perf";
 import worker, { app } from "../src/index";
 import gitWorker from "../git-proxy/index";
@@ -27,6 +29,66 @@ function trips(header: string | null): { trips: number; statements: number } {
   if (!m) throw new Error(`no db timing in ${header}`);
   return { trips: Number(m[1]), statements: Number(m[2]) };
 }
+
+describe("latency budget situations", () => {
+  async function fixture() {
+    const tenant = await seedTenant("acme");
+    const project = await createProject(env.HUB_DB, {tenant_id:tenant.id,namespace_id:null,slug:"latency",kind:"repo",display_name:"Latency"},Date.now());
+    const now = Date.now(), version = "11111111-1111-4111-8111-111111111111", oldVersion = "22222222-2222-4222-8222-222222222222", commit = "a".repeat(40);
+    await env.HUB_DB.prepare("INSERT INTO site (id,tenant_id,project_id,name,hostnames,created_at) VALUES ('latency-site',?,?, 'pimwell.com','[]',?)").bind(tenant.id,project.id,now).run();
+    for (const [id,v,at] of [["new-deploy",version,now-1_800_000],["old-deploy",oldVersion,now-5_400_000]] as const) await env.HUB_DB.prepare("INSERT INTO app_deploy (id,tenant_id,project_id,script_name,version_id,tag,message,seen_at) VALUES (?,?,?,'pimwell-hub',?,?,?,?)").bind(id,tenant.id,project.id,v+":"+v,commit,JSON.stringify({release:1,environment:"production"}),at).run();
+    const target:CheckTarget = {site_id:"latency-site",tenant_id:tenant.id,project_id:project.id,project:"latency",name:"pimwell.com",script_name:"pimwell-hub"};
+    return {target,now,current:{id:"new-deploy",version,commit,seen_at:now-1_800_000},previous:{id:"old-deploy",version:oldVersion,commit,seen_at:now-5_400_000}};
+  }
+  it("synthetic points create a breach and threshold regression linked to deploy, commit, route and growing span; recovery resolves, unknown does not", async () => {
+    const f = await fixture();
+    let p95 = 500, samples = 200, empty = false;
+    const queries:string[] = [];
+    const query = async (sql:string) => {
+      queries.push(sql);
+      if (sql.includes("AS span")) return [{span:"d1.batch",version:f.current.version,p95:300,samples:200},{span:"d1.batch",version:f.previous.version,p95:100,samples:200},{span:"fetch",version:f.current.version,p95:120,samples:200},{span:"fetch",version:f.previous.version,p95:110,samples:200}];
+      if (!sql.includes("blob11 = 'cookie'") || empty) return [];
+      // Exactly +25% qualifies, not just >25%.
+      const points = Array.from({length:samples},()=>({duration:sql.includes(f.current.version)?p95:400,weight:1}));
+      return [{route:"/docket",p95:points[0]!.duration,samples:points.length}];
+    };
+    await checkPerformance(env,f.target,f.current,f.previous,f.now,query);
+    await checkPerformance(env,f.target,f.current,f.previous,f.now+1,query);
+    const alerts = (await env.HUB_DB.prepare("SELECT * FROM perf_alert ORDER BY kind").all()).results;
+    expect(alerts).toHaveLength(2);
+    expect(alerts.map(a=>a.kind)).toEqual(["budget","regression"]);
+    for (const alert of alerts) expect(alert).toMatchObject({deploy_id:f.current.id,commit_oid:f.current.commit,route:"/docket",span:"d1.batch"});
+    const situations = (await env.HUB_DB.prepare("SELECT * FROM situation WHERE tenant_id = ?").bind(f.target.tenant_id).all()).results;
+    expect(situations).toHaveLength(2);
+    expect(situations[0]!.report).toContain(`/apps?d=${f.current.id}`);
+    expect(situations[0]!.report).toContain(`/latency/code?c=${f.current.commit}`);
+    expect(queries.every(q=>q.includes("blob1 = 'pimwell.com'") && q.includes("blob2 = 'pimwell-hub'"))).toBe(true);
+    expect(queries.some(q=>q.includes("COUNT() AS samples"))).toBe(true);
+    empty = true;
+    await checkPerformance(env,f.target,f.current,f.previous,f.now+2,query);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation WHERE outcome IS NOT NULL").first("n")).toBe(0);
+    empty = false; samples = 199; p95 = 200;
+    await checkPerformance(env,f.target,f.current,f.previous,f.now+3,query);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation WHERE outcome IS NOT NULL").first("n")).toBe(1);
+    samples = 200;
+    await checkPerformance(env,f.target,f.current,f.previous,f.now+4,query);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation WHERE outcome IS NOT NULL").first("n")).toBe(2);
+    p95 = 500;
+    await checkPerformance(env,f.target,f.current,f.previous,f.now+5,query);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation").first("n")).toBe(4);
+    expect(await env.HUB_DB.prepare("SELECT met FROM perf_budget_check").first("met")).toBe(0);
+    expect(BUDGETS.map(b=>b.ms)).toEqual([300,500,800,1000,400,1000]);
+  });
+  it("does not call analytics before 30 minutes or within an hour of a successful check", async () => {
+    const f = await fixture();
+    await env.HUB_DB.prepare("INSERT INTO app_source (id,tenant_id,project_id,script_name,state,created_at) VALUES ('latency-app',?,?, 'pimwell-hub','active',?)").bind(f.target.tenant_id,f.target.project_id,f.now).run();
+    await env.HUB_DB.prepare("INSERT INTO site_app (site_id,app_id) VALUES ('latency-site','latency-app')").run();
+    await runPerformanceChecks(env,f.now-1);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM perf_budget_check").first("n")).toBe(0);
+    await env.HUB_DB.prepare("INSERT INTO perf_budget_check VALUES ('latency-site','pimwell-hub','new-deploy',?,0,0)").bind(f.now).run();
+    await runPerformanceChecks(env,f.now+3_599_999);
+  });
+});
 
 describe("performance budget", () => {
   it("every signed-in page stays within the round-trip budget", async () => {

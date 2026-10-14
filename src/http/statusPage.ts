@@ -1,5 +1,7 @@
 // /<project>/status: what happened lately, from the record only (src/verbs/status.ts).
 import type { Env } from "../env";
+import { projectPathSql } from "../db/projects";
+import { BUDGETS } from "../perf/budgets";
 import { localTime, plural, esc, htmlResponse, kitList, kitTabs, toolbar, workbench } from "../html";
 import { buildContext } from "../auth/context";
 import { clearSessionCookie } from "../auth/cookie";
@@ -22,10 +24,13 @@ export async function statusPage(request: Request, env: Env, slug: string): Prom
   const workHref = (ref: string) => { const u = new URL(url); u.searchParams.set("work", ref); return u.pathname + u.search; };
   let s;
   try { s = await projectStatus(ctx, slug, parseSince(sinceParam, ctx.now)); } catch (e) { if (e instanceof HubError && e.status === 404) return notFoundPage(extra); throw e; }
+  const checks = (await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FstatusPage.ts:27:25:statusPage:8beb262a*/ SELECT c.met, c.measured, c.checked_at FROM perf_budget_check c JOIN site s ON s.id = c.site_id JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id WHERE s.tenant_id = ? AND (${projectPathSql()}) = ?`).bind(ctx.tenant.id, slug).all<{met:number;measured:number;checked_at:number}>()).results;
+  const budgetLine = checks.length ? `Latency budgets: ${checks.reduce((n,c)=>n+c.met,0)}/${checks.length*BUDGETS.length} met; ${checks.reduce((n,c)=>n+BUDGETS.length-c.measured,0)} unknown.${checks.some(c=>ctx.now-c.checked_at>7_200_000) ? " Stale evidence." : ""} Last checked ${localTime(Math.min(...checks.map(c=>c.checked_at)))}.` : "Latency budgets: not yet checked.";
   const when = localTime;
   const range = kitTabs("Status period", ["1d", "7d", "30d"].map(r => { const u = new URL(url); u.searchParams.set("since", r); u.searchParams.delete("work"); return {label:r === "1d" ? "Today" : r === "7d" ? "This week" : "30 days",href:u.pathname+u.search,current:r === sinceParam}; }));
   const sec = (title: string, n: number, shown: number, body: string) => n ? `<h2 title="${esc(statusExamples(n, shown))}">${esc(title)} <span class="wb-count">${n}</span></h2>${body}` : `<p class="lede">${esc(title)}: none</p>`;
   const list = `<div class="status-report"><div class="head"><h1>Status</h1><span>since ${when(s.since)}</span></div>${toolbar("Status actions and filters", range, '<input data-filter aria-label="Filter the list" placeholder="Filter these (/)" size="16">')}
+<p class="lede">${budgetLine}</p>
 <p class="lede" title="${esc(statusFreshness(s) + " " + s.coverage.note)}">Git sync: ${esc(s.coverage.git_sync.phase)} · ${plural(s.coverage.telemetry.active_sources,"active source")} · ⓘ</p>
 ${sec("Under way now", s.totals.doing, s.doing.length, kitList("doing", s.doing.map((d) => ({href:workHref(d.ref),selected:url.searchParams.get("work") === d.ref,html:`<a href="${esc(workHref(d.ref))}">${esc(d.ref)}</a> ${esc(d.title)}${d.owner ? ` — ${esc(d.owner)}` : " — nobody"}${d.stalled ? ' <span class="pill">stalled</span>' : ""}`}))))}
 ${sec("Finished or let go", s.totals.finished, s.finished.length, kitList("finished", s.finished.map((f) => ({href:workHref(f.ref),selected:url.searchParams.get("work") === f.ref,html:`<a href="${esc(workHref(f.ref))}">${esc(f.ref)}</a> ${esc(f.title)}${f.state === "dropped" ? " (let go)" : ""}`}))))}

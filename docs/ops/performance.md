@@ -148,6 +148,29 @@ A transition into failure creates one Situation per journey in the synthetic org
 
 Workers tests exercise the live page/API/MCP handlers with a stub browser transport, isolation/marker expiry, all fixed journey outcomes, credential cleanup and Situation failure/recovery deduplication. They do not describe stub Chromium timing as live measurements.
 
+## Latency budgets and automatic Situations
+
+`src/perf/budgets.ts` is the source of truth for p95 limits:
+
+| Measurement | p95 limit |
+| --- | --- |
+| Signed-in document GET, server dispatch (cookie auth, excluding API and Git routes) | 300 ms |
+| Pane swap, input to paint (`pane.swap`) | 500 ms |
+| Form submit, input to paint (`form.submit`) | 800 ms |
+| Visible spinner, grouped by route | 1,000 ms |
+| Completed MCP tool span | 400 ms |
+| Synthetic Git ls-remote journey | 1,000 ms |
+
+The existing five-minute scheduler calls `src/perf/checks.ts`. Each active site's registered Worker is first eligible 30 minutes after its latest recorded production deploy (normally checked within five minutes), then hourly after a successful evaluation. Deploy identity comes from the same release records as Sites, not an inferred commit. A new deploy bypasses the previous deploy's hourly cooldown. Failed SQL reads do not advance the checkpoint; they retry on the next tick and cannot resolve an alert.
+
+Checks use complete points, site/Worker/version filters and weighted p95, grouped by route. The current window is the last hour, bounded by the new deploy's recording time. The baseline is the last hour before that recording time, bounded by the preceding production deploy. A budget breach is p95 strictly above its limit. A deploy regression is p95 **at least 25% higher**, with **at least 200 retained observations on each side** (raw `COUNT()` is used only as this conservative evidence floor, never as represented traffic). The baseline must have a positive p95. All external HTTP routes are additionally checked for server-time regressions, even when no absolute budget applies (for example anonymous pages or token-authenticated API calls). Non-Git populations exclude synthetic traffic by kind; Git uses only the fixed synthetic journey label. Browser version is the beacon receiver's version, with the delayed-beacon caveat described below.
+
+A failing route/budget opens one Situation per failure episode in the site's owning organization, without a model call or user content. Its report links the deploy and full recorded commit, identifies the route and names the matched span with the greatest p95 growth (or explicitly says unavailable). `perf_alert` retains structured deploy/commit/span references. The system-owned synthetic identity authors these reports but is **not** added to the site's organization. Repeated failures do not flood Situations. A later measured passing window records automatic recovery; missing routes or insufficient regression samples cannot resolve an episode. A recurrence opens a fresh Situation and preserves the earlier report.
+
+The project Status line reports met/total budget categories across checked Workers, unknown categories, and the oldest check time; evidence older than two hours is marked stale. A category counts as met only when it has observations and every observed route passes. No observations is unknown, not a pass. The six limits apply independently per Worker; Workers without relevant traffic can have all six unknown. Situation reports and Status summaries are tenant/project-scoped; no measured organization identity or request contents are copied into them.
+
+`test/perf-budget.test.ts` supplies synthetic 200-point populations at the exact 25% boundary, checks budget and regression Situations' deploy/commit/route/span references, deduplication, recovery, sparse/absent data and scheduler cooldowns.
+
 ## Performance over MCP
 
 `perf_summary`, `perf_route`, `perf_compare`, `perf_exemplar` and `perf_statements` reuse the workbench queries and authorization. All take a registered `site` name and `hours` (1, 24 or 168, default 24). By default they aggregate every organization’s traffic, including unscoped invocations, on that site. Set `only_my_org: true` to restrict every query to the viewer’s keyed tenant hash. No tenant hashes, names, slugs, people, projects or organization IDs are returned; there is no organization grouping or lookup. Summary returns the top 200 routes and interactions by sample-weighted total waiting time. Route, exemplar and statements take `selected` and optionally `kind` (routes by default, or interactions, verbs, tools, spinners) and `version`. Route details are queried directly, even outside the overview's top 200. Compare takes `version` and `previous` and returns route metrics side by side. Exemplar defaults to the slowest retained request; optional `request` must belong to the selected group's five slow exemplars. Statements include fingerprint, recorded source/call site and version. Durations are milliseconds; absence of observations is not zero latency. Unavailable reporting returns a sanitized `performance_unavailable` error.

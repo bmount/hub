@@ -1,6 +1,7 @@
 import { clientSlow } from "./http/clientSlow";
 import { clientTiming } from "./http/clientTiming";
 import { situationsPage } from "./http/situationPage";
+import { runPerformanceChecks } from "./perf/checks";
 import { statusPage } from "./http/statusPage";
 import { boardPage } from "./http/boardPage";
 import { reviewsPage } from "./http/reviewPages";
@@ -261,6 +262,7 @@ export default {
       await Promise.all([
         span("cron.cleanup", () => cleanupFileObjects(e, Date.now(), false)),
         span("cron.git.sync", () => syncAll(e, Date.now())),
+        span("cron.performance", () => runPerformanceChecks(e)),
       ]);
     }));
     ctx.waitUntil(tracedInvocation(env, p => ctx.waitUntil(p), "synthetic", async e => {
