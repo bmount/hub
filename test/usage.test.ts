@@ -28,6 +28,20 @@ async function world() {
 const costs = async () => (await env.HUB_DB.prepare("SELECT model, cost_micros, cost_source, source FROM model_call ORDER BY model").all()).results;
 
 describe("project-filtered recorded AI usage", () => {
+  it('attributes item aliases in single and batch reports, rejects ambiguity and foreign items', async () => {
+    const w=await world();
+    const created=await w.call(w.pat,'work.create',{project:'site',kind:'errand',title:'Item tokens'});
+    const item=created.result.item as {id:string;project_id:string};
+    expect((await w.call(w.pat,'usage.report',{provider:'p',model:'single',item:'site#1',input_tokens:12})).status).toBe(200);
+    expect((await w.call(w.pat,'usage.report',{calls:[{provider:'p',model:'batch',item:'site#1',output_tokens:3}]})).status).toBe(200);
+    const rows=(await env.HUB_DB.prepare("SELECT work_item_id,project_id FROM model_call WHERE model IN ('single','batch')").all()).results;
+    expect(rows).toEqual([{work_item_id:item.id,project_id:item.project_id},{work_item_id:item.id,project_id:item.project_id}]);
+    expect((await w.call(w.pat,'usage.report',{provider:'p',model:'bad',item:'site#1',work:'site#2'})).status).toBe(400);
+    expect((await w.call(w.pat,'usage.report',{provider:'p',model:'bad',item:42})).status).toBe(400);
+    const foreign=await seedTenant('foreign');
+    await createProject(env.HUB_DB,{tenant_id:foreign.id,namespace_id:null,slug:'secret',kind:'tracker',display_name:'Secret'},Date.now());
+    expect((await w.call(w.pat,'usage.report',{provider:'p',model:'bad',item:'secret#1'})).status).toBe(404);
+  });
   it("filters every aggregate and inspector, includes calls without work, and retains own/admin scope", async () => {
     const w = await world();
     const created = await w.call(w.pat, "work.create", { project: "site", kind: "errand", title: "Build" });

@@ -180,6 +180,18 @@ try {
   await db.prepare("INSERT INTO situation (id,tenant_id,identity_id,thread_id,title,question,report,created_at) VALUES (?,?,?,?,'Investigate the workbench','Why did the workbench request fail?','Synthetic report: inspect the recorded error group.',?)").bind('synthetic-situation',tenant,viewerId,assistantId,now).run();
   browser = await chromium.launch({headless: true});
   const pages = {multiSidebar:'/sample/code?repo=api', multiCode:'/sample/code?repo=api', multiCommit:'/sample/code?repo=api&c='+'b'.repeat(40), multiFiles:'/sample/files?repo=web&f=app.ts', multiItem:'/sample/w/2', multiReviews:'/sample/reviews?repo=api', home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', person:'/people/dev%40example.test', agent:'/people/acme.build%40pimwell.test', connect:'/people?connect=1', invite:'/people?invite=1', appGroup:'/apps?g=synthetic-error', situations:'/situations', situation:'/situations?s=synthetic-situation', usagePerson:'/usage?days=30&who=dev%40example.test', mailSettings:'/mail?addresses=1', mailRecipients:'/mail/recipients', account:'https://pimwell.test/me', sessions:'https://pimwell.test/me/sessions', models:'https://pimwell.test/admin/models', orgs:'https://pimwell.test/admin/orgs', adminApps:'https://pimwell.test/admin/apps', newProject:'/projects/new', intent:'/do', chatDirectory:'/c', chatInbox:'/inbox', assistantNew:'/assistant', contactNew:'/knowledge/contacts?new=1', upload:'/knowledge/documents?upload=1', wikiNew:'/knowledge/wiki?new=1', skill:'/skills/start-here', skills:'/skills', tools:'/assistant/tools', archive:'/archive', organizations:'https://pimwell.test/', newWork:'/new?project=sample', search:'/search?q=workbench', performance:'/apps?project=sample&site=workbench.example.com&view=performance', performanceRoute:'/apps?project=sample&site=workbench.example.com&view=performance&selected=%2F%3Aproject%2Fdocket', performanceVerb:'/apps?project=sample&site=workbench.example.com&view=performance&kind=verbs', performanceTool:'/apps?project=sample&site=workbench.example.com&view=performance&kind=tools', performanceInteraction:'/apps?project=sample&site=workbench.example.com&view=performance&kind=interactions&selected=pane.swap', performanceSpinner:'/apps?project=sample&site=workbench.example.com&view=performance&kind=spinners&selected=pane.swap', performanceDeploy:'/apps?project=sample&site=workbench.example.com&view=performance&kind=deploys'};
+  if(process.env.WORKBENCH_PAGES?.split(',').some(n=>n.startsWith('velocity'))){
+    pages.velocity='/sample/velocity'; pages.velocityItem='/sample/velocity?work=sample%232';
+    await db.prepare('UPDATE project SET velocity_since = ? WHERE id = ?').bind(now-7*86400000,sampleId).run();
+    await db.prepare("INSERT INTO code_event(tenant_id,project_id,repo,ardi_id,kind,target,summary,at) VALUES(?,?,'api',99,'commit',?,'sample#2 Keep navigation visible',?)").bind(tenant,sampleId,'b'.repeat(40),now-3*86400000).run();
+    for(let n=2;n<=4;n++){
+      const item=await db.prepare('SELECT id FROM work_item WHERE project_id = ? AND number = ?').bind(sampleId,n).first('id');
+      const filed=now-(6-n)*86400000, claimed=filed+2*3600000, closed=claimed+(n*14)*60000;
+      await db.prepare("UPDATE work_item SET created_at = ?, updated_at = ?, closed_at = ?, state = 'done', parent_id = (SELECT id FROM work_item WHERE project_id = ? AND number = 1) WHERE id = ?").bind(filed,closed,closed,sampleId,item).run();
+      for(const [kind,summary,at] of [['work.claim','Claimed sample#'+n,claimed],['work.update','Updated sample#'+n+' (Under way to Done): finished',closed]])await db.prepare("INSERT INTO event(id,tenant_id,identity_id,kind,target_kind,target_id,summary,created_at) VALUES(?,?,?,?,'work_item',?,?,?)").bind(id(),tenant,viewerId,kind,item,summary,at).run();
+      await verb(member,'usage.report',{provider:'openai',model:'synthetic',item:'sample#'+n,input_tokens:n*420000,cached_tokens:n*360000,output_tokens:n*12000,cost_usd:n*.42});
+    }
+  }
   const phase = process.env.WORKBENCH_PHASE || 'before';
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
@@ -230,6 +242,19 @@ try {
       expect(response.status(), name).toBe(200);
       await page.locator('main').waitFor();
       expect(browserErrors, name+' browser errors').toEqual([]);
+      if(name==='velocity'){
+        await expect(page.locator('#explorer')).toContainText('Velocity');
+        await expect(page.locator('table[aria-label="Velocity items"]')).toContainText('28 min');
+        await page.evaluate(()=>{window.velocityList=document.getElementById('list');});
+        await page.locator('table[aria-label="Velocity items"] a').filter({hasText:'sample#2'}).click();
+        await expect(page).toHaveURL(/work=sample%232/);
+        await expect(page.locator('#inspector h1')).toContainText('sample#2');
+        await expect(page.locator('#inspector')).toContainText('Of which cached');
+        await expect(page.locator('#inspector a[href*="repo=api"]')).toContainText('Keep navigation visible');
+        expect(await page.evaluate(()=>window.velocityList===document.getElementById('list'))).toBe(true);
+        await page.goBack();
+        await expect(page).toHaveURL(/\/sample\/velocity$/);
+      }
       if (name.startsWith('multi')) {
         await expect(page.locator('#explorer')).toContainText('Code');
         for (const repo of ['default','api','web']) await expect(page.locator(`#explorer a[href$="/sample/code?repo=${repo}"]`).first()).toBeVisible();
@@ -799,7 +824,7 @@ try {
       await verb(member, 'member.set_role', {email:'peer@example.test', role:'member'});
       console.log(`Shell and master–detail browser acceptance passed at ${viewport.width}px (single sidebar, selection and inline edits).`);
     }
-    if (viewport.width === 1440) {
+    if (viewport.width === 1440 && !process.env.WORKBENCH_PAGES?.split(',').some(n=>n.startsWith('velocity'))) {
       await page.goto(base+'/sample/docket');
       const selectResponse = page.waitForResponse(r => new URL(r.url()).pathname === '/sample/w/2' && r.request().resourceType() === 'fetch');
       await page.locator('#list tr[data-href="/sample/w/2"] a').first().click();

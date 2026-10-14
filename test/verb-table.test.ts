@@ -100,6 +100,7 @@ const TABLE: Record<string, Decl> = {
   "deploy.read": T("tenant", "reader", null, { mcp: "read" }),
   "deploy.record": T("tenant", "member", null, { mcp: "write" }),
   "usage.summary": T("tenant", "reader", null, { mcp: "read" }),
+  "velocity.read": T("tenant", "reader", null, { mcp: "read" }),
   "model.price_set": T("hub", "root", 60, { humanOnly: true }),
   "member.remove": T("tenant", "admin", 60, { humanOnly: true }),
   "mail.propose_work": T("tenant", "member", null, { mcp: "read" }),

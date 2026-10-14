@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { SELF } from "cloudflare:test";
 import { ASSETS } from "../src/assets";
-import { breadcrumb, emptyState, esc, formRow, HTML_CSP, htmlResponse, inspectorSection, kitList, kitTable, kitTabs, kitTree, page, statusChip, toolbar, workbench } from "../src/html";
+import { breadcrumb, emptyState, esc, formRow, HTML_CSP, htmlResponse, inspectorSection, kitList, kitTable, kitTabs, kitTree, page, statusChip, toolbar, utcTime, workbench } from "../src/html";
 
 describe("workbench kit", () => {
+  it('keeps reporting cutoffs explicitly UTC without local-time conversion',()=>{
+    expect(utcTime(Date.parse('2026-10-10T05:26:00Z'))).toBe('<time datetime="2026-10-10T05:26:00.000Z">2026-10-10 05:26 UTC</time>');
+  });
   it("keeps page timestamps in the shared helper", () => {
     // @ts-expect-error Vite transforms raw page imports in the Workers test build.
     const pages = import.meta.glob("../src/http/*.ts", {query:"?raw", import:"default", eager:true});

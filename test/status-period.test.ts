@@ -1,4 +1,7 @@
 import { env, SELF } from "cloudflare:test";
+import { projectVelocity, workedIntervals, percentile } from "../src/verbs/velocity";
+import { recordEvent } from "../src/db/events";
+import { usageStatement } from "../src/models/usage";
 import { describe, expect, it } from "vitest";
 import { buildContext } from "../src/auth/context";
 import { createProject } from "../src/db/projects";
@@ -28,6 +31,90 @@ async function group(w: Awaited<ReturnType<typeof world>>, id: string, first: nu
   await env.HUB_DB.prepare("INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, title, last_message, count, first_seen, last_seen) VALUES (?, ?, ?, 'app', ?, 'error', ?, 'detail', ?, ?, ?)")
     .bind(id, w.t.id, w.p.id, id, id, count, first, last).run();
 }
+
+describe("velocity evidence", () => {
+  it("sums doing intervals without overlapping renewals, counts claims, and keeps workers", () => {
+    const claim = (at: number, who = 'a') => ({ kind: 'work.claim', summary: '', created_at: at, identity_id: who });
+    const update = (at: number, summary: string) => ({ kind: 'work.update', summary, created_at: at, identity_id: 'a' });
+    const result = workedIntervals([
+      claim(100), claim(200), update(250,'Updated p#1 (details): renamed'),
+      update(300,'Updated p#1 (Under way to Open): renamed'), claim(500,'b'),
+      {kind:'work.release',summary:'',created_at:700,identity_id:'b'}, claim(800),
+      claim(900,'b'), update(1000,'Updated p#1 (Under way to Done): finished'), claim(2000),
+    ], 1000);
+    expect(result.worked_ms).toBe(600);
+    expect(result.first_claimed_at).toBe(100);
+    expect(result.attempts).toBe(5);
+    expect(result.workers).toEqual(['a','b']);
+    expect(result.intervals).toEqual([{start:100,end:300,who:'a'},{start:500,end:700,who:'b'},{start:800,end:900,who:'a'},{start:900,end:1000,who:'b'}]);
+    expect(workedIntervals([],100).first_claimed_at).toBeNull();
+    expect(workedIntervals([claim(10)],100).worked_ms).toBe(90);
+    expect(percentile([10,20,30,40],.5)).toBe(25);
+    expect(percentile([10,20,30,40],.9)).toBe(37);
+    expect(percentile([],.5)).toBeNull();
+  });
+  it("applies the cutoff to items, commits and attributed usage in API, MCP and the view", async () => {
+    const w=await world(), cutoff=w.now-3*DAY;
+    await env.HUB_DB.prepare('UPDATE project SET velocity_since = ? WHERE id = ?').bind(cutoff,w.p.id).run();
+    await work(w,1,'done',cutoff-1); await work(w,2,'done',cutoff); await work(w,3,'done',cutoff+1000);
+    await env.HUB_DB.prepare('UPDATE work_item SET closed_at = ? WHERE id IN (?,?)').bind(cutoff+3_600_000,'w2','w3').run();
+    for(const [at,kind,summary] of [[cutoff+60_000,'work.claim',''],[cutoff+120_000,'work.claim',''],[cutoff+180_000,'work.update','Updated site#2 (Under way to Done): Work 2']] as const)await recordEvent(env.HUB_DB,{tenant_id:w.t.id,identity_id:w.h.identity.id,session_id:null,kind,target_kind:'work_item',target_id:'w2',summary},at);
+    for(const [id,item,project,tenant,at] of [['old','w1',w.p.id,w.t.id,cutoff+100],['good','w2',w.p.id,w.t.id,cutoff+100],['unmatched',null,w.p.id,w.t.id,cutoff+100],['pre','w2',w.p.id,w.t.id,cutoff-1],['foreign','w2',w.p.id,'foreign',cutoff+100]] as const) {
+      if(tenant==='foreign')continue;
+      await usageStatement(env.HUB_DB,{id,source:'reported',purpose:'coding',provider:'p',model:'m',tenant_id:tenant,identity_id:w.h.identity.id,project_id:project,work_item_id:item,ok:true,ms:0,input_tokens:100,output_tokens:10,cached_tokens:80,reported_cost_micros:1000,created_at:at}).run();
+    }
+    const oid='a'.repeat(40),oldOid='b'.repeat(40);
+    for(const [n,sha,at] of [[1,oid,cutoff+1000],[2,oid,cutoff+1000],[2,oldOid,cutoff-1]] as const){
+      await env.HUB_DB.prepare("INSERT OR IGNORE INTO code_event(tenant_id,project_id,ardi_id,kind,target,summary,at) VALUES(?,?,?,'commit',?,'Commit',?)").bind(w.t.id,w.p.id,n+(sha===oldOid?10:0),sha,at).run();
+      await env.HUB_DB.prepare("INSERT INTO work_link(id,item_id,target_kind,target_ref,created_by,created_at) VALUES(?,?,'commit',?,?,?)").bind(`link${n}${sha[0]}`,`w${n}`,sha,w.h.identity.id,w.now).run();
+    }
+    const source=await createProject(env.HUB_DB,{tenant_id:w.t.id,namespace_id:null,slug:'source',kind:'repo',display_name:'Source'},w.now);
+    const crossOid='c'.repeat(40);
+    await env.HUB_DB.prepare("INSERT INTO code_event(tenant_id,project_id,ardi_id,kind,target,summary,at) VALUES(?,?,1,'commit',?,'Linked from another project',?)").bind(w.t.id,source.id,crossOid,cutoff+2000).run();
+    await env.HUB_DB.prepare("INSERT INTO work_link(id,item_id,target_kind,target_ref,created_by,created_at) VALUES('cross-link','w2','commit',?,?,?)").bind(`source@${crossOid}`,w.h.identity.id,w.now).run();
+    const foreignUsage=await seedTenant('usage-other');
+    await usageStatement(env.HUB_DB,{id:'foreign-usage',source:'reported',purpose:'coding',provider:'p',model:'m',tenant_id:foreignUsage.id,identity_id:w.h.identity.id,project_id:w.p.id,work_item_id:'w2',ok:true,ms:0,input_tokens:99999,output_tokens:null,created_at:cutoff+100}).run();
+    const v=await projectVelocity(w.ctx,'site');
+    expect(v.items.map(x=>x.number)).toEqual([2,3]);
+    expect(v.items[0]).toMatchObject({worked_ms:120_000,attempts:2,input_tokens:100,cached_tokens:80,output_tokens:10,cost_usd:.001});
+    expect(v.items[0]!.commits).toHaveLength(2);
+    expect(v.items[0]!.commits.map(c=>c.oid).sort()).toEqual([oid,crossOid]);
+    expect(v.items[0]!.commits.find(c=>c.oid===crossOid)!.source_project).toBe('source');
+    expect(v.total.closed).toBe(2);
+    expect(v.total.cycle_ms.known).toBe(1);
+    expect(v.by_day.reduce((n,d)=>n+d.worked_ms,0)).toBe(v.total.worked_ms);
+    expect(v.by_week.reduce((n,d)=>n+d.input_tokens,0)).toBe(100);
+    expect((await projectVelocity(w.ctx,'site',null,'2000-01-01')).since).toBe(cutoff);
+    const response=await apiPost(HOST,'velocity.read',{project:'site'},w.headers);
+    expect(response.status).toBe(200);
+    expect((await response.json() as {result:typeof v}).result.items).toHaveLength(2);
+    const page=await (await SELF.fetch(`https://${HOST}/site/velocity?work=site%232`,{headers:w.headers})).text();
+    expect(page).toContain('Velocity items');expect(page).toContain('Of which cached');expect(page).not.toContain('site#1 ');
+    const other=await seedTenant('other');
+    const stranger=await seedHuman('stranger@example.test',{memberships:[{tenant_id:other.id,role:'reader'}]});
+    expect((await apiPost('other.pimwell.test','velocity.read',{project:'site'},cookieHeaders(stranger.token,'other.pimwell.test'))).status).toBe(404);
+  });
+});
+
+describe('velocity quest and calendar rollups',()=>{
+  it('rolls up descendants once, excludes old children, and splits midnight intervals',async()=>{
+    const w=await world(),cutoff=Math.floor((w.now-4*DAY)/DAY)*DAY;
+    await env.HUB_DB.prepare('UPDATE project SET velocity_since = ? WHERE id = ?').bind(cutoff,w.p.id).run();
+    for(const [n,at] of [[1,cutoff],[2,cutoff+1],[3,cutoff+2],[4,cutoff-1]] as const)await work(w,n,n===1||n===3?'open':'done',at);
+    await env.HUB_DB.prepare("UPDATE work_item SET kind = 'quest' WHERE id IN ('w1','w3')").run();
+    await env.HUB_DB.prepare("UPDATE work_item SET parent_id = 'w1' WHERE id IN ('w3','w4')").run();
+    await env.HUB_DB.prepare("UPDATE work_item SET parent_id = 'w3', closed_at = ? WHERE id = 'w2'").bind(cutoff+DAY+60_000).run();
+    await recordEvent(env.HUB_DB,{tenant_id:w.t.id,identity_id:w.h.identity.id,session_id:null,kind:'work.claim',target_kind:'work_item',target_id:'w2',summary:''},cutoff+DAY-60_000);
+    const v=await projectVelocity(w.ctx,'site','site#1');
+    expect(v.items.map(i=>i.number)).toEqual([2,3]);
+    expect(v.total.worked_ms).toBe(120_000);
+    expect(v.by_quest.find(q=>q.ref==='site#1')).toMatchObject({items:2,closed:1,worked_ms:120_000});
+    expect(v.by_quest.find(q=>q.ref==='site#3')).toMatchObject({items:1,closed:1,worked_ms:120_000});
+    expect(v.by_day.filter(d=>d.worked_ms).map(d=>d.worked_ms)).toEqual([60_000,60_000]);
+    expect(v.by_day.reduce((n,d)=>n+d.closed,0)).toBe(1);
+    await expect(projectVelocity(w.ctx,'site','site#2')).rejects.toThrow('no such eligible quest');
+  });
+});
 
 describe("project status evidence navigation", () => {
   it("keeps record IDs and normalized full commit targets in API/MCP and opens safe inspector links", async () => {

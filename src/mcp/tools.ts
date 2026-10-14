@@ -42,7 +42,7 @@ export function toolsFor(ctx: Ctx): VerbDef<unknown, unknown>[] {
   const verbs = exposedVerbs(ctx.role, mcpScopes(ctx));
   if (!ctx.mcpProject) return verbs;
   const features = projectFeatures(ctx.mcpProject.kind);
-  const families: Record<string, ProjectFeature> = { perf: "repo", work: "docket", repo: "repo", wiki: "wiki", kb: "knowledge", research: "knowledge", file: "files", doc: "files", person: "people", company: "people", connection: "people", graph: "people" };
+  const families: Record<string, ProjectFeature> = { velocity: "docket", perf: "repo", work: "docket", repo: "repo", wiki: "wiki", kb: "knowledge", research: "knowledge", file: "files", doc: "files", person: "people", company: "people", connection: "people", graph: "people" };
   // Opt in only families whose resource references obey the endpoint's boundary.
   return verbs.filter(v => {
     const feature = families[v.name.split(".")[0]!];
@@ -147,7 +147,7 @@ export async function callTool(ctx: Ctx, name: string, args: Record<string, unkn
     if (ctx.mcpProject) {
       if (args.project !== undefined && args.project !== ctx.mcpProject.slug && args.project !== ctx.mcpProject.path) throw new HubError(403, "forbidden", "this endpoint is scoped to one project");
       if (verb.name === "mail.send" && args.from_project !== undefined && args.from_project !== ctx.mcpProject.slug) throw new HubError(403, "forbidden", "this endpoint is scoped to one project");
-      args = { ...args, project: (/^(wiki|research|file|person|company|connection|graph|review)\./.test(verb.name) || verb.name === "work.board" || verb.name === "project.status") ? ctx.mcpProject.path : ctx.mcpProject.slug, ...(verb.name === "mail.send" ? { from_project: ctx.mcpProject.slug } : {}) };
+      args = { ...args, project: (/^(wiki|research|file|person|company|connection|graph|review)\./.test(verb.name) || verb.name === "work.board" || verb.name === "project.status" || verb.name === "velocity.read") ? ctx.mcpProject.path : ctx.mcpProject.slug, ...(verb.name === "mail.send" ? { from_project: ctx.mcpProject.slug } : {}) };
       if (verb.name.startsWith("work.")) {
         // A cross-project dependency/resource must not reveal another project's work
         // or silently change readiness. Use the organization endpoint for such graphs.

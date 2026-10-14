@@ -26,6 +26,8 @@ const short = (v: unknown, name: string, max: number): string | null => {
 type Call = { provider: string; model: string; input_tokens: number | null; output_tokens: number | null; cached_tokens: number | null; cost_micros: number | null; client: string | null; purpose: string; work: string | null; at: number | null };
 
 function parseCall(c: Record<string, unknown>, now: number): Call {
+  if (c.item !== undefined && (typeof c.item !== 'string' || !c.item || c.item.length > 80)) throw badRequest('item must be a work item reference');
+  if (c.item && c.work && c.item !== c.work) throw badRequest('item and work must agree');
   const provider = short(c.provider, "provider", 40); const model = short(c.model, "model", 80);
   if (!provider || !model) throw badRequest("provider and model are required");
   const cost = c.cost_usd;
@@ -45,7 +47,7 @@ function parseCall(c: Record<string, unknown>, now: number): Call {
     // without tokens or a cost the call is still on the ledger, counted, and marked unpriced rather than guessed.
     provider: provider.toLowerCase(), model, input_tokens: tokens(c.input_tokens, "input_tokens", false), output_tokens: tokens(c.output_tokens, "output_tokens", false),
     cached_tokens: tokens(c.cached_tokens, "cached_tokens", false), cost_micros, client: short(c.client, "client", 40), purpose: short(c.purpose, "purpose", 40) ?? "agent",
-    work: typeof c.work === "string" && c.work ? c.work.slice(0, 80) : null, at,
+    work: typeof (c.item ?? c.work) === "string" && (c.item ?? c.work) ? String(c.item ?? c.work).slice(0, 80) : null, at,
   };
 }
 
@@ -57,6 +59,7 @@ const CALL_SCHEMA = {
   cost_usd: { type: "number", minimum: 0, description: "The cost your tool reports, if it does; otherwise Pimwell prices it" },
   client: { type: "string", description: "The tool that made the call: claude-code, codex, cursor, an app's name" },
   purpose: { type: "string", description: "What kind of work: coding, review, triage, …" },
+  item: { type: "string", description: "The work item it was for, like pimwell#225 (alias of work)" },
   work: { type: "string", description: "The work item it was for, like pimwell#62" },
   at: { type: "string", description: "When, ISO 8601; default now" },
 };

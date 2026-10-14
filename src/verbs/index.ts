@@ -1,3 +1,4 @@
+import { velocityRead } from "./velocity";
 import { performanceVerbs } from "./performance";
 import { researchVerbs } from "./research";
 import { contactVerbs } from "./contacts";
@@ -55,7 +56,7 @@ import { chatAgentMute, chatAgentUnmute, chatAgentsDisable, chatAgentsEnable, ch
 
 export function registerAllVerbs(): void {
   registerVerbs([
-    bootstrap, whoami, ...performanceVerbs, ...wikiVerbs, ...fileVerbs, ...docVerbs, ...researchVerbs, ...contactVerbs,
+    bootstrap, whoami, velocityRead, ...performanceVerbs, ...wikiVerbs, ...fileVerbs, ...docVerbs, ...researchVerbs, ...contactVerbs,
     tenantCreate, tenantArchive, tenantUnarchive, tenantList, tenantDelete,
     mailList, mailRead, mailRelease, mailProposeWork, mailResponseRecipients, mailSetResponseRecipients, mailResponseIntent, mailSetResponseIntent,
     workCreate, workList, workRead, workUpdate, workClaim, workLink,

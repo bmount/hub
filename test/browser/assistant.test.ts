@@ -376,6 +376,14 @@ it("audits every workbench page at desktop, wide desktop and phone sizes", () =>
   expect(output).toContain("Screenshots:");
 }, 240000);
 
+it("audits Velocity selection and evidence at desktop, wide desktop and phone sizes", () => {
+  const output = execFileSync(process.execPath, ["scripts/workbench-screenshots.mjs"], {
+    encoding: "utf8", timeout: 120000, maxBuffer: 20 * 1024 * 1024,
+    env: { ...process.env, WORKBENCH_PHASE: "after", WORKBENCH_PAGES: "velocity,velocityItem", WORKBENCH_ARTIFACTS: path.join(temp, "velocity-audit") },
+  });
+  expect(output).toContain("Screenshots:");
+}, 120000);
+
 it("runs Tools in both scopes, copies on a plain page, and keeps landing animation executable", async () => {
   const { context, page } = await open();
   try {

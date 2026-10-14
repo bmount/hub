@@ -22,6 +22,12 @@ export function timeText(ms: number, now: number, timeZone?: string): string {
   return d.toLocaleDateString("en-GB", {day:"numeric", month:"short", ...(d.getUTCFullYear() !== today.getUTCFullYear() ? {year:"numeric" as const} : {}), timeZone});
 }
 
+/** Fixed UTC boundaries (such as a reporting cutoff) must not move with the viewer's timezone. */
+export function utcTime(ms: number): string {
+  const iso = new Date(ms).toISOString();
+  return `<time datetime="${iso}">${esc(iso.slice(0,16).replace('T',' '))} UTC</time>`;
+}
+
 export function localTime(ms: number | null): string {
   if (ms === null) return "Not recorded";
   const date = new Date(ms);

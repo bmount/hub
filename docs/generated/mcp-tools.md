@@ -101,8 +101,9 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `skill_read` | read | public | no | Implemented | **`name`** |
 | `trace_list` | read | reader | no | Implemented | `days`, `project` |
 | `trace_read` | read | reader | no | Implemented | **`id`** |
-| `usage_report` | write | reader | no | Implemented | `at`, `cached_tokens`, `calls`, `client`, `cost_usd`, `input_tokens`, `model`, `output_tokens`, `provider`, `purpose`, `work` |
+| `usage_report` | write | reader | no | Implemented | `at`, `cached_tokens`, `calls`, `client`, `cost_usd`, `input_tokens`, `item`, `model`, `output_tokens`, `provider`, `purpose`, `work` |
 | `usage_summary` | read | reader | no | Implemented | `days`, `everyone`, `project`, `work` |
+| `velocity_read` | read | reader | no | Implemented | **`project`**, `quest`, `since` |
 | `whoami` | read | public | no | Implemented | — |
 | `wiki_history` | read | reader | no | Implemented | `before`, **`project`**, **`slug`** |
 | `wiki_list` | read | reader | no | Implemented | `after`, **`project`**, `slug` |
