@@ -82,6 +82,17 @@ async function setup(role: "member" | "reader" = "member") {
 }
 
 describe("Artifacts compatibility adapter", () => {
+  it("reuses the live ownership metadata for HEAD normalization without log lookups", async () => {
+    const s = await setup();
+    const response = await artifactGit(new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: s.auth } }), s.configured, "acme");
+    expect(response.status).toBe(200);expect(await response.text()).toContain(`${hash(4)} HEAD`);
+    expect(s.requests.filter(path => path.endsWith("/repos/site"))).toHaveLength(1);
+    expect(s.requests.filter(path => path.endsWith("/log"))).toHaveLength(0);
+    s.setDescription("foreign ownership");s.requests.length = 0;
+    const denied = await artifactGit(new Request("https://acme.pimwell.test/site.git/info/refs?service=git-upload-pack", { headers: { authorization: s.auth } }), s.configured, "acme");
+    expect(denied.status).toBe(503);
+    expect(s.requests.some(path => path.includes("/git/"))).toBe(false);
+  });
   it("routes named repositories with isolated history and attribution while preserving the default", async () => {
     const s = await setup();
     await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(s.tenant.id, s.project.id, Date.now()).run();

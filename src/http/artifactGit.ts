@@ -24,13 +24,15 @@ export async function artifactGit(request: Request, env: Env, tenant: string): P
     if (write && !grant.write) return new Response("read-only access\n", { status: 403 });
     const api = new ArtifactsRest(env), namespace = artifactNamespace(grant.tenant.slug);
     const storage = grant.repository?.storage_name ?? grant.project.slug;
-    const info = await api.info(namespace, storage);
+    // The caller is authorized already. Minting a scoped storage token may overlap
+    // the ownership check, but no storage data is fetched until that check passes.
+    const [info] = await Promise.all([api.info(namespace, storage), api.repoToken(namespace, storage, write ? "write" : "read")]);
     if (info.description !== repoOwnership(grant.tenant.id, grant.project.id)) throw new HubError(503, "unavailable", "repository migration is not ready");
     if (write && info.read_only) return new Response("repository is read-only\n", { status: 403 });
     if (tail === "git-receive-pack") return await artifactPush(request, env, grant, api, agentSrc
       ? async () => { const again = await agentSrcGrant(env, request.headers.get("authorization"), tenant, repo); return typeof again === "string" ? null : again; }
       : undefined);
-    const upstream = await api.git(namespace, storage, tail, request, request.body, write);
+    const upstream = await api.git(namespace, storage, tail, request, request.body, write, true, info);
     if (!upstream.ok) throw new HubError(502, "unavailable", "Git storage is temporarily unavailable");
     const headers = new Headers({ "cache-control": "no-store" });
     for (const name of ["content-type", "content-encoding", "git-protocol"]) {

@@ -268,7 +268,7 @@ export class ArtifactsRest {
     tokens.set(key, { plaintext: result.plaintext, expires });
     return result.plaintext;
   }
-  async git(namespace: string, repo: string, tail: string, request: Request, body: ReadableStream<Uint8Array> | null, write: boolean, normalizeHead = true): Promise<Response> {
+  async git(namespace: string, repo: string, tail: string, request: Request, body: ReadableStream<Uint8Array> | null, write: boolean, normalizeHead = true, headInfo?: ArtifactRepo): Promise<Response> {
     if (!["info/refs", "git-upload-pack", "git-receive-pack"].includes(tail)) throw new HubError(400, "bad_request", "invalid Git operation");
     const url = new URL(request.url), upstream = new URL(`${this.remote(namespace, repo)}/${tail}`);
     upstream.search = url.search;
@@ -283,7 +283,7 @@ export class ArtifactsRest {
     // v2 discovery advertises capabilities, not refs. Overlap fresh metadata with
     // token/storage I/O, but never retain promises across Worker invocations.
     const needsHead = normalizeV2 || (normalizeV0 && !request.headers.get("git-protocol")?.split(":").includes("version=2"));
-    const metadata = needsHead ? this.info(namespace, repo).then(info => ({ info }), error => ({ error })) : null;
+    const metadata = needsHead ? (headInfo ? Promise.resolve({ info: headInfo }) : this.info(namespace, repo).then(info => ({ info }), error => ({ error }))) : null;
     headers.set("authorization", `Bearer ${await this.repoToken(namespace, repo, write ? "write" : "read")}`);
     let response: Response;
     try { response = await fetch(upstream, { method: request.method, headers, body, redirect: "manual", signal: this.signal(120_000) }); }
