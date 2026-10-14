@@ -14,7 +14,7 @@ export function writeInvocation(env: { PERF?: AnalyticsEngineDataset }, event: T
   const version = event.scriptVersion?.id ?? "unknown";
   try {
     env.PERF.writeDataPoint({ indexes: [`invocation:${bounded("request", 36) || crypto.randomUUID()}`],
-      blobs: ["pimwell.com", event.scriptName ?? "unknown", version, bounded("colo", 8), bounded("tenant", 32), bounded("request", 36), "invocation",
+      blobs: ["pimwell.com", event.scriptName ?? "unknown", version, bounded("colo", 8), bounded("tenant", 32), bounded("request", 36), marker.synthetic === true ? "synthetic" : "invocation",
         bounded("route"), bounded("method", 64), typeof marker.status === "number" ? `${Math.floor(marker.status/100)}xx` : "", bounded("auth", 16), bounded("verb", 64), bounded("tool", 64), "invocation", "", "", "", ""],
       doubles: [event.wallTime ?? -1, +(marker.cold === true), 0, Number.isSafeInteger(marker.parent) ? Number(marker.parent) : 0, +(event.outcome !== "ok"), 0, 0, 0, 0, -1, 1, event.cpuTime ?? -1, event.wallTime ?? -1, 1],
     });

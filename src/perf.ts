@@ -11,6 +11,7 @@ export type TimingSpan = {
 };
 export type Trace = {
   id: string; parent: number; kind: "request" | "rpc"; started: number; at: number; cold: boolean; spans: TimingSpan[]; next: number; other: number; otherMs: number; otherOpen: number; otherStarted: number;
+  synthetic?: boolean;
   route: string; method: string; auth: string; verb: string; tool: string; tenant: string; colo: string; status: number; ended?: number; pending: Set<Promise<unknown>>;
 };
 const context = new AsyncLocalStorage<{ trace: Trace; parent: number; entry?: TimingSpan }>();
@@ -316,7 +317,7 @@ export async function writeClientPoints(env: Parameters<typeof writeTrace>[0], t
     for (const p of points) env.PERF.writeDataPoint({
       // Browser phases must not compete with each other or high-volume server spans.
       indexes: [`client:${p.phase}:${p.request || crypto.randomUUID()}`],
-      blobs: ["pimwell.com", "pimwell-hub", version, colo, tenant, p.request, "client", p.path, p.phase, "", "cookie", "", "", p.name, "", "", "", "", p.previous, JSON.stringify({file:"src/clientTimingScript.ts",line:19,fn:"point"})],
+      blobs: ["pimwell.com", "pimwell-hub", version, colo, tenant, p.request, tenantId === "perf-synthetic-tenant" ? "synthetic" : "client", p.path, p.phase, "", "cookie", "", "", p.name, "", "", "", "", p.previous, JSON.stringify({file:"src/clientTimingScript.ts",line:19,fn:"point"})],
       doubles: [p.duration, 0, 0, 0, 0, -1, -1, -1, -1, p.phase === "first-token" ? p.duration : -1, 1, 0, 0, 1, 0, p.at ?? 0, 0, 0, 0, p.at === undefined ? 0 : 2],
     });
   } catch { /* best-effort: never fail the product */ }
@@ -349,7 +350,7 @@ export async function writeTrace(env: Pick<Env, "PERF" | "WORKER_VERSION" | "PER
       env.PERF!.writeDataPoint({
       // Keep roots outside the detail budget, including across internal RPC invocations.
       indexes: [`${kind === "span" || kind === "other" ? "trace" : kind}:${trace.id}`],
-      blobs: [site, worker, version, trace.colo, tenant, trace.id, kind, trace.route, trace.method, `${Math.floor(trace.status/100)}xx`, trace.auth,
+      blobs: [site, worker, version, trace.colo, tenant, trace.id, trace.synthetic || trace.tenant === "perf-synthetic-tenant" ? "synthetic" : kind, trace.route, trace.method, `${Math.floor(trace.status/100)}xx`, trace.auth,
         trace.verb, trace.tool, s.name, s.fingerprint ?? "", s.region ?? "", s.provider ?? "", s.model ?? "", s.source ? JSON.stringify(s.source) : "", s.sqlCode ?? ""],
       doubles: [s.finished === false ? snapshot - s.started! : s.ms, +trace.cold, s.id, s.parent, +s.failed, s.execution ?? -1, s.read ?? -1, s.written ?? -1, s.primary === undefined ? -1 : +s.primary, s.firstToken ?? -1, kind === "other" ? trace.other : 1, 0, 0, s.finished === false ? 0 : 1, kind==="other"?0:Math.max(0,(s.started ?? trace.started)-trace.started), kind==="other"?0:trace.at + ((s.started ?? trace.started)-trace.started), wall, trace.kind === "rpc" ? 1 : 0, execution, 2],
     });
@@ -361,7 +362,7 @@ export async function writeTrace(env: Pick<Env, "PERF" | "WORKER_VERSION" | "PER
       const ms = trace.otherMs + trace.otherOpen * ended - trace.otherStarted;
       write("other", { name: "other", id: trace.next+1, parent: 0, ms, started: ended-ms, finished: trace.otherOpen === 0, failed: false });
     }
-    console.log(JSON.stringify({ msg: "perf", request: trace.id, parent: trace.parent, tenant, colo: trace.colo, cold: trace.cold, route: trace.route, method: trace.method, auth: trace.auth, status: trace.status, verb: trace.verb, tool: trace.tool }));
+    console.log(JSON.stringify({ msg: "perf", synthetic: trace.synthetic === true || trace.tenant === "perf-synthetic-tenant", request: trace.id, parent: trace.parent, tenant, colo: trace.colo, cold: trace.cold, route: trace.route, method: trace.method, auth: trace.auth, status: trace.status, verb: trace.verb, tool: trace.tool }));
   } catch { /* best-effort telemetry */ }
 }
 export async function deferredTrace(env: Parameters<typeof writeTrace>[0], trace: Trace, worker = "pimwell-hub", settleMs = 25_000): Promise<void> {

@@ -17,11 +17,11 @@ export async function adminOrgsPage(request: Request, env: Env): Promise<Respons
   if (ctx.host.kind !== "apex" || !ctx.identity || ctx.identity.kind !== "human" || ctx.identity.is_root !== 1) return notFoundPage(extra);
 
   const orgs = (await ctx.db.prepare(
-    `/*perf-site:src%2Fhttp%2FadminOrgs.ts:19:23:adminOrgsPage:6cfdd9d2*/ SELECT t.slug, t.display_name, t.state, t.created_at,
+    `/*perf-site:src%2Fhttp%2FadminOrgs.ts:19:23:adminOrgsPage:6b46915b*/ SELECT t.slug, t.display_name, t.state, t.created_at,
        (SELECT COUNT(*) FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = t.id AND m.state = 'active' AND i.kind = 'human') AS people,
        (SELECT COUNT(*) FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = t.id AND m.state = 'active' AND i.kind = 'agent') AS agents,
        (SELECT COUNT(*) FROM project p WHERE p.tenant_id = t.id) AS projects
-     FROM tenant t ORDER BY t.state, t.slug`,
+     FROM tenant t WHERE t.is_synthetic = 0 ORDER BY t.state, t.slug`,
   ).all<{ slug: string; display_name: string; state: string; created_at: number; people: number; agents: number; projects: number }>()).results;
   const deleted = await listDeletedTenants(ctx.db);
 

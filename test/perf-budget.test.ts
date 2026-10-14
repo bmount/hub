@@ -10,7 +10,12 @@ import type { Ctx } from "../src/auth/context";
 import type { Env } from "../src/env";
 import { SQL_CATALOG } from "../src/perfCatalog";
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import puppeteer from "@cloudflare/puppeteer";
+import * as ardi from "../src/code/ardi";
+import { runSynthetic, recordSynthetic, syntheticMarker, SYNTHETIC_TENANT, SYNTHETIC_MEMBER, SYNTHETIC_JOURNEYS } from "../src/synthetic";
+import { listMembers } from "../src/db/memberships";
+import { sha256Hex } from "../src/ids";
 import { createProject } from "../src/db/projects";
 import { apiPost, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
@@ -275,5 +280,70 @@ describe("request tracing guardrails", () => {
       expect(await e.INBOX.get(e.INBOX.idFromName(tenant.id + ":probe")).head(tenant.id, "probe")).toBe(0);
     });
     expect(trace.spans.map(s => s.name)).toContain("do.stub.INBOX.head");
+  });
+});
+
+describe("isolated synthetic journeys", () => {
+  it("seeds a hidden member, refuses spoofed/expired markers and rejects real-tenant credentials", async () => {
+    const c = collector();
+    expect(await listMembers(env.HUB_DB,SYNTHETIC_TENANT)).toEqual([]);
+    expect(await syntheticMarker(c.measured,"spoof")).toBe(false);
+    const token="pms_synthetic_test",now=Date.now();
+    await env.HUB_DB.prepare("INSERT INTO session (id,identity_id,tenant_id,kind,label,token_hash,created_at,last_seen_at,expires_at,last_proof_at) VALUES ('synthetic-test',?,?,'browser','Synthetic journey',?,?,?,?,?)").bind(SYNTHETIC_MEMBER,SYNTHETIC_TENANT,await sha256Hex(token),now,now,now+60000,now).run();
+    expect(await syntheticMarker(c.measured,token)).toBe(true);
+    await seedTenant("acme");
+    const response=await app.fetch(new Request("https://"+HOST+"/docket",{headers:cookieHeaders(token,HOST)}),c.measured,c.ctx);
+    expect(response.status).not.toBe(200);
+    await c.flush();
+    await env.HUB_DB.prepare("UPDATE session SET expires_at = 0 WHERE id = 'synthetic-test'").run();
+    expect(await syntheticMarker(c.measured,token)).toBe(false);
+  });
+  it("records each journey as synthetic, opens one Situation per failure episode, and never retains content", async () => {
+    const c=collector(),point={duration:12,version:"synthetic-version",colo:"DFW",failed:true};
+    await recordSynthetic(c.measured,"mail",point);
+    await recordSynthetic(c.measured,"mail",point);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation").first("n")).toBe(1);
+    await recordSynthetic(c.measured,"mail",{...point,failed:false});
+    await recordSynthetic(c.measured,"mail",point);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation").first("n")).toBe(2);
+    expect(c.points.every(p=>p.blobs?.[6]==="synthetic")).toBe(true);
+    expect(c.points[0]?.blobs?.slice(2,4)).toEqual(["synthetic-version","DFW"]);
+  });
+  it("runs the fixed browser/MCP/chat/Git journeys through live handlers and deletes ephemeral credentials", async () => {
+    const c=collector(); let cookies="",current="",html="";
+    const measured={...c.measured,SYNTHETIC_BROWSER:{} as Fetcher};
+    const page={
+      setRequestInterception:async()=>{},on:()=>{},setCookie:async(p:{value:string})=>{cookies="pmw_session="+p.value;},
+      goto:async(url:string)=>{
+        current=url;
+        const response=await app.fetch(new Request(url,{headers:{cookie:cookies}}),measured,c.ctx);
+        html=await response.text();
+        return {status:()=>response.status,headers:()=>Object.fromEntries(response.headers)};
+      },
+      url:()=>current,$:async()=>html.includes("/assets/timing.")?{}:null,evaluate:async(_fn:unknown,url?:string,options?:RequestInit)=>{
+        if(!url)return;
+        const response=await fetch(url,{...options,headers:{...options?.headers,cookie:cookies,...(new URL(url).pathname==="/mcp"?{}:{origin:new URL(url).origin})}});
+        return {status:response.status,headers:Array.from(response.headers.entries()),body:await response.text()};
+      }
+    };
+    const close=vi.fn(async()=>{});
+    vi.spyOn(puppeteer,"launch").mockResolvedValue({newPage:async()=>page,close} as never);
+    vi.spyOn(ardi,"createRepo").mockResolvedValue();
+    const originalFetch=globalThis.fetch;
+    vi.spyOn(globalThis,"fetch").mockImplementation(async(input,init)=>{
+      const request=input instanceof Request?input:new Request(input,init),url=new URL(request.url);
+      if(url.pathname.includes(".git/"))return new Response("001e# service=git-upload-pack\n00000000",{headers:{"content-type":"application/x-git-upload-pack-advertisement","x-pimwell-colo":"DFW","x-pimwell-version":"test-version"}});
+      if(url.hostname.endsWith(".pimwell.test")||url.hostname==="pimwell.test")return app.fetch(request,measured,c.ctx);
+      return originalFetch(input,init);
+    });
+    try {
+      await runSynthetic(measured,c.ctx);
+      await c.flush();
+      const rows=(await env.HUB_DB.prepare("SELECT journey,failed FROM synthetic_run ORDER BY journey").all<{journey:string;failed:number}>()).results;
+      expect(rows).toEqual([...SYNTHETIC_JOURNEYS].sort().map(journey=>({journey,failed:0})));
+      expect(close).toHaveBeenCalledOnce();
+      expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM oauth_grant WHERE identity_id = ?").bind(SYNTHETIC_MEMBER).first("n")).toBe(0);
+      expect(await env.OAUTH_KV.list({prefix:"client:"})).toMatchObject({keys:[]});
+    } finally {vi.restoreAllMocks();}
   });
 });

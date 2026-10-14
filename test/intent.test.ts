@@ -76,7 +76,7 @@ describe("intent", () => {
     await seedHuman("friend@example.com", { memberships: [{ tenant_id: String((await env.HUB_DB.prepare("SELECT id FROM tenant WHERE slug = 'acme'").first())!.id), role: "member" }] });
     reply = '{"action":"open_chat","params":{"person":"friend"}}';
     expect(await (await doIt(h, "message friend")).text()).toContain('action="/api/chat.open"');
-    expect((await env.HUB_DB.prepare("SELECT count(*) AS n FROM project WHERE kind = 'channel'").first())!.n).toBe(0);
+    expect((await env.HUB_DB.prepare("SELECT count(*) AS n FROM project WHERE kind = 'channel' AND tenant_id != 'perf-synthetic-tenant'").first())!.n).toBe(0);
   });
 
   it("refuses off-catalog answers and requests for data", async () => {

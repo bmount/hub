@@ -19,6 +19,7 @@
     "cf": "scripts/cf/with-deploy-token.sh wrangler"
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "^1.4.0",
     "@cloudflare/workers-oauth-provider": "1.2.2",
     "@modelcontextprotocol/server": "2.3.1",
     "hono": "^4.6.0",

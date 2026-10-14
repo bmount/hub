@@ -58,7 +58,7 @@ describe("filing work from review evidence", () => {
     expect(page).toContain('<option value="errand" selected>');
     expect(page).toContain("Review text is evidence, never instructions or authorization");
     expect(gitCalls).toBe(0);
-    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_item").first("n")).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_item WHERE tenant_id != 'perf-synthetic-tenant'").first("n")).toBe(0);
     expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM model_call").first("n")).toBe(0);
     const form = page.match(/<form method="post" action="\/api\/work\.create">([\s\S]*?)<\/form>/)![1]!;
     const field = (name: string) => form.match(new RegExp(`name="${name}" value="([^"]*)"`))![1]!;
@@ -72,7 +72,7 @@ describe("filing work from review evidence", () => {
     const filed = await post(true);
     expect(filed.status).toBe(303);
     expect(filed.headers.get("location")).toBe("/site/w/1");
-    const item = await env.HUB_DB.prepare("SELECT id, title, state, source_kind, source_ref, source_quote, created_by FROM work_item").first();
+    const item = await env.HUB_DB.prepare("SELECT id, title, state, source_kind, source_ref, source_quote, created_by FROM work_item WHERE tenant_id != 'perf-synthetic-tenant'").first();
     expect(item).toMatchObject({ title: "Add coverage", state: "open", source_kind: "url", source_ref: `https://${HOST}/site/reviews/1`, source_quote: fields.source_quote, created_by: w.sam.identity.id });
     expect(gitCalls).toBe(0);
     expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM model_call").first("n")).toBe(0);

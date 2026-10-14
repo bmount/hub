@@ -26,7 +26,7 @@ function fakeArdi(seen: Seen[], answer: () => Response = () => Response.json({ o
   } as unknown as Fetcher);
 }
 
-const projects = async () => (await env.HUB_DB.prepare("SELECT slug FROM project WHERE kind != 'channel' ORDER BY slug").all<{ slug: string }>()).results.map((r) => r.slug);
+const projects = async () => (await env.HUB_DB.prepare("SELECT slug FROM project WHERE kind != 'channel' AND tenant_id != 'perf-synthetic-tenant' ORDER BY slug").all<{ slug: string }>()).results.map((r) => r.slug);
 
 describe("Artifacts repository provisioning", () => {
   async function setup() {

@@ -80,7 +80,7 @@ describe("recorded work closure attribution", () => {
       await expect(updateWork(env.HUB_DB, item, { state: "done" }, w.now + 1, actor)).rejects.toThrow();
       expect(await getWork(env.HUB_DB, w.t.id, item.id)).toEqual(item);
       await expect(createWork(env.HUB_DB, { tenant_id: w.t.id, project_id: w.p.id, kind: "snag", title: "No phantom", body: "", state: "done", created_by: w.h.identity.id }, w.now + 2, actor)).rejects.toThrow();
-      expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_item").first("n")).toBe(1);
+      expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM work_item WHERE tenant_id != 'perf-synthetic-tenant'").first("n")).toBe(1);
       expect(await events(item.id)).toEqual([]);
     } finally { await env.HUB_DB.exec("DROP TRIGGER reject_done;"); }
   });

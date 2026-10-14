@@ -59,6 +59,8 @@ export function buildLocalTestWranglerConfig(): WranglerConfig {
     // Never submit synthetic fixture traffic to the production performance dataset.
     // Collection tests inject their own point writer.
     analytics_engine_datasets: [],
+    // Browser journeys use an explicit stub in Workers tests, not a local Chromium process.
+    browser: undefined,
     services: (config.services ?? []).filter((service) => service.binding !== "GIT_PROXY"),
   };
 }

@@ -34,10 +34,10 @@ export async function listMembershipsForIdentity(db: D1Database, identity_id: st
 
 export async function listMembers(db: D1Database, tenant_id: string): Promise<Array<{ membership: Membership; identity: Identity }>> {
   const r = await db.prepare(
-    `/*perf-site:src%2Fdb%2Fmemberships.ts:36:19:listMembers:95eb14f4*/ SELECT m.id AS m_id, m.identity_id, m.tenant_id, m.role, m.state AS m_state, m.created_at AS m_created_at,
+    `/*perf-site:src%2Fdb%2Fmemberships.ts:36:19:listMembers:a9218e92*/ SELECT m.id AS m_id, m.identity_id, m.tenant_id, m.role, m.state AS m_state, m.created_at AS m_created_at,
             i.id AS i_id, i.kind, i.display_name, i.is_root, i.email, i.operator_id, i.state AS i_state, i.created_at AS i_created_at
        FROM membership m JOIN identity i ON i.id = m.identity_id
-      WHERE m.tenant_id = ? AND m.state = 'active'
+      WHERE m.tenant_id = ? AND m.state = 'active' AND i.is_synthetic = 0
       ORDER BY i.display_name`,
   ).bind(tenant_id).all<Record<string, string | number | null>>();
   return r.results.map((x) => ({

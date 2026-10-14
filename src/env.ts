@@ -1,6 +1,7 @@
 import type { Conversation } from "./chat/conversationDO";
 import type { Inbox } from "./chat/inboxDO";
 export type Env = {
+  SYNTHETIC_BROWSER?: Fetcher;
   PERF?: AnalyticsEngineDataset;
   /** Account-owned Account Analytics Read only; never a deploy token. */
   PERF_ANALYTICS_TOKEN?: string;

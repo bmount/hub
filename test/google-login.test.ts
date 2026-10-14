@@ -147,7 +147,7 @@ describe("Sign in with Google", () => {
       expect(sessionSet(res)).toBe(false);
       expect(await getIdentityByEmail(env.HUB_DB, "protected@example.com")).toBeNull();
       for (const id of [invite.id, root.id]) expect((await env.HUB_DB.prepare("SELECT accepted_at FROM invite WHERE id = ?").bind(id).first<any>()).accepted_at).toBeNull();
-      for (const table of ["membership", "proof", "session"]) expect((await env.HUB_DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<any>()).n).toBe(0);
+      for (const table of ["membership", "proof", "session"]) expect((await env.HUB_DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE identity_id != 'perf-synthetic-member'`).first<any>()).n).toBe(0);
     }
   });
 

@@ -38,7 +38,7 @@ export function getTenantById(db: D1Database, id: string): Promise<Tenant | null
 }
 
 export async function listTenants(db: D1Database, state: State): Promise<Tenant[]> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:41:19:listTenants:959af30f*/ SELECT * FROM tenant WHERE state = ? ORDER BY slug").bind(state).all<Tenant>();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:41:19:listTenants:7f061568*/ SELECT * FROM tenant WHERE state = ? AND is_synthetic = 0 ORDER BY slug").bind(state).all<Tenant>();
   return r.results;
 }
 

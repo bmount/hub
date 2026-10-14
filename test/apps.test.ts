@@ -527,7 +527,7 @@ describe("recorded app-error work evidence", () => {
   it("files a reviewed error draft through the existing form while preserving its source and backlink", async () => {
     const w = await evidenceWorld();
     const get = (path: string) => SELF.fetch(`https://${HOST}${path}`, { headers: cookieHeaders(w.pat.token, HOST) });
-    const count = (table: "work_item" | "model_call") => env.HUB_DB.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<number>("n");
+    const count = (table: "work_item" | "model_call") => env.HUB_DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id != 'perf-synthetic-tenant'`).first<number>("n");
     const initialModels = await count("model_call");
     const inspector = await (await get(`/apps?g=${w.id}`)).text();
     expect(inspector).toContain(`href="/new?trace=${w.id}">File a snag</a>`);
@@ -553,7 +553,7 @@ describe("recorded app-error work evidence", () => {
     const filed = await post(true);
     expect(filed.status).toBe(303);
     expect(filed.headers.get("location")).toBe("/pricebench/w/1");
-    const item = await env.HUB_DB.prepare("SELECT id, title, source_kind, source_ref, source_quote, created_by FROM work_item").first();
+    const item = await env.HUB_DB.prepare("SELECT id, title, source_kind, source_ref, source_quote, created_by FROM work_item WHERE tenant_id != 'perf-synthetic-tenant'").first();
     expect(item).toMatchObject({ title: "Investigate lookup", source_kind: "url", source_ref: w.url, source_quote: fields.source_quote, created_by: w.pat.identity.id });
     expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'work.create'").first("n")).toBe(1);
     expect((await w.call(w.pat.token, "trace.read", { id: w.id })).result.relatedWork).toMatchObject([{ id: item!.id, ref: "pricebench#1", relationship: "filed" }]);

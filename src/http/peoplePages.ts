@@ -38,11 +38,11 @@ export async function peoplePage(request: Request, env: Env, who: string | null 
   const tid = ctx.tenant.id;
   const eventAccess = readableMailEvents(ctx);
   const stmts: D1PreparedStatement[] = [
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FpeoplePages.ts:41:5:peoplePage:77c7bf94*/ SELECT i.id, i.display_name, i.email, i.kind, i.is_root, m.role, m.created_at, op.display_name AS sponsor, i.operator_id,
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FpeoplePages.ts:41:5:peoplePage:d642a178*/ SELECT i.id, i.display_name, i.email, i.kind, i.is_root, m.role, m.created_at, op.display_name AS sponsor, i.operator_id,
         (SELECT MAX(e.created_at) FROM event e WHERE e.identity_id = i.id AND e.tenant_id = m.tenant_id) AS last_seen,
         (SELECT COUNT(*) FROM work_item w WHERE w.tenant_id = m.tenant_id AND w.owner_id = i.id AND w.state IN ('open', 'doing')) AS open
       FROM membership m JOIN identity i ON i.id = m.identity_id LEFT JOIN identity op ON op.id = i.operator_id
-      WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' ORDER BY i.kind = 'agent', i.display_name`).bind(tid),
+      WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active' AND i.is_synthetic = 0 ORDER BY i.kind = 'agent', i.display_name`).bind(tid),
     ctx.db.prepare(`/*perf-site:src%2Fhttp%2FpeoplePages.ts:46:5:peoplePage:0d92031a*/ SELECT v.id, v.email, v.role, v.display_name, v.created_at, v.expires_at, b.display_name AS by FROM invite v LEFT JOIN identity b ON b.id = v.created_by
       WHERE v.tenant_id = ? AND v.accepted_at IS NULL AND v.revoked_at IS NULL AND v.expires_at > ? AND ? ORDER BY v.created_at DESC`).bind(tid, ctx.now, admin ? 1 : 0),
     ctx.db.prepare(`/*perf-site:src%2Fhttp%2FpeoplePages.ts:48:5:peoplePage:4e8d874c*/ SELECT e.summary, e.created_at FROM event e JOIN identity i ON i.id = e.identity_id WHERE e.tenant_id = ? AND i.email = ? AND ${eventAccess.sql} ORDER BY e.created_at DESC LIMIT 15`).bind(tid, email ?? "", ...eventAccess.bindings),

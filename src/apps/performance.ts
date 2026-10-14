@@ -63,7 +63,7 @@ export async function performanceScope(ctx:Ctx, site:SiteRow, hours:number, only
   const hash=onlyMyOrg?await tenantHash(ctx.tenant.id,ctx.env.PERF_TENANT_KEY??ctx.env.HUB_INTERNAL_SECRET??ctx.env.HUB_SECRETS_KEY??""):"";
   if(onlyMyOrg&&!hash) throw new PerformanceUnavailable("Performance tenant identity is not configured.");
   if(![1,24,168].includes(hours)) throw badRequest("invalid performance range");
-  return {scripts,where:`blob1 = ${quote(site.name)} ${onlyMyOrg?`AND blob5 = ${quote(hash)} `:""}AND blob2 IN (${scripts.length?scripts.map(quote).join(","):"''"}) AND timestamp > NOW() - INTERVAL '${hours}' HOUR`};
+  return {scripts,where:`blob7 != 'synthetic' AND blob1 = ${quote(site.name)} ${onlyMyOrg?`AND blob5 = ${quote(hash)} `:""}AND blob2 IN (${scripts.length?scripts.map(quote).join(","):"''"}) AND timestamp > NOW() - INTERVAL '${hours}' HOUR`};
 }
 export function population(selection:PerfSelection):string {
   const dim=dimensions[selection.kind];

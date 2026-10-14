@@ -114,6 +114,40 @@ GROUP BY worker
 
 Guardrails in `test/perf-budget.test.ts` enumerate every registered route, verb and public Durable Object method, assert actual span emission, cover both scheduled handlers, exercise page/API/MCP/git/chat collection and check content/credential exclusion, nesting, failures, D1 metadata and the cap. The existing deadline tests ensure tracing does not change cancellation/timer behavior. `node scripts/perf-overhead.mjs` measures warmed CPU-only overhead against fake I/O at ordinary, capped and overflowing span counts; the host suite asserts <1 ms. This isolates tracer/serialization cost and explicitly excludes native Analytics Engine ingestion; live native invocation CPU provides the production cross-check. Browser collection is described below; synthetic collection and authorized product querying are separate quest items.
 
+## Synthetic baseline
+
+The hub's existing `*/5 * * * *` Cron Trigger runs `src/synthetic.ts` against the public live hosts. Migration 0033 seeds a system-owned `perf-synthetic` organization, flagged synthetic human member, permanent `perf-synthetic` workspace with item #1, a `synthetic` channel and a `fixture` repository. It is not a disposable `tmp-` workspace. Synthetic members/organizations are omitted from member/admin organization lists and synthetic model calls from usage aggregates. Fixture credentials are pinned to this organization, never to a real organization's projects, channels, mail or repositories.
+
+Fixed journey labels:
+
+| Label | Live check |
+| --- | --- |
+| landing | Anonymous `https://pimwell.com/`, loaded and painted in Chromium |
+| sign-in | Anonymous `https://pimwell.com/login`, loaded and painted |
+| home | Signed-in `https://perf-synthetic.pimwell.com/` |
+| docket | Signed-in `/docket` |
+| item | Signed-in `/perf-synthetic/w/1` |
+| chat-page | Signed-in `/c/synthetic` |
+| mail | Signed-in `/mail` |
+| tools/list | OAuth-authenticated MCP tool discovery on `/mcp` |
+| work_read | MCP read of `perf-synthetic#1` |
+| search_query | MCP search for the fixed fixture title |
+| chat-post | Idempotent fixed check message in the synthetic channel |
+| chat-read | Read back and verify that tick's posted message |
+| git-ls-remote | Protocol-v0 smart-HTTP ref advertisement for the isolated `fixture.git` repository |
+
+The Git journey performs the exchange used by `git ls-remote` (validates the advertisement content type and parses pkt-line refs), not a shell subprocess: Workers cannot execute native Git. An empty freshly provisioned repository is a valid advertisement. Repo provisioning is idempotent and ownership-checked; no real repo is used.
+
+The browser runs through the `SYNTHETIC_BROWSER` Browser Rendering binding. Page readiness means a successful non-redirected document, the signed-in timing collector present, load completion and two animation frames, not a fixed sleep. Browser requests are restricted to the apex and synthetic organization host; third-party requests are aborted. The Worker mints four-minute browser/Git sessions and an OAuth grant, uses them only inside the Worker/browser service and revokes/removes them after the tick. No bearer/cookie is logged, stored as plaintext, exported to an agent or returned from an API. Interrupted credentials expire and stale D1 rows are cleaned by the next tick. OAuth library clients/grants are deleted after use.
+
+Every journey emits kind `synthetic`, blob8/blob14 = its fixed label, blob3 = deployed version, blob4 = response colo, double1 = elapsed milliseconds and double5 = failure. Version/colo come from the origin response; failed setup falls back to the health probe's metadata (colo is explicitly `unknown` if the origin cannot be reached). Setup failures produce failed observations for all unattempted journeys, never fabricated successes. `synthetic_run` retains only the latest outcome/timing per label, for operational verification and episode deduplication, not user content.
+
+Authenticated fixture requests and browser beacons are kind `synthetic` too. Anonymous browser documents carry an ephemeral marker, checked against a live fixture session before classifying telemetry; an arbitrary header cannot suppress real-user points. Performance queries explicitly exclude this kind, including span/tool/interaction populations. No synthetic point enters real-user latency distributions.
+
+A transition into failure creates one Situation per journey in the synthetic organization, with fixed journey/version/colo metadata and no response contents. Repeated failed ticks do not flood Situations; recovery followed by another failure opens a new episode. A site operator with root web access can inspect `https://perf-synthetic.pimwell.com/situations`; the synthetic member is never added to the real site's organization. Latest outcomes are available to operators through D1 `SELECT * FROM synthetic_run ORDER BY journey`; Analytics Engine observations can be checked with `WHERE blob7 = 'synthetic' AND blob9 = 'journey'`, grouped by journey and five-minute timestamp buckets. The journey phase distinguishes end-to-end measurements from synthetic origin/client detail.
+
+Workers tests exercise the live page/API/MCP handlers with a stub browser transport, isolation/marker expiry, all fixed journey outcomes, credential cleanup and Situation failure/recovery deduplication. They do not describe stub Chromium timing as live measurements.
+
 ## Performance over MCP
 
 `perf_summary`, `perf_route`, `perf_compare`, `perf_exemplar` and `perf_statements` reuse the workbench queries and authorization. All take a registered `site` name and `hours` (1, 24 or 168, default 24). By default they aggregate every organization’s traffic, including unscoped invocations, on that site. Set `only_my_org: true` to restrict every query to the viewer’s keyed tenant hash. No tenant hashes, names, slugs, people, projects or organization IDs are returned; there is no organization grouping or lookup. Summary returns the top 200 routes and interactions by sample-weighted total waiting time. Route, exemplar and statements take `selected` and optionally `kind` (routes by default, or interactions, verbs, tools, spinners) and `version`. Route details are queried directly, even outside the overview's top 200. Compare takes `version` and `previous` and returns route metrics side by side. Exemplar defaults to the slowest retained request; optional `request` must belong to the selected group's five slow exemplars. Statements include fingerprint, recorded source/call site and version. Durations are milliseconds; absence of observations is not zero latency. Unavailable reporting returns a sanitized `performance_unavailable` error.

@@ -129,7 +129,7 @@ export async function resolveUsageProject(ctx: Ctx, reference: string | null, wo
 }
 
 export function usageQueries(db: D1Database, tenant_id: string, since: number, identity_id: string | null, work: UsageWork | null = null, project: UsageProject | null = null) {
-  const where = `m.tenant_id = ? AND m.created_at >= ? AND (? IS NULL OR m.identity_id = ?)
+  const where = `m.tenant_id = ? AND NOT EXISTS (SELECT 1 FROM identity synthetic WHERE synthetic.id = m.identity_id AND synthetic.is_synthetic = 1) AND m.created_at >= ? AND (? IS NULL OR m.identity_id = ?)
     AND (? IS NULL OR (m.work_item_id = ? AND m.project_id = ?)) AND (? IS NULL OR m.project_id = ?)`;
   const args = [tenant_id, since, identity_id, identity_id, work?.id ?? null, work?.id ?? null, work?.project_id ?? null, project?.id ?? null, project?.id ?? null];
   const cols = `${USAGE_MONEY_COLUMNS}, COALESCE(SUM(m.input_tokens), 0) AS input_tokens, COALESCE(SUM(m.output_tokens), 0) AS output_tokens,

@@ -62,6 +62,8 @@ import { acceptInvitePage, archivePage, homePage, invitePage, notFoundPage, sess
 export { Conversation } from "./chat/conversationDO";
 export { Inbox } from "./chat/inboxDO";
 
+import { runSynthetic, syntheticMarker, SYNTHETIC_TENANT } from "./synthetic";
+
 installFetchTiming();
 registerAllVerbs();
 
@@ -84,12 +86,16 @@ app.use("*", async (c, next) => {
   const rawEnv = c.env;
   c.env = { ...timedEnv(c.env), HUB_DB: meteredD1(c.env.HUB_DB, meter) };
   trace.route = c.req.matchedRoutes.at(-1)?.path ?? "not_found";
+  trace.synthetic = await syntheticMarker(rawEnv, c.req.header("x-pimwell-synthetic") ?? null);
+  if (trace.synthetic) trace.tenant = SYNTHETIC_TENANT;
   await withTrace(trace, () => span("request", next));
   if (c.req.path.includes(".git/")) { trace.route = "/:repo.git/*"; trace.auth = "git"; }
   trace.status = c.res?.status ?? 500;
   trace.ended = performance.now();
   const headers = new Headers(c.res.headers);
   headers.set("x-request-id", trace.id);
+  headers.set("x-pimwell-version", rawEnv.WORKER_VERSION?.id ?? "unknown");
+  headers.set("x-pimwell-colo", String(c.req.raw.cf?.colo ?? "unknown"));
   headers.set("server-timing", serverTiming(Date.now() - started, meter, trace) + `, request;desc="${trace.id}"`);
   c.res = new Response(c.res.body, { status: c.res.status, statusText: c.res.statusText, headers,
     ...(c.res.webSocket ? { webSocket: c.res.webSocket } : {}) });
@@ -256,6 +262,10 @@ export default {
         span("cron.cleanup", () => cleanupFileObjects(e, Date.now(), false)),
         span("cron.git.sync", () => syncAll(e, Date.now())),
       ]);
+    }));
+    ctx.waitUntil(tracedInvocation(env, p => ctx.waitUntil(p), "synthetic", async e => {
+      traceFields({ tenant: SYNTHETIC_TENANT });
+      await span("cron.synthetic", () => runSynthetic(e, ctx));
     }));
   },
 } satisfies ExportedHandler<Env>;

@@ -83,7 +83,7 @@ for (const { name, config } of WORKERS) {
   const version = /Worker Version ID:\s*([0-9a-f-]{36})/.exec(upload)?.[1];
   if (!version) fail(`${name} upload outcome unknown; nothing was deployed; see ${join(dir, `upload-${name}.log`)}`);
   const fresh = await api(name, `/versions/${version}`, { newlyUploaded: true });
-  if (!compatibleBindings(old.resources.bindings, fresh.resources.bindings)) fail(`${name} bindings changed: version ${version} is uploaded but nothing was deployed; deploy by hand after review`);
+  if (!compatibleBindings(old.resources.bindings, fresh.resources.bindings, name)) fail(`${name} bindings changed: version ${version} is uploaded but nothing was deployed; deploy by hand after review`);
   if (!compatibleRuntime(old.resources.script_runtime, fresh.resources.script_runtime, name)) fail(`${name} runtime or migrations changed: version ${version} is uploaded but nothing was deployed; deploy by hand after review`);
   targets.push({ worker: name, version, rollback_version: rollback, before_deployment: before.id, deployment: null });
 }

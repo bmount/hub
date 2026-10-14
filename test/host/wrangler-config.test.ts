@@ -48,6 +48,15 @@ describe("wrangler configuration", () => {
     expect(compatibleRuntime(runtime, { ...fresh, compatibility_flags: ["nodejs_compat", "other"] }, "pimwell-tail")).toBe(false);
     expect(readWranglerConfig().analytics_engine_datasets).toEqual([{ binding: "PERF", dataset: "pimwell_perf" }]);
   });
+  it("allows only the approved hub synthetic browser addition", () => {
+    const db={name:"HUB_DB",type:"d1",id:"database"},browser={name:"SYNTHETIC_BROWSER",type:"browser"};
+    expect(compatibleBindings([db],[db,browser],"pimwell-hub")).toBe(true);
+    expect(compatibleBindings([db],[db,browser],"pimwell-tail")).toBe(false);
+    expect(compatibleBindings([db],[db,{...browser,name:"OTHER"}],"pimwell-hub")).toBe(false);
+    expect(compatibleBindings([db],[db,{...browser,type:"service"}],"pimwell-hub")).toBe(false);
+    expect(compatibleBindings([db,browser],[db],"pimwell-hub")).toBe(false);
+    expect(buildLocalTestWranglerConfig().browser).toBeUndefined();
+  });
   it("starts a release reporting session before recording with a long-lived token", async () => {
     const dir = mkdtempSync(join(tmpdir(), "release-report-"));
     try {

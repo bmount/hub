@@ -97,6 +97,6 @@ describe("comments, following, and what needs me", () => {
     const root = await seedHuman("root@example.com", { is_root: true });
     const r = await deleteTenant(env.HUB_DB, "acme", root.identity.id, Date.now());
     expect(r.counts).toMatchObject({ work_item: 1, work_comment: 1, work_link: 1 });
-    expect(await env.HUB_DB.prepare("SELECT (SELECT COUNT(*) FROM work_item) + (SELECT COUNT(*) FROM attention) + (SELECT COUNT(*) FROM follow) AS n").first()).toEqual({ n: 0 });
+    expect(await env.HUB_DB.prepare("SELECT (SELECT COUNT(*) FROM work_item WHERE tenant_id != 'perf-synthetic-tenant') + (SELECT COUNT(*) FROM attention) + (SELECT COUNT(*) FROM follow) AS n").first()).toEqual({ n: 0 });
   });
 });

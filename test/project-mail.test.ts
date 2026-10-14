@@ -231,7 +231,7 @@ async function actionWorld(role: "member" | "reader" = "member") {
 }
 const plan = (actions: unknown[], refused: string[] = []) => vi.spyOn(model, "ask").mockResolvedValue({text: JSON.stringify({actions, refused}), purpose: "reasoning", provider: "test", model: "fixed", key_fingerprint: "test", ms: 1});
 const action = (tool: string, input: Record<string, unknown>, as?: string) => ({tool, input, quote: request, ...(as ? {as} : {})});
-const count = (table: string) => env.HUB_DB.prepare(`SELECT COUNT(*) n FROM ${table}`).first<number>("n");
+const count = (table: string) => env.HUB_DB.prepare(`SELECT COUNT(*) n FROM ${table} WHERE tenant_id != 'perf-synthetic-tenant'`).first<number>("n");
 
 describe("verified member project-mail actions", () => {
   it("creates sender-attributed people, company, introduction and affiliation, files the deck and replies once across replay", async () => {
@@ -282,7 +282,7 @@ describe("verified member project-mail actions", () => {
     ].map(a => ({...a, quote}));
     plan(actions);
     await w.deliver(fixtures.knowledge);
-    expect(await env.HUB_DB.prepare("SELECT title, created_by, source_kind FROM work_item").first()).toMatchObject({title: "Review Acme", created_by: w.person.identity.id, source_kind: "mail"});
+    expect(await env.HUB_DB.prepare("SELECT title, created_by, source_kind FROM work_item WHERE tenant_id != 'perf-synthetic-tenant'").first()).toMatchObject({title: "Review Acme", created_by: w.person.identity.id, source_kind: "mail"});
     expect(await count("wiki_revision")).toBe(2);
     expect(w.sent).toHaveLength(3); // One per inbound, plus the explicitly requested member share.
     expect(w.sent[1]!.text).toContain("/space/documents/download?path=mail%2Fdeck.pdf");

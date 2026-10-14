@@ -22,6 +22,7 @@
     "ARDI_REPO_CREATE": "on"
   },
   "services": [{ "binding": "GIT_PROXY", "service": "pimwell-git" }],
+  "browser": { "binding": "SYNTHETIC_BROWSER" },
   "r2_buckets": [{ "binding": "GIT_PUSH_STAGING", "bucket_name": "pimwell-git-staging" }],
   // Push sync from the git host every five minutes (src/code/sync.ts).
   "triggers": { "crons": ["*/5 * * * *"] },
