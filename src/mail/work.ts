@@ -7,7 +7,7 @@ const LIMIT = 50;
 
 export function mailWorkStatement(ctx: Ctx, mailId: string): D1PreparedStatement {
   const access = readableMail(ctx);
-  return ctx.db.prepare(`SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,
+  return ctx.db.prepare(`/*perf-site:src%2Fmail%2Fwork.ts:10:10:mailWorkStatement*/ SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,
       CASE WHEN w.source_kind = 'mail' AND w.source_ref = ? THEN 'filed' ELSE 'linked' END AS relationship
     FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
     WHERE w.tenant_id = ? AND (? IS NULL OR w.project_id = ?) AND ((w.source_kind = 'mail' AND w.source_ref = ?) OR EXISTS (

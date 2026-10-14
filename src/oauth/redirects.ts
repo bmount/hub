@@ -29,7 +29,7 @@ export function matchRedirect(patterns: RedirectPattern[], uri: string): Redirec
 }
 
 export async function loadRedirectPatterns(db: D1Database): Promise<RedirectPattern[]> {
-  const r = await db.prepare("SELECT pattern, label FROM oauth_redirect_allow ORDER BY pattern").all<RedirectPattern>();
+  const r = await db.prepare("/*perf-site:src%2Foauth%2Fredirects.ts:32:19:r*/ SELECT pattern, label FROM oauth_redirect_allow ORDER BY pattern").all<RedirectPattern>();
   return r.results;
 }
 

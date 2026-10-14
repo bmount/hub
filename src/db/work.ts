@@ -21,7 +21,7 @@ export type ClosureActor = { identity_id: string; session_id: string | null };
 function doneEventStatement(db: D1Database, item: { id: string; tenant_id: string }, actor: ClosureActor, now: number): D1PreparedStatement {
   // Must immediately follow the work write inside one transactional D1 batch.
   // Snapshot losers have changes() = 0 even when the winner wrote identical values.
-  return db.prepare(`INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
+  return db.prepare(`/*perf-site:src%2Fdb%2Fwork.ts:24:10:doneEventStatement*/ INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
     SELECT ?, ?, ?, ?, 'work.done', 'work_item', ?, 'Recorded done transition', ? WHERE changes() = 1`)
     .bind(ulid(now), item.tenant_id, actor.identity_id, actor.session_id, item.id, now);
 }
@@ -38,14 +38,14 @@ export async function createWork(
   const title = input.title.trim();
   if (!title) throw badRequest("a title is required");
   if (input.parent_id) {
-    const parent = await db.prepare("SELECT kind FROM work_item WHERE id = ? AND project_id = ?").bind(input.parent_id, input.project_id).first<{ kind: string }>();
+    const parent = await db.prepare("/*perf-site:src%2Fdb%2Fwork.ts:41:26:parent*/ SELECT kind FROM work_item WHERE id = ? AND project_id = ?").bind(input.parent_id, input.project_id).first<{ kind: string }>();
     if (!parent) throw badRequest("the parent must be an item in the same project");
   }
   const id = ulid(now);
   const created = input.created_at ?? now;
   const state = input.state ?? "open";
   const insert = db.prepare(
-    `INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, owner_id, parent_id, priority, estimate, source_kind, source_ref, source_quote, source_at, created_by, created_at, updated_at, closed_at)
+    `/*perf-site:src%2Fdb%2Fwork.ts:47:18:insert*/ INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, owner_id, parent_id, priority, estimate, source_kind, source_ref, source_quote, source_at, created_by, created_at, updated_at, closed_at)
      SELECT ?, ?, ?, COALESCE(MAX(number), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM work_item WHERE project_id = ?`,
   ).bind(id, input.tenant_id, input.project_id, input.kind, title, input.body.trim(), state, input.owner_id ?? null, input.parent_id ?? null, input.priority ?? 2, input.estimate ?? null,
     input.source_kind ?? null, input.source_ref ?? null, input.source_quote ?? null, input.source_at ?? null, input.created_by, created, now,
@@ -56,11 +56,11 @@ export async function createWork(
 }
 
 export function getWork(db: D1Database, tenant_id: string, id: string): Promise<WorkItem | null> {
-  return db.prepare("SELECT * FROM work_item WHERE id = ? AND tenant_id = ?").bind(id, tenant_id).first<WorkItem>();
+  return db.prepare("/*perf-site:src%2Fdb%2Fwork.ts:59:10:getWork*/ SELECT * FROM work_item WHERE id = ? AND tenant_id = ?").bind(id, tenant_id).first<WorkItem>();
 }
 
 export function getWorkByNumber(db: D1Database, project_id: string, number: number): Promise<WorkItem | null> {
-  return db.prepare("SELECT * FROM work_item WHERE project_id = ? AND number = ?").bind(project_id, number).first<WorkItem>();
+  return db.prepare("/*perf-site:src%2Fdb%2Fwork.ts:63:10:getWorkByNumber*/ SELECT * FROM work_item WHERE project_id = ? AND number = ?").bind(project_id, number).first<WorkItem>();
 }
 
 export type WorkFilter = {
@@ -83,7 +83,7 @@ export function listWorkStatement(db: D1Database, tenant_id: string, f: WorkFilt
   if (f.parent_number && f.project_id) { where.push("w.parent_id = (SELECT id FROM work_item WHERE project_id = ? AND number = ?)"); args.push(f.project_id, f.parent_number); }
   if (f.before) { where.push("w.updated_at < ?"); args.push(f.before); }
   const join = withProject ? "JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')" : "";
-  return db.prepare(`SELECT w.*${withProject ? ", p.slug AS project" : ""} FROM work_item w ${join} WHERE ${where.join(" AND ")} ORDER BY w.updated_at DESC, w.id DESC LIMIT ?`).bind(...args, f.limit);
+  return db.prepare(`/*perf-site:src%2Fdb%2Fwork.ts:86:10:listWorkStatement*/ SELECT w.*${withProject ? ", p.slug AS project" : ""} FROM work_item w ${join} WHERE ${where.join(" AND ")} ORDER BY w.updated_at DESC, w.id DESC LIMIT ?`).bind(...args, f.limit);
 }
 
 export async function listWork(db: D1Database, tenant_id: string, f: WorkFilter): Promise<WorkItem[]> {
@@ -119,7 +119,7 @@ export async function updateWork(
   const lease = next.state === "doing" && next.owner_id === item.owner_id ? item.lease_until : null;
   const updated_at = Math.max(now, item.updated_at + 1);
   const snapshot = snapshotPredicate(item);
-  const write = db.prepare(`UPDATE work_item SET title = ?, body = ?, kind = ?, state = ?, owner_id = ?, parent_id = ?, priority = ?, estimate = ?, lease_until = ?, closed_at = ?, updated_at = ? WHERE ${snapshot.sql}`)
+  const write = db.prepare(`/*perf-site:src%2Fdb%2Fwork.ts:122:17:write*/ UPDATE work_item SET title = ?, body = ?, kind = ?, state = ?, owner_id = ?, parent_id = ?, priority = ?, estimate = ?, lease_until = ?, closed_at = ?, updated_at = ? WHERE ${snapshot.sql}`)
     .bind(next.title.trim(), next.body, next.kind, next.state, next.owner_id, next.parent_id, next.priority, next.estimate, lease, closed_at, updated_at, ...snapshot.args);
   const r = next.state === "done" && item.state !== "done" && closureActor
     ? (await db.batch([write, doneEventStatement(db, item, closureActor, now)]))[0]!
@@ -139,7 +139,7 @@ export async function claimWork(db: D1Database, item: WorkItem, identity_id: str
   const snapshot = snapshotPredicate(item);
   const updated_at = Math.max(now, item.updated_at + 1);
   const r = await db.prepare(
-    `UPDATE work_item SET owner_id = ?, state = 'doing', lease_until = ?, closed_at = NULL, updated_at = ? WHERE ${snapshot.sql}
+    `/*perf-site:src%2Fdb%2Fwork.ts:141:19:r*/ UPDATE work_item SET owner_id = ?, state = 'doing', lease_until = ?, closed_at = NULL, updated_at = ? WHERE ${snapshot.sql}
      AND state IN ('open', 'doing') AND (owner_id IS NULL OR owner_id = ? OR lease_until IS NULL OR lease_until < ?)
      AND NOT EXISTS (${WAITING_SQL}) AND NOT EXISTS (${CONFLICT_SQL})`,
   ).bind(identity_id, now + LEASE_MS, updated_at, ...snapshot.args, identity_id, now, item.id, item.id, now).run();
@@ -156,7 +156,7 @@ const CONFLICT_SQL = `SELECT 1 FROM work_resource mine JOIN work_resource other 
 
 /** Why a claim was refused, in terms the claimer can act on. */
 async function claimRefusal(db: D1Database, item: WorkItem, identity_id: string, now: number): Promise<string> {
-  const refs = (sql: string, ...args: unknown[]) => db.prepare(sql).bind(...args).all<{ ref: string }>().then((r) => r.results.map((x) => x.ref));
+  const refs = (sql: string, ...args: unknown[]) => db.prepare("/*perf-site:src%2Fdb%2Fwork.ts:159:53:refs*/ " + (sql)).bind(...args).all<{ ref: string }>().then((r) => r.results.map((x) => x.ref));
   const waiting = await refs(`SELECT p2.slug || '#' || p.number AS ref FROM work_dep d JOIN work_item p ON p.id = d.prereq_id JOIN project p2 ON p2.id = p.project_id
     WHERE d.dependent_id = ? AND p.state <> 'done' ORDER BY ref`, item.id);
   if (waiting.length) return `that item waits on ${waiting.join(", ")}, which ${waiting.length === 1 ? "is" : "are"} not done`;
@@ -164,7 +164,7 @@ async function claimRefusal(db: D1Database, item: WorkItem, identity_id: string,
     JOIN work_item o ON o.id = other.item_id JOIN project p2 ON p2.id = o.project_id WHERE mine.item_id = ? AND (mine.mode = 'exclusive' OR other.mode = 'exclusive')
     AND o.state = 'doing' AND o.owner_id IS NOT NULL AND o.lease_until >= ? ORDER BY ref`, item.id, now);
   if (holders.length) return `a resource it needs is held by ${holders.join(", ")}; try again when that claim ends`;
-  const current = await db.prepare("SELECT owner_id, lease_until FROM work_item WHERE id = ?").bind(item.id).first<{ owner_id: string | null; lease_until: number | null }>();
+  const current = await db.prepare("/*perf-site:src%2Fdb%2Fwork.ts:167:25:current*/ SELECT owner_id, lease_until FROM work_item WHERE id = ?").bind(item.id).first<{ owner_id: string | null; lease_until: number | null }>();
   if (current?.owner_id && current.owner_id !== identity_id && (current.lease_until ?? 0) >= now) return `someone else holds a live claim until ${new Date(current.lease_until!).toISOString()}`;
   return "that item changed or has another live claim; read it again before retrying your claim";
 }
@@ -173,7 +173,7 @@ async function claimRefusal(db: D1Database, item: WorkItem, identity_id: string,
 export async function releaseWork(db: D1Database, item: WorkItem, now: number): Promise<WorkItem> {
   if (item.state !== "doing") throw conflict("that item is not under way");
   const updated_at = Math.max(now, item.updated_at + 1), snapshot = snapshotPredicate(item);
-  const r = await db.prepare(`UPDATE work_item SET state = 'open', lease_until = NULL, updated_at = ? WHERE ${snapshot.sql}`).bind(updated_at, ...snapshot.args).run();
+  const r = await db.prepare(`/*perf-site:src%2Fdb%2Fwork.ts:176:19:r*/ UPDATE work_item SET state = 'open', lease_until = NULL, updated_at = ? WHERE ${snapshot.sql}`).bind(updated_at, ...snapshot.args).run();
   if (r.meta.changes !== 1) throw conflict("that item changed; read it again before releasing it");
   return { ...item, state: "open", lease_until: null, updated_at };
 }
@@ -188,13 +188,13 @@ export async function linkWork(
   if (!ref) throw badRequest(input.target_kind === "url" ? "URL links must be absolute HTTPS URLs without credentials, whitespace or control characters" : "a link target is required");
   const row: WorkLink = { id: ulid(now), item_id: item.id, target_kind: input.target_kind, target_ref: ref, note: input.note, created_by: input.created_by, created_at: now };
   const statements = [
-    db.prepare(`INSERT INTO work_link (id, item_id, target_kind, target_ref, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+    db.prepare(`/*perf-site:src%2Fdb%2Fwork.ts:191:5:statements*/ INSERT INTO work_link (id, item_id, target_kind, target_ref, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (item_id, target_kind, target_ref) DO NOTHING RETURNING *`)
       .bind(row.id, row.item_id, row.target_kind, row.target_ref, row.note, row.created_by, row.created_at),
-    db.prepare("UPDATE work_item SET updated_at = ? WHERE id = ? AND EXISTS (SELECT 1 FROM work_link WHERE id = ?)").bind(now, item.id, row.id),
+    db.prepare("/*perf-site:src%2Fdb%2Fwork.ts:194:5:statements*/ UPDATE work_item SET updated_at = ? WHERE id = ? AND EXISTS (SELECT 1 FROM work_link WHERE id = ?)").bind(now, item.id, row.id),
   ];
   if (event) statements.push(creationEventStatement(db, event(row), now, { table: "work_link", id: row.id }));
-  statements.push(db.prepare("SELECT * FROM work_link WHERE item_id = ? AND target_kind = ? AND target_ref = ?").bind(item.id, row.target_kind, row.target_ref));
+  statements.push(db.prepare("/*perf-site:src%2Fdb%2Fwork.ts:197:19:linkWork*/ SELECT * FROM work_link WHERE item_id = ? AND target_kind = ? AND target_ref = ?").bind(item.id, row.target_kind, row.target_ref));
   const results = await db.batch<WorkLink>(statements);
   const link = results[results.length - 1]!.results[0];
   if (!link) throw conflict("link creation could not be reconciled");
@@ -202,7 +202,7 @@ export async function linkWork(
 }
 
 export function listLinksStatement(db: D1Database, item_id: string): D1PreparedStatement {
-  return db.prepare("SELECT * FROM work_link WHERE item_id = ? ORDER BY created_at").bind(item_id);
+  return db.prepare("/*perf-site:src%2Fdb%2Fwork.ts:205:10:listLinksStatement*/ SELECT * FROM work_link WHERE item_id = ? ORDER BY created_at").bind(item_id);
 }
 
 export async function listLinks(db: D1Database, item_id: string): Promise<WorkLink[]> {

@@ -51,10 +51,10 @@ export async function resolveMailAddress(db: D1Database, hubDomain: string, to: 
   const t = await getTenantBySlug(db, orgSlug);
   if (!t || t.state !== "active") return null;
   if (projSlug === null) return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: null, project_slug: null, project_name: null };
-  const p = await db.prepare("SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND slug = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src')").bind(t.id, projSlug)
+  const p = await db.prepare("/*perf-site:src%2Fmail%2FprojectMail.ts:54:19:p*/ SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND slug = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src')").bind(t.id, projSlug)
     .first<{ id: string; slug: string; display_name: string }>();
   if (p) return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: p.id, project_slug: p.slug, project_name: p.display_name };
-  const a = await db.prepare(`SELECT i.id, i.display_name FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ? AND m.state = 'active'
+  const a = await db.prepare(`/*perf-site:src%2Fmail%2FprojectMail.ts:57:19:a*/ SELECT i.id, i.display_name FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ? AND m.state = 'active'
     WHERE i.kind = 'agent' AND i.state = 'active' AND i.email = ?`).bind(t.id, addr).first<{ id: string; display_name: string }>();
   if (!a) return null;
   return { tenant_id: t.id, tenant_slug: t.slug, tenant_name: t.display_name, project_id: null, project_slug: null, project_name: null, recipient_id: a.id, recipient_name: a.display_name };
@@ -127,7 +127,7 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
     try {
       // Passive verified inbound may establish FIRST consent, never reinstate it.
       // A single atomic statement handles concurrent messages and withdrawal races.
-      await env.HUB_DB.prepare(`INSERT INTO consent
+      await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2FprojectMail.ts:130:13:handleProjectMail*/ INSERT INTO consent
         (id, email, tenant_id, kind, granted_at, revoked_at, source_message_id, evidence)
         SELECT ?, m.from_email, NULL, 'inbound_email', ?, NULL, m.message_id, ?
         FROM inbound_mail m JOIN identity i ON i.id = m.identity_id JOIN tenant t ON t.id = m.tenant_id
@@ -159,7 +159,7 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
   const verdict = "quarantined";
   const id = ulid(now);
   await env.HUB_DB.prepare(
-    `INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied)
+    `/*perf-site:src%2Fmail%2FprojectMail.ts:161:9:handleProjectMail*/ INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(id, target.tenant_id, target.project_id, target.recipient_id ?? null, identity.id, from, message.to.trim().toLowerCase(), parsed.subject, safeMessageId(message.headers.get("message-id")),
     parsed.date, now, bytes.byteLength, verdict, result.proof.authentication === "unknown" ? result.proof.reason : "authentication unknown",

@@ -75,8 +75,8 @@ const normalizedSQL = new Map<string, string>();
 const sqlSources = new Map<string, {source?: CodeSite; sqlCode: string}>();
 function spanSource(name: string): CodeSite | undefined {
   return SPAN_CATALOG[name] ?? FUNCTION_CATALOG[name.startsWith("d1.") ? "meteredD1" :
-    name.startsWith("fetch.") ? "installFetchTiming" : name.startsWith("do.handler.") ? "traceDurableClass" :
-    name.startsWith("do.stub.") ? "timedStub" : name.startsWith("do.") ? "traceStorage" :
+    name.startsWith("fetch.") ? "installFetchTiming" : name.startsWith("do.handler.") ? "instrumentDurableObject" :
+    name.startsWith("do.stub.") ? "timedStub" : name.startsWith("do.") ? "timedStorage" :
     /^(RATE|OAUTH_KV|MAIL|GIT_PUSH_STAGING|GIT_PROXY|ARDI)\./.test(name) ? "timedBinding" : "span"]; 
 }
 export function exclusiveDuration(s: TimingSpan, spans: TimingSpan[], snapshot: number): number {
@@ -103,7 +103,8 @@ function fingerprint(sql: string, caller?: Function): string {
     try { Error.stackTraceLimit = 1; Error.captureStackTrace(holder, caller); site = holder.stack?.split("\n")[1]?.trim() ?? site; }
     finally { Error.stackTraceLimit = limit; }
   } else site = new Error().stack?.split("\n")[3]?.trim() ?? site;
-  const key = normalized + site;
+  const marker=/^\/\*perf-site:([^:]+):(\d+):(\d+):([^*]+)\*\//.exec(sql);
+  const key = normalized + (marker?.[0] ?? site);
   let value = fingerprints.get(key);
   if (!value) {
     let hash = 2166136261;
@@ -113,10 +114,18 @@ function fingerprint(sql: string, caller?: Function): string {
     fingerprints.set(key, value);
     let codeHash = 2166136261;
     for (let i=0;i<normalized.length;i++) codeHash=Math.imul(codeHash ^ normalized.charCodeAt(i),16777619);
-    const code=(codeHash>>>0).toString(16).padStart(8,"0"), catalog=SQL_CATALOG[code];
-    if (catalog?.text === normalized) {
+    let code=(codeHash>>>0).toString(16).padStart(8,"0"), catalog=SQL_CATALOG[code];
+    if(marker) {
+      let siteHash=2166136261;
+      const text=marker[0]+" ";
+      for(let i=0;i<text.length;i++)siteHash=Math.imul(siteHash^text.charCodeAt(i),16777619);
+      const siteCode="site-"+(siteHash>>>0).toString(16).padStart(8,"0"), candidate=SQL_CATALOG[siteCode];
+      if(candidate?.sites.some(s=>encodeURIComponent(s.file)===marker[1]&&s.line===Number(marker[2])&&s.column===Number(marker[3])&&encodeURIComponent(s.fn)===marker[4])) {code=siteCode;catalog=candidate;}
+    }
+    if (catalog && (code.startsWith("site-") || catalog.text === normalized)) {
       if (sqlSources.size >= 512) sqlSources.clear();
-      sqlSources.set(value,{sqlCode:code,...(catalog.sites.length === 1 ? {source:catalog.sites[0]} : {})});
+      const source=catalog.sites.length===1?catalog.sites[0]:undefined;
+      sqlSources.set(value,{sqlCode:code,...(source?{source}:{})});
     }
   }
   return value;
@@ -283,8 +292,8 @@ export async function writeClientPoints(env: Parameters<typeof writeTrace>[0], t
     const version = env.WORKER_VERSION?.id ?? "unknown";
     for (const p of points) env.PERF.writeDataPoint({
       indexes: [version],
-      blobs: ["pimwell.com", "pimwell-hub", version, colo, tenant, p.request, "client", p.path, p.phase, "", "cookie", "", "", p.name, "", "", "", "", p.previous],
-      doubles: [p.duration, 0, 0, 0, 0, -1, -1, -1, -1, p.phase === "first-token" ? p.duration : -1, 1, 0, 0, 1],
+      blobs: ["pimwell.com", "pimwell-hub", version, colo, tenant, p.request, "client", p.path, p.phase, "", "cookie", "", "", p.name, "", "", "", "", p.previous, JSON.stringify({file:"src/clientTimingScript.ts",line:19,fn:"point"})],
+      doubles: [p.duration, 0, 0, 0, 0, -1, -1, -1, -1, p.phase === "first-token" ? p.duration : -1, 1, 0, 0, 1, 0, p.at ?? 0, 0, 0, 0, p.at === undefined ? 0 : 2],
     });
   } catch { /* best-effort: never fail the product */ }
 }

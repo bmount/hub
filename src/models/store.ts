@@ -16,13 +16,13 @@ type SealedRow = Credential & { secret_ciphertext: string; secret_iv: string };
 const PUBLIC_COLS = "id, tenant_id, provider, label, fingerprint, status, verified_at, verify_error, last_used_at, last_error, last_error_at, created_by, created_at, retired_at";
 
 export async function listCredentials(db: D1Database, tenant_id: string | null = null): Promise<Credential[]> {
-  const r = await db.prepare(`SELECT ${PUBLIC_COLS} FROM provider_credential WHERE IFNULL(tenant_id, '*') = IFNULL(?, '*') ORDER BY provider, status, created_at DESC`)
+  const r = await db.prepare(`/*perf-site:src%2Fmodels%2Fstore.ts:19:19:r*/ SELECT ${PUBLIC_COLS} FROM provider_credential WHERE IFNULL(tenant_id, '*') = IFNULL(?, '*') ORDER BY provider, status, created_at DESC`)
     .bind(tenant_id).all<Credential>();
   return r.results;
 }
 
 export async function getCredential(db: D1Database, id: string): Promise<Credential | null> {
-  return db.prepare(`SELECT ${PUBLIC_COLS} FROM provider_credential WHERE id = ?`).bind(id).first<Credential>();
+  return db.prepare(`/*perf-site:src%2Fmodels%2Fstore.ts:25:10:getCredential*/ SELECT ${PUBLIC_COLS} FROM provider_credential WHERE id = ?`).bind(id).first<Credential>();
 }
 
 /**
@@ -39,7 +39,7 @@ export async function addCredential(
   if (!p.looksLikeKey(secret)) throw badRequest(`that does not look like an ${p.name} key`);
   const check = await p.verify(secret);
   if (!check.ok) throw badRequest(`${p.name} rejected the key: ${check.error}`);
-  const active = await db.prepare("SELECT 1 FROM provider_credential WHERE provider = ? AND IFNULL(tenant_id, '*') = IFNULL(?, '*') AND status = 'active'")
+  const active = await db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:42:24:active*/ SELECT 1 FROM provider_credential WHERE provider = ? AND IFNULL(tenant_id, '*') = IFNULL(?, '*') AND status = 'active'")
     .bind(input.provider, input.tenant_id).first();
   const sealed = await seal(secretsKey, secret);
   const row: SealedRow = {
@@ -48,7 +48,7 @@ export async function addCredential(
     created_by: input.created_by, created_at: now, retired_at: null, secret_ciphertext: sealed.ciphertext, secret_iv: sealed.iv,
   };
   await db.prepare(
-    "INSERT INTO provider_credential (id, tenant_id, provider, label, secret_ciphertext, secret_iv, fingerprint, status, verified_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "/*perf-site:src%2Fmodels%2Fstore.ts:50:9:addCredential*/ INSERT INTO provider_credential (id, tenant_id, provider, label, secret_ciphertext, secret_iv, fingerprint, status, verified_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).bind(row.id, row.tenant_id, row.provider, row.label, row.secret_ciphertext, row.secret_iv, row.fingerprint, row.status, row.verified_at, row.created_by, row.created_at).run();
   const { secret_ciphertext: _c, secret_iv: _i, ...pub } = row;
   return pub;
@@ -60,11 +60,11 @@ export async function promoteCredential(db: D1Database, id: string): Promise<{ p
   if (!c) throw notFound("no such key");
   if (c.status === "active") throw conflict("that key is already active");
   if (c.status === "retired") throw conflict("a retired key cannot be promoted; add it again");
-  const prev = await db.prepare(`SELECT ${PUBLIC_COLS} FROM provider_credential WHERE provider = ? AND IFNULL(tenant_id, '*') = IFNULL(?, '*') AND status = 'active'`)
+  const prev = await db.prepare(`/*perf-site:src%2Fmodels%2Fstore.ts:63:22:prev*/ SELECT ${PUBLIC_COLS} FROM provider_credential WHERE provider = ? AND IFNULL(tenant_id, '*') = IFNULL(?, '*') AND status = 'active'`)
     .bind(c.provider, c.tenant_id).first<Credential>();
   const stmts = [];
-  if (prev) stmts.push(db.prepare("UPDATE provider_credential SET status = 'standby' WHERE id = ?").bind(prev.id));
-  stmts.push(db.prepare("UPDATE provider_credential SET status = 'active' WHERE id = ?").bind(id));
+  if (prev) stmts.push(db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:66:24:promoteCredential*/ UPDATE provider_credential SET status = 'standby' WHERE id = ?").bind(prev.id));
+  stmts.push(db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:67:14:promoteCredential*/ UPDATE provider_credential SET status = 'active' WHERE id = ?").bind(id));
   await db.batch(stmts);
   return { promoted: { ...c, status: "active" }, demoted: prev ? { ...prev, status: "standby" } : null };
 }
@@ -76,12 +76,12 @@ export async function retireCredential(db: D1Database, id: string, now: number):
   if (c.status === "active") throw conflict("promote another key before retiring the active one");
   if (c.status === "retired") throw conflict("already retired");
   // The ciphertext is wiped on retirement: a retired key is a record, not a credential.
-  await db.prepare("UPDATE provider_credential SET status = 'retired', retired_at = ?, secret_ciphertext = '', secret_iv = '' WHERE id = ?").bind(now, id).run();
+  await db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:79:9:retireCredential*/ UPDATE provider_credential SET status = 'retired', retired_at = ?, secret_ciphertext = '', secret_iv = '' WHERE id = ?").bind(now, id).run();
   return { ...c, status: "retired", retired_at: now };
 }
 
 export async function revealSecret(db: D1Database, secretsKey: string | undefined, id: string): Promise<string> {
-  const row = await db.prepare("SELECT secret_ciphertext, secret_iv FROM provider_credential WHERE id = ? AND status != 'retired'").bind(id).first<{ secret_ciphertext: string; secret_iv: string }>();
+  const row = await db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:84:21:row*/ SELECT secret_ciphertext, secret_iv FROM provider_credential WHERE id = ? AND status != 'retired'").bind(id).first<{ secret_ciphertext: string; secret_iv: string }>();
   if (!row) throw notFound("no such key");
   return open(secretsKey, { ciphertext: row.secret_ciphertext, iv: row.secret_iv });
 }
@@ -92,7 +92,7 @@ export async function reverifyCredential(db: D1Database, secretsKey: string | un
   const p = providerById(c.provider);
   if (!p) throw badRequest("unknown provider");
   const r = await p.verify(await revealSecret(db, secretsKey, id));
-  await db.prepare("UPDATE provider_credential SET verified_at = ?, verify_error = ? WHERE id = ?").bind(now, r.ok ? null : r.error, id).run();
+  await db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:95:9:reverifyCredential*/ UPDATE provider_credential SET verified_at = ?, verify_error = ? WHERE id = ?").bind(now, r.ok ? null : r.error, id).run();
   return r.ok ? { ok: true, error: null, models: r.models } : { ok: false, error: r.error, models: [] };
 }
 
@@ -102,10 +102,10 @@ export async function resolveRoute(db: D1Database, purposeId: string, tenant_id:
   const p = purposeById(purposeId);
   if (!p) throw badRequest("unknown purpose");
   if (tenant_id) {
-    const o = await db.prepare("SELECT provider, model FROM model_route WHERE purpose = ? AND tenant_id = ?").bind(purposeId, tenant_id).first<{ provider: string; model: string }>();
+    const o = await db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:105:21:o*/ SELECT provider, model FROM model_route WHERE purpose = ? AND tenant_id = ?").bind(purposeId, tenant_id).first<{ provider: string; model: string }>();
     if (o) return { purpose: purposeId, ...o, source: "org" };
   }
-  const h = await db.prepare("SELECT provider, model FROM model_route WHERE purpose = ? AND tenant_id IS NULL").bind(purposeId).first<{ provider: string; model: string }>();
+  const h = await db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:108:19:h*/ SELECT provider, model FROM model_route WHERE purpose = ? AND tenant_id IS NULL").bind(purposeId).first<{ provider: string; model: string }>();
   if (h) return { purpose: purposeId, ...h, source: "hub" };
   return { purpose: purposeId, provider: p.provider, model: p.model, source: "default" };
 }
@@ -115,8 +115,8 @@ export async function setRoute(db: D1Database, input: { purpose: string; provide
   if (!providerById(input.provider)) throw badRequest("unknown provider");
   if (!/^[A-Za-z0-9._:-]{1,100}$/.test(input.model)) throw badRequest("invalid model name");
   await db.batch([
-    db.prepare("DELETE FROM model_route WHERE purpose = ? AND IFNULL(tenant_id, '*') = IFNULL(?, '*')").bind(input.purpose, input.tenant_id),
-    db.prepare("INSERT INTO model_route (id, purpose, tenant_id, provider, model, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:118:5:setRoute*/ DELETE FROM model_route WHERE purpose = ? AND IFNULL(tenant_id, '*') = IFNULL(?, '*')").bind(input.purpose, input.tenant_id),
+    db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:119:5:setRoute*/ INSERT INTO model_route (id, purpose, tenant_id, provider, model, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(ulid(now), input.purpose, input.tenant_id, input.provider, input.model, input.updated_by, now),
   ]);
 }
@@ -124,10 +124,10 @@ export async function setRoute(db: D1Database, input: { purpose: string; provide
 /** The active key for a provider: the organization's own if it has one, else the hub's. */
 export async function activeCredentialRow(db: D1Database, providerId: string, tenant_id: string | null): Promise<SealedRow | null> {
   if (tenant_id) {
-    const o = await db.prepare("SELECT * FROM provider_credential WHERE provider = ? AND tenant_id = ? AND status = 'active'").bind(providerId, tenant_id).first<SealedRow>();
+    const o = await db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:127:21:o*/ SELECT * FROM provider_credential WHERE provider = ? AND tenant_id = ? AND status = 'active'").bind(providerId, tenant_id).first<SealedRow>();
     if (o) return o;
   }
-  return db.prepare("SELECT * FROM provider_credential WHERE provider = ? AND tenant_id IS NULL AND status = 'active'").bind(providerId).first<SealedRow>();
+  return db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:130:10:activeCredentialRow*/ SELECT * FROM provider_credential WHERE provider = ? AND tenant_id IS NULL AND status = 'active'").bind(providerId).first<SealedRow>();
 }
 
 export type PurposeStatus = {
@@ -142,7 +142,7 @@ export async function purposeStatus(db: D1Database, tenant_id: string | null, no
   for (const p of PURPOSES) {
     const route = await resolveRoute(db, p.id, tenant_id);
     const key = await activeCredentialRow(db, route.provider, tenant_id);
-    const stats = await db.prepare("SELECT COUNT(*) AS n, SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS e FROM model_call WHERE purpose = ? AND created_at > ?")
+    const stats = await db.prepare("/*perf-site:src%2Fmodels%2Fstore.ts:145:25:stats*/ SELECT COUNT(*) AS n, SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS e FROM model_call WHERE purpose = ? AND created_at > ?")
       .bind(p.id, now - 24 * 3600_000).first<{ n: number; e: number | null }>();
     const prov = providerById(route.provider);
     out.push({

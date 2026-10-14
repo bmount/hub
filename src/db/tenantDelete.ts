@@ -21,60 +21,60 @@ const TENANT_TABLES = [
 export type DeleteResult = { tenant_id: string; slug: string; counts: Record<string, number>; agents_deleted: number };
 
 export async function deleteTenant(db: D1Database, slug: string, deleted_by: string, now: number): Promise<DeleteResult> {
-  const t = await db.prepare("SELECT id, slug, display_name, state FROM tenant WHERE slug = ?").bind(slug)
+  const t = await db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:24:19:t*/ SELECT id, slug, display_name, state FROM tenant WHERE slug = ?").bind(slug)
     .first<{ id: string; slug: string; display_name: string; state: string }>();
   if (!t) throw notFound("no such organization");
   if (t.state !== "archived") throw conflict("archive the organization before deleting it");
 
   const counts: Record<string, number> = {};
   for (const table of TENANT_TABLES) {
-    const r = await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ?`).bind(t.id).first<{ n: number }>();
+    const r = await db.prepare(`/*perf-site:src%2Fdb%2FtenantDelete.ts:31:21:r*/ SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ?`).bind(t.id).first<{ n: number }>();
     if (r && r.n) counts[table] = r.n;
   }
   // Agents that belong only to this organization go with it.
   const agents = (await db.prepare(
-    `SELECT i.id FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ?
+    `/*perf-site:src%2Fdb%2FtenantDelete.ts:35:25:agents*/ SELECT i.id FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ?
      WHERE i.kind = 'agent' AND NOT EXISTS (SELECT 1 FROM membership o WHERE o.identity_id = i.id AND o.tenant_id != ?)`,
   ).bind(t.id, t.id).all<{ id: string }>()).results.map((r) => r.id);
   if (agents.length) counts.identity = agents.length;
-  const links = await db.prepare("SELECT COUNT(*) AS n FROM work_link WHERE item_id IN (SELECT id FROM work_item WHERE tenant_id = ?)").bind(t.id).first<{ n: number }>();
+  const links = await db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:40:23:links*/ SELECT COUNT(*) AS n FROM work_link WHERE item_id IN (SELECT id FROM work_item WHERE tenant_id = ?)").bind(t.id).first<{ n: number }>();
   if (links?.n) counts.work_link = links.n;
 
-  const stmts: D1PreparedStatement[] = [db.prepare("PRAGMA defer_foreign_keys = true")];
+  const stmts: D1PreparedStatement[] = [db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:43:41:stmts*/ PRAGMA defer_foreign_keys = true")];
   // Replay records live in existing meta until a dedicated schema
   // is authorized. Tenant ids are internal ULIDs; the trailing colon scopes them.
-  stmts.push(db.prepare("DELETE FROM meta WHERE substr(key, 1, length(?)) = ?").bind(`project_channel:v1:${t.id}:`, `project_channel:v1:${t.id}:`));
-  stmts.push(db.prepare("DELETE FROM meta WHERE substr(key, 1, length(?)) = ?").bind(`project_delete:v1:${t.id}:`, `project_delete:v1:${t.id}:`));
-  stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`review_request:v1:${t.id}:*`));
-  stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_welcome:v1:${t.id}:*`));
-  stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`private_chat:v1:${t.id}:*`));
-  stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`private_open:v1:${t.id}:*`));
-  stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_actions:v1:${t.id}:*`));
-  stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_replay:v1:${t.id}:*`));
-  stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_response_recipients:v1:${t.id}:*`));
-  stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`mail_response_intent:v1:${t.id}:*`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:46:14:deleteTenant*/ DELETE FROM meta WHERE substr(key, 1, length(?)) = ?").bind(`project_channel:v1:${t.id}:`, `project_channel:v1:${t.id}:`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:47:14:deleteTenant*/ DELETE FROM meta WHERE substr(key, 1, length(?)) = ?").bind(`project_delete:v1:${t.id}:`, `project_delete:v1:${t.id}:`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:48:14:deleteTenant*/ DELETE FROM meta WHERE key GLOB ?").bind(`review_request:v1:${t.id}:*`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:49:14:deleteTenant*/ DELETE FROM meta WHERE key GLOB ?").bind(`mail_welcome:v1:${t.id}:*`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:50:14:deleteTenant*/ DELETE FROM meta WHERE key GLOB ?").bind(`private_chat:v1:${t.id}:*`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:51:14:deleteTenant*/ DELETE FROM meta WHERE key GLOB ?").bind(`private_open:v1:${t.id}:*`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:52:14:deleteTenant*/ DELETE FROM meta WHERE key GLOB ?").bind(`mail_actions:v1:${t.id}:*`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:53:14:deleteTenant*/ DELETE FROM meta WHERE key GLOB ?").bind(`mail_replay:v1:${t.id}:*`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:54:14:deleteTenant*/ DELETE FROM meta WHERE key GLOB ?").bind(`mail_response_recipients:v1:${t.id}:*`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:55:14:deleteTenant*/ DELETE FROM meta WHERE key GLOB ?").bind(`mail_response_intent:v1:${t.id}:*`));
   const sessions = "SELECT id FROM session WHERE tenant_id = ?";
   // Records elsewhere that point at this organization's sessions keep their meaning without the link.
-  stmts.push(db.prepare(`UPDATE event SET session_id = NULL WHERE session_id IN (${sessions}) AND IFNULL(tenant_id, '') != ?`).bind(t.id, t.id));
-  stmts.push(db.prepare(`UPDATE oauth_grant SET approved_by_session_id = NULL WHERE approved_by_session_id IN (${sessions}) AND tenant_id != ?`).bind(t.id, t.id));
-  stmts.push(db.prepare("DELETE FROM work_proposal_decision WHERE proposal_id IN (SELECT id FROM work_proposal WHERE tenant_id = ?)").bind(t.id));
+  stmts.push(db.prepare(`/*perf-site:src%2Fdb%2FtenantDelete.ts:58:14:deleteTenant*/ UPDATE event SET session_id = NULL WHERE session_id IN (${sessions}) AND IFNULL(tenant_id, '') != ?`).bind(t.id, t.id));
+  stmts.push(db.prepare(`/*perf-site:src%2Fdb%2FtenantDelete.ts:59:14:deleteTenant*/ UPDATE oauth_grant SET approved_by_session_id = NULL WHERE approved_by_session_id IN (${sessions}) AND tenant_id != ?`).bind(t.id, t.id));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:60:14:deleteTenant*/ DELETE FROM work_proposal_decision WHERE proposal_id IN (SELECT id FROM work_proposal WHERE tenant_id = ?)").bind(t.id));
   // Review verdicts carry no tenant column; they go with their reviews, before the reviews.
-  stmts.push(db.prepare("DELETE FROM review_reviewer WHERE review_id IN (SELECT id FROM review WHERE tenant_id = ?)").bind(t.id));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:62:14:deleteTenant*/ DELETE FROM review_reviewer WHERE review_id IN (SELECT id FROM review WHERE tenant_id = ?)").bind(t.id));
   // Work links carry no tenant column; they go with their items, before the items.
-  stmts.push(db.prepare("DELETE FROM work_link WHERE item_id IN (SELECT id FROM work_item WHERE tenant_id = ?)").bind(t.id));
-  stmts.push(db.prepare("DELETE FROM site_app WHERE site_id IN (SELECT id FROM site WHERE tenant_id = ?) OR app_id IN (SELECT id FROM app_source WHERE tenant_id = ?)").bind(t.id, t.id));
-  for (const table of TENANT_TABLES) stmts.push(db.prepare(`DELETE FROM ${table} WHERE tenant_id = ?`).bind(t.id));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:64:14:deleteTenant*/ DELETE FROM work_link WHERE item_id IN (SELECT id FROM work_item WHERE tenant_id = ?)").bind(t.id));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:65:14:deleteTenant*/ DELETE FROM site_app WHERE site_id IN (SELECT id FROM site WHERE tenant_id = ?) OR app_id IN (SELECT id FROM app_source WHERE tenant_id = ?)").bind(t.id, t.id));
+  for (const table of TENANT_TABLES) stmts.push(db.prepare(`/*perf-site:src%2Fdb%2FtenantDelete.ts:66:49:deleteTenant*/ DELETE FROM ${table} WHERE tenant_id = ?`).bind(t.id));
   for (const id of agents) {
-    stmts.push(db.prepare("UPDATE event SET identity_id = NULL WHERE identity_id = ?").bind(id));
-    stmts.push(db.prepare("DELETE FROM session WHERE identity_id = ?").bind(id));
-    stmts.push(db.prepare("DELETE FROM api_token WHERE identity_id = ?").bind(id));
-    stmts.push(db.prepare("DELETE FROM proof WHERE identity_id = ?").bind(id));
-    stmts.push(db.prepare("DELETE FROM auth_link WHERE identity_id = ?").bind(id));
-    stmts.push(db.prepare("DELETE FROM identity WHERE id = ?").bind(id));
+    stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:68:16:deleteTenant*/ UPDATE event SET identity_id = NULL WHERE identity_id = ?").bind(id));
+    stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:69:16:deleteTenant*/ DELETE FROM session WHERE identity_id = ?").bind(id));
+    stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:70:16:deleteTenant*/ DELETE FROM api_token WHERE identity_id = ?").bind(id));
+    stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:71:16:deleteTenant*/ DELETE FROM proof WHERE identity_id = ?").bind(id));
+    stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:72:16:deleteTenant*/ DELETE FROM auth_link WHERE identity_id = ?").bind(id));
+    stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:73:16:deleteTenant*/ DELETE FROM identity WHERE id = ?").bind(id));
   }
-  stmts.push(db.prepare("DELETE FROM meta WHERE key = ?").bind(`tenant_delete:v1:${t.id}`));
-  stmts.push(db.prepare("DELETE FROM tenant WHERE id = ?").bind(t.id));
-  stmts.push(db.prepare("INSERT INTO deleted_tenant (id, slug, display_name, deleted_by, deleted_at, counts) VALUES (?, ?, ?, ?, ?, ?)")
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:75:14:deleteTenant*/ DELETE FROM meta WHERE key = ?").bind(`tenant_delete:v1:${t.id}`));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:76:14:deleteTenant*/ DELETE FROM tenant WHERE id = ?").bind(t.id));
+  stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:77:14:deleteTenant*/ INSERT INTO deleted_tenant (id, slug, display_name, deleted_by, deleted_at, counts) VALUES (?, ?, ?, ?, ?, ?)")
     .bind(t.id, t.slug, t.display_name, deleted_by, now, JSON.stringify(counts)));
   await db.batch(stmts);
   return { tenant_id: t.id, slug: t.slug, counts, agents_deleted: agents.length };
@@ -82,11 +82,11 @@ export async function deleteTenant(db: D1Database, slug: string, deleted_by: str
 
 /** A deleted organization's name stays reserved until the git host has purged its data for that name. */
 export async function slugReserved(db: D1Database, slug: string): Promise<boolean> {
-  return (await db.prepare("SELECT 1 FROM deleted_tenant WHERE slug = ? AND git_purged_at IS NULL").bind(slug).first()) !== null;
+  return (await db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:85:17:slugReserved*/ SELECT 1 FROM deleted_tenant WHERE slug = ? AND git_purged_at IS NULL").bind(slug).first()) !== null;
 }
 
 export async function listDeletedTenants(db: D1Database): Promise<Array<{ id: string; slug: string; display_name: string; deleted_by: string | null; deleted_at: number; counts: string; git_purged_at: number | null }>> {
-  return (await db.prepare("SELECT * FROM deleted_tenant ORDER BY deleted_at DESC").all<{ id: string; slug: string; display_name: string; deleted_by: string | null; deleted_at: number; counts: string; git_purged_at: number | null }>()).results;
+  return (await db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:89:17:listDeletedTenants*/ SELECT * FROM deleted_tenant ORDER BY deleted_at DESC").all<{ id: string; slug: string; display_name: string; deleted_by: string | null; deleted_at: number; counts: string; git_purged_at: number | null }>()).results;
 }
 
 export function confirmMatches(slug: string, confirm: string | null): void {

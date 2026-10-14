@@ -3,7 +3,7 @@ import { finishLegacyForward, migrationRepo, startLegacyForward } from "./gitMig
 
 export async function usesArtifacts(env: Env, tenant: string, repo: string): Promise<boolean> {
   if (env.GIT_BACKEND !== "artifacts") return false;
-  return !!await env.HUB_DB.prepare(`SELECT 1 FROM git_repository g JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id JOIN tenant t ON t.id = g.tenant_id WHERE t.slug = ? AND p.slug = ?`)
+  return !!await env.HUB_DB.prepare(`/*perf-site:src%2Fcode%2FgitBackend.ts:6:18:usesArtifacts*/ SELECT 1 FROM git_repository g JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id JOIN tenant t ON t.id = g.tenant_id WHERE t.slug = ? AND p.slug = ?`)
     .bind(tenant, repo).first();
 }
 

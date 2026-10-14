@@ -29,7 +29,7 @@ export async function searchPage(request: Request, env: Env): Promise<Response> 
   if (selectedHref && !selected) return notFoundPage(extra);
   const selectionHref = (h: Hit) => { const u = new URL(request.url); u.searchParams.delete("format"); u.searchParams.set("result",h.href); return u.pathname + u.search; };
   const close = new URL(request.url); close.searchParams.delete("result");
-  const projects = (await ctx.db.prepare("SELECT p.slug, p.display_name, n.slug AS namespace FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND p.kind NOT IN ('channel','agent-src')").bind(ctx.tenant.id).all<{slug:string;display_name:string;namespace:string|null}>()).results;
+  const projects = (await ctx.db.prepare("/*perf-site:src%2Fhttp%2FsearchPage.ts:32:27:projects*/ SELECT p.slug, p.display_name, n.slug AS namespace FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND p.kind NOT IN ('channel','agent-src')").bind(ctx.tenant.id).all<{slug:string;display_name:string;namespace:string|null}>()).results;
   const reference = (h: Hit) => h.ref.includes("@") ? address(h.ref) : esc(h.ref || "—");
   const projectFor = (h: Hit) => h.project_name ?? projects.find(p => {
     const path = p.namespace ? `${p.namespace}/${p.slug}` : p.slug;

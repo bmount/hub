@@ -65,8 +65,8 @@ export async function assistantPage(request: Request, env: Env): Promise<Respons
   if (allowed(ctx) !== "ok") return notFoundPage(extra);
   const tid = new URL(request.url).searchParams.get("t") ?? "";
   const [threadsR, msgsR] = await ctx.db.batch([
-    ctx.db.prepare("SELECT id, title, scopes, updated_at FROM assistant_thread WHERE identity_id = ? AND tenant_id = ? ORDER BY updated_at DESC LIMIT 50").bind(ctx.identity!.id, ctx.tenant!.id),
-    ctx.db.prepare(`SELECT m.role, m.text, m.steps FROM assistant_message m JOIN assistant_thread t ON t.id = m.thread_id
+    ctx.db.prepare("/*perf-site:src%2Fhttp%2FassistantPages.ts:68:5:%5BthreadsR%2C%20msgsR%5D*/ SELECT id, title, scopes, updated_at FROM assistant_thread WHERE identity_id = ? AND tenant_id = ? ORDER BY updated_at DESC LIMIT 50").bind(ctx.identity!.id, ctx.tenant!.id),
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FassistantPages.ts:69:5:%5BthreadsR%2C%20msgsR%5D*/ SELECT m.role, m.text, m.steps FROM assistant_message m JOIN assistant_thread t ON t.id = m.thread_id
       WHERE m.thread_id = ? AND t.identity_id = ? AND t.tenant_id = ? ORDER BY m.created_at LIMIT 400`).bind(tid, ctx.identity!.id, ctx.tenant!.id),
   ]);
   const threads = threadsR!.results as Thread[];
@@ -131,13 +131,13 @@ export async function assistantChat(request: Request, env: Env): Promise<Respons
   if (!scopes) return json({ error: "bad_request", reason: "scopes must be read or write" }, 400);
   let threadId: string;
   if (typeof b.thread === "string" && b.thread) {
-    const t = await ctx.db.prepare("SELECT id, scopes FROM assistant_thread WHERE id = ? AND identity_id = ? AND tenant_id = ?").bind(b.thread, ctx.identity!.id, ctx.tenant!.id).first<{ id: string; scopes: string }>();
+    const t = await ctx.db.prepare("/*perf-site:src%2Fhttp%2FassistantPages.ts:134:21:t*/ SELECT id, scopes FROM assistant_thread WHERE id = ? AND identity_id = ? AND tenant_id = ?").bind(b.thread, ctx.identity!.id, ctx.tenant!.id).first<{ id: string; scopes: string }>();
     if (!t) return json({ error: "not_found" }, 404);
     threadId = t.id;
-    if (t.scopes !== scopes) await ctx.db.prepare("UPDATE assistant_thread SET scopes = ? WHERE id = ?").bind(scopes, t.id).run();
+    if (t.scopes !== scopes) await ctx.db.prepare("/*perf-site:src%2Fhttp%2FassistantPages.ts:137:36:assistantChat*/ UPDATE assistant_thread SET scopes = ? WHERE id = ?").bind(scopes, t.id).run();
   } else {
     threadId = ulid(ctx.now);
-    await ctx.db.prepare("INSERT INTO assistant_thread (id, tenant_id, identity_id, title, scopes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    await ctx.db.prepare("/*perf-site:src%2Fhttp%2FassistantPages.ts:140:11:assistantChat*/ INSERT INTO assistant_thread (id, tenant_id, identity_id, title, scopes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(threadId, ctx.tenant!.id, ctx.identity!.id, text.replace(/\s+/g, " ").slice(0, 80), scopes, ctx.now, ctx.now).run();
   }
   note(request, { verb: "assistant.turn", via: "assistant" });

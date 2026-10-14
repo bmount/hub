@@ -23,21 +23,21 @@ export async function clientSlow(request: Request, env: Env, waitUntil: (p: Prom
       !Number.isSafeInteger(x.duration) || (x.duration as number) < 0 || (x.duration as number) > 3_600_000 ||
       !(x.status === null || (Number.isInteger(x.status) && (x.status as number) >= 100 && (x.status as number) <= 599))) return reply(400);
   // Use only this tenant's approved source; never let a client choose a source or another tenant's group.
-  const source = await ctx.db.prepare("SELECT s.project_id FROM app_source s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id WHERE s.tenant_id = ? AND s.script_name = 'pimwell-hub' AND s.state = 'active' AND p.state = 'active'").bind(ctx.tenant.id).first<{ project_id: string }>();
+  const source = await ctx.db.prepare("/*perf-site:src%2Fhttp%2FclientSlow.ts:26:24:source*/ SELECT s.project_id FROM app_source s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id WHERE s.tenant_id = ? AND s.script_name = 'pimwell-hub' AND s.state = 'active' AND p.state = 'active'").bind(ctx.tenant.id).first<{ project_id: string }>();
   if (!source) return reply(204);
   const fingerprint = await sha256Hex(`${ctx.tenant.id}|client|${x.path}|${x.phase}|${x.result}`);
   const title = `Browser ${x.result}: ${x.path} (${x.phase})`;
   const detail = `duration=${x.duration}ms phase=${x.phase} status=${x.status ?? "none"}`;
   const id = ulid(ctx.now);
   await ctx.db.batch([
-    ctx.db.prepare(`INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, client_kind, title, last_message, count, first_seen, last_seen)
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FclientSlow.ts:33:5:clientSlow*/ INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, client_kind, title, last_message, count, first_seen, last_seen)
       VALUES (?, ?, ?, 'pimwell-hub', ?, 'warn', 'slow', ?, ?, 1, ?, ?)
       ON CONFLICT(fingerprint) DO UPDATE SET count = count + 1, last_message = excluded.last_message, last_seen = excluded.last_seen`)
       .bind(id, ctx.tenant.id, source.project_id, fingerprint, title, detail, ctx.now, ctx.now),
-    ctx.db.prepare(`INSERT INTO app_event (id, tenant_id, group_id, at, path, status, detail)
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FclientSlow.ts:37:5:clientSlow*/ INSERT INTO app_event (id, tenant_id, group_id, at, path, status, detail)
       SELECT ?, ?, id, ?, ?, ?, ? FROM app_error_group WHERE fingerprint = ? AND tenant_id = ?`)
       .bind(ulid(ctx.now), ctx.tenant.id, ctx.now, x.path, x.status, detail, fingerprint, ctx.tenant.id),
-    ctx.db.prepare(`DELETE FROM app_event WHERE group_id = (SELECT id FROM app_error_group WHERE fingerprint = ? AND tenant_id = ?)
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FclientSlow.ts:40:5:clientSlow*/ DELETE FROM app_event WHERE group_id = (SELECT id FROM app_error_group WHERE fingerprint = ? AND tenant_id = ?)
       AND id NOT IN (SELECT id FROM app_event WHERE group_id = (SELECT id FROM app_error_group WHERE fingerprint = ? AND tenant_id = ?) ORDER BY at DESC, id DESC LIMIT 50)`)
       .bind(fingerprint, ctx.tenant.id, fingerprint, ctx.tenant.id),
   ]);

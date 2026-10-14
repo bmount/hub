@@ -31,7 +31,7 @@ async function sessionVisible(db: D1Database, v: Viewer, s: Session): Promise<bo
 async function resolveMsg(ctx: Ctx, v: Viewer, r: Extract<ParsedRef, { kind: "msg" }>): Promise<StoredRef | null> {
   let conversation_id: string | null = null;
   if (r.msg_id) {
-    const row = await ctx.db.prepare("SELECT conversation_id FROM msg_index WHERE tenant_id = ? AND msg_id = ? LIMIT 1").bind(v.tenant.id, r.msg_id).first<{ conversation_id: string }>();
+    const row = await ctx.db.prepare("/*perf-site:src%2Fchat%2Frefs.ts:34:23:row*/ SELECT conversation_id FROM msg_index WHERE tenant_id = ? AND msg_id = ? LIMIT 1").bind(v.tenant.id, r.msg_id).first<{ conversation_id: string }>();
     conversation_id = row?.conversation_id ?? null;
   }
   const ch = conversation_id ? await getChannelById(ctx.db, v.tenant.id, conversation_id) : r.channel ? await getChannelBySlug(ctx.db, v.tenant.id, r.channel) : null;

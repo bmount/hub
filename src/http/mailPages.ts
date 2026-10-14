@@ -27,7 +27,7 @@ export async function sentMailReadPage(request: Request, env: Env, id: string): 
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
   const access = readableOutgoingMail(ctx);
-  const mail = await ctx.db.prepare(`SELECT o.id, o.in_reply_to, o.error, o.subject, o.text, o.from_address, o.to_address, o.status, o.created_at FROM outbound_mail o WHERE o.id = ? AND ${access.sql}`)
+  const mail = await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FmailPages.ts:30:22:mail*/ SELECT o.id, o.in_reply_to, o.error, o.subject, o.text, o.from_address, o.to_address, o.status, o.created_at FROM outbound_mail o WHERE o.id = ? AND ${access.sql}`)
     .bind(id, ...access.bindings).first<DeliveryNotice & { subject: string; text: string; from_address: string; to_address: string; created_at: number }>();
   if (!mail) return notFoundPage(extra);
   const list = `<a href="/mail">‹ Mail</a><h1>${esc(mail.subject || "(no subject)")}</h1><p>${esc(mail.from_address)} → ${esc(mail.to_address)} · ${esc(mail.status)} · ${when(mail.created_at)}</p>${mail.status !== "sent" ? mailDeliveryNotice(ctx, mail) : ""}<div class="prose">${esc(mail.text)}</div>`;
@@ -43,13 +43,13 @@ async function mailPage(request: Request, env: Env, id: string | null): Promise<
   const tid = ctx.tenant.id;
   const project = new URL(request.url).searchParams.get("project");
   const [rowsR, projR, msgR, relatedR, repliesR, switchR] = await ctx.db.batch([
-    ctx.db.prepare(`SELECT m.id, COALESCE(pr.slug, r.display_name) AS project, m.from_email, m.subject, m.received_at, m.verdict, m.forwarded FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FmailPages.ts:46:5:%5BrowsR%2C%20projR%2C%20msgR%2C%20relatedR%2C%20repliesR%2C%20switchR%5D*/ SELECT m.id, COALESCE(pr.slug, r.display_name) AS project, m.from_email, m.subject, m.received_at, m.verdict, m.forwarded FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id
       WHERE ${access.sql} AND (? IS NULL OR (pr.slug = ? AND pr.namespace_id IS NULL)) ORDER BY m.received_at DESC LIMIT 200`).bind(...access.bindings, project, project),
-    ctx.db.prepare("SELECT slug, display_name FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name").bind(tid),
-    ctx.db.prepare(`SELECT m.*, COALESCE(pr.slug, 'agent ' || r.display_name) AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id WHERE m.id = ? AND ${access.sql}`).bind(id ?? "", ...access.bindings),
+    ctx.db.prepare("/*perf-site:src%2Fhttp%2FmailPages.ts:48:5:%5BrowsR%2C%20projR%2C%20msgR%2C%20relatedR%2C%20repliesR%2C%20switchR%5D*/ SELECT slug, display_name FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY display_name").bind(tid),
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FmailPages.ts:49:5:%5BrowsR%2C%20projR%2C%20msgR%2C%20relatedR%2C%20repliesR%2C%20switchR%5D*/ SELECT m.*, COALESCE(pr.slug, 'agent ' || r.display_name) AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id LEFT JOIN identity r ON r.id = m.recipient_id WHERE m.id = ? AND ${access.sql}`).bind(id ?? "", ...access.bindings),
     mailWorkStatement(ctx, id ?? ""),
-    ctx.db.prepare(`SELECT o.id, o.to_address, o.in_reply_to, o.error, o.text, o.created_at, o.status, i.display_name AS who FROM outbound_mail o JOIN identity i ON i.id = o.sent_by WHERE o.in_reply_to = ? AND o.tenant_id = ? AND EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = o.in_reply_to AND ${access.sql}) ORDER BY o.created_at`).bind(id ?? "", tid, ...access.bindings),
-    ctx.db.prepare("SELECT mail_out FROM tenant WHERE id = ?").bind(tid),
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FmailPages.ts:51:5:%5BrowsR%2C%20projR%2C%20msgR%2C%20relatedR%2C%20repliesR%2C%20switchR%5D*/ SELECT o.id, o.to_address, o.in_reply_to, o.error, o.text, o.created_at, o.status, i.display_name AS who FROM outbound_mail o JOIN identity i ON i.id = o.sent_by WHERE o.in_reply_to = ? AND o.tenant_id = ? AND EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = o.in_reply_to AND ${access.sql}) ORDER BY o.created_at`).bind(id ?? "", tid, ...access.bindings),
+    ctx.db.prepare("/*perf-site:src%2Fhttp%2FmailPages.ts:52:5:%5BrowsR%2C%20projR%2C%20msgR%2C%20relatedR%2C%20repliesR%2C%20switchR%5D*/ SELECT mail_out FROM tenant WHERE id = ?").bind(tid),
   ]);
   const sendingOn = (switchR!.results[0] as { mail_out: number } | undefined)?.mail_out === 1;
   const rows = rowsR!.results as Row[];

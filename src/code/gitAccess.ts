@@ -44,7 +44,7 @@ export async function authorizeGit(env: Env, authorization: string | null, tenan
   const caller = await gitCaller(env, authorization, tenantSlug, now);
   if (!caller) return null;
   const { identity, session, tenant, role } = caller;
-  const project = await env.HUB_DB.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'")
+  const project = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FgitAccess.ts:47:25:project*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'")
     .bind(tenant.id, repo).first<{ id: string; slug: string }>();
   if (!project) return null;
   if (session.kind === "git") await touchSession(env.HUB_DB, session, now);

@@ -10,13 +10,13 @@ export async function createAuthLink(db: D1Database, identity_id: string, purpos
     created_at: now, expires_at: now + AUTH_LINK_TTL_MS, used_at: null,
   };
   await db.prepare(
-    "INSERT INTO auth_link (id, identity_id, token_hash, purpose, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, ?, ?, NULL)",
+    "/*perf-site:src%2Fdb%2FauthLinks.ts:12:9:createAuthLink*/ INSERT INTO auth_link (id, identity_id, token_hash, purpose, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, ?, ?, NULL)",
   ).bind(link.id, link.identity_id, link.token_hash, link.purpose, link.created_at, link.expires_at).run();
   return { link, token };
 }
 
 export async function findAuthLinkByToken(db: D1Database, token: string): Promise<AuthLink | null> {
-  return db.prepare("SELECT * FROM auth_link WHERE token_hash = ?").bind(await sha256Hex(token)).first<AuthLink>();
+  return db.prepare("/*perf-site:src%2Fdb%2FauthLinks.ts:19:10:findAuthLinkByToken*/ SELECT * FROM auth_link WHERE token_hash = ?").bind(await sha256Hex(token)).first<AuthLink>();
 }
 
 export function authLinkIsOpen(link: AuthLink, now: number): boolean {
@@ -25,7 +25,7 @@ export function authLinkIsOpen(link: AuthLink, now: number): boolean {
 
 // Atomic single-use claim: exactly one concurrent caller sees true.
 export async function claimAuthLink(db: D1Database, id: string, now: number): Promise<boolean> {
-  const r = await db.prepare("UPDATE auth_link SET used_at = ? WHERE id = ? AND used_at IS NULL AND expires_at > ?")
+  const r = await db.prepare("/*perf-site:src%2Fdb%2FauthLinks.ts:28:19:r*/ UPDATE auth_link SET used_at = ? WHERE id = ? AND used_at IS NULL AND expires_at > ?")
     .bind(now, id, now).run();
   return r.meta.changes === 1;
 }

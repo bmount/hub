@@ -20,7 +20,7 @@ export async function reviewsPage(request: Request, env: Env, slug: string | nul
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
-  if (slug && !(await ctx.db.prepare(`SELECT 1 FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind = 'repo'`).bind(ctx.tenant.id, slug).first())) return notFoundPage(extra);
+  if (slug && !(await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FreviewPages.ts:23:23:reviewsPage*/ SELECT 1 FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind = 'repo'`).bind(ctx.tenant.id, slug).first())) return notFoundPage(extra);
   const rows = (await reviewListStatement(ctx, slug, true).all<{ slug: string; number: number; title: string; branch: string; base: string; status: string; author: string; updated_at: number; mine: number }>()).results;
   const url = new URL(request.url);
   const filters = new URLSearchParams(url.search); filters.delete("work");

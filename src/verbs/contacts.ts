@@ -24,7 +24,7 @@ export async function contactProject(ctx: Ctx, slug: string, writing = false) {
   return p;
 }
 async function entity(ctx: Ctx, pid: string, id: string, kind?: string) {
-  const r = await ctx.db.prepare("SELECT id, kind, name, data, revision, updated_at FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(ctx.tenant!.id, pid, id).first<Contact>();
+  const r = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:27:19:r*/ SELECT id, kind, name, data, revision, updated_at FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(ctx.tenant!.id, pid, id).first<Contact>();
   if (!r || (kind && r.kind !== kind)) throw notFound("no such workspace contact");
   return r;
 }
@@ -45,23 +45,23 @@ function links(i: Record<string, unknown>): Link[] | null {
 async function visibleLink(ctx: Ctx, pid: string, l: Link): Promise<{kind: string; ref: string; title: string; href: string} | null> {
   const tid = ctx.tenant!.id;
   if (l.kind === "item") {
-    const r = await ctx.db.prepare("SELECT w.number, w.title, CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) || '/' || p.slug END AS slug FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND w.project_id = ? AND w.id = ?").bind(tid, pid, l.ref).first<{number: number; title: string; slug: string}>();
+    const r = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:48:21:r*/ SELECT w.number, w.title, CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) || '/' || p.slug END AS slug FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND w.project_id = ? AND w.id = ?").bind(tid, pid, l.ref).first<{number: number; title: string; slug: string}>();
     return r ? {...l, title: r.title, href: `/${r.slug}/w/${r.number}`} : null;
   }
   if (l.kind === "mail") {
     const access = readableMail(ctx);
-    const r = await ctx.db.prepare(`SELECT m.subject FROM inbound_mail m WHERE m.id = ? AND ${access.sql}`).bind(l.ref, ...access.bindings).first<{subject: string}>();
+    const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcontacts.ts:53:21:r*/ SELECT m.subject FROM inbound_mail m WHERE m.id = ? AND ${access.sql}`).bind(l.ref, ...access.bindings).first<{subject: string}>();
     return r ? {...l, title: r.subject, href: `/mail/${encodeURIComponent(l.ref)}`} : null;
   }
   if (l.kind === "research") {
-    const r = await ctx.db.prepare(`SELECT r.title, CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) || '/' || p.slug END AS slug FROM wiki_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND r.project_id = ? AND r.slug = ? AND ${currentWiki} AND r.deleted = 0 AND r.research IS NOT NULL`).bind(tid, pid, l.ref).first<{title: string; slug: string}>();
+    const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcontacts.ts:57:21:r*/ SELECT r.title, CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) || '/' || p.slug END AS slug FROM wiki_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND r.project_id = ? AND r.slug = ? AND ${currentWiki} AND r.deleted = 0 AND r.research IS NOT NULL`).bind(tid, pid, l.ref).first<{title: string; slug: string}>();
     return r ? {...l, title: r.title, href: `/${r.slug}/wiki/${encodeURIComponent(l.ref)}`} : null;
   }
-  const r = await ctx.db.prepare(`SELECT r.name, CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) || '/' || p.slug END AS slug FROM file_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND r.project_id = ? AND r.path = ? AND ${currentFile} AND r.deleted = 0`).bind(tid, pid, filePath(l.ref)).first<{name: string; slug: string}>();
+  const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcontacts.ts:60:19:r*/ SELECT r.name, CASE WHEN p.namespace_id IS NULL THEN p.slug ELSE (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) || '/' || p.slug END AS slug FROM file_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE r.tenant_id = ? AND r.project_id = ? AND r.path = ? AND ${currentFile} AND r.deleted = 0`).bind(tid, pid, filePath(l.ref)).first<{name: string; slug: string}>();
   return r ? {...l, title: r.name, href: `/${r.slug}/documents?path=${encodeURIComponent(l.ref)}`} : null;
 }
 async function backlinks(ctx: Ctx, pid: string, id: string) {
-  const rows = (await ctx.db.prepare("SELECT kind, ref FROM contact_link WHERE tenant_id = ? AND project_id = ? AND entity_id = ? ORDER BY kind, ref LIMIT 201").bind(ctx.tenant!.id, pid, id).all<Link>()).results;
+  const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:64:23:rows*/ SELECT kind, ref FROM contact_link WHERE tenant_id = ? AND project_id = ? AND entity_id = ? ORDER BY kind, ref LIMIT 201").bind(ctx.tenant!.id, pid, id).all<Link>()).results;
   // Mail references, including identifiers, remain private to readers of that mailbox.
   const visible = await Promise.all(rows.slice(0, 200).map(l => visibleLink(ctx, pid, l)));
   return visible.filter((x): x is NonNullable<typeof x> => x !== null);
@@ -86,12 +86,12 @@ function upsert(kind: "person" | "company") {
       if (v.id) await entity(ctx, p.id, v.id, kind);
       for (const l of v.links ?? []) if (!await visibleLink(ctx, p.id, l)) throw notFound("no such readable workspace link");
       const id = v.id ?? ulid(ctx.now);
-      const statements = [v.id ? ctx.db.prepare("UPDATE contact_entity SET name = ?, data = CASE WHEN revision = ? THEN ? ELSE NULL END, revision = revision + 1, updated_at = ? WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(v.name, v.revision, JSON.stringify(v.data), ctx.now, tid, p.id, id) : ctx.db.prepare("INSERT INTO contact_entity (tenant_id, project_id, id, kind, name, data, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(tid, p.id, id, kind, v.name, JSON.stringify(v.data), ctx.now)];
+      const statements = [v.id ? ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:89:34:statements*/ UPDATE contact_entity SET name = ?, data = CASE WHEN revision = ? THEN ? ELSE NULL END, revision = revision + 1, updated_at = ? WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(v.name, v.revision, JSON.stringify(v.data), ctx.now, tid, p.id, id) : ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:89:362:statements*/ INSERT INTO contact_entity (tenant_id, project_id, id, kind, name, data, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(tid, p.id, id, kind, v.name, JSON.stringify(v.data), ctx.now)];
       if (v.links !== null) {
         const mail = readableMail(ctx);
         // Replace all readable associations, not just the first page; preserve private mailbox links.
-        statements.push(ctx.db.prepare(`DELETE FROM contact_link WHERE tenant_id = ? AND project_id = ? AND entity_id = ? AND (kind <> 'mail' OR EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = contact_link.ref AND ${mail.sql})) AND EXISTS (SELECT 1 FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ? AND revision = ?)`).bind(tid, p.id, id, ...mail.bindings, tid, p.id, id, (v.revision ?? 0) + 1));
-        for (const l of v.links) statements.push(ctx.db.prepare("INSERT OR IGNORE INTO contact_link (tenant_id, project_id, entity_id, kind, ref) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ? AND revision = ?)").bind(tid, p.id, id, l.kind, l.ref, tid, p.id, id, (v.revision ?? 0) + 1));
+        statements.push(ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcontacts.ts:93:25:upsert*/ DELETE FROM contact_link WHERE tenant_id = ? AND project_id = ? AND entity_id = ? AND (kind <> 'mail' OR EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = contact_link.ref AND ${mail.sql})) AND EXISTS (SELECT 1 FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ? AND revision = ?)`).bind(tid, p.id, id, ...mail.bindings, tid, p.id, id, (v.revision ?? 0) + 1));
+        for (const l of v.links) statements.push(ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:94:50:upsert*/ INSERT OR IGNORE INTO contact_link (tenant_id, project_id, entity_id, kind, ref) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ? AND revision = ?)").bind(tid, p.id, id, l.kind, l.ref, tid, p.id, id, (v.revision ?? 0) + 1));
       }
       const results = await ctx.db.batch(statements).catch((e: unknown) => {if (String(e).includes("NOT NULL")) throw conflict("stale contact edit: read before writing"); throw e;});
       if (!results[0]!.meta.changes) throw conflict("stale contact edit: read before writing");
@@ -107,7 +107,7 @@ function read(kind: "person" | "company") {
 function contactList(kind: "person" | "company") {
   return defineVerb({...base, name: `${kind}.list`, kind: "query", minRole: "reader", summary: `List workspace ${kind} contacts, optionally by name substring or tag; 200/page, ordered by ID.`, mcp: {scope: "read", destructive: false, title: `List ${kind} contacts`, input: schema({q: str, tag: str, after: str})}, parse: i => ({...projectRef(i), q: optString(i, "q", {max: 200}) ?? "", tag: optString(i, "tag", {max: 200}), after: optString(i, "after", {max: 100}) ?? ""}), run: async (ctx, v) => {
     const p = await contactProject(ctx, v.project);
-    const rows = (await ctx.db.prepare("SELECT id, kind, name, data, revision, updated_at FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND kind = ? AND id > ? AND instr(lower(name), lower(?)) > 0 AND (? IS NULL OR EXISTS (SELECT 1 FROM json_each(data, '$.tags') WHERE value = ?)) ORDER BY id LIMIT 201").bind(ctx.tenant!.id, p.id, kind, v.after, v.q, v.tag, v.tag).all<Contact>()).results;
+    const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:110:25:rows*/ SELECT id, kind, name, data, revision, updated_at FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND kind = ? AND id > ? AND instr(lower(name), lower(?)) > 0 AND (? IS NULL OR EXISTS (SELECT 1 FROM json_each(data, '$.tags') WHERE value = ?)) ORDER BY id LIMIT 201").bind(ctx.tenant!.id, p.id, kind, v.after, v.q, v.tag, v.tag).all<Contact>()).results;
     return {entities: rows.slice(0, 200).map(unpack), next_cursor: rows.length > 200 ? rows[199]!.id : null};
   }});
 }
@@ -126,24 +126,24 @@ export const connectionAdd = defineVerb({...base, name: "connection.add", kind: 
   const p = await contactProject(ctx, v.project, true);
   await entity(ctx, p.id, v.a); await entity(ctx, p.id, v.b);
   const c = {id: ulid(ctx.now), a: v.a, b: v.b, type: v.type, strength: v.strength, source: v.source, date: v.date ?? new Date(ctx.now).toISOString().slice(0, 10)};
-  await ctx.db.prepare("INSERT INTO contact_connection (tenant_id, project_id, id, a, b, type, strength, source, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(ctx.tenant!.id, p.id, c.id, c.a, c.b, c.type, c.strength, c.source, c.date).run();
+  await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:129:9:connectionAdd*/ INSERT INTO contact_connection (tenant_id, project_id, id, a, b, type, strength, source, date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(ctx.tenant!.id, p.id, c.id, c.a, c.b, c.type, c.strength, c.source, c.date).run();
   return {connection: c};
 }});
 export const connectionRemove = defineVerb({...base, name: "connection.remove", kind: "command", minRole: "member", summary: "Remove a workspace contact connection by ID.", mcp: {scope: "write", destructive: false, title: "Remove connection", input: schema({id: str}, ["project", "id"])}, parse: entityRef, run: async (ctx, v) => {
   const p = await contactProject(ctx, v.project, true);
-  const r = await ctx.db.prepare("DELETE FROM contact_connection WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(ctx.tenant!.id, p.id, v.id).run();
+  const r = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:134:19:r*/ DELETE FROM contact_connection WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(ctx.tenant!.id, p.id, v.id).run();
   if (!r.meta.changes) throw notFound("no such connection");
   return {removed: v.id};
 }});
 export const connectionList = defineVerb({...base, name: "connection.list", kind: "query", minRole: "reader", summary: "List workspace connections, optionally incident to an entity or of a type; 200/page.", mcp: {scope: "read", destructive: false, title: "List connections", input: schema({entity: str, type: str, after: str})}, parse: i => ({...projectRef(i), entity: optString(i, "entity", {max: 100}), type: optString(i, "type", {max: 100}), after: optString(i, "after", {max: 100}) ?? ""}), run: async (ctx, v) => {
   const p = await contactProject(ctx, v.project);
   if (v.entity) await entity(ctx, p.id, v.entity);
-  const rows = (await ctx.db.prepare("SELECT id, a, b, type, strength, source, date FROM contact_connection WHERE tenant_id = ? AND project_id = ? AND id > ? AND (? IS NULL OR a = ? OR b = ?) AND (? IS NULL OR type = ?) ORDER BY id LIMIT 201").bind(ctx.tenant!.id, p.id, v.after, v.entity, v.entity, v.entity, v.type, v.type).all<Connection>()).results;
+  const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:141:23:rows*/ SELECT id, a, b, type, strength, source, date FROM contact_connection WHERE tenant_id = ? AND project_id = ? AND id > ? AND (? IS NULL OR a = ? OR b = ?) AND (? IS NULL OR type = ?) ORDER BY id LIMIT 201").bind(ctx.tenant!.id, p.id, v.after, v.entity, v.entity, v.entity, v.type, v.type).all<Connection>()).results;
   return {connections: rows.slice(0, 200), next_cursor: rows.length > 200 ? rows[199]!.id : null};
 }});
 async function graph(ctx: Ctx, project: string) {
   const p = await contactProject(ctx, project);
-  const [nodes, edges] = await ctx.db.batch([ctx.db.prepare("SELECT id, kind, name, data, revision, updated_at FROM contact_entity WHERE tenant_id = ? AND project_id = ? ORDER BY id LIMIT 2001").bind(ctx.tenant!.id, p.id), ctx.db.prepare("SELECT id, a, b, type, strength, source, date FROM contact_connection WHERE tenant_id = ? AND project_id = ? ORDER BY id LIMIT 10001").bind(ctx.tenant!.id, p.id)]);
+  const [nodes, edges] = await ctx.db.batch([ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:146:46:%5Bnodes%2C%20edges%5D*/ SELECT id, kind, name, data, revision, updated_at FROM contact_entity WHERE tenant_id = ? AND project_id = ? ORDER BY id LIMIT 2001").bind(ctx.tenant!.id, p.id), ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:146:294:%5Bnodes%2C%20edges%5D*/ SELECT id, a, b, type, strength, source, date FROM contact_connection WHERE tenant_id = ? AND project_id = ? ORDER BY id LIMIT 10001").bind(ctx.tenant!.id, p.id)]);
   // Refuse oversized graphs rather than returning a false shortest path.
   if (nodes!.results.length > 2000 || edges!.results.length > 10000) throw badRequest("graph exceeds traversal limit (2000 entities, 10000 connections)");
   return {nodes: nodes!.results as Contact[], edges: edges!.results as Connection[]};
@@ -190,13 +190,13 @@ export const personMerge = defineVerb({...base, name: "person.merge", kind: "com
   // NOT NULL violation is an intentional atomic guard against edits between read and batch.
   try {
     await ctx.db.batch([
-      ctx.db.prepare("INSERT INTO contact_entity (tenant_id, project_id, id, kind, name, data, updated_at) SELECT ?, ?, ?, 'person', '', NULL, ? WHERE NOT EXISTS (SELECT 1 FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ?)").bind(tid, p.id, v.into, ctx.now, tid, p.id, v.into),
-      ctx.db.prepare("UPDATE contact_entity SET data = CASE WHEN revision = ? AND EXISTS (SELECT 1 FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ? AND revision = ?) THEN ? ELSE NULL END, revision = revision + 1, updated_at = ? WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(v.into_revision, tid, p.id, v.from, v.from_revision, JSON.stringify(b), ctx.now, tid, p.id, v.into),
-      ctx.db.prepare("DELETE FROM contact_connection WHERE tenant_id = ? AND project_id = ? AND ((a = ? AND b = ?) OR (a = ? AND b = ?))").bind(tid, p.id, v.from, v.into, v.into, v.from),
-      ctx.db.prepare("UPDATE contact_connection SET a = CASE WHEN a = ? THEN ? ELSE a END, b = CASE WHEN b = ? THEN ? ELSE b END WHERE tenant_id = ? AND project_id = ? AND (a = ? OR b = ?)").bind(v.from, v.into, v.from, v.into, tid, p.id, v.from, v.from),
-      ctx.db.prepare("INSERT OR IGNORE INTO contact_link (tenant_id, project_id, entity_id, kind, ref) SELECT tenant_id, project_id, ?, kind, ref FROM contact_link WHERE tenant_id = ? AND project_id = ? AND entity_id = ?").bind(v.into, tid, p.id, v.from),
-      ctx.db.prepare("DELETE FROM contact_link WHERE tenant_id = ? AND project_id = ? AND entity_id = ?").bind(tid, p.id, v.from),
-      ctx.db.prepare("DELETE FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(tid, p.id, v.from),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:193:7:personMerge*/ INSERT INTO contact_entity (tenant_id, project_id, id, kind, name, data, updated_at) SELECT ?, ?, ?, 'person', '', NULL, ? WHERE NOT EXISTS (SELECT 1 FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ?)").bind(tid, p.id, v.into, ctx.now, tid, p.id, v.into),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:194:7:personMerge*/ UPDATE contact_entity SET data = CASE WHEN revision = ? AND EXISTS (SELECT 1 FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ? AND revision = ?) THEN ? ELSE NULL END, revision = revision + 1, updated_at = ? WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(v.into_revision, tid, p.id, v.from, v.from_revision, JSON.stringify(b), ctx.now, tid, p.id, v.into),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:195:7:personMerge*/ DELETE FROM contact_connection WHERE tenant_id = ? AND project_id = ? AND ((a = ? AND b = ?) OR (a = ? AND b = ?))").bind(tid, p.id, v.from, v.into, v.into, v.from),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:196:7:personMerge*/ UPDATE contact_connection SET a = CASE WHEN a = ? THEN ? ELSE a END, b = CASE WHEN b = ? THEN ? ELSE b END WHERE tenant_id = ? AND project_id = ? AND (a = ? OR b = ?)").bind(v.from, v.into, v.from, v.into, tid, p.id, v.from, v.from),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:197:7:personMerge*/ INSERT OR IGNORE INTO contact_link (tenant_id, project_id, entity_id, kind, ref) SELECT tenant_id, project_id, ?, kind, ref FROM contact_link WHERE tenant_id = ? AND project_id = ? AND entity_id = ?").bind(v.into, tid, p.id, v.from),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:198:7:personMerge*/ DELETE FROM contact_link WHERE tenant_id = ? AND project_id = ? AND entity_id = ?").bind(tid, p.id, v.from),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcontacts.ts:199:7:personMerge*/ DELETE FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(tid, p.id, v.from),
     ]);
   } catch (e) {if (String(e).includes("NOT NULL")) throw conflict("stale merge: read both people"); throw e;}
   return {entity: unpack(await entity(ctx, p.id, v.into, "person")), merged: v.from, backlinks: await backlinks(ctx, p.id, v.into)};

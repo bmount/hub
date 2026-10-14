@@ -182,15 +182,15 @@ export class Inbox extends DurableObject<Env> {
 
   async webSocketClose(ws: WebSocket, code: number): Promise<void> {
     try { ws.close(code); } catch { /* already closed */ }
-    this.#storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('socket_disconnect', ?)", JSON.stringify({ state: ws.deserializeAttachment(), due: Date.now() + SOCKET_GRACE_MS }));
+    this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:185:webSocketClose*/ INSERT OR REPLACE INTO meta (key, value) VALUES ('socket_disconnect', ?)", JSON.stringify({ state: ws.deserializeAttachment(), due: Date.now() + SOCKET_GRACE_MS }));
     await this.#socketAlarm();
   }
 
   async webSocketError(ws: WebSocket): Promise<void> { await this.webSocketClose(ws, 1011); }
 
   #pruneUpdates(): void {
-    this.#storage.sql.exec("DELETE FROM chat_update WHERE created_at < ? OR update_id <= (SELECT COALESCE(MAX(update_id), 0) - 10000 FROM chat_update)", Date.now() - 7 * 86_400_000);
-    this.#storage.sql.exec("DELETE FROM update_delivered WHERE created_at < ?", Date.now() - 7 * 86_400_000);
+    this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:192:%23pruneUpdates*/ DELETE FROM chat_update WHERE created_at < ? OR update_id <= (SELECT COALESCE(MAX(update_id), 0) - 10000 FROM chat_update)", Date.now() - 7 * 86_400_000);
+    this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:193:%23pruneUpdates*/ DELETE FROM update_delivered WHERE created_at < ?", Date.now() - 7 * 86_400_000);
   }
 
   async #scheduleRetention(): Promise<void> {
@@ -217,7 +217,7 @@ export class Inbox extends DurableObject<Env> {
       const { state, due } = JSON.parse(pending.value) as { state: SocketState; due: number };
       if (Date.now() >= due) {
         if (!this.ctx.getWebSockets().some(ws => ws.readyState === WebSocket.OPEN)) await this.#presence(state, 'offline').catch(() => {});
-        this.#storage.sql.exec("DELETE FROM meta WHERE key = 'socket_disconnect'");
+        this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:220:alarm*/ DELETE FROM meta WHERE key = 'socket_disconnect'");
       }
     }
     await this.#socketAlarm();
@@ -231,7 +231,7 @@ export class Inbox extends DurableObject<Env> {
       for (const update of updates) {
         if (update.created_at < Date.now() - 7 * 86_400_000) continue;
         const fresh = this.#q("INSERT INTO update_delivered (key, created_at) VALUES (?, ?) ON CONFLICT(key) DO NOTHING RETURNING key", update.key, update.created_at);
-        if (fresh.length) this.#storage.sql.exec("INSERT INTO chat_update (key, payload, created_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING", update.key, JSON.stringify({ type: update.type, chat: update.chat, data: update.data }), update.created_at);
+        if (fresh.length) this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:234:deliverUpdates*/ INSERT INTO chat_update (key, payload, created_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING", update.key, JSON.stringify({ type: update.type, chat: update.chat, data: update.data }), update.created_at);
       }
       this.#pruneUpdates();
     });
@@ -298,9 +298,9 @@ export class Inbox extends DurableObject<Env> {
     bindOnce(this.#storage.sql, tenant_id, identity_id);
     for (const ws of this.ctx.getWebSockets()) ws.close(1008, 'organization deleted');
     this.#storage.transactionSync(() => {
-      this.#storage.sql.exec("DELETE FROM meta WHERE key = 'socket_disconnect'");
+      this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:301:purgeTenant*/ DELETE FROM meta WHERE key = 'socket_disconnect'");
       for (const table of ["item", "cursor", "mail_delivered", "chat_update", "update_delivered"]) this.#storage.sql.exec(`DELETE FROM ${table}`);
-      this.#storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('deleted', '1')");
+      this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:303:purgeTenant*/ INSERT OR REPLACE INTO meta (key, value) VALUES ('deleted', '1')");
     });
   }
 
@@ -310,9 +310,9 @@ export class Inbox extends DurableObject<Env> {
     return this.#storage.transactionSync(() => {
       const channels = JSON.stringify(conversations), messages = JSON.stringify(mail);
       const rows = this.#q<{ item_seq: number }>("DELETE FROM item WHERE conversation_id IN (SELECT value FROM json_each(?)) OR (kind = 'mail' AND msg_id IN (SELECT value FROM json_each(?))) RETURNING item_seq", channels, messages);
-      this.#storage.sql.exec("DELETE FROM cursor WHERE conversation_id IN (SELECT value FROM json_each(?))", channels);
-      this.#storage.sql.exec("DELETE FROM chat_update WHERE json_extract(payload, '$.chat.id') IN (SELECT value FROM json_each(?))", channels);
-      this.#storage.sql.exec("DELETE FROM mail_delivered WHERE key IN (SELECT 'mail:' || value FROM json_each(?))", messages);
+      this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:313:purgeProject*/ DELETE FROM cursor WHERE conversation_id IN (SELECT value FROM json_each(?))", channels);
+      this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:314:purgeProject*/ DELETE FROM chat_update WHERE json_extract(payload, '$.chat.id') IN (SELECT value FROM json_each(?))", channels);
+      this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:315:purgeProject*/ DELETE FROM mail_delivered WHERE key IN (SELECT 'mail:' || value FROM json_each(?))", messages);
       return rows.length;
     });
   }
@@ -332,7 +332,7 @@ export class Inbox extends DurableObject<Env> {
     bindOnce(this.#storage.sql, tenant_id, identity_id);
     if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) return 0;
     // Acked items are kept 30 days (they show with include_acked), then pruned.
-    this.#storage.sql.exec("DELETE FROM item WHERE acked_at IS NOT NULL AND acked_at < ?", Date.now() - LIMITS.INBOX_ACKED_KEEP_MS);
+    this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:335:deliver*/ DELETE FROM item WHERE acked_at IS NOT NULL AND acked_at < ?", Date.now() - LIMITS.INBOX_ACKED_KEEP_MS);
     let added = 0;
     for (const it of items) {
       added += this.#storage.transactionSync(() => {
@@ -387,7 +387,7 @@ export class Inbox extends DurableObject<Env> {
   async ack(tenant_id: string, identity_id: string, through: number, now: number): Promise<number> {
     bindOnce(this.#storage.sql, tenant_id, identity_id);
     const n = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM item WHERE item_seq <= ? AND acked_at IS NULL", through)[0]!.n;
-    this.#storage.sql.exec("UPDATE item SET acked_at = ? WHERE item_seq <= ? AND acked_at IS NULL", now, through);
+    this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:390:ack*/ UPDATE item SET acked_at = ? WHERE item_seq <= ? AND acked_at IS NULL", now, through);
     return n;
   }
 
@@ -438,7 +438,7 @@ export class Inbox extends DurableObject<Env> {
   async markRead(tenant_id: string, identity_id: string, conversation_id: string, seq: number): Promise<number> {
     bindOnce(this.#storage.sql, tenant_id, identity_id);
     this.#storage.sql.exec(
-      "INSERT INTO cursor (conversation_id, read_seq) VALUES (?, ?) ON CONFLICT (conversation_id) DO UPDATE SET read_seq = MAX(read_seq, excluded.read_seq)",
+      "/*perf-site:src%2Fchat%2FinboxDO.ts:440:markRead*/ INSERT INTO cursor (conversation_id, read_seq) VALUES (?, ?) ON CONFLICT (conversation_id) DO UPDATE SET read_seq = MAX(read_seq, excluded.read_seq)",
       conversation_id, seq,
     );
     return this.#q<{ read_seq: number }>("SELECT read_seq FROM cursor WHERE conversation_id = ?", conversation_id)[0]!.read_seq;
@@ -451,12 +451,12 @@ export class Inbox extends DurableObject<Env> {
    */
   async reserve(tenant_id: string, identity_id: string, q: { session_id: string; is_agent: boolean; conversation_id: string; now: number }): Promise<ReserveResult> {
     bindOnce(this.#storage.sql, tenant_id, identity_id);
-    this.#storage.sql.exec("DELETE FROM stamp WHERE at < ?", q.now - 86_400_000);
+    this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:454:reserve*/ DELETE FROM stamp WHERE at < ?", q.now - 86_400_000);
     const stamps = (scope: string) => this.#q<{ at: number }>("SELECT at FROM stamp WHERE scope = ?", scope).map((r) => r.at);
     const session = `session:${q.session_id}`;
     const v = postVerdict({ is_agent: q.is_agent, session: stamps(session), identity: stamps("identity"), now: q.now });
     if (!v.ok) return v;
-    this.#storage.sql.exec("INSERT INTO stamp (scope, at) VALUES (?, ?), ('identity', ?)", session, q.now, q.now);
+    this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:459:reserve*/ INSERT INTO stamp (scope, at) VALUES (?, ?), ('identity', ?)", session, q.now, q.now);
     const w = this.#q<{ hop: number }>(
       "SELECT hop FROM item WHERE wake = 1 AND created_at > ? AND conversation_id = ? ORDER BY item_seq DESC LIMIT 1", q.now - LIMITS.WAKE_HOP_WINDOW_MS, q.conversation_id,
     )[0];
@@ -471,11 +471,11 @@ export class Inbox extends DurableObject<Env> {
   /** Counts a refusal; the one that makes more than 20 in an hour trips the wire and clears the window, so it can trip again after an unmute. */
   async noteRefusal(tenant_id: string, identity_id: string, now: number): Promise<{ count: number; tripped: boolean }> {
     bindOnce(this.#storage.sql, tenant_id, identity_id);
-    this.#storage.sql.exec("DELETE FROM refusal WHERE at <= ?", now - 3_600_000);
-    this.#storage.sql.exec("INSERT INTO refusal (at) VALUES (?)", now);
+    this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:474:noteRefusal*/ DELETE FROM refusal WHERE at <= ?", now - 3_600_000);
+    this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:475:noteRefusal*/ INSERT INTO refusal (at) VALUES (?)", now);
     const count = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM refusal")[0]!.n;
     const tripped = count > LIMITS.TRIPWIRE_REFUSALS;
-    if (tripped) this.#storage.sql.exec("DELETE FROM refusal");
+    if (tripped) this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:478:noteRefusal*/ DELETE FROM refusal");
     return { count, tripped };
   }
 }

@@ -49,7 +49,7 @@ export const mailList = defineVerb({
     if (p.quarantined && !canInspectMail(ctx)) throw notFound();
     const access = readableMail(ctx);
     const r = await ctx.db.prepare(
-      `SELECT m.id, m.project_id, pr.slug AS project, m.from_email, m.to_address, m.subject, m.sent_at, m.received_at, m.size, m.verdict, m.reason, m.forwarded, m.attachments
+      `/*perf-site:src%2Fverbs%2Fmail.ts:51:21:r*/ SELECT m.id, m.project_id, pr.slug AS project, m.from_email, m.to_address, m.subject, m.sent_at, m.received_at, m.size, m.verdict, m.reason, m.forwarded, m.attachments
        FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id
        WHERE ${access.sql} AND m.verdict = ? AND (? IS NULL OR pr.slug = ?) AND (? = 0 OR m.recipient_id = ?) ORDER BY m.received_at DESC LIMIT ?`,
     ).bind(...access.bindings, p.quarantined ? "quarantined" : "admitted", p.project, p.project, p.mine ? 1 : 0, ctx.identity!.id, p.limit).all<MailRow>();
@@ -88,7 +88,7 @@ export const mailRead = defineVerb({
   run: async (ctx, p) => {
     const access = readableMail(ctx);
     const m = await ctx.db.prepare(
-      `SELECT m.*, pr.slug AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id WHERE m.id = ? AND ${access.sql}`,
+      `/*perf-site:src%2Fverbs%2Fmail.ts:90:21:m*/ SELECT m.*, pr.slug AS project FROM inbound_mail m LEFT JOIN project pr ON pr.id = m.project_id WHERE m.id = ? AND ${access.sql}`,
     ).bind(p.id, ...access.bindings).first<MailRow>();
     if (!m) throw notFound();
     const related = await mailWorkStatement(ctx, m.id).all<MailWorkItem>();
@@ -101,7 +101,7 @@ export const mailRelease = defineVerb({
   summary: "Release a quarantined message after reading it, when you are sure who sent it.",
   parse: (i) => ({ id: reqString(i, "id", { max: 40 }) }),
   run: async (ctx, p) => {
-    const r = await ctx.db.prepare("UPDATE inbound_mail SET verdict = 'admitted', released_by = ?, released_at = ? WHERE id = ? AND tenant_id = ? AND verdict = 'quarantined'")
+    const r = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fmail.ts:104:21:r*/ UPDATE inbound_mail SET verdict = 'admitted', released_by = ?, released_at = ? WHERE id = ? AND tenant_id = ? AND verdict = 'quarantined'")
       .bind(ctx.identity!.id, ctx.now, p.id, ctx.tenant!.id).run();
     if (r.meta.changes !== 1) throw conflict("no quarantined message with that id");
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "mail.release", target_kind: "inbound_mail", target_id: p.id, summary: "Released a quarantined message" }, ctx.now);
@@ -127,7 +127,7 @@ export const mailProposeWork = defineVerb({
   parse: (i) => ({ id: reqString(i, "id", { max: 40 }) }),
   run: async (ctx, p): Promise<ProposeResult> => {
     const access = readableMail(ctx);
-    const m = await ctx.db.prepare(`SELECT m.id, m.subject, m.from_email, m.text, m.verdict, pr.slug AS project, pr.display_name AS project_name FROM inbound_mail m
+    const m = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fmail.ts:130:21:m*/ SELECT m.id, m.subject, m.from_email, m.text, m.verdict, pr.slug AS project, pr.display_name AS project_name FROM inbound_mail m
       LEFT JOIN project pr ON pr.id = m.project_id WHERE m.id = ? AND ${access.sql}`).bind(p.id, ...access.bindings)
       .first<{ id: string; subject: string; from_email: string; text: string; verdict: string; project: string | null; project_name: string | null }>();
     if (!m || m.verdict !== "admitted") throw notFound();
@@ -137,7 +137,7 @@ export const mailProposeWork = defineVerb({
       tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, instructions: PROPOSE_INSTRUCTIONS, maxOutputTokens: 6000,
     });
     const { proposals, dropped } = parseProposals(answer.text, m.text);
-    const projects = (await ctx.db.prepare("SELECT slug FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY slug").bind(ctx.tenant!.id).all<{ slug: string }>()).results.map((r) => r.slug);
+    const projects = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fmail.ts:140:29:projects*/ SELECT slug FROM project WHERE tenant_id = ? AND state = 'active' AND kind NOT IN ('channel', 'agent-src') ORDER BY slug").bind(ctx.tenant!.id).all<{ slug: string }>()).results.map((r) => r.slug);
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "mail.propose_work", target_kind: "inbound_mail", target_id: m.id, summary: `Proposed ${proposals.length} work items from mail: ${m.subject || "(no subject)"}`.slice(0, 300) }, ctx.now);
     return { mail_id: m.id, subject: m.subject, project: m.project, projects, proposals, dropped, model: `${answer.provider} ${answer.model}` };
   },

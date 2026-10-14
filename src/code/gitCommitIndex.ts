@@ -7,7 +7,7 @@ export async function indexCommitNodes(db: D1Database, tenantId: string, project
   const generations = new Map<string, number>(), needed = [...new Set(nodes.flatMap(node => node.parents))];
   for (let offset = 0; offset < needed.length; offset += 100) {
     const ids = needed.slice(offset, offset + 100);
-    const rows = (await db.prepare(`SELECT oid, generation FROM git_commit WHERE tenant_id = ? AND project_id = ? AND oid IN (${ids.map(() => "?").join(",")})`)
+    const rows = (await db.prepare(`/*perf-site:src%2Fcode%2FgitCommitIndex.ts:10:25:rows*/ SELECT oid, generation FROM git_commit WHERE tenant_id = ? AND project_id = ? AND oid IN (${ids.map(() => "?").join(",")})`)
       .bind(tenantId, projectId, ...ids).all<{ oid: string; generation: number }>()).results;
     for (const row of rows) generations.set(row.oid, row.generation);
   }
@@ -18,7 +18,7 @@ export async function indexCommitNodes(db: D1Database, tenantId: string, project
       if (node.parents.some(parent => !generations.has(parent))) continue;
       const generation = 1 + Math.max(0, ...node.parents.map(parent => generations.get(parent)!));
       generations.set(hash, generation);pending.delete(hash);progress = true;
-      ready.push(db.prepare("INSERT OR IGNORE INTO git_commit (tenant_id, project_id, oid, tree_hash, parents_json, generation, commit_time) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      ready.push(db.prepare("/*perf-site:src%2Fcode%2FgitCommitIndex.ts:21:18:indexCommitNodes*/ INSERT OR IGNORE INTO git_commit (tenant_id, project_id, oid, tree_hash, parents_json, generation, commit_time) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .bind(tenantId, projectId, hash, node.treeHash, JSON.stringify(node.parents), generation, node.committedAt));
     }
     if (!progress) throw new HubError(503, "unavailable", "repository history metadata is incomplete");

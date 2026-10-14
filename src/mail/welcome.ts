@@ -30,7 +30,7 @@ const validIds = (s: WelcomeSource) => Object.values(s).every((id) => /^[0-9A-HJ
  */
 export async function sendNewcomerWelcome(env: Env, source: WelcomeSource, proof: DkimProof, now: number): Promise<WelcomeResult> {
   if (!validIds(source) || proof.authentication !== "pass" || proof.source !== "aligned_dkim") return "ineligible";
-  const row = await env.HUB_DB.prepare(`SELECT m.from_email, m.to_address, m.project_id, m.recipient_id FROM inbound_mail m
+  const row = await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Fwelcome.ts:33:21:row*/ SELECT m.from_email, m.to_address, m.project_id, m.recipient_id FROM inbound_mail m
     JOIN identity i ON i.id = m.identity_id JOIN tenant t ON t.id = m.tenant_id
     WHERE m.id = ? AND m.tenant_id = ? AND m.identity_id = ?
       AND m.verdict = 'admitted' AND m.reason IS NULL AND m.released_by IS NULL
@@ -48,7 +48,7 @@ export async function sendNewcomerWelcome(env: Env, source: WelcomeSource, proof
   // Only absence/valid explicit empty can establish "no configured recipients".
   // Stale nonempty and corrupt preferences are NOT evidence of absence.
   const preferenceKey = `${RESPONSE_RECIPIENT_PREFIX}${source.tenant_id}:${target.project_id ?? "org"}`;
-  const preferenceRaw = target.recipient_id ? null : (await env.HUB_DB.prepare("SELECT value FROM meta WHERE key = ?")
+  const preferenceRaw = target.recipient_id ? null : (await env.HUB_DB.prepare("/*perf-site:src%2Fmail%2Fwelcome.ts:51:61:preferenceRaw*/ SELECT value FROM meta WHERE key = ?")
     .bind(preferenceKey).first<{ value: string }>())?.value ?? null;
   const config = decodeResponseRecipients(preferenceRaw);
   const setup = !target.recipient_id && (preferenceRaw === null || config?.recipients.length === 0);
@@ -56,7 +56,7 @@ export async function sendNewcomerWelcome(env: Env, source: WelcomeSource, proof
     status: "pending", completed_at: null, setup_guidance: setup ? "no_configured_recipients" : "not_applicable" };
   // Uniqueness is enforced by the primary key, not a read-then-write check.
   // Repeat eligibility inside the atomic write to handle membership/consent races.
-  const reserved = await env.HUB_DB.prepare(`INSERT INTO meta (key, value)
+  const reserved = await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Fwelcome.ts:59:26:reserved*/ INSERT INTO meta (key, value)
     SELECT ?, ? FROM inbound_mail m JOIN identity i ON i.id = m.identity_id
       JOIN tenant t ON t.id = m.tenant_id
     WHERE m.id = ? AND m.tenant_id = ? AND m.identity_id = ?
@@ -83,7 +83,7 @@ export async function sendNewcomerWelcome(env: Env, source: WelcomeSource, proof
       env.HUB_DOMAIN.toLowerCase(), env.HUB_DOMAIN.toLowerCase(),
       target.recipient_id ? 1 : 0, preferenceKey, preferenceRaw).run();
   if (reserved.meta.changes !== 1) {
-    return await env.HUB_DB.prepare("SELECT 1 FROM meta WHERE key = ?").bind(keyFor(source)).first()
+    return await env.HUB_DB.prepare("/*perf-site:src%2Fmail%2Fwelcome.ts:86:18:sendNewcomerWelcome*/ SELECT 1 FROM meta WHERE key = ?").bind(keyFor(source)).first()
       ? "already_reserved" : "ineligible";
   }
   const where = target.recipient_name ? "an agent mailbox" : target.project_name ? "a project inbox" : "the organization inbox";
@@ -101,7 +101,7 @@ export async function sendNewcomerWelcome(env: Env, source: WelcomeSource, proof
   }, now);
   state.status = result === "unknown" ? "failed" : result; state.completed_at = Math.max(now, Date.now());
   // Only this attempt can finalize; no late/stale writer can change a terminal result.
-  await env.HUB_DB.prepare(`UPDATE meta SET value = ? WHERE key = ?
+  await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Fwelcome.ts:104:9:sendNewcomerWelcome*/ UPDATE meta SET value = ? WHERE key = ?
     AND json_extract(value, '$.attempt_id') = ? AND json_extract(value, '$.status') = 'pending'`)
     .bind(JSON.stringify(state), keyFor(source), state.attempt_id).run();
   return state.status;

@@ -47,7 +47,7 @@ function beforeReserve(change: () => Promise<void>): Env {
   const db = new Proxy(env.HUB_DB, { get(target, prop) {
     if (prop === "prepare") return (sql: string) => {
       const stmt = target.prepare(sql);
-      if (!sql.startsWith("INSERT INTO meta")) return stmt;
+      if (!sql.replace(/^\/\*perf-site:[^*]+\*\/\s*/, "").startsWith("INSERT INTO meta")) return stmt;
       return new Proxy(stmt, { get(s, p) {
         if (p === "bind") return (...args: unknown[]) => {
           const bound = s.bind(...args);

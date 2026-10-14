@@ -75,10 +75,10 @@ export async function createAgent(
     made = await db.batch([
       // Projects and agents share one name space per organization (mailboxes spec, amendment 2026-10-07 b); the check
       // is inside the insert, so a project created at the same moment cannot also win the name.
-      db.prepare(`INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) SELECT ?, 'agent', ?, 0, ?, ?, 'active', ?
+      db.prepare(`/*perf-site:src%2Fdb%2Fagents.ts:78:7:createAgent*/ INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) SELECT ?, 'agent', ?, 0, ?, ?, 'active', ?
         WHERE NOT EXISTS (SELECT 1 FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src'))`)
         .bind(identity.id, display_name, email, input.operator_id, now, input.tenant.id, slug),
-      db.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) SELECT ?, ?, ?, ?, 'active', ? WHERE EXISTS (SELECT 1 FROM identity WHERE id = ?)")
+      db.prepare("/*perf-site:src%2Fdb%2Fagents.ts:81:7:createAgent*/ INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) SELECT ?, ?, ?, ?, 'active', ? WHERE EXISTS (SELECT 1 FROM identity WHERE id = ?)")
         .bind(membership.id, identity.id, input.tenant.id, input.role, now, identity.id),
     ]);
   } catch (e) {
@@ -90,22 +90,22 @@ export async function createAgent(
 }
 
 export async function getAgentById(db: D1Database, id: string): Promise<Agent | null> {
-  const row = await db.prepare(`${AGENT_SELECT} AND i.id = ?`).bind(id).first<Row>();
+  const row = await db.prepare(`/*perf-site:src%2Fdb%2Fagents.ts:93:21:row*/ ${AGENT_SELECT} AND i.id = ?`).bind(id).first<Row>();
   return row ? toAgent(row) : null;
 }
 
 export async function getAgentBySlug(db: D1Database, tenant: Tenant, slug: string, hubDomain: string): Promise<Agent | null> {
-  const row = await db.prepare(`${AGENT_SELECT} AND i.email = ?`).bind(agentAddress(slug.trim().toLowerCase(), tenant.slug, hubDomain)).first<Row>();
+  const row = await db.prepare(`/*perf-site:src%2Fdb%2Fagents.ts:98:21:row*/ ${AGENT_SELECT} AND i.email = ?`).bind(agentAddress(slug.trim().toLowerCase(), tenant.slug, hubDomain)).first<Row>();
   return row ? toAgent(row) : null;
 }
 
 export async function listAgentsForTenant(db: D1Database, tenant_id: string, state: State): Promise<Agent[]> {
-  const r = await db.prepare(`${AGENT_SELECT} AND t.id = ? AND i.state = ? ORDER BY i.email`).bind(tenant_id, state).all<Row>();
+  const r = await db.prepare(`/*perf-site:src%2Fdb%2Fagents.ts:103:19:r*/ ${AGENT_SELECT} AND t.id = ? AND i.state = ? ORDER BY i.email`).bind(tenant_id, state).all<Row>();
   return r.results.map(toAgent);
 }
 
 export async function listAgentsForOperator(db: D1Database, operator_id: string): Promise<Agent[]> {
-  const r = await db.prepare(`${AGENT_SELECT} AND i.operator_id = ? AND i.state = 'active' AND t.state = 'active' ORDER BY t.slug, i.email`)
+  const r = await db.prepare(`/*perf-site:src%2Fdb%2Fagents.ts:108:19:r*/ ${AGENT_SELECT} AND i.operator_id = ? AND i.state = 'active' AND t.state = 'active' ORDER BY t.slug, i.email`)
     .bind(operator_id).all<Row>();
   return r.results.map(toAgent);
 }
@@ -113,17 +113,17 @@ export async function listAgentsForOperator(db: D1Database, operator_id: string)
 /** Archive the agent and revoke every token and session it holds, in one batch (spec 6.5 cascade). */
 export async function archiveAgent(db: D1Database, agent_id: string, now: number): Promise<{ archived: boolean; tokens: number; sessions: number }> {
   const r = await db.batch([
-    db.prepare("UPDATE identity SET state = 'archived' WHERE id = ? AND kind = 'agent' AND state = 'active'").bind(agent_id),
-    db.prepare("UPDATE api_token SET revoked_at = ? WHERE identity_id = ? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM identity WHERE id = ? AND kind = 'agent')").bind(now, agent_id, agent_id),
-    db.prepare("UPDATE session SET revoked_at = ? WHERE identity_id = ? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM identity WHERE id = ? AND kind = 'agent')").bind(now, agent_id, agent_id),
+    db.prepare("/*perf-site:src%2Fdb%2Fagents.ts:116:5:r*/ UPDATE identity SET state = 'archived' WHERE id = ? AND kind = 'agent' AND state = 'active'").bind(agent_id),
+    db.prepare("/*perf-site:src%2Fdb%2Fagents.ts:117:5:r*/ UPDATE api_token SET revoked_at = ? WHERE identity_id = ? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM identity WHERE id = ? AND kind = 'agent')").bind(now, agent_id, agent_id),
+    db.prepare("/*perf-site:src%2Fdb%2Fagents.ts:118:5:r*/ UPDATE session SET revoked_at = ? WHERE identity_id = ? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM identity WHERE id = ? AND kind = 'agent')").bind(now, agent_id, agent_id),
   ]);
   return { archived: r[0]!.meta.changes === 1, tokens: r[1]!.meta.changes, sessions: r[2]!.meta.changes };
 }
 
 export async function tenantAgentActivity(db: D1Database, tenant_id: string, now: number): Promise<Map<string, { tokens: number; runs: number }>> {
   const [tokens, runs] = await db.batch<{ identity_id: string; n: number }>([
-    db.prepare("SELECT identity_id, COUNT(*) AS n FROM api_token WHERE tenant_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?) GROUP BY identity_id").bind(tenant_id, now),
-    db.prepare("SELECT identity_id, COUNT(*) AS n FROM session WHERE tenant_id = ? AND kind = 'agent_run' AND revoked_at IS NULL AND expires_at > ? GROUP BY identity_id").bind(tenant_id, now),
+    db.prepare("/*perf-site:src%2Fdb%2Fagents.ts:125:5:%5Btokens%2C%20runs%5D*/ SELECT identity_id, COUNT(*) AS n FROM api_token WHERE tenant_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?) GROUP BY identity_id").bind(tenant_id, now),
+    db.prepare("/*perf-site:src%2Fdb%2Fagents.ts:126:5:%5Btokens%2C%20runs%5D*/ SELECT identity_id, COUNT(*) AS n FROM session WHERE tenant_id = ? AND kind = 'agent_run' AND revoked_at IS NULL AND expires_at > ? GROUP BY identity_id").bind(tenant_id, now),
   ]);
   const out = new Map<string, { tokens: number; runs: number }>();
   const slot = (id: string) => out.get(id) ?? out.set(id, { tokens: 0, runs: 0 }).get(id)!;

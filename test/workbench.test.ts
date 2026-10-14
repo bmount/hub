@@ -158,7 +158,8 @@ describe("the workbench", () => {
     const points: Parameters<AnalyticsEngineDataset["writeDataPoint"]>[0][] = [];
     const measured = {...env, WORKER_VERSION:{id:"test-version",tag:"",timestamp:""}, PERF:{writeDataPoint:(p: Parameters<AnalyticsEngineDataset["writeDataPoint"]>[0]) => points.push(p)} as unknown as AnalyticsEngineDataset};
     const request = crypto.randomUUID();
-    const payload = [{path:"/:project/docket",previous:"/",name:"docket.select",phase:"paint",request,duration:12.5}];
+    const at=Date.now()-12.5;
+    const payload = [{path:"/:project/docket",previous:"/",name:"docket.select",phase:"paint",request,duration:12.5,at}];
     async function send(body: unknown = payload, headers: Record<string,string> = {}) {
       const pending: Promise<unknown>[] = [];
       const res = await clientTiming(new Request(`https://${HOST}/client/timing`,{method:"POST",headers:{...w.h,origin:`https://${HOST}`,...headers},body:JSON.stringify(body)}),measured,p=>pending.push(p));
@@ -166,9 +167,11 @@ describe("the workbench", () => {
     }
     expect((await send()).status).toBe(204);
     expect(points).toHaveLength(1);
-    expect(points[0]!.blobs).toEqual(["pimwell.com","pimwell-hub","test-version","",expect.stringMatching(/^[0-9a-f]{32}$/),request,"client","/:project/docket","paint","","cookie","","","docket.select","","","","","/"]);
+    expect(points[0]!.blobs).toEqual(["pimwell.com","pimwell-hub","test-version","",expect.stringMatching(/^[0-9a-f]{32}$/),request,"client","/:project/docket","paint","","cookie","","","docket.select","","","","","/",JSON.stringify({file:"src/clientTimingScript.ts",line:19,fn:"point"})]);
     expect(points[0]!.doubles?.[0]).toBe(12.5);
-    for (const change of [{path:"/secret?q=mail"},{previous:"/private"},{name:"secret"},{phase:"secret"},{request:"secret"},{duration:-1},{duration:3600001},{duration:null},{text:"private"},{tenant:w.t.id},{version:"spoof"}]) expect((await send([{...payload[0],...change}])).status).toBe(400);
+    expect(points[0]!.doubles?.[15]).toBe(at);
+    expect(points[0]!.doubles?.[19]).toBe(2);
+    for (const change of [{path:"/secret?q=mail"},{previous:"/private"},{name:"secret"},{phase:"secret"},{request:"secret"},{duration:-1},{duration:3600001},{duration:null},{at:0},{at:"bad"},{at:Date.now()-86_460_000},{at:Date.now()+86_460_000},{text:"private"},{tenant:w.t.id},{version:"spoof"}]) expect((await send([{...payload[0],...change}])).status).toBe(400);
     for (const body of [null,{},[],Array(101).fill(payload[0]),["x"], "x".repeat(33000)]) expect((await send(body)).status).toBe(400);
     for (const headers of [{origin:"https://evil.test"},{cookie:""},{cookie:"",authorization:`Bearer ${w.pat.token}`}] as Record<string,string>[]) expect((await send(payload,headers)).status).toBe(403);
     expect(points).toHaveLength(1);

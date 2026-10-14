@@ -45,13 +45,13 @@ export const researchSave = defineVerb({ ...base, name: "research.save", kind: "
   }, run: async (ctx, v) => {
     const p = await workspace(ctx, v.project, true);
     for (const id of v.research.people) {
-      if (!await ctx.db.prepare("SELECT 1 FROM membership WHERE tenant_id = ? AND identity_id = ? AND state = 'active'").bind(ctx.tenant!.id, id).first()) throw notFound("no such organization person");
+      if (!await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fresearch.ts:48:18:researchSave*/ SELECT 1 FROM membership WHERE tenant_id = ? AND identity_id = ? AND state = 'active'").bind(ctx.tenant!.id, id).first()) throw notFound("no such organization person");
     }
     for (const ref of v.research.items) {
       const m = /^([a-z0-9]+(?:-[a-z0-9]+)*)#([1-9][0-9]*)$/.exec(ref);
-      if (!m || !await ctx.db.prepare("SELECT 1 FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND p.slug = ? AND w.number = ?").bind(ctx.tenant!.id, m[1], Number(m[2])).first()) throw notFound("no such organization item");
+      if (!m || !await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fresearch.ts:52:24:researchSave*/ SELECT 1 FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id WHERE w.tenant_id = ? AND p.slug = ? AND w.number = ?").bind(ctx.tenant!.id, m[1], Number(m[2])).first()) throw notFound("no such organization item");
     }
-    for (const s of v.research.sources) if (s.file && !await ctx.db.prepare("SELECT 1 FROM file_revision r WHERE tenant_id = ? AND project_id = ? AND path = ? AND revision = (SELECT MAX(h.revision) FROM file_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.path = r.path) AND deleted = 0").bind(ctx.tenant!.id, p.id, s.file).first()) throw notFound("no such workspace file");
+    for (const s of v.research.sources) if (s.file && !await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fresearch.ts:54:62:researchSave*/ SELECT 1 FROM file_revision r WHERE tenant_id = ? AND project_id = ? AND path = ? AND revision = (SELECT MAX(h.revision) FROM file_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.path = r.path) AND deleted = 0").bind(ctx.tenant!.id, p.id, s.file).first()) throw notFound("no such workspace file");
     // A text projection keeps all structured fields in the existing wiki search index.
     const body = `${v.research.summary}\n\nStatus: ${v.research.status}\n\nSources\n${v.research.sources.map(s => `${s.title}\n${s.url ?? s.file}\nRetrieved: ${s.retrieved_at}\n${s.quote}`).join("\n\n")}\n\nPeople: ${v.research.people.join(", ")}\nOrganizations: ${v.research.orgs.join(", ")}\nItems: ${v.research.items.join(", ")}`;
     return appendWiki(ctx, {...v, title: v.research.topic, body, research: JSON.stringify(v.research)});
@@ -68,7 +68,7 @@ export const researchList = defineVerb({ ...base, name: "research.list", kind: "
   if (v.topic) {clauses.push("instr(lower(json_extract(r.research, '$.topic')), lower(?)) > 0"); args.push(v.topic);}
   if (v.status) {clauses.push("json_extract(r.research, '$.status') = ?"); args.push(v.status);}
   for (const [key, value] of [["people", v.person], ["orgs", v.org]] as const) if (value) {clauses.push(`EXISTS (SELECT 1 FROM json_each(r.research, '$.${key}') WHERE value = ?)`); args.push(value);}
-  const rows = (await ctx.db.prepare(`SELECT r.slug, r.revision, r.research, r.author_id, i.display_name AS author, r.created_at FROM wiki_revision r JOIN identity i ON i.id = r.author_id WHERE ${clauses.join(" AND ")} ORDER BY r.slug LIMIT 201`).bind(...args).all<{slug: string; revision: number; research: string; author_id: string; author: string; created_at: number}>()).results;
+  const rows = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fresearch.ts:71:23:rows*/ SELECT r.slug, r.revision, r.research, r.author_id, i.display_name AS author, r.created_at FROM wiki_revision r JOIN identity i ON i.id = r.author_id WHERE ${clauses.join(" AND ")} ORDER BY r.slug LIMIT 201`).bind(...args).all<{slug: string; revision: number; research: string; author_id: string; author: string; created_at: number}>()).results;
   return {results: rows.slice(0, 200).map(({research, ...r}) => ({...r, ...JSON.parse(research) as Research})), next_cursor: rows.length > 200 ? rows[199]!.slug : null};
 }});
 export const researchVerbs = [researchSave, researchList];

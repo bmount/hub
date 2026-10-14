@@ -15,9 +15,9 @@ export const CLIENT_TIMING_JS = `var timingPath = ${timingPath.toString()};\nvar
   var pageId = nav && nav.serverTiming && (nav.serverTiming.find(function (s) { return s.name === 'request'; }) || {}).description || '';
   var currentId = pageId;
   function validId(id) { return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id); }
-  function point(name, phase, duration, id, path, prev) {
+  function point(name, phase, duration, id, path, prev, at) {
     if (!validId(id) || timingNames.indexOf(name) < 0 || !Number.isFinite(duration) || duration < 0) return;
-    var p = {path: path || current, previous: prev || previous, name: name, phase: phase, request: id, duration: Math.min(3600000, duration)};
+    var p = {path: path || current, previous: prev || previous, name: name, phase: phase, request: id, duration: Math.min(3600000, duration), at: Number.isFinite(at) ? at : Date.now() - duration};
     if (queue.length >= 100 && !flushing) flush();
     if (queue.length < 300) queue.push(p);
     return p;
@@ -101,7 +101,7 @@ export const CLIENT_TIMING_JS = `var timingPath = ${timingPath.toString()};\nvar
     if (e.startTime - clsAt > 1000 || e.startTime - clsStart > 5000) { clsWindow = 0; clsStart = e.startTime; }
     clsAt = e.startTime; clsWindow += e.value; cls = Math.max(cls, clsWindow); clsChanged = true;
   }); });
-  observe('longtask', function (entries) { entries.forEach(function (e) { point('longtask','page',e.duration,pageId,pagePath,pagePrevious); }); });
+  observe('longtask', function (entries) { entries.forEach(function (e) { point('longtask','page',e.duration,pageId,pagePath,pagePrevious,performance.timeOrigin+e.startTime); }); });
   observe('event', function (entries) { entries.forEach(function (e) {
     var action = interactions.find(function (a) { return Math.abs(a.stamp - e.startTime) < 8; });
     if (action && action.paint) action.paint.duration = Math.min(3600000,e.duration);
@@ -113,7 +113,7 @@ export const CLIENT_TIMING_JS = `var timingPath = ${timingPath.toString()};\nvar
   function loaded() {
     setTimeout(function () {
       var n = performance.getEntriesByType('navigation')[0]; if (!n) return;
-      [['navigation',n.duration],['dns',n.domainLookupEnd-n.domainLookupStart],['connect',n.connectEnd-n.connectStart],['tls',n.secureConnectionStart ? n.connectEnd-n.secureConnectionStart : 0],['ttfb',n.responseStart-n.requestStart],['response',n.responseEnd-n.responseStart],['dom.interactive',n.domInteractive],['load',n.loadEventEnd]].forEach(function (p) { point(p[0],'page',p[1],pageId,pagePath,pagePrevious); });
+      [['navigation',n.duration,0],['network',n.responseEnd,0],['render',Math.max(0,n.loadEventEnd-n.responseEnd),n.responseEnd],['dns',n.domainLookupEnd-n.domainLookupStart,n.domainLookupStart],['connect',n.connectEnd-n.connectStart,n.connectStart],['tls',n.secureConnectionStart ? n.connectEnd-n.secureConnectionStart : 0,n.secureConnectionStart || n.connectStart],['ttfb',n.responseStart-n.requestStart,n.requestStart],['response',n.responseEnd-n.responseStart,n.responseStart],['dom.interactive',n.domInteractive,0],['load',n.loadEventEnd,0]].forEach(function (p) { point(p[0],'page',p[1],pageId,pagePath,pagePrevious,performance.timeOrigin+p[2]); });
       point('cls','page',cls,pageId,pagePath,pagePrevious);
       if (nativeAction) {
         point(nativeAction.name,'fetch',n.responseEnd,pageId,pagePath,pagePrevious);

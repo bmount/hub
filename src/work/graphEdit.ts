@@ -17,11 +17,11 @@ const MAX_ATTEMPTS = 4;
 /** The statements that read a tenant's graph, so a caller can put them in the same round trip as its own reads. */
 export function graphStatements(db: D1Database, tenant_id: string): D1PreparedStatement[] {
   return [
-    db.prepare("SELECT COALESCE(MAX(rev), 0) AS rev FROM work_graph_rev WHERE tenant_id = ?").bind(tenant_id),
-    db.prepare(`SELECT w.id, w.kind, w.state, w.owner_id, w.lease_until, w.priority, w.estimate, w.created_at, w.title, w.project_id, (${projectPathSql()}) || '#' || w.number AS ref, o.email AS owner_email
+    db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:20:5:graphStatements*/ SELECT COALESCE(MAX(rev), 0) AS rev FROM work_graph_rev WHERE tenant_id = ?").bind(tenant_id),
+    db.prepare(`/*perf-site:src%2Fwork%2FgraphEdit.ts:21:5:graphStatements*/ SELECT w.id, w.kind, w.state, w.owner_id, w.lease_until, w.priority, w.estimate, w.created_at, w.title, w.project_id, (${projectPathSql()}) || '#' || w.number AS ref, o.email AS owner_email
       FROM work_item w JOIN project p ON p.id = w.project_id LEFT JOIN identity o ON o.id = w.owner_id WHERE w.tenant_id = ?`).bind(tenant_id),
-    db.prepare("SELECT prereq_id, dependent_id FROM work_dep WHERE tenant_id = ?").bind(tenant_id),
-    db.prepare("SELECT item_id, name, mode FROM work_resource WHERE tenant_id = ?").bind(tenant_id),
+    db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:23:5:graphStatements*/ SELECT prereq_id, dependent_id FROM work_dep WHERE tenant_id = ?").bind(tenant_id),
+    db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:24:5:graphStatements*/ SELECT item_id, name, mode FROM work_resource WHERE tenant_id = ?").bind(tenant_id),
   ];
 }
 
@@ -41,9 +41,9 @@ export async function commitGraphEdit(db: D1Database, tenant_id: string, now: nu
     const statements = build(g);
     try {
       await db.batch([
-        db.prepare("INSERT INTO work_graph_rev (tenant_id, rev, created_at) VALUES (?, ?, ?)").bind(tenant_id, g.rev + 1, now),
+        db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:44:9:commitGraphEdit*/ INSERT INTO work_graph_rev (tenant_id, rev, created_at) VALUES (?, ?, ?)").bind(tenant_id, g.rev + 1, now),
         ...statements,
-        db.prepare("DELETE FROM work_graph_rev WHERE tenant_id = ? AND rev < ?").bind(tenant_id, g.rev + 1),
+        db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:46:9:commitGraphEdit*/ DELETE FROM work_graph_rev WHERE tenant_id = ? AND rev < ?").bind(tenant_id, g.rev + 1),
       ]);
       return g;
     } catch (e) {
@@ -90,24 +90,24 @@ export function depStatements(db: D1Database, actor: Actor, g: Graph, change: De
   const event = (kind: string, e: Edge, summary: string) => eventStatement(db, { ...actorFields(actor), kind, target_kind: "work_item", target_id: e.dependent_id, summary }, now);
   return { added, removed, statements: [
     ...added.flatMap((e) => [
-      db.prepare("INSERT INTO work_dep (tenant_id, prereq_id, dependent_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)").bind(actor.tenant_id, e.prereq_id, e.dependent_id, actor.identity_id, now),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:93:7:depStatements*/ INSERT INTO work_dep (tenant_id, prereq_id, dependent_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)").bind(actor.tenant_id, e.prereq_id, e.dependent_id, actor.identity_id, now),
       event("work.depend", e, `${ref(e.dependent_id)} now waits on ${ref(e.prereq_id)}`),
     ]),
     ...removed.flatMap((e) => [
-      db.prepare("DELETE FROM work_dep WHERE prereq_id = ? AND dependent_id = ?").bind(e.prereq_id, e.dependent_id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:97:7:depStatements*/ DELETE FROM work_dep WHERE prereq_id = ? AND dependent_id = ?").bind(e.prereq_id, e.dependent_id),
       event("work.undepend", e, `${ref(e.dependent_id)} no longer waits on ${ref(e.prereq_id)}`),
     ]),
     // Stale snapshots of a dependent (an agent about to claim it) must not survive a change to what it waits on.
-    ...[...new Set([...added, ...removed].map((e) => e.dependent_id))].map((id) => db.prepare("UPDATE work_item SET updated_at = MAX(updated_at + 1, ?) WHERE id = ?").bind(now, id)),
+    ...[...new Set([...added, ...removed].map((e) => e.dependent_id))].map((id) => db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:101:84:depStatements*/ UPDATE work_item SET updated_at = MAX(updated_at + 1, ?) WHERE id = ?").bind(now, id)),
   ] };
 }
 
 /** Replace the resources an item needs while under way. */
 export async function setResources(db: D1Database, actor: Actor, item: WorkItem, ref: string, resources: Array<{ name: string; mode: "exclusive" | "shared" }>, now: number): Promise<void> {
   await db.batch([
-    db.prepare("DELETE FROM work_resource WHERE item_id = ?").bind(item.id),
-    ...resources.map((r) => db.prepare("INSERT INTO work_resource (tenant_id, item_id, name, mode) VALUES (?, ?, ?, ?)").bind(actor.tenant_id, item.id, r.name, r.mode)),
-    db.prepare("UPDATE work_item SET updated_at = MAX(updated_at + 1, ?) WHERE id = ?").bind(now, item.id),
+    db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:108:5:setResources*/ DELETE FROM work_resource WHERE item_id = ?").bind(item.id),
+    ...resources.map((r) => db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:109:29:setResources*/ INSERT INTO work_resource (tenant_id, item_id, name, mode) VALUES (?, ?, ?, ?)").bind(actor.tenant_id, item.id, r.name, r.mode)),
+    db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:110:5:setResources*/ UPDATE work_item SET updated_at = MAX(updated_at + 1, ?) WHERE id = ?").bind(now, item.id),
     eventStatement(db, { ...actorFields(actor), kind: "work.resources", target_kind: "work_item", target_id: item.id,
       summary: `${ref} needs ${resources.length ? resources.map((r) => `${r.name} (${r.mode})`).join(", ") : "no resources"}` }, now),
   ]);
@@ -124,18 +124,18 @@ export async function deleteWork(db: D1Database, actor: Actor, item: WorkItem, r
     if (!g.nodes.some((n) => n.id === item.id)) throw badRequest("no such item");
     released = g.edges.filter((e) => e.prereq_id === item.id).map((e) => e.dependent_id);
     return [
-      db.prepare("DELETE FROM work_dep WHERE prereq_id = ? OR dependent_id = ?").bind(item.id, item.id),
-      db.prepare("DELETE FROM work_resource WHERE item_id = ?").bind(item.id),
-      db.prepare("DELETE FROM work_link WHERE item_id = ?").bind(item.id),
-      db.prepare("UPDATE work_comment SET reply_to = NULL WHERE item_id = ?").bind(item.id),
-      db.prepare("DELETE FROM work_comment WHERE item_id = ?").bind(item.id),
-      db.prepare("DELETE FROM attention WHERE item_id = ?").bind(item.id),
-      db.prepare("UPDATE work_proposal SET item_id = NULL WHERE item_id = ?").bind(item.id),
-      db.prepare("UPDATE work_item SET parent_id = NULL, updated_at = MAX(updated_at + 1, ?) WHERE parent_id = ?").bind(now, item.id),
-      db.prepare("UPDATE model_call SET work_item_id = NULL WHERE work_item_id = ?").bind(item.id),
-      db.prepare("UPDATE app_error_group SET work_item_id = NULL WHERE work_item_id = ?").bind(item.id),
-      ...released.map((id) => db.prepare("UPDATE work_item SET updated_at = MAX(updated_at + 1, ?) WHERE id = ?").bind(now, id)),
-      db.prepare("DELETE FROM work_item WHERE id = ?").bind(item.id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:127:7:deleteWork*/ DELETE FROM work_dep WHERE prereq_id = ? OR dependent_id = ?").bind(item.id, item.id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:128:7:deleteWork*/ DELETE FROM work_resource WHERE item_id = ?").bind(item.id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:129:7:deleteWork*/ DELETE FROM work_link WHERE item_id = ?").bind(item.id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:130:7:deleteWork*/ UPDATE work_comment SET reply_to = NULL WHERE item_id = ?").bind(item.id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:131:7:deleteWork*/ DELETE FROM work_comment WHERE item_id = ?").bind(item.id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:132:7:deleteWork*/ DELETE FROM attention WHERE item_id = ?").bind(item.id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:133:7:deleteWork*/ UPDATE work_proposal SET item_id = NULL WHERE item_id = ?").bind(item.id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:134:7:deleteWork*/ UPDATE work_item SET parent_id = NULL, updated_at = MAX(updated_at + 1, ?) WHERE parent_id = ?").bind(now, item.id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:135:7:deleteWork*/ UPDATE model_call SET work_item_id = NULL WHERE work_item_id = ?").bind(item.id),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:136:7:deleteWork*/ UPDATE app_error_group SET work_item_id = NULL WHERE work_item_id = ?").bind(item.id),
+      ...released.map((id) => db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:137:31:deleteWork*/ UPDATE work_item SET updated_at = MAX(updated_at + 1, ?) WHERE id = ?").bind(now, id)),
+      db.prepare("/*perf-site:src%2Fwork%2FgraphEdit.ts:138:7:deleteWork*/ DELETE FROM work_item WHERE id = ?").bind(item.id),
       eventStatement(db, { ...actorFields(actor), kind: "work.delete", target_kind: "work_item", target_id: item.id, summary: `Deleted ${ref}: ${item.title}` }, now),
     ];
   });

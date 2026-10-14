@@ -20,7 +20,7 @@ export async function createIdentity(
   };
   try {
     await db.prepare(
-      "INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "/*perf-site:src%2Fdb%2Fidentities.ts:22:11:createIdentity*/ INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ).bind(row.id, row.kind, row.display_name, row.is_root, row.email, row.operator_id, row.state, row.created_at).run();
   } catch (e) {
     if (String(e).includes("UNIQUE")) throw conflict("email exists");
@@ -30,14 +30,14 @@ export async function createIdentity(
 }
 
 export function getIdentityByEmail(db: D1Database, email: string): Promise<Identity | null> {
-  return db.prepare("SELECT * FROM identity WHERE email = ?").bind(normalizeEmail(email)).first<Identity>();
+  return db.prepare("/*perf-site:src%2Fdb%2Fidentities.ts:33:10:getIdentityByEmail*/ SELECT * FROM identity WHERE email = ?").bind(normalizeEmail(email)).first<Identity>();
 }
 
 export function getIdentityById(db: D1Database, id: string): Promise<Identity | null> {
-  return db.prepare("SELECT * FROM identity WHERE id = ?").bind(id).first<Identity>();
+  return db.prepare("/*perf-site:src%2Fdb%2Fidentities.ts:37:10:getIdentityById*/ SELECT * FROM identity WHERE id = ?").bind(id).first<Identity>();
 }
 
 export async function rootExists(db: D1Database): Promise<boolean> {
-  const r = await db.prepare("SELECT 1 FROM identity WHERE is_root = 1 AND state = 'active' LIMIT 1").first();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Fidentities.ts:41:19:r*/ SELECT 1 FROM identity WHERE is_root = 1 AND state = 'active' LIMIT 1").first();
   return r !== null;
 }

@@ -40,7 +40,7 @@ export async function playgroundPage(request: Request, env: Env): Promise<Respon
   if (allowed(ctx) !== "ok") return notFoundPage(extra);
   const url = new URL(request.url);
   const thread = url.searchParams.get("t") ?? "";
-  if (thread && !await ctx.db.prepare("SELECT id FROM assistant_thread WHERE id = ? AND identity_id = ? AND tenant_id = ?").bind(thread, ctx.identity!.id, ctx.tenant!.id).first()) return notFoundPage(extra);
+  if (thread && !await ctx.db.prepare("/*perf-site:src%2Fhttp%2Fplayground.ts:43:24:playgroundPage*/ SELECT id FROM assistant_thread WHERE id = ? AND identity_id = ? AND tenant_id = ?").bind(thread, ctx.identity!.id, ctx.tenant!.id).first()) return notFoundPage(extra);
   const threadQuery = thread ? `?t=${esc(encodeURIComponent(thread))}` : "";
   const scopeQuery = thread ? `&t=${esc(encodeURIComponent(thread))}` : "";
   const set = url.searchParams.get("scopes") === "write" ? "write" : "read";

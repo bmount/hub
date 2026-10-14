@@ -8,6 +8,7 @@ import { Inbox } from "../src/chat/inboxDO";
 import { listVerbs } from "../src/verbs/table";
 import type { Ctx } from "../src/auth/context";
 import type { Env } from "../src/env";
+import { SQL_CATALOG } from "../src/perfCatalog";
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
@@ -154,6 +155,26 @@ describe("request tracing guardrails", () => {
     expect(newTrace().cold).toBe(false);
   });
 
+  it("resolves identical SQL at distinct annotated code sites without exporting runtime SQL or values", async () => {
+    const entries=Object.entries(SQL_CATALOG).filter(([key,value])=>key.startsWith("site-")&&!value.template);
+    const first=entries.find(([,value])=>entries.some(([,other])=>other!==value&&other.text===value.text))!;
+    const second=entries.find(([,value])=>value!==first[1]&&value.text===first[1].text)!;
+    expect(first).toBeDefined();expect(second).toBeDefined();
+    const statement={bind(){return this;},async all(){return {results:[],meta:{duration:1,rows_read:0,rows_written:0}};}};
+    const raw={prepare(){return statement;}} as unknown as D1Database;
+    const trace=newTrace(), db=meteredD1(raw,{trips:0,statements:0,ms:0});
+    await withTrace(trace,async()=>{
+      for(const [,catalog] of [first,second]) {
+        const s=catalog.sites[0]!;
+        await db.prepare(`/*perf-site:${encodeURIComponent(s.file)}:${s.line}:${s.column}:${encodeURIComponent(s.fn)}*/ SELECT 'user-secret-must-not-export'`).all();
+      }
+    });
+    expect(trace.spans[0]!.fingerprint).not.toBe(trace.spans[1]!.fingerprint);
+    expect(trace.spans[0]!.source).toEqual(first[1].sites[0]);expect(trace.spans[1]!.source).toEqual(second[1].sites[0]);
+    expect(trace.spans[0]!.sqlCode).toBe(first[0]);expect(trace.spans[1]!.sqlCode).toBe(second[0]);
+    const c=collector();await writeTrace(c.measured,trace);expect(JSON.stringify(c.points)).not.toContain("user-secret-must-not-export");
+    for(const point of c.points) {expect(point.blobs?.length).toBeLessThanOrEqual(20);expect(point.doubles?.length).toBeLessThanOrEqual(20);}
+  });
   it("captures D1 meta, row counts, call sites and one-trip batches, preserving first/raw", async () => {
     const trace = newTrace(), meter = { trips: 0, statements: 0, ms: 0 };
     await withTrace(trace, async () => {

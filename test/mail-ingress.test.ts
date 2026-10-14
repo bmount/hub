@@ -324,7 +324,7 @@ describe("receipt-free independently authenticated ingress", () => {
     const e = { ...env, HUB_DB: new Proxy(db, { get(target, prop) {
       if (prop === "prepare") return (sql: string) => {
         const stmt = target.prepare(sql);
-        if (!sql.startsWith("INSERT INTO consent")) return stmt;
+        if (!sql.replace(/^\/\*perf-site:[^*]+\*\/\s*/, "").startsWith("INSERT INTO consent")) return stmt;
         return { bind: (...args: unknown[]) => ({ run: async () => {
           if (!raced) {
             raced = true;

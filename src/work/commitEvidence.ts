@@ -7,7 +7,7 @@ const LIMIT = 50;
 export function commitWorkStatement(ctx: Ctx, projectId: string, oid: string) {
   const normalized = /^[0-9a-f]{40}$/i.test(oid) ? oid.toLowerCase() : null;
   const origin = `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/`;
-  return ctx.db.prepare(`SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,
+  return ctx.db.prepare(`/*perf-site:src%2Fwork%2FcommitEvidence.ts:10:10:commitWorkStatement*/ SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,
       CASE WHEN w.source_kind = 'url' AND w.source_ref = ? || cp.slug || '/code?c=' || ? THEN 'filed'
         WHEN EXISTS (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND l.target_kind = 'url'
           AND l.target_ref = ? || cp.slug || '/code?c=' || ?) THEN 'linked' ELSE 'commit' END AS relationship

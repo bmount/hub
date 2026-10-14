@@ -6,14 +6,14 @@ export type PrivateChat = ChannelRow & { kind: "direct" | "group"; members: stri
 const prefix = (tenant: string) => `private_chat:v1:${tenant}:`;
 
 export async function privateChats(db: D1Database, tenant: string): Promise<PrivateChat[]> {
-  const r = await db.prepare("SELECT value FROM meta WHERE key GLOB ? ORDER BY key").bind(`${prefix(tenant)}*`).all<{ value: string }>();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:9:19:r*/ SELECT value FROM meta WHERE key GLOB ? ORDER BY key").bind(`${prefix(tenant)}*`).all<{ value: string }>();
   return r.results.map(r => JSON.parse(r.value) as PrivateChat);
 }
 
 export async function privateChat(db: D1Database, tenant: string, idOrSlug: string): Promise<PrivateChat | null> {
   const id = idOrSlug.replace(/^(dm|group)-/, "").toUpperCase();
   if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)) return null;
-  const row = await db.prepare("SELECT value FROM meta WHERE key = ?").bind(prefix(tenant) + id).first<{ value: string }>();
+  const row = await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:16:21:row*/ SELECT value FROM meta WHERE key = ?").bind(prefix(tenant) + id).first<{ value: string }>();
   if (!row) return null;
   const chat = JSON.parse(row.value) as PrivateChat;
   return idOrSlug === chat.slug || idOrSlug === chat.project_id ? chat : null;
@@ -25,9 +25,9 @@ export async function openPrivateChat(db: D1Database, tenant: string, caller: st
   const intent = await sha256Hex(JSON.stringify({ kind, members }));
   const replayPrefix = `private_open:v1:${tenant}:${caller}:`;
   const key = replayPrefix + clientId;
-  await db.prepare("DELETE FROM meta WHERE key GLOB ? AND json_extract(value, '$.created_at') <= ?").bind(`${replayPrefix}*`, now - 86_400_000).run();
+  await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:28:9:openPrivateChat*/ DELETE FROM meta WHERE key GLOB ? AND json_extract(value, '$.created_at') <= ?").bind(`${replayPrefix}*`, now - 86_400_000).run();
   const prior = async () => {
-    const row = await db.prepare("SELECT value FROM meta WHERE key = ?").bind(key).first<{ value: string }>();
+    const row = await db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:30:23:row*/ SELECT value FROM meta WHERE key = ?").bind(key).first<{ value: string }>();
     if (!row) return null;
     const stored = JSON.parse(row.value) as { intent: string; id: string };
     if (stored.intent !== intent) throw conflict("client_id is bound to a different chat opening intent");
@@ -43,9 +43,9 @@ export async function openPrivateChat(db: D1Database, tenant: string, caller: st
     display_name: kind === "direct" ? "Direct chat" : "Group chat", state: "active", topic: "Private · fixed membership", agent_policy: "open", created_by: caller, created_at: now };
   try {
     await db.batch([
-      db.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").bind(key, JSON.stringify({ intent, id, created_at: now })),
-      db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").bind(prefix(tenant) + id, JSON.stringify(chat)),
-      ...members.map(member => db.prepare("INSERT OR IGNORE INTO conversation_member (conversation_id, tenant_id, identity_id, role, added_by, added_at, removed_at) VALUES (?, ?, ?, 'participant', ?, ?, NULL)").bind(id, tenant, member, caller, now)),
+      db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:46:7:openPrivateChat*/ INSERT INTO meta (key, value) VALUES (?, ?)").bind(key, JSON.stringify({ intent, id, created_at: now })),
+      db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:47:7:openPrivateChat*/ INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").bind(prefix(tenant) + id, JSON.stringify(chat)),
+      ...members.map(member => db.prepare("/*perf-site:src%2Fdb%2FprivateChat.ts:48:32:openPrivateChat*/ INSERT OR IGNORE INTO conversation_member (conversation_id, tenant_id, identity_id, role, added_by, added_at, removed_at) VALUES (?, ?, ?, 'participant', ?, ?, NULL)").bind(id, tenant, member, caller, now)),
     ]);
   } catch (e) {
     if (!String(e).includes("UNIQUE")) throw e;

@@ -15,13 +15,13 @@ export async function boardPage(request: Request, env: Env, slug: string | null)
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
-  const project = slug ? await ctx.db.prepare(`SELECT display_name FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant.id, slug).first<{display_name:string}>() : null;
+  const project = slug ? await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FboardPage.ts:18:32:project*/ SELECT display_name FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant.id, slug).first<{display_name:string}>() : null;
   if (slug && !project) return notFoundPage(extra);
   const url = new URL(request.url);
   const actor = url.searchParams.get("actor") || null;
   if (actor && actor.length > 26) return htmlResponse(page("Bad request", "<h1>Bad request</h1><p>Actor identity ID must be at most 26 characters.</p>"), 400, extra);
   const b = await board(ctx, slug, actor);
-  const people = (await ctx.db.prepare("SELECT i.id, i.display_name FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? ORDER BY i.display_name").bind(ctx.tenant.id).all<{id:string;display_name:string}>()).results;
+  const people = (await ctx.db.prepare("/*perf-site:src%2Fhttp%2FboardPage.ts:24:25:people*/ SELECT i.id, i.display_name FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? ORDER BY i.display_name").bind(ctx.tenant.id).all<{id:string;display_name:string}>()).results;
   let selected;
   try { selected = await selectedWorkInspector(ctx, env, url, slug); } catch (e) { if (e instanceof HubError && e.status === 404) return notFoundPage(extra); throw e; }
   const base = slug ? `/${slug}` : "";

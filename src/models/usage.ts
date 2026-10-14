@@ -23,7 +23,7 @@ export function usageStatement(db: D1Database, r: UsageRow): D1PreparedStatement
   const reported = r.reported_cost_micros ?? null;
   const uncachedIn = r.input_tokens === null ? null : Math.max(0, r.input_tokens - (r.cached_tokens ?? 0));
   return db.prepare(
-    `INSERT INTO model_call (id, purpose, provider, model, credential_id, tenant_id, identity_id, ok, ms, input_tokens, output_tokens, error, created_at,
+    `/*perf-site:src%2Fmodels%2Fusage.ts:25:10:usageStatement*/ INSERT INTO model_call (id, purpose, provider, model, credential_id, tenant_id, identity_id, ok, ms, input_tokens, output_tokens, error, created_at,
        source, session_id, project_id, work_item_id, client, cached_tokens, cost_micros, cost_source)
      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
        COALESCE(?, ${PRICE}),

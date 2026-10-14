@@ -62,7 +62,7 @@ export async function wikiPage(request: Request, env: Env, project: string, slug
       const v = await readWiki(ctx, project, slug, revision);
       const r = v.page;
       if (shell.breadcrumb?.length) shell.breadcrumb[shell.breadcrumb.length-1]!.label = r.title;
-      const people = r.research ? (await ctx.db.prepare("SELECT i.id, i.email, i.display_name FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active'").bind(ctx.tenant.id).all<{id: string; email: string; display_name: string}>()).results : [];
+      const people = r.research ? (await ctx.db.prepare("/*perf-site:src%2Fhttp%2FwikiPages.ts:65:42:people*/ SELECT i.id, i.email, i.display_name FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active'").bind(ctx.tenant.id).all<{id: string; email: string; display_name: string}>()).results : [];
       // The history includes tombstones; reverting a deleted page uses the latest head revision too.
       const h = await wikiHistory.run(ctx, wikiHistory.parse({project, slug, before: url.searchParams.get("before")}));
       const head = await wikiHistory.run(ctx, wikiHistory.parse({project, slug}));

@@ -63,10 +63,10 @@ export async function putFile(ctx: Ctx, v: FileParams, bytes: Uint8Array, source
   const p = await fileProject(ctx, v.project, true), tid = ctx.tenant!.id;
   filePath(v.path);
   const validated = validateFile(v.path, v.content_type, bytes);
-  if (v.item_id && !await ctx.db.prepare("SELECT 1 FROM work_item WHERE id = ? AND tenant_id = ? AND project_id = ?").bind(v.item_id, tid, p.id).first()) throw notFound("no such project item");
-  if (v.person_id && !await ctx.db.prepare("SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(v.person_id, tid).first()) throw notFound("no such organization person");
+  if (v.item_id && !await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:66:27:putFile*/ SELECT 1 FROM work_item WHERE id = ? AND tenant_id = ? AND project_id = ?").bind(v.item_id, tid, p.id).first()) throw notFound("no such project item");
+  if (v.person_id && !await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:67:29:putFile*/ SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(v.person_id, tid).first()) throw notFound("no such organization person");
   if (source) {
-    const existing = await ctx.db.prepare("SELECT path, revision FROM file_revision WHERE tenant_id = ? AND project_id = ? AND source = ?").bind(tid, p.id, source).first<{path: string; revision: number}>();
+    const existing = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:69:28:existing*/ SELECT path, revision FROM file_revision WHERE tenant_id = ? AND project_id = ? AND source = ?").bind(tid, p.id, source).first<{path: string; revision: number}>();
     if (existing) return {...existing, project: v.project};
   }
   const bucket = ctx.env.GIT_PUSH_STAGING;
@@ -78,7 +78,7 @@ export async function putFile(ctx: Ctx, v: FileParams, bytes: Uint8Array, source
   const name = v.path.split("/").pop()!, folder = v.path.slice(0, -name.length).replace(/\/$/, "");
   try {
     // Quota and revision comparison occur in the insert, including all retained versions.
-    const r = await ctx.db.prepare(`INSERT INTO file_revision (tenant_id, project_id, path, revision, name, folder, content_type, size, sha256, object_key, uploader_id, created_at, item_id, person_id, text, source)
+    const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Ffiles.ts:81:21:r*/ INSERT INTO file_revision (tenant_id, project_id, path, revision, name, folder, content_type, size, sha256, object_key, uploader_id, created_at, item_id, person_id, text, source)
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE COALESCE((SELECT MAX(revision) FROM file_revision WHERE tenant_id = ? AND project_id = ? AND path = ?), 0) = ?
       AND COALESCE((SELECT SUM(size) FROM file_revision WHERE tenant_id = ? AND project_id = ?), 0) + ? <= ?
@@ -88,7 +88,7 @@ export async function putFile(ctx: Ctx, v: FileParams, bytes: Uint8Array, source
     if (!r.meta.changes) throw conflict("stale revision, archived project, or project file quota (250 MiB including history) exceeded");
   } catch (e) {
     if (source) {
-      const existing = await ctx.db.prepare("SELECT path, revision, object_key FROM file_revision WHERE tenant_id = ? AND project_id = ? AND source = ?").bind(tid, p.id, source).first<{path: string; revision: number; object_key: string}>();
+      const existing = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:91:30:existing*/ SELECT path, revision, object_key FROM file_revision WHERE tenant_id = ? AND project_id = ? AND source = ?").bind(tid, p.id, source).first<{path: string; revision: number; object_key: string}>();
       if (existing) {
         if (existing.object_key !== key) await bucket.delete(key);
         return {project: v.project, path: existing.path, revision: existing.revision};
@@ -104,7 +104,7 @@ export async function putFile(ctx: Ctx, v: FileParams, bytes: Uint8Array, source
 }
 export async function readFile(ctx: Ctx, project: string, path: string, revision: number | null = null) {
   const p = await fileProject(ctx, project);
-  const row = await ctx.db.prepare(`SELECT r.* FROM file_revision r WHERE r.tenant_id = ? AND r.project_id = ? AND r.path = ? AND ${revision === null ? currentFile : "r.revision = ?"} AND r.deleted = 0`).bind(ctx.tenant!.id, p.id, path, ...(revision === null ? [] : [revision])).first<FileRow>();
+  const row = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Ffiles.ts:107:21:row*/ SELECT r.* FROM file_revision r WHERE r.tenant_id = ? AND r.project_id = ? AND r.path = ? AND ${revision === null ? currentFile : "r.revision = ?"} AND r.deleted = 0`).bind(ctx.tenant!.id, p.id, path, ...(revision === null ? [] : [revision])).first<FileRow>();
   if (!row) throw notFound("no such file version");
   return row;
 }
@@ -130,7 +130,7 @@ export const filePut = defineVerb({...base, name: "file.put", kind: "command", m
 }, run: (ctx, {v, bytes}) => putFile(ctx, v, bytes)});
 export const fileList = defineVerb({...base, name: "file.list", kind: "query", minRole: "reader", summary: "List current project files (200/page), with optional folder prefix and after path cursor.", mcp: {scope: "read", destructive: false, title: "List files", input: input({folder: {type: "string"}, after: {type: "string"}}, ["project"])}, parse: i => ({project: reqString(i, "project", {max: 127}), folder: optString(i, "folder", {max: 240}) ?? "", after: optString(i, "after", {max: 240}) ?? ""}), run: async (ctx, v) => {
   const p = await fileProject(ctx, v.project);
-  const rows = (await ctx.db.prepare(`SELECT r.* FROM file_revision r WHERE r.tenant_id = ? AND r.project_id = ? AND ${currentFile} AND r.deleted = 0 AND r.path > ? AND ( ? = '' OR r.folder = ? OR substr(r.folder, 1, length(?) + 1) = ? || '/') ORDER BY r.path LIMIT 201`).bind(ctx.tenant!.id, p.id, v.after, v.folder, v.folder, v.folder, v.folder).all<FileRow>()).results;
+  const rows = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Ffiles.ts:133:23:rows*/ SELECT r.* FROM file_revision r WHERE r.tenant_id = ? AND r.project_id = ? AND ${currentFile} AND r.deleted = 0 AND r.path > ? AND ( ? = '' OR r.folder = ? OR substr(r.folder, 1, length(?) + 1) = ? || '/') ORDER BY r.path LIMIT 201`).bind(ctx.tenant!.id, p.id, v.after, v.folder, v.folder, v.folder, v.folder).all<FileRow>()).results;
   return {files: rows.slice(0,200).map(fileMetadata), next_cursor: rows.length > 200 ? rows[199]!.path : null};
 }});
 export const fileGet = defineVerb({...base, name: "file.get", kind: "query", minRole: "reader", summary: "Fetch file metadata and authenticated web download URL; include_base64 returns bytes only up to 512 KiB. Optional revision selects an old version.", mcp: {scope: "read", destructive: false, title: "Get file", input: input({revision: {type: "integer", minimum: 1}, include_base64: {type: "boolean"}})}, parse: i => ({...ref(i), revision: optInt(i, "revision", {min: 1, max: 2147483647}), include_base64: i.include_base64 === true}), run: async (ctx, v) => {
@@ -146,12 +146,12 @@ export const fileGet = defineVerb({...base, name: "file.get", kind: "query", min
 }});
 export const fileHistory = defineVerb({...base, name: "file.history", kind: "query", minRole: "reader", summary: "List file versions newest first (200/page); before revision selects older history.", mcp: {scope: "read", destructive: false, title: "File history", input: input({before: {type: "integer", minimum: 1}})}, parse: i => ({...ref(i), before: optInt(i, "before", {min: 1, max: 2147483647}) ?? 2147483648}), run: async (ctx, v) => {
   const p = await fileProject(ctx, v.project);
-  const rows = (await ctx.db.prepare("SELECT * FROM file_revision WHERE tenant_id = ? AND project_id = ? AND path = ? AND revision < ? ORDER BY revision DESC LIMIT 201").bind(ctx.tenant!.id, p.id, v.path, v.before).all<FileRow>()).results;
+  const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:149:23:rows*/ SELECT * FROM file_revision WHERE tenant_id = ? AND project_id = ? AND path = ? AND revision < ? ORDER BY revision DESC LIMIT 201").bind(ctx.tenant!.id, p.id, v.path, v.before).all<FileRow>()).results;
   return {history: rows.slice(0,200).map(fileMetadata), next_cursor: rows.length > 200 ? rows[199]!.revision : null};
 }});
 export const fileDelete = defineVerb({...base, name: "file.delete", kind: "command", minRole: "admin", summary: "Hide a file and all its versions from downloads, lists and search (admin). Retained evidence still counts toward quota.", mcp: {scope: "write", destructive: true, title: "Delete file", input: input()}, parse: ref, run: async (ctx, v) => {
   const p = await fileProject(ctx, v.project, true);
-  await ctx.db.prepare("UPDATE file_revision SET deleted = 1 WHERE tenant_id = ? AND project_id = ? AND path = ?").bind(ctx.tenant!.id, p.id, v.path).run();
+  await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:154:9:fileDelete*/ UPDATE file_revision SET deleted = 1 WHERE tenant_id = ? AND project_id = ? AND path = ?").bind(ctx.tenant!.id, p.id, v.path).run();
   await recordEvent(ctx.db, {tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "file.delete", target_kind: "project", target_id: p.id, summary: `File removed: ${v.path}`}, ctx.now);
   return {project: v.project, path: v.path, deleted: true};
 }});
@@ -159,8 +159,8 @@ export const fileUploadUrl = defineVerb({...base, name: "file.upload_url", kind:
   const p = await fileProject(ctx, v.project, true);
   const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
   const expires_at = ctx.now + 600000;
-  await ctx.db.prepare("DELETE FROM file_upload WHERE expires_at <= ?").bind(ctx.now).run();
-  await ctx.db.prepare("INSERT INTO file_upload (token_hash, tenant_id, project_id, identity_id, params, expires_at) VALUES (?, ?, ?, ?, ?, ?)").bind(await sha256Hex(token), ctx.tenant!.id, p.id, ctx.identity!.id, JSON.stringify(v), expires_at).run();
+  await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:162:9:fileUploadUrl*/ DELETE FROM file_upload WHERE expires_at <= ?").bind(ctx.now).run();
+  await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:163:9:fileUploadUrl*/ INSERT INTO file_upload (token_hash, tenant_id, project_id, identity_id, params, expires_at) VALUES (?, ?, ?, ?, ?, ?)").bind(await sha256Hex(token), ctx.tenant!.id, p.id, ctx.identity!.id, JSON.stringify(v), expires_at).run();
   return {upload_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${ctx.mcpProject?.path ?? v.project}/documents/upload?token=${token}`, method: "PUT", expires_at, max_bytes: FILE_BYTES};
 }});
 export const fileVerbs = [filePut, fileGet, fileList, fileHistory, fileDelete, fileUploadUrl];

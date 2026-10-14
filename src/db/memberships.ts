@@ -8,19 +8,19 @@ export async function addMembership(
 ): Promise<Membership> {
   const row: Membership = { id: ulid(now), identity_id: input.identity_id, tenant_id: input.tenant_id, role: input.role, state: "active", created_at: now };
   await db.prepare(
-    `INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, ?, ?, ?)
+    `/*perf-site:src%2Fdb%2Fmemberships.ts:10:9:addMembership*/ INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT (identity_id, tenant_id) DO UPDATE SET state = 'active', role = excluded.role WHERE membership.state <> 'active'`,
   ).bind(row.id, row.identity_id, row.tenant_id, row.role, row.state, row.created_at).run();
   return (await getMembership(db, input.identity_id, input.tenant_id))!;
 }
 
 export function getMembership(db: D1Database, identity_id: string, tenant_id: string): Promise<Membership | null> {
-  return db.prepare("SELECT * FROM membership WHERE identity_id = ? AND tenant_id = ?").bind(identity_id, tenant_id).first<Membership>();
+  return db.prepare("/*perf-site:src%2Fdb%2Fmemberships.ts:18:10:getMembership*/ SELECT * FROM membership WHERE identity_id = ? AND tenant_id = ?").bind(identity_id, tenant_id).first<Membership>();
 }
 
 export async function listMembershipsForIdentity(db: D1Database, identity_id: string, includeArchived = false): Promise<Array<{ membership: Membership; tenant: Tenant }>> {
   const r = await db.prepare(
-    `SELECT m.id AS m_id, m.identity_id, m.tenant_id, m.role, m.state AS m_state, m.created_at AS m_created_at,
+    `/*perf-site:src%2Fdb%2Fmemberships.ts:22:19:r*/ SELECT m.id AS m_id, m.identity_id, m.tenant_id, m.role, m.state AS m_state, m.created_at AS m_created_at,
             t.id AS t_id, t.slug, t.display_name, t.state AS t_state, t.created_at AS t_created_at
        FROM membership m JOIN tenant t ON t.id = m.tenant_id
       WHERE m.identity_id = ? AND m.state = 'active' AND (t.state = 'active' OR ?)
@@ -34,7 +34,7 @@ export async function listMembershipsForIdentity(db: D1Database, identity_id: st
 
 export async function listMembers(db: D1Database, tenant_id: string): Promise<Array<{ membership: Membership; identity: Identity }>> {
   const r = await db.prepare(
-    `SELECT m.id AS m_id, m.identity_id, m.tenant_id, m.role, m.state AS m_state, m.created_at AS m_created_at,
+    `/*perf-site:src%2Fdb%2Fmemberships.ts:36:19:r*/ SELECT m.id AS m_id, m.identity_id, m.tenant_id, m.role, m.state AS m_state, m.created_at AS m_created_at,
             i.id AS i_id, i.kind, i.display_name, i.is_root, i.email, i.operator_id, i.state AS i_state, i.created_at AS i_created_at
        FROM membership m JOIN identity i ON i.id = m.identity_id
       WHERE m.tenant_id = ? AND m.state = 'active'

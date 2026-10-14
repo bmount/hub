@@ -8,14 +8,14 @@ import type { WorkItem } from "../db/work";
 export type Reason = "mention" | "comment" | "assigned" | "changed" | "filed";
 
 export function followStatement(ctx: Ctx, identity_id: string, kind: "item" | "project", target_id: string): D1PreparedStatement {
-  return ctx.db.prepare("INSERT OR IGNORE INTO follow (tenant_id, identity_id, target_kind, target_id, created_at) VALUES (?, ?, ?, ?, ?)")
+  return ctx.db.prepare("/*perf-site:src%2Fwork%2Fcollab.ts:11:10:followStatement*/ INSERT OR IGNORE INTO follow (tenant_id, identity_id, target_kind, target_id, created_at) VALUES (?, ?, ?, ?, ?)")
     .bind(ctx.tenant!.id, identity_id, kind, target_id, ctx.now);
 }
 
 /** Followers of the item or its project who are still active members, minus the actor. */
 export async function followers(ctx: Ctx, item: WorkItem): Promise<string[]> {
   const r = await ctx.db.prepare(
-    `SELECT DISTINCT f.identity_id FROM follow f JOIN membership m ON m.identity_id = f.identity_id AND m.tenant_id = f.tenant_id AND m.state = 'active'
+    `/*perf-site:src%2Fwork%2Fcollab.ts:17:19:r*/ SELECT DISTINCT f.identity_id FROM follow f JOIN membership m ON m.identity_id = f.identity_id AND m.tenant_id = f.tenant_id AND m.state = 'active'
      WHERE f.tenant_id = ? AND ((f.target_kind = 'item' AND f.target_id = ?) OR (f.target_kind = 'project' AND f.target_id = ?))`,
   ).bind(ctx.tenant!.id, item.id, item.project_id).all<{ identity_id: string }>();
   return r.results.map((x) => x.identity_id).filter((id) => id !== ctx.identity!.id);
@@ -28,7 +28,7 @@ export function attentionStatements(ctx: Ctx, item: WorkItem, entries: Array<{ t
   for (const e of entries) {
     if (e.to === ctx.identity!.id || seen.has(e.to)) continue;
     seen.add(e.to);
-    out.push(ctx.db.prepare("INSERT INTO attention (id, tenant_id, identity_id, reason, item_id, actor_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    out.push(ctx.db.prepare("/*perf-site:src%2Fwork%2Fcollab.ts:31:14:attentionStatements*/ INSERT INTO attention (id, tenant_id, identity_id, reason, item_id, actor_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
       .bind(ulid(ctx.now), ctx.tenant!.id, e.to, e.reason, item.id, ctx.identity!.id, e.summary.slice(0, 300), ctx.now));
   }
   return out;

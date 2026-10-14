@@ -104,10 +104,10 @@ export const projectHistory = defineVerb({
   },
   parse: (i) => ({ project: reqString(i, "project", { max: 63 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 30, before: optInt(i, "before", { min: 0, max: 9e15 }) }),
   run: async (ctx, p) => {
-    const pr = await ctx.db.prepare("SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, p.project.trim().toLowerCase()).first<{ id: string; slug: string }>();
+    const pr = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fdiscover.ts:107:22:pr*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id, p.project.trim().toLowerCase()).first<{ id: string; slug: string }>();
     if (!pr) throw notFound("no such project");
     const eventAccess = readableMailEvents(ctx);
-    const r = await ctx.db.prepare(`SELECT e.id, e.kind, e.summary, e.created_at, e.target_kind, e.target_id, i.display_name AS who, i.kind AS who_kind
+    const r = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fdiscover.ts:110:21:r*/ SELECT e.id, e.kind, e.summary, e.created_at, e.target_kind, e.target_id, i.display_name AS who, i.kind AS who_kind
       FROM event e LEFT JOIN identity i ON i.id = e.identity_id
       WHERE e.tenant_id = ? AND (? IS NULL OR e.created_at < ?) AND ((e.target_kind = 'project' AND e.target_id = ?)
         OR (e.target_kind = 'work_item' AND e.target_id IN (SELECT id FROM work_item WHERE project_id = ?))

@@ -53,7 +53,7 @@ export async function newSenderText(bytes: ArrayBuffer, recipient?: string): Pro
 
 async function sourceContext(env: Env, source: WelcomeSource, proof: DkimProof, now: number): Promise<Ctx | null> {
   if (proof.authentication !== "pass" || proof.source !== "aligned_dkim") return null;
-  const m = await env.HUB_DB.prepare(`SELECT m.to_address, m.from_email, m.project_id FROM inbound_mail m
+  const m = await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Factions.ts:56:19:m*/ SELECT m.to_address, m.from_email, m.project_id FROM inbound_mail m
     WHERE m.id = ? AND m.tenant_id = ? AND m.identity_id = ? AND m.message_id = ?
     AND m.verdict = 'admitted' AND m.reason IS NULL AND m.released_by IS NULL AND m.recipient_id IS NULL AND m.project_id IS NOT NULL`)
     .bind(source.mail_id, source.tenant_id, source.identity_id, proof.messageId).first<{to_address: string; from_email: string; project_id: string}>();
@@ -63,7 +63,7 @@ async function sourceContext(env: Env, source: WelcomeSource, proof: DkimProof, 
   if (!target || target.tenant_id !== source.tenant_id || target.project_id !== m.project_id || !tenant || tenant.state !== "active" || !identity || identity.kind !== "human" || identity.email !== m.from_email) return null;
   const role = roleFor(identity, await getMembership(env.HUB_DB, identity.id, tenant.id));
   if (!role) return null;
-  const p = await env.HUB_DB.prepare("SELECT id, slug, kind, display_name FROM project WHERE id = ? AND tenant_id = ? AND state = 'active'")
+  const p = await env.HUB_DB.prepare("/*perf-site:src%2Fmail%2Factions.ts:66:19:p*/ SELECT id, slug, kind, display_name FROM project WHERE id = ? AND tenant_id = ? AND state = 'active'")
     .bind(m.project_id, tenant.id).first<{id: string; slug: string; kind: string; display_name: string}>();
   if (!p) return null;
   return {env, db: env.HUB_DB, now, ip: "", host: {kind: "tenant", slug: tenant.slug}, tenant, identity, role,
@@ -84,7 +84,7 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
   let ctx = await sourceContext(env, source, proof, now);
   if (!ctx) return "ineligible";
   const key = `${ACTION_PREFIX}${source.tenant_id}:${source.mail_id}`;
-  const reservation = await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING")
+  const reservation = await env.HUB_DB.prepare("/*perf-site:src%2Fmail%2Factions.ts:87:29:reservation*/ INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING")
     .bind(key, JSON.stringify({status: "pending", reserved_at: now})).run();
   if (!reservation.meta.changes) return "already_reserved";
   const base = `https://${ctx.tenant!.slug}.${env.HUB_DOMAIN}`;
@@ -95,16 +95,16 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
   try {
     // Retention precedes planning. Report its actual effects even if the model
     // omits an attachment action or is unavailable; never claim it did nothing.
-    const retained = await ctx.db.prepare("SELECT attachments FROM inbound_mail WHERE id = ?").bind(source.mail_id).first<string>("attachments");
+    const retained = await ctx.db.prepare("/*perf-site:src%2Fmail%2Factions.ts:98:28:retained*/ SELECT attachments FROM inbound_mail WHERE id = ?").bind(source.mail_id).first<string>("attachments");
     for (const part of JSON.parse(retained ?? "[]") as Array<{filename?: string; file_path?: string; file_status?: string; file_reason?: string}>) {
       if (part.file_status === "stored" && part.file_path) done.push(`Filed attachment ${part.filename ?? part.file_path}: ${base}/${ctx.mcpProject!.path}/documents?path=${encodeURIComponent(part.file_path)}`);
       else refused.push(`Attachment ${part.filename ?? "unnamed"}: ${part.file_reason ?? "not retained (sender permissions or unsupported type)"}`);
     }
     let actions: Action[] = [];
     if (ownText) {
-      const contacts = (await ctx.db.prepare("SELECT id, kind, name, revision, json_extract(data, '$.title') AS title, json_extract(data, '$.domain') AS domain FROM contact_entity WHERE tenant_id = ? AND project_id = ? ORDER BY id LIMIT 200")
+      const contacts = (await ctx.db.prepare("/*perf-site:src%2Fmail%2Factions.ts:105:31:contacts*/ SELECT id, kind, name, revision, json_extract(data, '$.title') AS title, json_extract(data, '$.domain') AS domain FROM contact_entity WHERE tenant_id = ? AND project_id = ? ORDER BY id LIMIT 200")
         .bind(source.tenant_id, ctx.mcpProject!.id).all()).results;
-      const attachments = await ctx.db.prepare("SELECT attachments FROM inbound_mail WHERE id = ?").bind(source.mail_id).first<string>("attachments");
+      const attachments = await ctx.db.prepare("/*perf-site:src%2Fmail%2Factions.ts:107:33:attachments*/ SELECT attachments FROM inbound_mail WHERE id = ?").bind(source.mail_id).first<string>("attachments");
       const answer = await ask(env, PROPOSE_PURPOSE, JSON.stringify({project: ctx.mcpProject!.slug, new_text: ownText, contacts_evidence: contacts,
         attachments_evidence: (JSON.parse(attachments ?? "[]") as Array<Record<string, unknown>>).map(p => ({filename: p.filename, file_path: p.file_path, file_status: p.file_status, file_reason: p.file_reason})), tools: [...verbs.map(v => ({name: v.name, description: v.summary, input: v.mcp!.input})),
           {name: "file.attach", input: {path: "retained attachment file_path"}}, {name: "document.share", input: {path: "document path", to: "member email", subject: "subject"}}]}),
@@ -127,7 +127,7 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
         let result: unknown, link = `${base}/${ctx.mcpProject!.path}`, label = a.tool;
         if (a.tool === "file.attach") {
           // Retention is already durable and idempotent; never accept model bytes/paths for writes.
-          const raw = await ctx.db.prepare("SELECT attachments FROM inbound_mail WHERE id = ?").bind(source.mail_id).first<string>("attachments");
+          const raw = await ctx.db.prepare("/*perf-site:src%2Fmail%2Factions.ts:130:29:raw*/ SELECT attachments FROM inbound_mail WHERE id = ?").bind(source.mail_id).first<string>("attachments");
           const parts = JSON.parse(raw ?? "[]") as Array<{file_path?: string; file_status?: string}>;
           if (!parts.some(p => p.file_path === input.path && p.file_status === "stored")) throw new ActionRefused("Attachment was not retained (unsupported type, quota or sender permission)");
           result = {path: input.path}; link += `/documents?path=${encodeURIComponent(String(input.path))}`;
@@ -148,7 +148,7 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
           }
           if (a.tool === "work.update" && (input.state !== undefined || input.owner !== undefined || input.parent !== undefined)) throw new ActionRefused("State, ownership and hierarchy changes require web confirmation");
           if ((a.tool === "person.upsert" || a.tool === "company.upsert") && input.id) {
-            const existing = await ctx.db.prepare("SELECT name, data, revision FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ? AND kind = ?")
+            const existing = await ctx.db.prepare("/*perf-site:src%2Fmail%2Factions.ts:151:36:existing*/ SELECT name, data, revision FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ? AND kind = ?")
               .bind(source.tenant_id, ctx.mcpProject!.id, input.id as string, a.tool.split(".")[0]!).first<{name: string; data: string; revision: number}>();
             if (!existing || input.expected_revision !== existing.revision) throw new ActionRefused("Contact revision changed; review on the web");
             // Mail can enrich contacts, not silently erase fields omitted by a model.
@@ -195,6 +195,6 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
     } catch { reply = "failed_or_unknown"; }
   }
   await event(`Action summary reply: ${reply}`);
-  await env.HUB_DB.prepare("UPDATE meta SET value = ? WHERE key = ?").bind(JSON.stringify({status: "complete", reply, done, refused, completed_at: Date.now()}), key).run();
+  await env.HUB_DB.prepare("/*perf-site:src%2Fmail%2Factions.ts:198:9:runMailActions*/ UPDATE meta SET value = ? WHERE key = ?").bind(JSON.stringify({status: "complete", reply, done, refused, completed_at: Date.now()}), key).run();
   return "processed";
 }

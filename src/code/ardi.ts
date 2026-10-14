@@ -55,16 +55,16 @@ export async function codeAuth(ctx: Ctx): Promise<string> {
     if (ctx.agentMcp && ctx.session?.kind === "agent_run") return basic("agent", await open(ctx.env.HUB_SECRETS_KEY, ctx.agentMcp.sealed));
     throw new HubError(403, "forbidden", "agents read code with their run session");
   }
-  const row = await ctx.db.prepare("SELECT ciphertext, iv, expires_at FROM ardi_cred WHERE identity_id = ? AND tenant_id = ? AND kind = 'git_session'")
+  const row = await ctx.db.prepare("/*perf-site:src%2Fcode%2Fardi.ts:58:21:row*/ SELECT ciphertext, iv, expires_at FROM ardi_cred WHERE identity_id = ? AND tenant_id = ? AND kind = 'git_session'")
     .bind(id.id, ctx.tenant.id).first<{ ciphertext: string; iv: string; expires_at: number | null }>();
   if (row && (row.expires_at ?? 0) - ctx.now > REFRESH_MS) {
-    const live = await ctx.db.prepare("SELECT 1 FROM session s JOIN ardi_cred c ON c.ref_id = s.id WHERE c.identity_id = ? AND c.tenant_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?")
+    const live = await ctx.db.prepare("/*perf-site:src%2Fcode%2Fardi.ts:61:24:live*/ SELECT 1 FROM session s JOIN ardi_cred c ON c.ref_id = s.id WHERE c.identity_id = ? AND c.tenant_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?")
       .bind(id.id, ctx.tenant.id, ctx.now).first();
     if (live) return basic(id.email, await open(ctx.env.HUB_SECRETS_KEY, row));
   }
   const { session, token } = await createGitSession(ctx.db, { identity_id: id.id, tenant_id: ctx.tenant.id, label: "Pimwell code views" }, ctx.now);
   const sealed = await seal(ctx.env.HUB_SECRETS_KEY, token);
-  await ctx.db.prepare(`INSERT INTO ardi_cred (identity_id, tenant_id, kind, ref_id, ciphertext, iv, expires_at, created_at) VALUES (?, ?, 'git_session', ?, ?, ?, ?, ?)
+  await ctx.db.prepare(`/*perf-site:src%2Fcode%2Fardi.ts:67:9:codeAuth*/ INSERT INTO ardi_cred (identity_id, tenant_id, kind, ref_id, ciphertext, iv, expires_at, created_at) VALUES (?, ?, 'git_session', ?, ?, ?, ?, ?)
     ON CONFLICT (identity_id, tenant_id) DO UPDATE SET kind = excluded.kind, ref_id = excluded.ref_id, ciphertext = excluded.ciphertext, iv = excluded.iv, expires_at = excluded.expires_at, created_at = excluded.created_at`)
     .bind(id.id, ctx.tenant.id, session.id, sealed.ciphertext, sealed.iv, session.expires_at, ctx.now).run();
   return basic(id.email, token);
@@ -86,7 +86,7 @@ export class RepoProvisioningPending extends HubError {
 
 export async function createRepo(env: Env, db: D1Database, input: { identity_id: string; tenant_id: string; org: string; name: string }, now: number): Promise<void> {
   if (env.GIT_BACKEND === "artifacts") {
-    const project = await db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'").bind(input.tenant_id, input.name).first<{ id: string }>();
+    const project = await db.prepare("/*perf-site:src%2Fcode%2Fardi.ts:89:27:project*/ SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'").bind(input.tenant_id, input.name).first<{ id: string }>();
     if (!project) throw new HubError(404, "not_found", "repository project not found");
     const api = new ArtifactsRest(env), namespace = artifactNamespace(input.org), ownership = repoOwnership(input.tenant_id, project.id);
     try {
@@ -108,7 +108,7 @@ export async function createRepo(env: Env, db: D1Database, input: { identity_id:
       }
     }
     try {
-      await db.prepare("INSERT OR IGNORE INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(input.tenant_id, project.id, now).run();
+      await db.prepare("/*perf-site:src%2Fcode%2Fardi.ts:111:13:createRepo*/ INSERT OR IGNORE INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(input.tenant_id, project.id, now).run();
     } catch { throw new RepoProvisioningPending("Repository created but its local mapping could not be saved."); }
     return;
   }

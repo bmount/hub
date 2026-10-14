@@ -10,7 +10,7 @@ import { currentDeployStatement, deployView, type DeployRow } from "../apps/depl
 
 export type SiteRow = { id: string; tenant_id: string; project_id: string; name: string; hostnames: string; project: string };
 export async function findSite(ctx: Ctx, name: string): Promise<SiteRow> {
-  const row = await ctx.db.prepare(`SELECT s.*, p.slug AS project FROM site s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id
+  const row = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsites.ts:13:21:row*/ SELECT s.*, p.slug AS project FROM site s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id
     WHERE s.tenant_id = ? AND s.name = ? AND p.kind NOT IN ('channel','agent-src') AND (? IS NULL OR p.id = ?)`)
     .bind(ctx.tenant!.id, name, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first<SiteRow>();
   if (!row) throw notFound("no such site");
@@ -18,7 +18,7 @@ export async function findSite(ctx: Ctx, name: string): Promise<SiteRow> {
 }
 
 export async function siteView(ctx: Ctx, row: SiteRow) {
-  const apps = (await ctx.db.prepare(`SELECT a.id, a.script_name, a.state FROM site_app sa JOIN app_source a ON a.id = sa.app_id
+  const apps = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsites.ts:21:23:apps*/ SELECT a.id, a.script_name, a.state FROM site_app sa JOIN app_source a ON a.id = sa.app_id
     WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? ORDER BY a.script_name`)
     .bind(row.id, ctx.tenant!.id, row.project_id).all<{ id: string; script_name: string; state: string }>()).results;
   const versions = apps.length ? await ctx.db.batch(apps.map(a => currentDeployStatement(ctx, row.project_id, a.script_name))) : [];
@@ -43,7 +43,7 @@ export const siteList = defineVerb({
   parse: i => ({ project: optString(i, "project", { max: 127 }) }),
   run: async (ctx, p) => {
     const pr = p.project ? await featureProject(ctx, p.project) : ctx.mcpProject;
-    const rows = (await ctx.db.prepare(`SELECT s.*, p.slug AS project FROM site s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id
+    const rows = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsites.ts:46:25:rows*/ SELECT s.*, p.slug AS project FROM site s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id
       WHERE s.tenant_id = ? AND p.kind NOT IN ('channel','agent-src') AND (? IS NULL OR s.project_id = ?) ORDER BY s.name`)
       .bind(ctx.tenant!.id, pr?.id ?? null, pr?.id ?? null).all<SiteRow>()).results;
     return { sites: await Promise.all(rows.map(row => siteView(ctx, row))) };
@@ -72,15 +72,15 @@ export const siteRegister = defineVerb({
   run: async (ctx, p) => {
     const pr = await featureProject(ctx, p.project);
     if (pr.kind !== "repo") throw badRequest("sites require a code project");
-    const prior = await ctx.db.prepare("SELECT id, project_id FROM site WHERE tenant_id = ? AND name = ?").bind(ctx.tenant!.id, p.name).first<{ id: string; project_id: string }>();
+    const prior = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsites.ts:75:25:prior*/ SELECT id, project_id FROM site WHERE tenant_id = ? AND name = ?").bind(ctx.tenant!.id, p.name).first<{ id: string; project_id: string }>();
     if (prior && prior.project_id !== pr.id) throw conflict("site belongs to another project");
-    const apps = (await ctx.db.prepare("SELECT id, script_name FROM app_source WHERE tenant_id = ? AND project_id = ?").bind(ctx.tenant!.id, pr.id).all<{ id: string; script_name: string }>()).results;
+    const apps = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsites.ts:77:25:apps*/ SELECT id, script_name FROM app_source WHERE tenant_id = ? AND project_id = ?").bind(ctx.tenant!.id, pr.id).all<{ id: string; script_name: string }>()).results;
     const ids = p.apps.map(script => { const a = apps.find(a => a.script_name === script); if (!a) throw badRequest("every app must already be registered to this project"); return a.id; });
     const id = prior?.id ?? ulid(ctx.now);
     await ctx.db.batch([
-      ctx.db.prepare("INSERT INTO site (id, tenant_id, project_id, name, hostnames, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (tenant_id, name) DO UPDATE SET hostnames = excluded.hostnames").bind(id, ctx.tenant!.id, pr.id, p.name, JSON.stringify(p.hostnames), ctx.now),
-      ctx.db.prepare("DELETE FROM site_app WHERE site_id = ?").bind(id),
-      ...ids.map(app => ctx.db.prepare("INSERT INTO site_app (site_id, app_id) VALUES (?, ?)").bind(id, app)),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsites.ts:81:7:siteRegister*/ INSERT INTO site (id, tenant_id, project_id, name, hostnames, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (tenant_id, name) DO UPDATE SET hostnames = excluded.hostnames").bind(id, ctx.tenant!.id, pr.id, p.name, JSON.stringify(p.hostnames), ctx.now),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsites.ts:82:7:siteRegister*/ DELETE FROM site_app WHERE site_id = ?").bind(id),
+      ...ids.map(app => ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsites.ts:83:25:siteRegister*/ INSERT INTO site_app (site_id, app_id) VALUES (?, ?)").bind(id, app)),
     ]);
     await recordEvent(ctx.db, {tenant_id:ctx.tenant!.id,identity_id:ctx.identity!.id,session_id:ctx.session?.id ?? null,kind:"site.register",target_kind:"project",target_id:pr.id,summary:`Registered site ${p.name} with ${ids.length} apps`}, ctx.now);
     return { site: await siteView(ctx, await findSite(ctx, p.name)) };

@@ -26,11 +26,11 @@ export async function openSituation(ctx: Ctx, question: string): Promise<{ id: s
   if (q.length < 10) throw badRequest("describe the situation in a sentence or two");
   const threadId = ulid(ctx.now);
   const title = q.replace(/\s+/g, " ").slice(0, 80);
-  await ctx.db.prepare("INSERT INTO assistant_thread (id, tenant_id, identity_id, title, scopes, created_at, updated_at) VALUES (?, ?, ?, ?, 'read', ?, ?)")
+  await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsituation.ts:29:9:openSituation*/ INSERT INTO assistant_thread (id, tenant_id, identity_id, title, scopes, created_at, updated_at) VALUES (?, ?, ?, ?, 'read', ?, ?)")
     .bind(threadId, ctx.tenant!.id, ctx.identity!.id, `Situation: ${title}`, ctx.now, ctx.now).run();
   const r = await runTurn(ctx, threadId, "read", q, { instructions: `${instructions(ctx, "read")}\n\n${DIAGNOSIS}` });
   const id = ulid(ctx.now);
-  await ctx.db.prepare("INSERT INTO situation (id, tenant_id, identity_id, thread_id, title, question, report, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+  await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsituation.ts:33:9:openSituation*/ INSERT INTO situation (id, tenant_id, identity_id, thread_id, title, question, report, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
     .bind(id, ctx.tenant!.id, ctx.identity!.id, threadId, title, q, r.reply, ctx.now).run();
   await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "situation.open", target_kind: "situation", target_id: id, summary: `Situation: ${title}` }, ctx.now);
   return { id, thread: threadId, report: r.reply, steps: r.steps.length };
@@ -54,7 +54,7 @@ export const situationResolve = defineVerb({
   },
   parse: (i) => ({ id: reqString(i, "id", { max: 40 }), outcome: reqString(i, "outcome", { max: 4000 }) }),
   run: async (ctx, p) => {
-    const r = await ctx.db.prepare("UPDATE situation SET outcome = ?, outcome_by = ?, outcome_at = ? WHERE id = ? AND tenant_id = ?").bind(p.outcome.trim(), ctx.identity!.id, ctx.now, p.id, ctx.tenant!.id).run();
+    const r = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsituation.ts:57:21:r*/ UPDATE situation SET outcome = ?, outcome_by = ?, outcome_at = ? WHERE id = ? AND tenant_id = ?").bind(p.outcome.trim(), ctx.identity!.id, ctx.now, p.id, ctx.tenant!.id).run();
     if (!r.meta.changes) throw notFound("no such situation");
     return { id: p.id };
   },
@@ -69,5 +69,5 @@ export const situationList = defineVerb({
     render: (r) => { const x = (r as { situations: Array<{ id: string; title: string; report: string; outcome: string | null }> }).situations; return [DATA_NOTE, "", ...x.map((s) => `- \`${s.id}\` ${cleanText(s.title)}${s.outcome ? ` — outcome: ${cleanText(s.outcome).slice(0, 200)}` : ""}\n  ${cleanText(s.report).slice(0, 400)}`)].join("\n"); },
   },
   parse: () => ({}),
-  run: async (ctx) => ({ situations: (await ctx.db.prepare("SELECT s.id, s.title, s.report, s.outcome, s.created_at, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id WHERE s.tenant_id = ? ORDER BY s.created_at DESC LIMIT 50").bind(ctx.tenant!.id).all()).results }),
+  run: async (ctx) => ({ situations: (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsituation.ts:72:45:situationList*/ SELECT s.id, s.title, s.report, s.outcome, s.created_at, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id WHERE s.tenant_id = ? ORDER BY s.created_at DESC LIMIT 50").bind(ctx.tenant!.id).all()).results }),
 });

@@ -47,14 +47,14 @@ export function parseFindings(text: string, files: Set<string>): { summary: stri
 /** The organization's reviewer agent, created the first time; it answers to the requester's first admin. */
 async function reviewerAgent(ctx: Ctx): Promise<string> {
   const email = `${ctx.tenant!.slug}.pimwell-reviewer@${ctx.env.HUB_DOMAIN}`;
-  const found = await ctx.db.prepare("SELECT id FROM identity WHERE email = ? AND kind = 'agent'").bind(email).first<{ id: string }>();
+  const found = await ctx.db.prepare("/*perf-site:src%2Fverbs%2FreviewAi.ts:50:23:found*/ SELECT id FROM identity WHERE email = ? AND kind = 'agent'").bind(email).first<{ id: string }>();
   if (found) return found.id;
-  const op = await ctx.db.prepare(`SELECT i.id FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND m.role = 'admin' AND i.kind = 'human' ORDER BY m.created_at LIMIT 1`)
+  const op = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2FreviewAi.ts:52:20:op*/ SELECT i.id FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.state = 'active' AND m.role = 'admin' AND i.kind = 'human' ORDER BY m.created_at LIMIT 1`)
     .bind(ctx.tenant!.id).first<{ id: string }>();
   const id = ulid(ctx.now);
   await ctx.db.batch([
-    ctx.db.prepare("INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) VALUES (?, 'agent', 'Pimwell reviewer', 0, ?, ?, 'active', ?)").bind(id, email, op?.id ?? ctx.identity!.id, ctx.now),
-    ctx.db.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, 'member', 'active', ?)").bind(ulid(ctx.now), id, ctx.tenant!.id, ctx.now),
+    ctx.db.prepare("/*perf-site:src%2Fverbs%2FreviewAi.ts:56:5:reviewerAgent*/ INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) VALUES (?, 'agent', 'Pimwell reviewer', 0, ?, ?, 'active', ?)").bind(id, email, op?.id ?? ctx.identity!.id, ctx.now),
+    ctx.db.prepare("/*perf-site:src%2Fverbs%2FreviewAi.ts:57:5:reviewerAgent*/ INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, 'member', 'active', ?)").bind(ulid(ctx.now), id, ctx.tenant!.id, ctx.now),
   ]);
   return id;
 }
@@ -82,9 +82,9 @@ export const reviewAi = defineVerb({
     const ref = `${v.review.slug}!${v.review.number}`;
     const rows = [{ path: null as string | null, line: null as number | null, body: `Review by ${answer.model}: ${found.summary}` }, ...found.comments.map((c) => ({ path: c.path, line: c.line, body: `[${c.severity}] ${c.comment}` }))];
     await ctx.db.batch([
-      ...rows.map((c, n) => ctx.db.prepare("INSERT INTO review_comment (id, review_id, tenant_id, author_id, path, line, head_oid, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      ...rows.map((c, n) => ctx.db.prepare("/*perf-site:src%2Fverbs%2FreviewAi.ts:85:29:reviewAi*/ INSERT INTO review_comment (id, review_id, tenant_id, author_id, path, line, head_oid, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(ulid(ctx.now + n), v.review.id, ctx.tenant!.id, agent, c.path, c.line, v.head, c.body, ctx.now + n)),
-      ctx.db.prepare("UPDATE review SET updated_at = ? WHERE id = ?").bind(ctx.now, v.review.id),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2FreviewAi.ts:87:7:reviewAi*/ UPDATE review SET updated_at = ? WHERE id = ?").bind(ctx.now, v.review.id),
     ]);
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "review.ai", target_kind: "review", target_id: v.review.id, summary: `Asked the reviewer agent about ${ref}: ${found.comments.length} comments` }, ctx.now);
     return { ref, summary: found.summary, comments: found.comments.length, model: answer.model };

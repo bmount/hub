@@ -10,13 +10,13 @@ export function traceEvidenceUrl(ctx: Ctx, id: string): string {
 }
 
 export function traceGroupStatement(ctx: Ctx, id: string) {
-  return ctx.db.prepare(`SELECT g.*, COALESCE(g.client_kind, g.kind) AS kind, ${errorOriginColumns()}, p.slug AS project FROM app_error_group g
+  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fwork.ts:13:10:traceGroupStatement*/ SELECT g.*, COALESCE(g.client_kind, g.kind) AS kind, ${errorOriginColumns()}, p.slug AS project FROM app_error_group g
     JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
     WHERE g.id = ? AND g.tenant_id = ?`).bind(id, ctx.tenant!.id);
 }
 
 export function traceDraftStatement(ctx: Ctx, id: string) {
-  return ctx.db.prepare(`SELECT g.*, COALESCE(g.client_kind, g.kind) AS kind, p.slug AS project FROM app_error_group g
+  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fwork.ts:19:10:traceDraftStatement*/ SELECT g.*, COALESCE(g.client_kind, g.kind) AS kind, p.slug AS project FROM app_error_group g
     JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind NOT IN ('channel', 'agent-src') AND p.state = 'active'
     WHERE g.id = ? AND g.tenant_id = ? AND NOT EXISTS
       (SELECT 1 FROM project other WHERE other.tenant_id = p.tenant_id AND other.slug = p.slug
@@ -26,7 +26,7 @@ export function traceDraftStatement(ctx: Ctx, id: string) {
 
 export function traceWorkStatement(ctx: Ctx, id: string) {
   const url = traceEvidenceUrl(ctx, id);
-  return ctx.db.prepare(`SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,
+  return ctx.db.prepare(`/*perf-site:src%2Fapps%2Fwork.ts:29:10:traceWorkStatement*/ SELECT w.id, p.slug AS project, w.number, p.slug || '#' || w.number AS ref, w.kind, w.state, w.title,
       CASE WHEN w.source_kind = 'url' AND w.source_ref = ? THEN 'filed' ELSE 'linked' END AS relationship
     FROM app_error_group g
     JOIN project gp ON gp.id = g.project_id AND gp.tenant_id = g.tenant_id AND gp.kind NOT IN ('channel', 'agent-src')
