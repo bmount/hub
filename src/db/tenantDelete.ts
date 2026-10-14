@@ -4,7 +4,7 @@ import { badRequest, conflict, notFound } from "../errors";
 
 /** Tables holding rows that belong to one tenant, children before parents. */
 const TENANT_TABLES = [
-  "contact_link", "contact_connection", "contact_entity",
+  "agent_source_alias", "contact_link", "contact_connection", "contact_entity",
   "work_proposal", "work_dep", "work_resource", "work_graph_rev",
   "repository_sync", "repository_commit", "repository", "git_commit", "git_push", "git_legacy_forward", "git_repository",
   "document_delivery", "file_revision", "file_upload", "wiki_revision", "review_comment", "review",

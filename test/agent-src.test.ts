@@ -7,7 +7,7 @@ import { codePage, filesPage } from "../src/http/codePages";
 import { repoLog, repoFile, repoDiff, repoCommit, repoBranches, repoSearch } from "../src/verbs/code";
 import { artifactGit } from "../src/http/artifactGit";
 import { clearArtifactTokensForTest } from "../src/code/artifactsRest";
-import { agentSrcSlug } from "../src/code/agentSrc";
+import { agentByName, agentSrcSlug } from "../src/code/agentSrc";
 import { createGitSession } from "../src/db/sessions";
 import { getProjectByPath, listProjects } from "../src/db/projects";
 import { packet, peekCommands, ZERO_OID } from "../src/code/gitProtocol";
@@ -65,6 +65,32 @@ async function world() {
 }
 
 describe("agent source repositories", () => {
+  it("resolves reserved aliases to the same storage and permissions, never to a reused name", async () => {
+    const w = await world();
+    await env.HUB_DB.prepare("INSERT INTO agent_source_alias VALUES (?, 'short', ?)")
+      .bind(w.tenant.id, w.bot.agent.identity.id).run();
+    for (const auth of [w.botAuth, await w.gitAuth(w.operator), await w.gitAuth(w.admin), await w.gitAuth(w.other), null]) {
+      const canonical = await w.git('/agent-src/bot.git', auth);
+      const alias = await w.git('/agent-src/short.git', auth);
+      expect(alias.status).toBe(canonical.status);
+      expect(await alias.text()).toBe(await canonical.text());
+      const write = await w.git('/agent-src/short.git', auth, 'git-receive-pack');
+      const canonicalWrite = await w.git('/agent-src/bot.git', auth, 'git-receive-pack');
+      expect(write.status).toBe(canonicalWrite.status);
+    }
+    expect(w.created).toEqual([w.slug]);
+    const ctx = await buildContext(new Request('https://acme.pimwell.test/', { headers: cookieHeaders(w.other.token, 'acme.pimwell.test') }), w.configured);
+    await expect(repoBranches.run(ctx, repoBranches.parse({ project: 'agent-src/short' }))).rejects.toMatchObject({ status: 404 });
+    const headers = cookieHeaders(w.operator.token, 'acme.pimwell.test');
+    expect((await codePage(new Request('https://acme.pimwell.test/agent-src/short/code', { headers }), w.configured, 'agent-src/short')).status).toBe(200);
+    await expect(seedAgent(w.tenant, w.operator.identity, 'short')).rejects.toThrow();
+    await env.HUB_DB.prepare("UPDATE identity SET email = 'acme.renamed@pimwell.test' WHERE id = ?").bind(w.bot.agent.identity.id).run();
+    expect((await agentByName(env.HUB_DB, w.tenant, 'short'))?.id).toBe(w.bot.agent.identity.id);
+    await env.HUB_DB.prepare("UPDATE identity SET state = 'archived' WHERE id = ?").bind(w.bot.agent.identity.id).run();
+    expect(await agentByName(env.HUB_DB, w.tenant, 'short')).toBeNull();
+    const foreign = await seedTenant('foreign');
+    expect(await agentByName(env.HUB_DB, foreign, 'short')).toBeNull();
+  });
   it("links source only for its agent, operator and admins, hiding all browser and MCP reads from others", async () => {
     const w = await world();
     await w.git("/agent-src/bot.git", w.botAuth);

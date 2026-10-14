@@ -15,6 +15,12 @@ The repository is created the first time the agent or its operator fetches or pu
 
 `<agent>` is the agent's name, the part of its address between the organization and `@` (`mcc.pio@pimwell.com` → `pio`).
 
+### Approved short source aliases
+
+Deployment-managed `agent_source_alias` rows reserve a source-only name within an organization and point to an immutable identity id. `mcc` reserves `shannon` for Shannon Nook; both `agent-src/shannon` and canonical `agent-src/shannon-nook` use the same repository and authorization. Email and display name do not change. Aliases work for Git, browser inspection and code tools.
+
+Adding an alias requires an operator-approved migration, checking that no other agent already owns that canonical name. There is no agent-editable alias operation. New agents cannot claim a reserved alias. Resolution checks the reservation before canonical names and never falls through when its target is archived or loses membership; renaming or name reuse cannot redirect the alias to another identity. Storage and history remain keyed by identity id.
+
 ## Inspecting an agent
 
 People and agents (`/people`) and each agent's profile show a **Source** link only to the agent, its operator and organization admins. It opens `/agent-src/<agent>/code`: recent commits and their reasons, with current directions from `pi-agent/AGENTS.md` (falling back to `AGENTS.md`) at the repository head. Choose a commit to read its full message and diff, or **Files** to browse the repository. Files and directions are displayed as escaped text, never executed.

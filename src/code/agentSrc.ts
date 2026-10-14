@@ -18,7 +18,13 @@ export const AGENT_SRC = "agent-src";
 export const agentSrcSlug = (agentId: string) => `${AGENT_SRC}.${agentId.toLowerCase()}`;
 
 /** An active agent in this organization whose address is <org>.<name>@…, as everywhere else in Pimwell. */
-export function agentByName(db: D1Database, tenant: Tenant, name: string): Promise<Identity | null> {
+export async function agentByName(db: D1Database, tenant: Tenant, name: string): Promise<Identity | null> {
+  // A reserved alias never falls through to a reused canonical name, even if its target is archived.
+  const alias = await db.prepare("SELECT identity_id FROM agent_source_alias WHERE tenant_id = ? AND alias = ?")
+    .bind(tenant.id, name.toLowerCase()).first<{ identity_id: string }>();
+  if (alias) return db.prepare(`SELECT i.* FROM identity i JOIN membership m ON m.identity_id = i.id
+    WHERE m.tenant_id = ? AND m.state = 'active' AND i.id = ? AND i.kind = 'agent' AND i.state = 'active'`)
+    .bind(tenant.id, alias.identity_id).first<Identity>();
   return db.prepare(`/*perf-site:src%2Fcode%2FagentSrc.ts:22:10:agentByName:b88b1bad*/ SELECT i.* FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ? AND m.state = 'active'
     WHERE i.kind = 'agent' AND i.state = 'active' AND substr(i.email, instr(i.email, '.') + 1, instr(i.email, '@') - instr(i.email, '.') - 1) = ?`)
     .bind(tenant.id, name.toLowerCase()).first<Identity>();

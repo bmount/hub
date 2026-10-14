@@ -76,8 +76,9 @@ export async function createAgent(
       // Projects and agents share one name space per organization (mailboxes spec, amendment 2026-10-07 b); the check
       // is inside the insert, so a project created at the same moment cannot also win the name.
       db.prepare(`/*perf-site:src%2Fdb%2Fagents.ts:78:7:createAgent:84eccece*/ INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) SELECT ?, 'agent', ?, 0, ?, ?, 'active', ?
-        WHERE NOT EXISTS (SELECT 1 FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src'))`)
-        .bind(identity.id, display_name, email, input.operator_id, now, input.tenant.id, slug),
+        WHERE NOT EXISTS (SELECT 1 FROM project WHERE tenant_id = ? AND slug = ? AND kind NOT IN ('channel', 'agent-src'))
+          AND NOT EXISTS (SELECT 1 FROM agent_source_alias WHERE tenant_id = ? AND alias = ?)`)
+        .bind(identity.id, display_name, email, input.operator_id, now, input.tenant.id, slug, input.tenant.id, slug),
       db.prepare("/*perf-site:src%2Fdb%2Fagents.ts:81:7:createAgent:7c4f166a*/ INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) SELECT ?, ?, ?, ?, 'active', ? WHERE EXISTS (SELECT 1 FROM identity WHERE id = ?)")
         .bind(membership.id, identity.id, input.tenant.id, input.role, now, identity.id),
     ]);
@@ -85,7 +86,7 @@ export async function createAgent(
     if (String(e).includes("UNIQUE")) throw conflict("agent slug taken in this tenant");
     throw e;
   }
-  if (made[0]!.meta.changes !== 1) throw conflict(`"${slug}" is the name of a project in this organization; choose another agent name`);
+  if (made[0]!.meta.changes !== 1) throw conflict(`"${slug}" is the name of a project or reserved source alias in this organization; choose another agent name`);
   return { identity, membership, tenant: input.tenant, slug };
 }
 
