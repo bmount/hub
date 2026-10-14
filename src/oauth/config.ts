@@ -55,6 +55,7 @@ export function authServer(env: Env, resource: string | null): OAuthAuthorizatio
     refreshTokenTTL: REFRESH_IDLE_TTL_S,
     refreshTokenIdleTTL: REFRESH_IDLE_TTL_S,
     clientRegistrationTTL: CLIENT_UNUSED_TTL_S,
+    clientIdMetadataDocumentEnabled: false,
     // Never log descriptions or requests: they can echo client input (MCP spec 3).
     onError: ({ status, code }) => { console.log("oauth error", status, code); },
   });

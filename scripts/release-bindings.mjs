@@ -2,10 +2,11 @@
 export function compatibleRuntime(oldRuntime, freshRuntime, worker) {
   const normalize = runtime => JSON.stringify(Object.fromEntries(Object.entries(runtime).sort(([a], [b]) => a.localeCompare(b))));
   if (normalize(oldRuntime) === normalize(freshRuntime)) return true;
-  if (worker !== "pimwell-tail") return false;
+  const addition = worker === "pimwell-tail" ? "nodejs_compat" : worker === "pimwell-hub" ? "global_fetch_strictly_public" : null;
+  if (!addition) return false;
   const flags = oldRuntime.compatibility_flags ?? [];
-  if (flags.includes("nodejs_compat")) return false;
-  return normalize({ ...oldRuntime, compatibility_flags: [...flags, "nodejs_compat"] }) === normalize(freshRuntime);
+  if (flags.includes(addition)) return false;
+  return normalize({ ...oldRuntime, compatibility_flags: [...flags, addition] }) === normalize(freshRuntime);
 }
 export function compatibleBindings(oldBindings, freshBindings, worker) {
   const additive = b => (worker === "pimwell-hub" && b.name === "SYNTHETIC_BROWSER" && b.type === "browser" && (b.version === undefined || b.version === 2) && Object.keys(b).every(k => ["name", "type", "version"].includes(k))) ||

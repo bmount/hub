@@ -48,6 +48,16 @@ describe("wrangler configuration", () => {
     expect(compatibleRuntime(runtime, { ...fresh, compatibility_flags: ["nodejs_compat", "other"] }, "pimwell-tail")).toBe(false);
     expect(readWranglerConfig().analytics_engine_datasets).toEqual([{ binding: "PERF", dataset: "pimwell_perf" }]);
   });
+  it("allows only the additive hub public-fetch runtime required for same-zone public probes", () => {
+    const runtime = { compatibility_date: "2026-09-01", compatibility_flags: ["nodejs_compat"] };
+    const fresh = { ...runtime, compatibility_flags: [...runtime.compatibility_flags, "global_fetch_strictly_public"] };
+    expect(compatibleRuntime(runtime, fresh, "pimwell-hub")).toBe(true);
+    for (const worker of ["pimwell-git", "pimwell-tail", undefined]) expect(compatibleRuntime(runtime, fresh, worker)).toBe(false);
+    expect(compatibleRuntime(fresh, runtime, "pimwell-hub")).toBe(false);
+    expect(compatibleRuntime(runtime, { ...fresh, compatibility_date: "2027-01-01" }, "pimwell-hub")).toBe(false);
+    expect(compatibleRuntime(runtime, { ...fresh, compatibility_flags: [...fresh.compatibility_flags, "other"] }, "pimwell-hub")).toBe(false);
+    expect(readWranglerConfig().compatibility_flags).toContain("global_fetch_strictly_public");
+  });
   it("allows only the approved hub synthetic browser addition", () => {
     const db={name:"HUB_DB",type:"d1",id:"database"},browser={name:"SYNTHETIC_BROWSER",type:"browser"};
     expect(compatibleBindings([db],[db,browser],"pimwell-hub")).toBe(true);

@@ -3,7 +3,7 @@
   "name": "pimwell-hub",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": false,
   "version_metadata": { "binding": "WORKER_VERSION" },
   "analytics_engine_datasets": [{ "binding": "PERF", "dataset": "pimwell_perf" }],
