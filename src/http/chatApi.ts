@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { span, traceFields } from "../perf";
 import { agentMcpAuth } from "../mcp/agentAuth";
 import { mcpAuth } from "../mcp/context";
 import { postMessage, type PostParams } from "../chat/post";
@@ -133,9 +134,11 @@ export async function handleChatApi(request: Request, env: Env, waitUntil: (p: P
       return json({ ok: true, result });
     }
     const params = verb.parse({ c: ch.slug, body: input.text, msg: input.msg_id, reply_to: input.reply_to ?? wire.root, idempotency_key: input.client_id, after: input.after });
-    return json({ ok: true, result: method === 'sendMessage'
-      ? await postMessage(ctx, params as PostParams, true)
-      : await verb.run(ctx, params) });
+    if (method === 'sendMessage') {
+      traceFields({ verb: verb.name, tenant: ctx.tenant?.id ?? '', auth: ctx.agentMcp || ctx.identity?.kind === 'agent' ? 'agent' : ctx.authKind === 'oauth' ? 'MCP' : ctx.authKind === 'token' || ctx.authKind === 'bearer' ? 'API token' : ctx.authKind ?? 'anonymous' });
+      return json({ ok: true, result: await span('verb.chat.post', () => postMessage(ctx, params as PostParams, true)) });
+    }
+    return json({ ok: true, result: await verb.run(ctx, params) });
   } catch (e) {
     if (e instanceof HubError) return json({ ok: false, error: { code: e.reason === 'rate' ? 'rate_limited' : e.reason, message: e.detail ?? e.reason, ...e.data, ...(e.data?.retry_after !== undefined ? { retry_after_s: e.data.retry_after } : {}) } }, e.status);
     if (e instanceof SyntaxError) return json({ ok: false, error: { code: 'bad_request', message: 'invalid JSON' } }, 400);
