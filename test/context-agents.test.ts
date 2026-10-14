@@ -17,6 +17,40 @@ async function setup() {
 }
 
 describe("agent credentials in buildContext", () => {
+  it("authenticates each chat command from one live batch without page aggregates", async () => {
+    const { op, s } = await setup();
+    let batches = 0;
+    const prepared: string[] = [];
+    const measured = new Proxy(db(), { get(target, key) {
+      if (key === 'prepare') return (sql: string) => { prepared.push(sql); return target.prepare(sql); };
+      if (key === 'batch') return (statements: D1PreparedStatement[]) => { batches++; return target.batch(statements); };
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    const request = (headers: Record<string, string>) => new Request('https://acme.pimwell.test/chat/v1/getUpdates', { headers });
+    const agent = await buildContext(request({ authorization: `Bearer ${s.token}` }), { ...env, HUB_DB: measured });
+    expect(agent.identity?.id).toBe(s.agent.identity.id);
+    expect(agent.rail).toBeUndefined(); expect(agent.explorer).toBeUndefined();
+    expect(batches).toBe(1); expect(prepared).toHaveLength(7);
+    prepared.length = 0; batches = 0;
+    const human = await buildContext(request({ cookie: `pmw_session=${op.token}` }), { ...env, HUB_DB: measured });
+    expect(human.identity?.id).toBe(op.identity.id);
+    expect(human.rail).toBeUndefined(); expect(human.explorer).toBeUndefined();
+    expect(batches).toBe(1); expect(prepared).toHaveLength(4);
+  });
+
+  it.each(['parent identity', 'parent tenant', 'own membership', 'operator kind', 'operator membership'])('refuses changed %s evidence on the next batched chat authentication', async change => {
+    const { acme, blue, op, s } = await setup();
+    const request = () => new Request('https://acme.pimwell.test/chat/v1/getUpdates', { headers: { authorization: `Bearer ${s.token}` } });
+    expect((await buildContext(request(), env)).identity?.id).toBe(s.agent.identity.id);
+    if (change === 'parent identity') await db().prepare('UPDATE api_token SET identity_id = ? WHERE id = ?').bind(op.identity.id, s.apiToken.id).run();
+    if (change === 'parent tenant') await db().prepare('UPDATE api_token SET tenant_id = ? WHERE id = ?').bind(blue.id, s.apiToken.id).run();
+    if (change === 'own membership') await db().prepare("UPDATE membership SET state = 'archived' WHERE tenant_id = ? AND identity_id = ?").bind(acme.id, s.agent.identity.id).run();
+    if (change === 'operator kind') await db().prepare("UPDATE identity SET kind = 'agent' WHERE id = ?").bind(op.identity.id).run();
+    if (change === 'operator membership') await db().prepare('DELETE FROM membership WHERE tenant_id = ? AND identity_id = ?').bind(acme.id, op.identity.id).run();
+    expect((await buildContext(request(), env)).identity).toBeNull();
+  });
+
   it("resolves a pmw_ token on its own tenant as the agent, with no session", async () => {
     const { acme, s } = await setup();
     const ctx = await ctxFor("acme.pimwell.test", { authorization: `Bearer ${s.longLived}` });

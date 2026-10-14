@@ -135,10 +135,12 @@ async function buildContextImpl(request: Request, env: Env, now: number = Date.n
   // One round trip for the common case (performance budget, overnight plan 2 N4): with a session token in hand, the
   // tenant, session, identity and membership rows come back in a single batch. Every check below still runs on them.
   const sessionToken = bearer && bearer.startsWith("pms_") ? bearer : !bearer && cookieToken ? cookieToken : null;
-  // Page views on an organization's host also read the rail's numbers in that batch.
-  const pageBearer = bearer?.startsWith("pms_") && !/^\/(api|mcp|agent|p)\b/.test(new URL(request.url).pathname);
-  const wantRail = host.kind === "tenant" && request.method === "GET" && ((cookieToken !== null && !bearer) || !!pageBearer);
-  const pre = sessionToken ? await prefetch(db, host.kind === "tenant" ? host.slug : null, await sha256Hex(sessionToken), now, wantRail, request) : null;
+  // Page views also read rail counts. Chat transport is an API even though socket
+  // reauthentication uses a GET-shaped request; never load UI aggregates there.
+  const pageRequest = !/^\/(api|mcp|agent|p|chat)\b/.test(new URL(request.url).pathname);
+  const pageBearer = bearer?.startsWith("pms_") && pageRequest;
+  const wantRail = pageRequest && host.kind === "tenant" && request.method === "GET" && ((cookieToken !== null && !bearer) || !!pageBearer);
+  const pre = sessionToken ? await prefetch(db, host.kind === "tenant" ? host.slug : null, await sha256Hex(sessionToken), now, wantRail, request, !!bearer) : null;
 
   let tenant: Tenant | null = null;
   if (host.kind === "tenant") {
@@ -168,7 +170,7 @@ async function buildContextImpl(request: Request, env: Env, now: number = Date.n
   let identity: Identity | null = null;
   if (session) identity = pre && pre.identity?.id === session.identity_id ? pre.identity : await getIdentityById(db, session.identity_id);
   else if (apiToken) identity = await getIdentityById(db, apiToken.identity_id);
-  if (identity && !(await credentialUsable(db, identity, session, apiToken, tenant))) identity = null;
+  if (identity && !(await credentialUsable(db, identity, session, apiToken, tenant, "http", pre?.agentState))) identity = null;
   if (!identity && authKind !== null) {
     if (authKind === "cookie") staleCookie = true;
     session = null;
@@ -197,24 +199,33 @@ async function buildContextImpl(request: Request, env: Env, now: number = Date.n
   return ctx;
 }
 
-type Prefetched = { tenant: Tenant | null; session: Session | null; identity: Identity | null; membership: Membership | null; rail: RailData | null; explorer: ExplorerData | null };
+type Prefetched = { tenant: Tenant | null; session: Session | null; identity: Identity | null; membership: Membership | null; agentState?: AgentCredentialState; rail: RailData | null; explorer: ExplorerData | null };
 
-/** The rows buildContext needs for a session token, in one batch. Same predicates as the single-row getters. */
-async function prefetch(db: D1Database, slug: string | null, tokenHash: string, now: number, wantRail = false, request?: Request): Promise<Prefetched> {
+/** Session and live agent credential rows in one batch; identical predicates to the single-row getters. */
+async function prefetch(db: D1Database, slug: string | null, tokenHash: string, now: number, wantRail = false, request?: Request, wantAgentState = false): Promise<Prefetched> {
   const live = "SELECT identity_id FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?";
-  const [t, s, i, m, rc, ec] = await db.batch([
-    db.prepare("/*perf-site:src%2Fauth%2Fcontext.ts:206:5:prefetch:d9bfee79*/ SELECT * FROM tenant WHERE slug = ?").bind(slug),
-    db.prepare("/*perf-site:src%2Fauth%2Fcontext.ts:207:5:prefetch:f39885ba*/ SELECT * FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?").bind(tokenHash, now),
-    db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:208:5:prefetch:0e329609*/ SELECT * FROM identity WHERE id = (${live})`).bind(tokenHash, now),
-    db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:209:5:prefetch:8dcf294c*/ SELECT * FROM membership WHERE identity_id = (${live}) AND tenant_id = (SELECT id FROM tenant WHERE slug = ?)`).bind(tokenHash, now, slug),
+  const operator = `SELECT operator_id FROM identity WHERE id = (${live}) AND kind = 'agent'`;
+  const rows = await db.batch([
+    db.prepare("/*perf-site:src%2Fauth%2Fcontext.ts:208:5:prefetch:d9bfee79*/ SELECT * FROM tenant WHERE slug = ?").bind(slug),
+    db.prepare("/*perf-site:src%2Fauth%2Fcontext.ts:209:5:prefetch:f39885ba*/ SELECT * FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?").bind(tokenHash, now),
+    db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:210:5:prefetch:0e329609*/ SELECT * FROM identity WHERE id = (${live})`).bind(tokenHash, now),
+    db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:211:5:prefetch:8dcf294c*/ SELECT * FROM membership WHERE identity_id = (${live}) AND tenant_id = (SELECT id FROM tenant WHERE slug = ?)`).bind(tokenHash, now, slug),
+    ...(wantAgentState ? [
+      db.prepare("/*perf-site:src%2Fauth%2Fcontext.ts:213:7:prefetch:c6452254*/ SELECT identity_id, tenant_id, revoked_at FROM api_token WHERE id = (SELECT parent_token_id FROM session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?)").bind(tokenHash, now),
+      db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:214:7:prefetch:e2bf791f*/ SELECT * FROM identity WHERE id = (${operator})`).bind(tokenHash, now),
+      db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:215:7:prefetch:8d0c0d76*/ SELECT * FROM membership WHERE identity_id = (${operator}) AND tenant_id = (SELECT id FROM tenant WHERE slug = ?)`).bind(tokenHash, now, slug),
+    ] : []),
     ...(wantRail ? [railStatement(db, slug, live, tokenHash, now), explorerStatement(db, slug, live, tokenHash, now, request!)] : []),
   ]);
+  const [t, s, i, m] = rows;
+  const [parent, op, om] = wantAgentState ? rows.slice(4, 7) : [];
+  const [rc, ec] = wantRail ? rows.slice(wantAgentState ? 7 : 4) : [];
   const one = <T>(r: D1Result<unknown> | undefined): T | null => ((r?.results[0] as T | undefined) ?? null);
   const counts = one<Omit<RailData, "projects"> & { projects: string }>(rc);
   const rail: RailData | null = wantRail && counts ? { ...counts, projects: JSON.parse(counts.projects) } : null;
   const row = one<Omit<ExplorerData, "choices" | "channels" | "inProject" | "sites" | "repositories"> & { choices: string; channels: string; sites: string; repositories: string; inProject: number }>(ec);
   const explorer = row ? { ...row, choices: JSON.parse(row.choices), repositories: JSON.parse(row.repositories), sites: JSON.parse(row.sites), channels: JSON.parse(row.channels), inProject: !!row.inProject } : null;
-  return { tenant: one<Tenant>(t), session: one<Session>(s), identity: one<Identity>(i), membership: one<Membership>(m), rail, explorer };
+  return { tenant: one<Tenant>(t), session: one<Session>(s), identity: one<Identity>(i), membership: one<Membership>(m), ...(wantAgentState ? { agentState: { parent: one<AgentCredentialState["parent"]>(parent), own: one<Membership>(m), operator: one<Identity>(op), operatorMembership: one<Membership>(om) } } : {}), rail, explorer };
 }
 
 /** Preferences select only tenant-authorized projects; they never grant access. */
@@ -222,7 +233,7 @@ function explorerStatement(db: D1Database, slug: string | null, live: string, to
   let path = "", requested = "", remembered = "";
   try { const url = new URL(request.url); path = decodeURIComponent(url.pathname.split("/")[1] ?? ""); requested = url.searchParams.get("project") ?? url.searchParams.get("work")?.split("#")[0] ?? ""; } catch { /* invalid URL component */ }
   try { remembered = decodeURIComponent(/(?:^|;\s*)pmw_project=([^;]*)/.exec(request.headers.get("cookie") ?? "")?.[1] ?? ""); } catch { /* invalid preference */ }
-  return db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:225:10:explorerStatement:14a0c8b4*/ WITH target AS MATERIALIZED (SELECT id FROM tenant WHERE slug = ?),
+  return db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:235:10:explorerStatement:14a0c8b4*/ WITH target AS MATERIALIZED (SELECT id FROM tenant WHERE slug = ?),
     actor AS MATERIALIZED (${live}),
     choices AS MATERIALIZED (
       SELECT p.*, p.slug AS path FROM project p
@@ -259,7 +270,7 @@ function explorerStatement(db: D1Database, slug: string | null, live: string, to
 function railStatement(db: D1Database, slug: string | null, live: string, tokenHash: string, now: number): D1PreparedStatement {
   // No cross-request cache: writes, identity changes and access revocation need no
   // invalidation hooks. The sign-in checks still gate attaching this data to ctx.
-  return db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:262:10:railStatement:df17ef5a*/ WITH target AS MATERIALIZED (SELECT id FROM tenant WHERE slug = ?),
+  return db.prepare(`/*perf-site:src%2Fauth%2Fcontext.ts:272:10:railStatement:df17ef5a*/ WITH target AS MATERIALIZED (SELECT id FROM tenant WHERE slug = ?),
       actor AS MATERIALIZED (${live}),
       work_counts AS MATERIALIZED (
         SELECT p.id AS project_id, COUNT(*) AS open,
