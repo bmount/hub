@@ -86,6 +86,14 @@ function structure(body: string, explicit: Array<{ kind: string; key: string }>)
 
 async function extract(ctx: Ctx, s: Structure, me: string): Promise<Extracted> {
   const { parsed, all } = s;
+  if (parsed.handles.length === 0 && all.length === 0) {
+    // Plain messages need current membership evidence, not handle assignment and
+    // an organization-wide directory. Keep the same active identity/member check.
+    const active = await ctx.db.prepare("/*perf-site:src%2Fchat%2Fpost.ts:92:26:extract:f4f3784f*/ SELECT 1 FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.identity_id = ? AND m.state = 'active' AND i.state = 'active'")
+      .bind(ctx.tenant!.id, me).first();
+    if (!active) throw forbidden("only members of this tenant post");
+    return { resolved: [], unresolved: [], mentions: [], not_waking: 0 };
+  }
   const dir = await people(ctx.db, ctx.tenant!.id);
   if (!dir.get(me)?.active) throw forbidden("only members of this tenant post");
   const { resolved, unresolved } = await resolveRefs(ctx, all);
@@ -181,11 +189,14 @@ async function safeEvents(ctx: Ctx, ch: ChannelRow, author: Author, o: PostOk, k
   }
 }
 
-export async function postMessage(ctx: Ctx, p: PostParams, backgroundDelivery = false): Promise<PostResult> {
+export async function postMessage(ctx: Ctx, p: PostParams, backgroundDelivery = false, authorizedChannel?: ChannelRow): Promise<PostResult> {
   const author = authorOf(ctx);
   if (p.after === null && (needsAfter(author) || p.response_to)) throw badRequest("after is required: pass the head from chat.read or chat.catchup");
   const shape = structure(p.body, p.refs);
-  const ch = await readableChannel(ctx, p.c);
+  // The HTTP adapter has just resolved and authorized this exact channel. Never
+  // reuse it across commands, tenants or channel names.
+  if (authorizedChannel && (authorizedChannel.tenant_id !== ctx.tenant?.id || authorizedChannel.slug !== p.c)) throw forbidden("channel context mismatch");
+  const ch = authorizedChannel ?? await readableChannel(ctx, p.c);
   const conv = conversationStub(ctx.env, ch.tenant_id, ch.project_id);
   const response: ResponseIntent | undefined = p.response_to ? await responseIntent(p.body, p.refs, p.response_to) : undefined;
   if (response && p.reply_to !== response.source.msg_id) throw badRequest("response_to must be the exact reply target");
@@ -207,7 +218,11 @@ export async function postMessage(ctx: Ctx, p: PostParams, backgroundDelivery = 
       return result(ch, prior, [], 0);
     }
   }
-  const x = await extract(ctx, shape, author.id);
+  const [x, update_recipients, body_sha256] = await Promise.all([
+    extract(ctx, shape, author.id),
+    updateAudience(ctx.db, ch.tenant_id, ch.project_id, ch),
+    sha256Hex(p.body),
+  ]);
   const reserve = (await inboxStub(ctx.env, ch.tenant_id, author.id).reserve(ch.tenant_id, author.id, {
     session_id: author.session_id, is_agent: author.kind === "agent", conversation_id: ch.project_id, now: ctx.now,
   })) as ReserveResult;
@@ -216,9 +231,9 @@ export async function postMessage(ctx: Ctx, p: PostParams, backgroundDelivery = 
     throw new HubError(429, "rate", `retry after ${reserve.retry_after_s} s`, { retry_after: reserve.retry_after_s });
   }
   const o = (await conv.post({
-    tenant_id: ch.tenant_id, conversation_id: ch.project_id, now: ctx.now, author, policy, body: p.body, body_sha256: await sha256Hex(p.body),
+    tenant_id: ch.tenant_id, conversation_id: ch.project_id, now: ctx.now, author, policy, body: p.body, body_sha256,
     after: p.after, reply_to: p.reply_to, refs: x.resolved, mentions: x.mentions, wake_hop: reserve.wake_hop, thread_wake_hops: reserve.thread_wake_hops, idempotency_key: p.idempotency_key, audience, response, intent_fingerprint,
-    update_recipients: await updateAudience(ctx.db, ch.tenant_id, ch.project_id, ch),
+    update_recipients,
   }, backgroundDelivery)) as PostOutcome;
   if (o.refused !== null) throw await refusalError(ctx, author, ch, o);
   if (!o.replayed) {

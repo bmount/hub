@@ -136,7 +136,7 @@ export async function handleChatApi(request: Request, env: Env, waitUntil: (p: P
     const params = verb.parse({ c: ch.slug, body: input.text, msg: input.msg_id, reply_to: input.reply_to ?? wire.root, idempotency_key: input.client_id, after: input.after });
     if (method === 'sendMessage') {
       traceFields({ verb: verb.name, tenant: ctx.tenant?.id ?? '', auth: ctx.agentMcp || ctx.identity?.kind === 'agent' ? 'agent' : ctx.authKind === 'oauth' ? 'MCP' : ctx.authKind === 'token' || ctx.authKind === 'bearer' ? 'API token' : ctx.authKind ?? 'anonymous' });
-      return json({ ok: true, result: await span('verb.chat.post', () => postMessage(ctx, params as PostParams, true)) });
+      return json({ ok: true, result: await span('verb.chat.post', () => postMessage(ctx, params as PostParams, true, ch)) });
     }
     return json({ ok: true, result: await verb.run(ctx, params) });
   } catch (e) {
