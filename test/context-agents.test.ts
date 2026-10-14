@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { buildContext } from "../src/auth/context";
+import { buildContext, credentialUsable } from "../src/auth/context";
+import { introspect } from "../src/http/internal";
 import { createApiToken } from "../src/db/apiTokens";
 import { seedAgent, seedHuman, seedTenant } from "./helpers";
 
@@ -49,6 +50,56 @@ describe("agent credentials in buildContext", () => {
     if (change === 'operator kind') await db().prepare("UPDATE identity SET kind = 'agent' WHERE id = ?").bind(op.identity.id).run();
     if (change === 'operator membership') await db().prepare('DELETE FROM membership WHERE tenant_id = ? AND identity_id = ?').bind(acme.id, op.identity.id).run();
     expect((await buildContext(request(), env)).identity).toBeNull();
+  });
+
+  it.each(['run', 'api', 'introspect'])('authenticates %s with one batch and no standalone reads', async mode => {
+    const { s } = await setup();
+    let batches = 0;
+    const prepared: string[] = [];
+    const measured = new Proxy(db(), { get(target, key) {
+      if (key === 'prepare') return (sql: string) => { prepared.push(sql); return target.prepare(sql); };
+      if (key === 'batch') return (statements: D1PreparedStatement[]) => { batches++; return target.batch(statements); };
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    const e = { ...env, HUB_DB: measured };
+    if (mode === 'introspect') {
+      const response = await introspect(new Request('https://pimwell.test/internal/introspect', {
+        method: 'POST', headers: { 'x-hub-internal': 'test-internal-secret' },
+        body: JSON.stringify({ token: s.token, tenant: 'acme' }),
+      }), e);
+      expect(await response.json()).toMatchObject({ ok: true, role: 'member', identity: { id: s.agent.identity.id } });
+    } else {
+      const ctx = await buildContext(new Request('https://acme.pimwell.test/api/whoami', {
+        headers: { authorization: `Bearer ${mode === 'api' ? s.longLived : s.token}` },
+      }), e, Date.now(), undefined, { longLivedToken: true });
+      expect(ctx.identity?.id).toBe(s.agent.identity.id);
+      expect(ctx.role).toBe('member');
+    }
+    expect(batches).toBe(1);
+    expect(prepared).toHaveLength(7);
+  });
+
+  it.each(['revoked token', 'inactive agent', 'inactive operator', 'removed operator', 'operator kind', 'removed operator membership', 'inactive operator membership', 'removed own membership'])('rejects %s on the next API-token snapshot', async change => {
+    const { acme, op, s } = await setup();
+    const check = () => ctxFor('acme.pimwell.test', { authorization: `Bearer ${s.longLived}` });
+    expect((await check()).identity?.id).toBe(s.agent.identity.id);
+    if (change === 'revoked token') await db().prepare('UPDATE api_token SET revoked_at = ? WHERE id = ?').bind(Date.now(), s.apiToken.id).run();
+    if (change === 'inactive agent') await db().prepare("UPDATE identity SET state = 'archived' WHERE id = ?").bind(s.agent.identity.id).run();
+    if (change === 'inactive operator') await db().prepare("UPDATE identity SET state = 'archived' WHERE id = ?").bind(op.identity.id).run();
+    if (change === 'removed operator') await db().prepare('UPDATE identity SET operator_id = NULL WHERE id = ?').bind(s.agent.identity.id).run();
+    if (change === 'operator kind') await db().prepare("UPDATE identity SET kind = 'agent' WHERE id = ?").bind(op.identity.id).run();
+    if (change === 'removed operator membership') await db().prepare('DELETE FROM membership WHERE identity_id = ? AND tenant_id = ?').bind(op.identity.id, acme.id).run();
+    if (change === 'inactive operator membership') await db().prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ? AND tenant_id = ?").bind(op.identity.id, acme.id).run();
+    if (change === 'removed own membership') await db().prepare('DELETE FROM membership WHERE identity_id = ? AND tenant_id = ?').bind(s.agent.identity.id, acme.id).run();
+    expect((await check()).identity).toBeNull();
+  });
+
+  it('keeps synthetic credentials confined even with prefetched evidence', async () => {
+    const { acme, s } = await setup();
+    const synthetic = { ...s.agent.identity, id: 'perf-synthetic-member' };
+    expect(await credentialUsable(db(), synthetic, s.session, null, acme)).toBe(false);
+    expect(await credentialUsable(db(), synthetic, null, s.apiToken, { ...acme, id: 'perf-synthetic-tenant' })).toBe(false);
   });
 
   it("resolves a pmw_ token on its own tenant as the agent, with no session", async () => {
@@ -110,7 +161,9 @@ describe("agent credentials in buildContext", () => {
     const acme = await seedTenant("acme");
     const root = await seedHuman("root@example.com", { is_root: true });
     const s = await seedAgent(acme, root.identity);
-    expect((await ctxFor("acme.pimwell.test", { authorization: `Bearer ${s.token}` })).identity?.id).toBe(s.agent.identity.id);
+    for (const token of [s.token, s.longLived]) {
+      expect((await ctxFor("acme.pimwell.test", { authorization: `Bearer ${token}` })).identity?.id).toBe(s.agent.identity.id);
+    }
   });
 
   it("rejects a run whose parent token is revoked even if the run row was not", async () => {

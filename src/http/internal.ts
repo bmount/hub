@@ -1,9 +1,6 @@
 import type { Env } from "../env";
-import { credentialUsable, rank, roleFor } from "../auth/context";
-import { getSessionByToken, touchSession } from "../db/sessions";
-import { getIdentityById } from "../db/identities";
-import { getTenantBySlug } from "../db/tenants";
-import { getMembership } from "../db/memberships";
+import { credentialUsable, prefetch, rank, roleFor } from "../auth/context";
+import { touchSession } from "../db/sessions";
 import { isValidTenantSlug } from "../tenant";
 import { sha256Hex, timingSafeEqual } from "../ids";
 import { notFoundPage } from "./pages";
@@ -49,16 +46,16 @@ export async function introspect(request: Request, env: Env, now: number = Date.
   if (!token.startsWith("pms_") || token.length > 128 || !isValidTenantSlug(slug)) return denied();
 
   const db = env.HUB_DB;
-  const [session, tenant] = await Promise.all([getSessionByToken(db, token, now), getTenantBySlug(db, slug)]);
+  const pre = await prefetch(db, slug, await sha256Hex(token), now, false, undefined, true);
+  const { session, tenant, identity } = pre;
   if (!session || !tenant || tenant.state !== "active") return denied();
-  const identity = await getIdentityById(db, session.identity_id);
-  if (!identity || !(await credentialUsable(db, identity, session, null, tenant, "introspect"))) return denied();
-  let role = roleFor(identity, await getMembership(db, identity.id, tenant.id));
+  if (!identity || !(await credentialUsable(db, identity, session, null, tenant, "introspect", pre.agentState))) return denied();
+  let role = roleFor(identity, pre.membership);
   if (!role) return denied();
   // Agents can do what their person can, never more, and at most a member's rights (owner, 2026-10-08).
   if (identity.kind === "agent") {
-    const op = identity.operator_id ? await getIdentityById(db, identity.operator_id) : null;
-    const opRole = op ? roleFor(op, await getMembership(db, op.id, tenant.id)) : null;
+    const op = pre.agentState?.operator;
+    const opRole = op ? roleFor(op, pre.agentState?.operatorMembership ?? null) : null;
     if (!opRole) return denied();
     if (rank(opRole) < rank(role)) role = opRole;
     if (rank(role) > rank("member")) role = "member";
