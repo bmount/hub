@@ -48,7 +48,7 @@ function plan(db: D1Database, actor: Actor, g: Graph, change: ProposalChange, sl
 }
 
 export async function getProposal(db: D1Database, tenant_id: string, id: string): Promise<Proposal> {
-  const p = await db.prepare(`/*perf-site:src%2Fwork%2Fproposals.ts:51:19:p*/ SELECT p.*, d.decision, d.note, d.result_json, d.decided_by, d.decided_at FROM work_proposal p
+  const p = await db.prepare(`/*perf-site:src%2Fwork%2Fproposals.ts:51:19:p:d73605b5*/ SELECT p.*, d.decision, d.note, d.result_json, d.decided_by, d.decided_at FROM work_proposal p
     LEFT JOIN work_proposal_decision d ON d.proposal_id = p.id WHERE p.id = ? AND p.tenant_id = ?`).bind(id, tenant_id).first<Proposal>();
   if (!p) throw notFound("no such proposal");
   return p;
@@ -58,7 +58,7 @@ export async function fileProposal(db: D1Database, actor: Actor, input: { item_i
   checkChange(db, actor, await loadGraph(db, actor.tenant_id), input.change, slugs, now);
   const id = ulid(now);
   await db.batch([
-    db.prepare("/*perf-site:src%2Fwork%2Fproposals.ts:61:5:fileProposal*/ INSERT INTO work_proposal (id, tenant_id, item_id, reason, change_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    db.prepare("/*perf-site:src%2Fwork%2Fproposals.ts:61:5:fileProposal:b854222c*/ INSERT INTO work_proposal (id, tenant_id, item_id, reason, change_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(id, actor.tenant_id, input.item_id, input.reason, JSON.stringify(input.change), actor.identity_id, now),
     eventStatement(db, { tenant_id: actor.tenant_id, identity_id: actor.identity_id, session_id: actor.session_id, kind: "work.propose", target_kind: "work_proposal", target_id: id, summary: input.summary }, now),
   ]);
@@ -73,7 +73,7 @@ export async function fileProposal(db: D1Database, actor: Actor, input: { item_i
 export async function decideProposal(db: D1Database, actor: Actor, p: Proposal, decision: "approved" | "rejected", note: string | null, slugs: Map<string, string>, proposer: string, now: number): Promise<{ created: Array<{ key: string; id: string }> }> {
   if (p.decision) throw conflict(`that proposal was already ${p.decision}`);
   if (p.created_by === actor.identity_id) throw forbidden("someone other than the proposer decides a proposal");
-  const decide = (result: unknown) => db.prepare("/*perf-site:src%2Fwork%2Fproposals.ts:76:39:decide*/ INSERT INTO work_proposal_decision (proposal_id, decision, note, result_json, decided_by, decided_at) VALUES (?, ?, ?, ?, ?, ?)")
+  const decide = (result: unknown) => db.prepare("/*perf-site:src%2Fwork%2Fproposals.ts:76:39:decide:e3f4becf*/ INSERT INTO work_proposal_decision (proposal_id, decision, note, result_json, decided_by, decided_at) VALUES (?, ?, ?, ?, ?, ?)")
     .bind(p.id, decision, note, result === null ? null : JSON.stringify(result), actor.identity_id, now);
   const event = (kind: string, summary: string) => eventStatement(db, { tenant_id: actor.tenant_id, identity_id: actor.identity_id, session_id: actor.session_id, kind, target_kind: "work_proposal", target_id: p.id, summary }, now);
   try {
@@ -90,7 +90,7 @@ export async function decideProposal(db: D1Database, actor: Actor, p: Proposal, 
       return [
         decide({ items: created }),
         ...change.new_items.map((n) => db.prepare(
-          `/*perf-site:src%2Fwork%2Fproposals.ts:92:40:decideProposal*/ INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, priority, estimate, source_kind, source_ref, source_quote, created_by, created_at, updated_at)
+          `/*perf-site:src%2Fwork%2Fproposals.ts:92:40:decideProposal:e31ffec1*/ INSERT INTO work_item (id, tenant_id, project_id, number, kind, title, body, state, priority, estimate, source_kind, source_ref, source_quote, created_by, created_at, updated_at)
            SELECT ?, ?, ?, COALESCE(MAX(number), 0) + 1, ?, ?, ?, 'open', ?, ?, 'words', ?, ?, ?, ?, ? FROM work_item WHERE project_id = ?`,
         ).bind(planned.created.get(n.key)!, actor.tenant_id, n.project_id, n.kind, n.title, n.body, n.priority, n.estimate, `proposal:${p.id}`, source, actor.identity_id, now, now, n.project_id)),
         ...change.new_items.map((n) => eventStatement(db, { tenant_id: actor.tenant_id, identity_id: actor.identity_id, session_id: actor.session_id, kind: "work.create",

@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { chromium, expect } from '@playwright/test';
+import { SQL_CATALOG } from '../src/perfCatalog.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
 const temp = await mkdtemp(path.join(tmpdir(), 'pimwell-chat-browser-'));
@@ -46,7 +47,7 @@ try {
       ...(await readdir(path.join(temp, 'build'))).filter(f => f.endsWith('.html')).map(f => ({ type: 'Text', path: path.join(temp, 'build', f) })),
     ],
     compatibilityDate: '2026-09-01', compatibilityFlags: ['nodejs_compat'],
-    bindings: { HUB_DOMAIN: 'pimwell.test', ARDI_REPO_CREATE: 'off', HUB_SECRETS_KEY: randomBytes(32).toString('base64') },
+    bindings: { HUB_DOMAIN: 'pimwell.test', ARDI_REPO_CREATE: 'off', HUB_SECRETS_KEY: randomBytes(32).toString('base64'), ARTIFACTS_ACCOUNT_ID:'a'.repeat(32), PERF_ANALYTICS_TOKEN:'synthetic-read-only' },
     d1Databases: ['HUB_DB'], r2Buckets: ['GIT_PUSH_STAGING'], kvNamespaces: ['RATE', 'OAUTH_KV'],
     durableObjects: { CONVERSATION: { className: 'Conversation', useSQLite: true }, INBOX: { className: 'Inbox', useSQLite: true } },
     serviceBindings: { PERF_SINK: async request => { perfPoints.push(await request.json()); return new Response(null,{status:204}); }, ARDI: async request => {
@@ -62,7 +63,29 @@ try {
       if (verb === 'file.show' && body.path === 'app.ts') { const text = body.rev === a ? 'export const navigation = false;\n' : 'export const navigation = true;\n'; return ok({content_b64:Buffer.from(text).toString('base64'),size:text.length,oid:b,path:body.path,rev:body.rev}); }
       return Response.json({ok:false,error:'No synthetic path'},{status:404});
     } },
-    outboundService: () => new Response('Local acceptance denies network access', { status: 503 }),
+    outboundService: async request => {
+      if(new URL(request.url).hostname !== 'api.cloudflare.com') return new Response('Local acceptance denies network access', {status:503});
+      const sql=await request.text(), version='11111111-1111-4111-8111-111111111111',previous='22222222-2222-4222-8222-222222222222',rid='33333333-3333-4333-8333-333333333333';
+      const metric={n:120,p50:40,p95:180,p99:500,errors:1.2,total:15000}, label=sql.includes('substring(blob14,6) AS label')?'work.read':sql.includes('substring(blob14,5) AS label')?'work_read':sql.includes('blob14 AS label')?'pane.swap':'/:project/docket';
+      const code=Object.keys(SQL_CATALOG)[0],source=JSON.stringify(SQL_CATALOG[code].sites[0]);
+      let data;
+      if(sql.includes('AS schema')) data=[{request:rid,kind:'request',name:'request',phase:'GET',source,code:'',fingerprint:'',version,worker:'sample-worker',duration:180,span:0,parent:0,complete:1,offset:0,started:now,schema:2,weight:1},{request:rid,kind:'span',name:'d1.first',phase:'GET',source,code,fingerprint:'abcdef01',version,worker:'sample-worker',duration:100,span:1,parent:0,complete:1,offset:20,started:now+20,schema:2,weight:1},{request:rid,kind:'client',name:'pane.swap',phase:'fetch',source:JSON.stringify({file:'src/clientTimingScript.ts',line:19,fn:'point'}),code:'',fingerprint:'',version,worker:'sample-worker',duration:220,span:0,parent:0,complete:1,offset:0,started:now-10,schema:2,weight:1}];
+      else if(sql.includes('GROUP BY label, previous')) data=[{label:'/:project/docket',previous:'/:project',...metric}];
+      else if(sql.includes('AS mean')) data=[{request:rid,label:'/:project/docket',kind:'request',version,name:'request',phase:'GET',mean:180,n:120},{request:rid,label:'/:project/docket',kind:'client',version,name:'pane.swap',phase:'fetch',mean:220,n:120},{request:rid,label:'/:project/docket',kind:'client',version,name:'pane.swap',phase:'paint',mean:250,n:120}];
+      else if(sql.includes('AS cold')) data=[{request:rid,version,colo:'LHR',auth:'cookie',cold:0,weight:1}];
+      else if(sql.includes('SELECT blob6')) data=[{request:rid,version,colo:'LHR',duration:180,weight:1}];
+      else if(sql.includes('SELECT blob15')) data=[{fingerprint:'abcdef01',code,source,version,...metric}];
+      else if(sql.includes('IF(double1 < 10')) data=[{bucket:1,n:60},{bucket:2,n:30},{bucket:4,n:20},{bucket:7,n:10}];
+      else if(sql.includes('double17')) data=[{label:'/:project/docket',name:'request',kind:'request',attributed:2400,execution:0,n:120},{label:'/:project/docket',name:'auth.buildContext',kind:'span',attributed:2400,execution:0,n:120},{label:'/:project/docket',name:'d1.first',kind:'span',attributed:12000,execution:2400,known_wall:12000,execution_n:120,n:120},{label:'/:project/docket',name:'do.stub.CONVERSATION.fetch',kind:'span',attributed:4800,execution:0,n:120}];
+      else if(sql.includes('intDiv')) data=Array.from({length:12},(_,i)=>({label,bucket:i,p50:30+i*4,n:10}));
+      else if(sql.includes('GROUP BY label, version')) data=[{label,version,...metric},{label,version:previous,...metric,p95:140}];
+      else if(sql.includes('double2 AS label')) data=[{label:0,...metric},{label:1,...metric,n:12,p95:350}];
+      else if(sql.includes('blob4 AS label')) data=[{label:'LHR',...metric},{label:'DFW',...metric,n:50}];
+      else if(sql.includes('blob3 AS label')) data=[{label:version,...metric}];
+      else if(sql.includes('blob11 AS label')) data=[{label:'cookie',...metric}];
+      else data=[{label,...metric}];
+      return Response.json({data});
+    },
     // No persistence directory: everything, including sessions and memberships,
     // is in this process's temporary Miniflare storage and disposed in finally.
   }] }));
@@ -117,6 +140,11 @@ try {
   await verb(member, 'review.request', {project:'sample',branch:'topic',title:'Keep navigation visible',summary:'Synthetic review of the workbench.',reviewers:['peer@example.test']});
   const sampleId = await db.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'sample'").bind(tenant).first('id');
   await db.prepare("INSERT INTO app_deploy (id,tenant_id,project_id,script_name,version_id,tag,message,seen_at) VALUES (?,?,?,?,?,?,?,?)").bind('synthetic-deploy',tenant,sampleId,'sample-worker','b'.repeat(40),'workbench','Synthetic deploy record; not a live rollout.',now).run();
+  await db.prepare("INSERT INTO site (id,tenant_id,project_id,name,hostnames,created_at) VALUES ('performance-site',?,?, 'workbench.example.com','[\"workbench.example.com\"]',?)").bind(tenant,sampleId,now).run();
+  for(const [i,version] of ['22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111'].entries()) {
+    const deployment='44444444-4444-4444-8444-444444444444',commit=String(i?'b':'a').repeat(40),message=JSON.stringify({release:1,environment:'production',version,deployment,commit});
+    await db.prepare("INSERT INTO app_deploy (id,tenant_id,project_id,script_name,version_id,tag,message,seen_at) VALUES (?,?,?,?,?,?,?,?)").bind('performance-deploy-'+i,tenant,sampleId,'sample-worker',version+':'+deployment,commit,message,now+i).run();
+  }
   await db.prepare("INSERT INTO inbound_mail (id,tenant_id,project_id,identity_id,from_email,to_address,subject,received_at,size,verdict,text,attachments,forwarded) VALUES (?,?,?,?,?,?,?, ?,100,'admitted',?,'[]',0)")
     .bind(mailId,tenant,sampleId,viewerId,'peer@example.test','acme.sample@pimwell.test','Review the communication views',now,'Can you check the Mail inspector and reply actions?').run();
   await db.prepare("INSERT INTO outbound_mail (id,tenant_id,from_address,to_address,subject,text,in_reply_to,sent_by,status,error,created_at) VALUES (?,?,?,?,?,?,?,?,'refused','sending_off',?)")
@@ -143,10 +171,11 @@ try {
   await verb(member,'agent.create',{tenant:'acme',slug:'build',display_name:'Build agent'});
   await verb(member,'usage.report',{provider:'openai',model:'synthetic-model',input_tokens:1200,output_tokens:400,cost_usd:0.02,work:'sample#2'});
   await db.prepare("INSERT INTO app_source (id,tenant_id,project_id,script_name,state,created_by,created_at,last_event_at) VALUES (?,?,?,'sample-worker','active',?,?,?)").bind(id(),tenant,sampleId,viewerId,now,now).run();
+  await db.prepare("INSERT INTO site_app (site_id,app_id) SELECT 'performance-site',id FROM app_source WHERE tenant_id = ? AND script_name = 'sample-worker'").bind(tenant).run();
   await db.prepare("INSERT INTO app_error_group (id,tenant_id,project_id,script_name,fingerprint,kind,title,last_message,count,first_seen,last_seen) VALUES (?,?,?,'sample-worker','synthetic-error','exception','Workbench request failed','Synthetic exception for design evidence',3,?,?)").bind('synthetic-error',tenant,sampleId,now,now).run();
   await db.prepare("INSERT INTO situation (id,tenant_id,identity_id,thread_id,title,question,report,created_at) VALUES (?,?,?,?,'Investigate the workbench','Why did the workbench request fail?','Synthetic report: inspect the recorded error group.',?)").bind('synthetic-situation',tenant,viewerId,assistantId,now).run();
   browser = await chromium.launch({headless: true});
-  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', person:'/people/dev%40example.test', agent:'/people/acme.build%40pimwell.test', connect:'/people?connect=1', invite:'/people?invite=1', appGroup:'/apps?g=synthetic-error', situations:'/situations', situation:'/situations?s=synthetic-situation', usagePerson:'/usage?days=30&who=dev%40example.test', mailSettings:'/mail?addresses=1', mailRecipients:'/mail/recipients', account:'https://pimwell.test/me', sessions:'https://pimwell.test/me/sessions', models:'https://pimwell.test/admin/models', orgs:'https://pimwell.test/admin/orgs', adminApps:'https://pimwell.test/admin/apps', newProject:'/projects/new', intent:'/do', chatDirectory:'/c', chatInbox:'/inbox', assistantNew:'/assistant', contactNew:'/knowledge/contacts?new=1', upload:'/knowledge/documents?upload=1', wikiNew:'/knowledge/wiki?new=1', skill:'/skills/start-here', skills:'/skills', tools:'/assistant/tools', archive:'/archive', organizations:'https://pimwell.test/', newWork:'/new?project=sample', search:'/search?q=workbench'};
+  const pages = {home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', person:'/people/dev%40example.test', agent:'/people/acme.build%40pimwell.test', connect:'/people?connect=1', invite:'/people?invite=1', appGroup:'/apps?g=synthetic-error', situations:'/situations', situation:'/situations?s=synthetic-situation', usagePerson:'/usage?days=30&who=dev%40example.test', mailSettings:'/mail?addresses=1', mailRecipients:'/mail/recipients', account:'https://pimwell.test/me', sessions:'https://pimwell.test/me/sessions', models:'https://pimwell.test/admin/models', orgs:'https://pimwell.test/admin/orgs', adminApps:'https://pimwell.test/admin/apps', newProject:'/projects/new', intent:'/do', chatDirectory:'/c', chatInbox:'/inbox', assistantNew:'/assistant', contactNew:'/knowledge/contacts?new=1', upload:'/knowledge/documents?upload=1', wikiNew:'/knowledge/wiki?new=1', skill:'/skills/start-here', skills:'/skills', tools:'/assistant/tools', archive:'/archive', organizations:'https://pimwell.test/', newWork:'/new?project=sample', search:'/search?q=workbench', performance:'/apps?project=sample&site=workbench.example.com&view=performance', performanceRoute:'/apps?project=sample&site=workbench.example.com&view=performance&selected=%2F%3Aproject%2Fdocket', performanceVerb:'/apps?project=sample&site=workbench.example.com&view=performance&kind=verbs', performanceTool:'/apps?project=sample&site=workbench.example.com&view=performance&kind=tools', performanceInteraction:'/apps?project=sample&site=workbench.example.com&view=performance&kind=interactions&selected=pane.swap', performanceSpinner:'/apps?project=sample&site=workbench.example.com&view=performance&kind=spinners&selected=pane.swap', performanceDeploy:'/apps?project=sample&site=workbench.example.com&view=performance&kind=deploys'};
   const phase = process.env.WORKBENCH_PHASE || 'before';
   const manifest = [];
   for (const [label, viewport] of [['1440', {width:1440,height:900}], ['1920',{width:1920,height:1080}], ['390',{width:390,height:844}]]) {
@@ -305,6 +334,26 @@ try {
         expect(visibleNavigation).toEqual(viewport.width >= 1280 ? [true,true] : [false,false]);
         if (viewport.width < 760) await expect(page.locator('.tabs')).toBeVisible();
         } else expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
+      }
+      if (phase === 'after' && name.startsWith('performance')) {
+        await expect(page.locator('#list h1')).toHaveText('Performance');
+        await expect(page.locator('#list')).not.toContainText('Performance unavailable');
+        await expect(page.locator('#list table')).toBeVisible();
+        await expect(page.locator('#explorer')).toContainText('Site: workbench.example.com');
+        if(name === 'performance') {
+          const listBefore=await page.locator('#list').evaluate(el=>el.scrollTop);
+          await page.locator('#list tr[data-href] a').first().click();
+          await page.waitForURL(/selected=/);
+          await expect(page.locator('#inspector')).toContainText('Latency histogram');
+          await expect(page.locator('#inspector')).toContainText('Request waterfall');
+          expect(await page.locator('#list').evaluate(el=>el.scrollTop)).toBe(listBefore);
+          await page.goBack();await expect(page.locator('#inspector')).toBeHidden();
+          await page.reload();await expect(page.locator('#list h1')).toHaveText('Performance');
+        }
+        if(name === 'performanceRoute') {
+          await expect(page.locator('#inspector')).toContainText('Where the time goes');
+          await expect(page.locator('#inspector a[href*="/files?ref="]').first()).toHaveAttribute('href',/ref=b{40}/);
+        }
       }
       if (phase === 'after' && name === 'board') {
         // Native selects size to their longest option, including unselected names.

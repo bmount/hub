@@ -30,7 +30,7 @@ async function recipientsAllowed(ctx: Ctx, recipients: string[]) {
     const refused = await agentRecipientRefusals(ctx, recipients);
     if (refused.length) throw forbidden(refused.join("; "));
   } else for (const r of recipients) {
-    const member = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fdoc.ts:33:26:member*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id
+    const member = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fdoc.ts:33:26:member:eee56f87*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id
       WHERE lower(i.email) = ? AND i.kind = 'human' AND i.state = 'active' AND m.tenant_id = ? AND m.state = 'active' LIMIT 1`).bind(r, ctx.tenant!.id).first();
     if (!member) throw forbidden(`${r} is not an active human member of this organization`);
   }
@@ -68,7 +68,7 @@ async function sendDocument(ctx: Ctx, v: ReturnType<typeof parse>, mode: "share"
   for (const recipients of groups) {
     const ids = recipients.map(() => ulid(ctx.now));
     // Preserve an uncertain attempt even if transport or a subsequent DB response is lost.
-    await ctx.db.batch(recipients.map((r, n) => ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fdoc.ts:71:49:sendDocument*/ INSERT INTO document_delivery
+    await ctx.db.batch(recipients.map((r, n) => ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fdoc.ts:71:49:sendDocument:ca527385*/ INSERT INTO document_delivery
       (id, tenant_id, project_id, document_kind, document_ref, revision, recipient, sent_by, mode, status, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`).bind(ids[n], ctx.tenant!.id, project.id, kind, ref, revision, r, ctx.identity!.id, mode, ctx.now)));
     let status: string, id: string | undefined, detail: string | undefined;
@@ -84,7 +84,7 @@ async function sendDocument(ctx: Ctx, v: ReturnType<typeof parse>, mode: "share"
       const mail = e.data?.mail_delivery as {id: string; status: string; error?: string} | undefined;
       status = mail?.error === "unknown" ? "uncertain" : mail?.status ?? "refused"; id = mail?.id; detail = e.detail ?? e.reason;
     }
-    await ctx.db.batch(ids.map(d => ctx.db.prepare("/*perf-site:src%2Fverbs%2Fdoc.ts:87:37:sendDocument*/ UPDATE document_delivery SET status = ?, outbound_id = ? WHERE id = ? AND tenant_id = ?").bind(status, id ?? null, d, ctx.tenant!.id)));
+    await ctx.db.batch(ids.map(d => ctx.db.prepare("/*perf-site:src%2Fverbs%2Fdoc.ts:87:37:sendDocument:286fccb1*/ UPDATE document_delivery SET status = ?, outbound_id = ? WHERE id = ? AND tenant_id = ?").bind(status, id ?? null, d, ctx.tenant!.id)));
     deliveries.push({recipients, status, ...(id ? {id} : {}), ...(detail ? {detail} : {})});
     // Stop on refusal or uncertainty; never retry an ambiguous transport.
     if (status !== "sent") break;

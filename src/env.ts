@@ -2,6 +2,8 @@ import type { Conversation } from "./chat/conversationDO";
 import type { Inbox } from "./chat/inboxDO";
 export type Env = {
   PERF?: AnalyticsEngineDataset;
+  /** Account-owned Account Analytics Read only; never a deploy token. */
+  PERF_ANALYTICS_TOKEN?: string;
   /** Shared only by measured Workers; pseudonymizes tenant IDs, never authorizes requests. */
   PERF_TENANT_KEY?: string;
   WORKER_VERSION?: { id: string; tag: string; timestamp: string };

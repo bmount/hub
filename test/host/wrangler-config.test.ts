@@ -28,6 +28,11 @@ describe("wrangler configuration", () => {
     const db = { name: "HUB_DB", type: "d1", id: "database" };
     const perf = { name: "PERF", type: "analytics_engine", dataset: "pimwell_perf" };
     expect(compatibleBindings([db], [db, perf])).toBe(true);
+    const analytics={name:"PERF_ANALYTICS_TOKEN",type:"secret_text"};
+    expect(compatibleBindings([db],[db,analytics])).toBe(true);
+    expect(compatibleBindings([db],[db,{...analytics,name:"DEPLOY_TOKEN"}])).toBe(false);
+    expect(compatibleBindings([db],[db,{...analytics,type:"plain_text"}])).toBe(false);
+    expect(compatibleBindings([db,analytics],[db])).toBe(false);
     expect(compatibleBindings([db, perf], [perf, db])).toBe(true);
     expect(compatibleBindings([db, perf], [db])).toBe(false);
     expect(compatibleBindings([db], [db, { ...perf, dataset: "foreign" }])).toBe(false);

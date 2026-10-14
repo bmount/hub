@@ -20,10 +20,10 @@ export async function adminModelsPage(request: Request, env: Env): Promise<Respo
   if (ctx.host.kind !== "apex" || !ctx.identity || ctx.identity.kind !== "human" || ctx.identity.is_root !== 1) return notFoundPage(extra);
 
   const [purposes, keys, prices] = await Promise.all([purposeStatus(ctx.db, null, ctx.now), listCredentials(ctx.db, null),
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FadminModels.ts:23:5:%5Bpurposes%2C%20keys%2C%20prices%5D*/ SELECT p.provider, p.model, p.input_per_mtok, p.output_per_mtok, p.cached_input_per_mtok, p.effective_from FROM model_price p
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FadminModels.ts:23:5:%5Bpurposes%2C%20keys%2C%20prices%5D:485ec458*/ SELECT p.provider, p.model, p.input_per_mtok, p.output_per_mtok, p.cached_input_per_mtok, p.effective_from FROM model_price p
       WHERE p.effective_from = (SELECT MAX(q.effective_from) FROM model_price q WHERE q.provider = p.provider AND q.model = p.model) ORDER BY p.provider, p.model`)
       .all<{ provider: string; model: string; input_per_mtok: number; output_per_mtok: number; cached_input_per_mtok: number | null; effective_from: number }>().then((r) => r.results)]);
-  const unpriced = (await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FadminModels.ts:26:27:unpriced*/ SELECT m.provider, m.model, COUNT(*) AS n FROM model_call m WHERE m.cost_micros IS NULL AND m.created_at > ? GROUP BY m.provider, m.model ORDER BY n DESC LIMIT 20`)
+  const unpriced = (await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FadminModels.ts:26:27:unpriced:db0da857*/ SELECT m.provider, m.model, COUNT(*) AS n FROM model_call m WHERE m.cost_micros IS NULL AND m.created_at > ? GROUP BY m.provider, m.model ORDER BY n DESC LIMIT 20`)
     .bind(ctx.now - 30 * 86_400_000).all<{ provider: string; model: string; n: number }>()).results;
   // The live model list, from the active key of each provider in use; failures just leave the list empty.
   const models = new Map<string, string[]>();

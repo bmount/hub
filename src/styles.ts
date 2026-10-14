@@ -14,6 +14,7 @@ export const COMPONENTS_CSS = `
 .wb-table-wrap{max-width:100%;overflow-x:auto}.wb-table{width:100%;border-collapse:collapse}
 .wb-table th{white-space:nowrap}.wb-table th,.wb-table td{height:var(--row-h);padding:3px var(--space-2);border-bottom:var(--separator) solid var(--line)}
 .pane{overflow-wrap:anywhere}
+.perf-stack{display:block;min-width:100px;margin-top:4px}.perf-spark{display:block}.perf-waterfall{padding:var(--space-2) 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.perf-waterfall strong,.perf-waterfall span,.perf-waterfall small{display:block}.perf-waterfall span,.perf-waterfall small{font-size:var(--fs-sm);color:var(--muted)}.perf-waterfall svg{display:block;margin:4px 0}#inspector h1 code{overflow-wrap:anywhere}#inspector pre{overflow-wrap:anywhere}
 .wb-code .wb-table{font-family:var(--mono)}.wb-code .wb-table td{padding:0 var(--space-2);height:auto;white-space:pre-wrap;overflow-wrap:anywhere}.wb-code code{font-size:var(--fs-sm);background:none;padding:0}.wb-code .ln{color:var(--faint);width:1%;white-space:nowrap!important;text-align:right;user-select:none}.wb-code .ins{background:var(--add-bg)}.wb-code .dl{background:var(--del-bg)}.wb-code .hunk{background:var(--sunk);color:var(--muted)}
 .wb-table tr[aria-selected=true]{background:var(--accent-soft)}
 .wb-table tr[data-href]:hover{background:var(--sunk)}

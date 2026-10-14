@@ -29,7 +29,7 @@ export async function contactPage(request: Request, env: Env, project: string, i
     let body = `<a class="back" href="${esc(target(null,{view:null,hops:null}))}">Close</a>`;
     if (!id && writable && url.searchParams.has("new")) body += `<h2>New ${kind}</h2><form method="post" action="/api/${kind}.upsert"><input type="hidden" name="project" value="${esc(project)}"><input type="hidden" name="_back" value="@result"><label>Name <input name="name" required maxlength="200"></label><label>Notes <textarea name="notes" rows="6"></textarea></label><button>Create contact</button></form>`;
     if (id) {
-      const k = await ctx.db.prepare("/*perf-site:src%2Fhttp%2FcontactPages.ts:32:23:k*/ SELECT kind FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(ctx.tenant.id,p.id,id).first<{kind:string}>();
+      const k = await ctx.db.prepare("/*perf-site:src%2Fhttp%2FcontactPages.ts:32:23:k:6aeb80f0*/ SELECT kind FROM contact_entity WHERE tenant_id = ? AND project_id = ? AND id = ?").bind(ctx.tenant.id,p.id,id).first<{kind:string}>();
       if (!k) return notFoundPage();
       const read = k.kind === "person" ? personRead : companyRead;
       const v = await read.run(ctx,read.parse({project,id}));

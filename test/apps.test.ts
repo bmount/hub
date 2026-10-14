@@ -1,7 +1,12 @@
 // App telemetry (migration 0013): redaction at the source, registration and approval, grouping, deploys, usage.
 import siteMigration from "../migrations/0032_sites.sql?raw";
 import { env, SELF } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { appsPage } from "../src/http/appsPages";
+import { clearPerformanceCache, performanceSelection, performanceScope } from "../src/apps/performance";
+import { buildContext } from "../src/auth/context";
+import { tenantHash } from "../src/perf";
+import { SQL_CATALOG } from "../src/perfCatalog";
 import { createProject } from "../src/db/projects";
 import { writeInvocation } from "../tail/perf";
 import tailWorker from "../tail/index";
@@ -42,6 +47,83 @@ async function world() {
 }
 
 describe("sites", () => {
+  it("shows weighted live-query performance in URL-selected workbench views without crossing site, tenant or app boundaries", async () => {
+    const w=await world();
+    await w.call(w.root.token,"app.register",{project:"pricebench",script:"pricebench"});
+    await w.call(w.pat.token,"site.register",{project:"pricebench",name:"prices.example.com",hostnames:["prices.example.com"],apps:["pricebench"]});
+    const version="11111111-1111-4111-8111-111111111111",previous="22222222-2222-4222-8222-222222222222",request="33333333-3333-4333-8333-333333333333";
+    await w.call(w.pat.token,"deploy.record",{project:"pricebench",worker:"pricebench",commit:"b".repeat(40),version:previous,deployment:"55555555-5555-4555-8555-555555555555"});
+    await w.call(w.pat.token,"deploy.record",{project:"pricebench",worker:"pricebench",commit:"a".repeat(40),version,deployment:"44444444-4444-4444-8444-444444444444"});
+    const measured={...env,ARTIFACTS_ACCOUNT_ID:"a".repeat(32),PERF_ANALYTICS_TOKEN:"runtime-read-only",PERF_TENANT_KEY:"test-tenant-hash-key"};
+    const code=Object.keys(SQL_CATALOG)[0]!,location=SQL_CATALOG[code]!.sites[0]!;
+    const sqls:string[]=[];
+    clearPerformanceCache();
+    const mock=vi.spyOn(globalThis,"fetch").mockImplementation(async (input,init)=>{
+      expect(String(input)).toBe(`https://api.cloudflare.com/client/v4/accounts/${"a".repeat(32)}/analytics_engine/sql`);
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer runtime-read-only");
+      const sql=String(init?.body);sqls.push(sql);
+      expect(sql).toContain("_sample_interval");expect(sql).not.toContain("COUNT(*)");
+      let data:Record<string,string|number>[];
+      const metric={n:"100",p50:25,p95:100,p99:250,errors:2,total:4000};
+      if(sql.includes("AS schema")) data=[{request,kind:"request",name:"request",phase:"GET",source:JSON.stringify(location),code:"",fingerprint:"",version,worker:"pricebench",duration:100,span:0,parent:0,complete:1,offset:0,started:1000,schema:2,weight:1},{request,kind:"client",name:"pane.swap",phase:"fetch",source:"/:project",code:"",fingerprint:"",version,worker:"pricebench",duration:120,span:0,parent:0,complete:1,offset:0,started:0,schema:0,weight:1}];
+      else if(sql.includes("GROUP BY label, previous")) data=[{label:"/:project",previous:"/",...metric}];
+      else if(sql.includes("AS mean")) data=[{request,label:"/:project",kind:"request",version,name:"request",phase:"GET",mean:30,n:100},{request,label:"/:project",kind:"client",version,name:"pane.swap",phase:"fetch",mean:120,n:100},{request,label:"/:project",kind:"client",version,name:"pane.swap",phase:"paint",mean:140,n:100}];
+      else if(sql.includes("AS cold")) data=[{request,version,colo:"DFW",auth:"cookie",cold:0,weight:1}];
+      else if(sql.includes("SELECT blob6")) data=[{request,version,colo:"DFW",duration:100,weight:1}];
+      else if(sql.includes("SELECT blob15")) data=[{fingerprint:"01234567",code,source:JSON.stringify(location),version,...metric}];
+      else if(sql.includes("IF(double1 < 10")) data=[{bucket:1,n:100}];
+      else if(sql.includes("double17")) data=[{label:"/:project",name:"request",kind:"request",attributed:1000,execution:0,n:100},{label:"/:project",name:"d1.first",kind:"span",attributed:2000,execution:500,known_wall:2000,execution_n:100,n:100}];
+      else if(sql.includes("intDiv")) data=[{label:"/:project",bucket:1,p50:20,n:50},{label:"/:project",bucket:2,p50:25,n:50}];
+      else if(sql.includes("GROUP BY label, version")) data=[{label:"/:project",version,...metric},{label:"/:project",version:previous,...metric,p95:80}];
+      else if(sql.includes("double2 AS label")) data=[{label:0,...metric},{label:1,...metric}];
+      else if(sql.includes("blob4 AS label")) data=[{label:"DFW",...metric}];
+      else if(sql.includes("blob3 AS label")) data=[{label:version,...metric}];
+      else if(sql.includes("blob11 AS label")) data=[{label:"cookie",...metric}];
+      else data=[{label:sql.includes("substring(blob14,6) AS label")?"work.read":sql.includes("substring(blob14,5) AS label")?"work_read":sql.includes("blob14 AS label")?"pane.swap":"/:project",...metric}];
+      return Response.json({data});
+    });
+    try {
+      const base=`https://${HOST}/apps?project=pricebench&site=prices.example.com&view=performance`;
+      const get=(suffix="",token=w.pat.token,host=HOST)=>appsPage(new Request(base.replace(HOST,host)+suffix,{headers:cookieHeaders(token,host)}),measured);
+      const selected=await get("&selected=%2F%3Aproject");expect(selected.status).toBe(200);
+      const html=(await selected.text()).replaceAll('\u00a0',' ');
+      for(const label of ["Performance","Where the time goes","Latency histogram","Cold / warm isolates","Slowest D1 statements","Request waterfall","Version comparison","Browser network residual","D1 transport / queue"]) expect(html).toContain(label);
+      expect(html).toContain("100 ms");expect(html).toContain("pricebench/files?ref="+"a".repeat(40));expect(html).toContain('id="inspector"');
+      expect(html).not.toContain(measured.PERF_ANALYTICS_TOKEN);
+      const hash=await tenantHash(w.t.id,measured.PERF_TENANT_KEY);
+      for(const sql of sqls) {expect(sql).toContain(`blob5 = '${hash}'`);expect(sql).toContain("blob1 = 'prices.example.com'");expect(sql).toContain("blob2 IN ('pricebench')");}
+      const calls=sqls.length;await get("&selected=%2F%3Aproject");expect(sqls).toHaveLength(calls);
+      const date=vi.spyOn(Date,"now").mockReturnValue(Date.now()+61_000);await get("&selected=%2F%3Aproject");date.mockRestore();expect(sqls.length).toBeGreaterThan(calls);
+      expect((await (await get(`&kind=deploys&version=${version}&previous=${previous}`)).text()).replaceAll("\u00a0"," ")).toContain("+20 ms");
+      expect(await (await get("&kind=spinners&selected=pane.swap")).text()).toContain("Time shown");
+      expect(await (await get("&kind=interactions")).text()).toContain("Not collected");
+      expect(await (await get("&kind=verbs&selected=work.read")).text()).toContain("work.read");
+      expect(await (await get("&kind=tools&selected=work_read")).text()).toContain("work_read");
+      expect((await get("&selected=foreign-org" )).status).toBe(404);
+      expect((await get("&version=unknown-version")).status).toBe(404);
+      const outsider=await seedHuman("outsider@example.com");const before=sqls.length;
+      expect((await get("",outsider.token)).status).toBe(404);expect(sqls).toHaveLength(before);
+      const other=await seedTenant("other");const foreign=await seedHuman("foreign@example.com",{memberships:[{tenant_id:other.id,role:"member"}]});
+      expect((await get("",foreign.token,"other.pimwell.test")).status).toBe(404);expect(sqls).toHaveLength(before);
+      expect((await appsPage(new Request(base.replace("project=pricebench","project=missing"),{headers:cookieHeaders(w.pat.token,HOST)}),measured)).status).toBe(404);
+      const ctx=await buildContext(new Request(base,{headers:cookieHeaders(w.pat.token,HOST)}),measured);
+      const site=await ctx.db.prepare("SELECT s.*, 'pricebench' AS project FROM site s WHERE tenant_id = ?").bind(w.t.id).first<any>();
+      await expect(performanceScope(ctx,{...site,tenant_id:other.id},24)).rejects.toMatchObject({status:404});
+      await ctx.db.prepare("UPDATE app_source SET state = 'disabled' WHERE tenant_id = ?").bind(w.t.id).run();
+      const noCalls=sqls.length;expect(await (await get()).text()).toContain("No performance data yet");expect(sqls).toHaveLength(noCalls);
+      expect(performanceSelection(new URLSearchParams())).toMatchObject({kind:"routes",hours:24});
+      for(const params of ["hours=2","kind=constructor","version=bad%27","request=invalid"]) expect(()=>performanceSelection(new URLSearchParams(params))).toThrow();
+    } finally {mock.mockRestore();clearPerformanceCache();}
+  });
+  it("does not expose upstream errors or credentials in the performance unavailable state", async () => {
+    const w=await world();await w.call(w.root.token,"app.register",{project:"pricebench",script:"pricebench"});
+    await w.call(w.pat.token,"site.register",{project:"pricebench",name:"prices.example.com",hostnames:["prices.example.com"],apps:["pricebench"]});
+    clearPerformanceCache();const mock=vi.spyOn(globalThis,"fetch").mockResolvedValue(new Response("foreign-org secret-runtime-token",{status:403}));
+    try {
+      const r=await appsPage(new Request(`https://${HOST}/apps?site=prices.example.com`,{headers:cookieHeaders(w.pat.token,HOST)}),{...env,ARTIFACTS_ACCOUNT_ID:"a".repeat(32),PERF_ANALYTICS_TOKEN:"secret-runtime-token"});
+      const html=await r.text();expect(html).toContain("Performance unavailable");expect(html).not.toContain("foreign-org");expect(html).not.toContain("secret-runtime-token");
+    } finally {mock.mockRestore();clearPerformanceCache();}
+  });
   it("seeds only MCC code projects and their own registered apps", async () => {
     for (const slug of ["mcc","other"]) {
       const t = await seedTenant(slug);
@@ -101,7 +183,7 @@ describe("sites", () => {
     expect(errors).toContain("Performance");
     expect(errors).not.toContain("extra-worker");
     expect((await get(`view=errors&g=${foreign}`)).status).toBe(404);
-    expect(await (await get("view=performance")).text()).toContain("No performance data yet");
+    expect(await (await get("view=performance")).text()).toContain("Performance unavailable");
     const excluded = await w.call(w.pat.token,"deploy.record",{project:"pricebench",worker:"extra-worker",commit:"b".repeat(40),version:"33333333-3333-4333-8333-333333333333",deployment:"44444444-4444-4444-8444-444444444444"});
     const unknown = await w.call(w.pat.token,"deploy.record",{project:"pricebench",worker:"pricebench",commit:"unknown",version:"55555555-5555-4555-8555-555555555555",deployment:"66666666-6666-4666-8666-666666666666"});
     const deploys = await (await get("view=deploys")).text();

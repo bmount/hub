@@ -102,7 +102,7 @@ export const agentConnect = defineVerb({
     } else {
       const name = (p.display_name ?? "").trim();
       if (!name) throw badRequest("name the agent");
-      const mine = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fagent.ts:105:26:mine*/ SELECT i.id FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ? AND m.state = 'active'
+      const mine = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fagent.ts:105:26:mine:0898d0ac*/ SELECT i.id FROM identity i JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ? AND m.state = 'active'
         WHERE i.kind = 'agent' AND i.state = 'active' AND i.operator_id = ? AND lower(i.display_name) = lower(?) LIMIT 1`).bind(tenant.id, identity.id, name).first<{ id: string }>();
       const existing = mine && !p.slug ? await getAgentById(ctx.db, mine.id) : null;
       // Agents inherit their person's rights (owner, 2026-10-08), never more than a member's.

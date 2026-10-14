@@ -18,7 +18,7 @@ export const bootstrap = defineVerb({
     if (!ctx.env.HUB_BOOTSTRAP_TOKEN || !timingSafeEqual(p.token, ctx.env.HUB_BOOTSTRAP_TOKEN)) throw forbidden();
     if (await rootExists(ctx.db)) throw conflict("bootstrap already done");
     const pending = await ctx.db.prepare(
-      "/*perf-site:src%2Fverbs%2Fbootstrap.ts:20:27:pending*/ SELECT 1 FROM invite WHERE role = 'root' AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ? LIMIT 1",
+      "/*perf-site:src%2Fverbs%2Fbootstrap.ts:20:27:pending:5ea9eef1*/ SELECT 1 FROM invite WHERE role = 'root' AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ? LIMIT 1",
     ).bind(ctx.now).first();
     if (pending) throw conflict("root invite pending");
     const { invite, token } = await createInvite(ctx.db, { tenant_id: null, email: p.email, role: "root", display_name: p.display_name, created_by: null }, ctx.now);

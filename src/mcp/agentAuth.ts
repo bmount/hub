@@ -52,13 +52,13 @@ async function agentMcpAuthImpl(request: Request, env: Env, slug: string, now: n
   const hash = await sha256Hex(token);
   const db = env.HUB_DB;
   const [tokR, idR, tenR, memR, opR, sesR] = await db.batch([
-    db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:55:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D*/ SELECT * FROM api_token WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)").bind(hash, now),
-    db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:56:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D*/ SELECT i.* FROM identity i JOIN api_token a ON a.identity_id = i.id WHERE a.token_hash = ?").bind(hash),
-    db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:57:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D*/ SELECT * FROM tenant WHERE slug = ?").bind(slug),
-    db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:58:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D*/ SELECT m.* FROM membership m JOIN api_token a ON a.identity_id = m.identity_id AND a.tenant_id = m.tenant_id WHERE a.token_hash = ?").bind(hash),
-    db.prepare(`/*perf-site:src%2Fmcp%2FagentAuth.ts:59:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D*/ SELECT op.kind, op.state, op.is_root, om.role, om.state AS mstate FROM api_token a JOIN identity ag ON ag.id = a.identity_id
+    db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:55:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D:8c1fbc7f*/ SELECT * FROM api_token WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)").bind(hash, now),
+    db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:56:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D:e3a12131*/ SELECT i.* FROM identity i JOIN api_token a ON a.identity_id = i.id WHERE a.token_hash = ?").bind(hash),
+    db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:57:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D:d9bfee79*/ SELECT * FROM tenant WHERE slug = ?").bind(slug),
+    db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:58:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D:acc84ad4*/ SELECT m.* FROM membership m JOIN api_token a ON a.identity_id = m.identity_id AND a.tenant_id = m.tenant_id WHERE a.token_hash = ?").bind(hash),
+    db.prepare(`/*perf-site:src%2Fmcp%2FagentAuth.ts:59:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D:495c5c7f*/ SELECT op.kind, op.state, op.is_root, om.role, om.state AS mstate FROM api_token a JOIN identity ag ON ag.id = a.identity_id
       JOIN identity op ON op.id = ag.operator_id LEFT JOIN membership om ON om.identity_id = op.id AND om.tenant_id = a.tenant_id WHERE a.token_hash = ?`).bind(hash),
-    db.prepare(`/*perf-site:src%2Fmcp%2FagentAuth.ts:61:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D*/ SELECT s.*, x.ciphertext, x.iv FROM agent_mcp_session x JOIN session s ON s.id = x.session_id JOIN api_token a ON a.id = x.api_token_id
+    db.prepare(`/*perf-site:src%2Fmcp%2FagentAuth.ts:61:5:%5BtokR%2C%20idR%2C%20tenR%2C%20memR%2C%20opR%2C%20sesR%5D:915bbead*/ SELECT s.*, x.ciphertext, x.iv FROM agent_mcp_session x JOIN session s ON s.id = x.session_id JOIN api_token a ON a.id = x.api_token_id
       WHERE a.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ? ORDER BY s.expires_at DESC LIMIT 1`).bind(hash, now + SESSION_REUSE_MARGIN_MS),
   ]);
   const apiToken = tokR!.results[0] as ApiToken | undefined;
@@ -95,8 +95,8 @@ async function agentMcpAuthImpl(request: Request, env: Env, slug: string, now: n
     const made = await createAgentSession(db, { identity_id: identity.id, tenant_id: tenant.id, label: "agent mcp", parent_token_id: apiToken.id, ttl_s: SESSION_TTL_S }, now);
     sealed = await seal(env.HUB_SECRETS_KEY, made.token);
     await db.batch([
-      db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:98:7:agentMcpAuthImpl*/ INSERT INTO agent_mcp_session (session_id, tenant_id, api_token_id, ciphertext, iv) VALUES (?, ?, ?, ?, ?)").bind(made.session.id, tenant.id, apiToken.id, sealed.ciphertext, sealed.iv),
-      db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:99:7:agentMcpAuthImpl*/ UPDATE api_token SET last_used_at = ? WHERE id = ?").bind(now, apiToken.id),
+      db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:98:7:agentMcpAuthImpl:8adeebab*/ INSERT INTO agent_mcp_session (session_id, tenant_id, api_token_id, ciphertext, iv) VALUES (?, ?, ?, ?, ?)").bind(made.session.id, tenant.id, apiToken.id, sealed.ciphertext, sealed.iv),
+      db.prepare("/*perf-site:src%2Fmcp%2FagentAuth.ts:99:7:agentMcpAuthImpl:14d46ef2*/ UPDATE api_token SET last_used_at = ? WHERE id = ?").bind(now, apiToken.id),
     ]);
     session = made.session;
   }

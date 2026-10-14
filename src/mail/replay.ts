@@ -60,7 +60,7 @@ export async function storeIndependentMailCandidate(env: Env,
   const eligibility = [target.tenant_id, identity.id, from,
     target.recipient_id ?? null, target.recipient_id ?? null, to,
     target.project_id, target.project_id, to, env.HUB_DOMAIN.toLowerCase(), to, env.HUB_DOMAIN.toLowerCase()];
-  const eligible = async () => !!await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:63:40:eligible*/ SELECT 1 WHERE ${ELIGIBLE}`).bind(...eligibility).first();
+  const eligible = async () => !!await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:63:40:eligible:f717c86c*/ SELECT 1 WHERE ${ELIGIBLE}`).bind(...eligibility).first();
   if (!await eligible()) return { status: "ineligible" };
   const proof = await verifyIndependentDkim(bytes, from, now, resolver);
   if (proof.authentication !== "pass") return { status: "unknown", proof };
@@ -72,9 +72,9 @@ export async function storeIndependentMailCandidate(env: Env,
   const pending = JSON.stringify(state), stored = JSON.stringify({ ...state, status: "stored" });
   const parsed = await parseMail(bytes.buffer);
   const results = await env.HUB_DB.batch([
-    env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:75:5:results*/ INSERT INTO meta (key, value) SELECT ?, ? WHERE ${ELIGIBLE} AND NOT ${LEGACY}
+    env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:75:5:results:02f39bca*/ INSERT INTO meta (key, value) SELECT ?, ? WHERE ${ELIGIBLE} AND NOT ${LEGACY}
       ON CONFLICT(key) DO NOTHING`).bind(key, pending, ...eligibility, ...legacy),
-    env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:77:5:results*/ INSERT INTO inbound_mail
+    env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:77:5:results:f37f0c47*/ INSERT INTO inbound_mail
       (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id,
        sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied)
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'admitted', NULL, ?, ?, ?, ?
@@ -84,11 +84,11 @@ export async function storeIndependentMailCandidate(env: Env,
         parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0,
         JSON.stringify(parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`))),
         key, pending, ...eligibility, ...legacy),
-    env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:87:5:results*/ UPDATE meta SET value = ? WHERE key = ? AND value = ?
+    env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:87:5:results:c4ea8469*/ UPDATE meta SET value = ? WHERE key = ? AND value = ?
       AND EXISTS (SELECT 1 FROM inbound_mail WHERE id = ? AND tenant_id = ? AND identity_id = ?
         AND from_email = ? AND to_address = ? AND message_id = ? AND verdict = 'admitted' AND reason IS NULL)`)
       .bind(stored, key, pending, state.mail_id, target.tenant_id, identity.id, from, to, proof.messageId),
-    env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:91:5:results*/ INSERT INTO event
+    env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:91:5:results:048e1a75*/ INSERT INTO event
       (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
       SELECT ?, ?, ?, NULL, 'mail.received', 'inbound_mail', ?, ?, ?
       FROM meta WHERE key = ? AND value = ?`)
@@ -102,7 +102,7 @@ export async function storeIndependentMailCandidate(env: Env,
   }
   // Recheck current authority before even returning a scoped existing row id.
   if (!await eligible()) return { status: "ineligible" };
-  const value = await env.HUB_DB.prepare("/*perf-site:src%2Fmail%2Freplay.ts:105:23:value*/ SELECT value FROM meta WHERE key = ?").bind(key).first<string>("value");
+  const value = await env.HUB_DB.prepare("/*perf-site:src%2Fmail%2Freplay.ts:105:23:value:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key).first<string>("value");
   if (!value) return { status: "blocked" }; // includes pre-rollout admitted/quarantined rows
   let existing: ReplayState;
   try { existing = JSON.parse(value); } catch { return { status: "blocked" }; }
@@ -112,7 +112,7 @@ export async function storeIndependentMailCandidate(env: Env,
     || !Number.isSafeInteger(existing.reserved_at) || existing.reserved_at < 0) return { status: "blocked" };
   if (existing.raw_sha256 !== raw_sha256) return { status: "collision" };
   if (existing.status !== "stored") return { status: "blocked" };
-  const row = await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:115:21:row*/ SELECT id FROM inbound_mail WHERE id = ? AND tenant_id = ?
+  const row = await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:115:21:row:4a2eac7b*/ SELECT id FROM inbound_mail WHERE id = ? AND tenant_id = ?
     AND identity_id = ? AND from_email = ? AND to_address = ? AND message_id = ?
     AND project_id IS ? AND recipient_id IS ? AND verdict = 'admitted' AND reason IS NULL AND released_by IS NULL`)
     .bind(existing.mail_id, ...[target.tenant_id, identity.id, from, to, proof.messageId], target.project_id,

@@ -28,14 +28,14 @@ export function decodeResponseRecipients(raw: string | null): Config | null {
   } catch { return null; }
 }
 async function eligible(ctx: Ctx, ids: string[]) {
-  return (await ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseRecipients.ts:31:17:eligible*/ SELECT i.id FROM identity i JOIN membership m ON m.identity_id = i.id
+  return (await ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseRecipients.ts:31:17:eligible:2e0e03a4*/ SELECT i.id FROM identity i JOIN membership m ON m.identity_id = i.id
     WHERE m.tenant_id = ? AND m.state = 'active' AND m.role IN ('member', 'admin')
       AND i.kind = 'human' AND i.state = 'active' AND i.id IN (SELECT value FROM json_each(?))`)
     .bind(ctx.tenant!.id, JSON.stringify(ids)).all<{ id: string }>()).results.map(r => r.id);
 }
 export async function responseRecipients(ctx: Ctx, address: string) {
   const target = await targetFor(ctx, address);
-  const raw = (await ctx.db.prepare("/*perf-site:src%2Fmail%2FresponseRecipients.ts:38:22:raw*/ SELECT value FROM meta WHERE key = ?").bind(keyFor(target)).first<{ value: string }>())?.value ?? null;
+  const raw = (await ctx.db.prepare("/*perf-site:src%2Fmail%2FresponseRecipients.ts:38:22:raw:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(keyFor(target)).first<{ value: string }>())?.value ?? null;
   const config = decodeResponseRecipients(raw);
   const current = config ? new Set(await eligible(ctx, config.recipients)) : new Set<string>();
   return {
@@ -53,7 +53,7 @@ export async function responseRecipients(ctx: Ctx, address: string) {
 
 export async function setResponseRecipients(ctx: Ctx, address: string, recipients: string[], expected: number) {
   const target = await targetFor(ctx, address), key = keyFor(target);
-  const raw = (await ctx.db.prepare("/*perf-site:src%2Fmail%2FresponseRecipients.ts:56:22:raw*/ SELECT value FROM meta WHERE key = ?").bind(key).first<{ value: string }>())?.value ?? null;
+  const raw = (await ctx.db.prepare("/*perf-site:src%2Fmail%2FresponseRecipients.ts:56:22:raw:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key).first<{ value: string }>())?.value ?? null;
   const old = decodeResponseRecipients(raw);
   if (raw !== null && !old) throw conflict("invalid recipient configuration requires administrator reconciliation");
   if ((old?.revision ?? 0) !== expected) throw conflict("recipient configuration changed; read before editing");
@@ -63,7 +63,7 @@ export async function setResponseRecipients(ctx: Ctx, address: string, recipient
   // Repeat eligibility inside the atomic CAS; archiving/removal cannot become a grant.
   // Audit commits in the same transaction only for this unique successful change.
   const result = await ctx.db.batch([
-    ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseRecipients.ts:66:5:result*/ INSERT INTO meta (key, value) SELECT ?, ? FROM tenant t
+    ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseRecipients.ts:66:5:result:5057d4f6*/ INSERT INTO meta (key, value) SELECT ?, ? FROM tenant t
       WHERE t.id = ? AND t.state = 'active'
         AND EXISTS (SELECT 1 FROM identity actor WHERE actor.id = ? AND actor.kind = 'human' AND actor.state = 'active'
           AND (actor.is_root = 1 OR EXISTS (SELECT 1 FROM membership am WHERE am.identity_id = actor.id
@@ -74,7 +74,7 @@ export async function setResponseRecipients(ctx: Ctx, address: string, recipient
             AND i.kind = 'human' AND i.state = 'active' AND i.id IN (SELECT value FROM json_each(?))) = ?
       ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE meta.value = ?`)
       .bind(key, value, target.tenant_id, ctx.identity!.id, target.project_id, target.project_id, JSON.stringify(recipients), recipients.length, raw),
-    ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseRecipients.ts:77:5:result*/ INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
+    ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseRecipients.ts:77:5:result:d2e7a48c*/ INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
       SELECT ?, ?, ?, ?, 'mail.set_response_recipients', 'mailbox', ?, 'Updated response-recipient preferences (no response scheduled)', ?
       WHERE EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)`)
       .bind(ulid(ctx.now), target.tenant_id, ctx.identity!.id, ctx.session?.id ?? null, target.project_id ?? target.tenant_id, ctx.now, key, value),

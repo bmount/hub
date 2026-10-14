@@ -39,7 +39,7 @@ function withSuffix(base: string, n: number): string {
 /** Give every membership in the tenant without a handle one, oldest first; the unique skeleton index settles races. */
 export async function ensureHandles(db: D1Database, tenant_id: string): Promise<void> {
   const r = await db.prepare(
-    "/*perf-site:src%2Fchat%2Fhandles.ts:41:19:r*/ SELECT m.id, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.handle IS NULL ORDER BY m.created_at, m.id",
+    "/*perf-site:src%2Fchat%2Fhandles.ts:41:19:r:994e0951*/ SELECT m.id, i.email, i.kind FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ? AND m.handle IS NULL ORDER BY m.created_at, m.id",
   ).bind(tenant_id).all<{ id: string; email: string; kind: string }>();
   for (const row of r.results) {
     // An agent's address is <org>.<agent>@<hub>; its handle is its name.
@@ -49,7 +49,7 @@ export async function ensureHandles(db: D1Database, tenant_id: string): Promise<
       const h = withSuffix(base, n);
       if (!isValidHandle(h)) continue;
       try {
-        await db.prepare("/*perf-site:src%2Fchat%2Fhandles.ts:52:15:ensureHandles*/ UPDATE membership SET handle = ?, handle_skeleton = ? WHERE id = ? AND handle IS NULL").bind(h, skeleton(h), row.id).run();
+        await db.prepare("/*perf-site:src%2Fchat%2Fhandles.ts:52:15:ensureHandles:b3f9a3ec*/ UPDATE membership SET handle = ?, handle_skeleton = ? WHERE id = ? AND handle IS NULL").bind(h, skeleton(h), row.id).run();
         break;
       } catch (e) {
         if (!String(e).includes("UNIQUE")) throw e;
@@ -64,7 +64,7 @@ export type Person = { identity_id: string; kind: "human" | "agent"; display_nam
 export async function people(db: D1Database, tenant_id: string, assignHandles = true): Promise<Map<string, Person>> {
   if (assignHandles) await ensureHandles(db, tenant_id);
   const r = await db.prepare(
-    `/*perf-site:src%2Fchat%2Fhandles.ts:66:19:r*/ SELECT i.id, i.kind, i.display_name, i.operator_id, i.state AS i_state, m.state AS m_state, m.handle
+    `/*perf-site:src%2Fchat%2Fhandles.ts:66:19:r:5efe0f32*/ SELECT i.id, i.kind, i.display_name, i.operator_id, i.state AS i_state, m.state AS m_state, m.handle
        FROM membership m JOIN identity i ON i.id = m.identity_id WHERE m.tenant_id = ?`,
   ).bind(tenant_id).all<{ id: string; kind: "human" | "agent"; display_name: string; operator_id: string | null; i_state: string; m_state: string; handle: string | null }>();
   const out = new Map<string, Person>();
@@ -107,7 +107,7 @@ export async function nameTags(
   const sessions = new Map<string, { label: string | null }>();
   for (let i = 0; i < ids.length; i += 90) {
     const chunk = ids.slice(i, i + 90);
-    const r = await db.prepare(`/*perf-site:src%2Fchat%2Fhandles.ts:110:21:r*/ SELECT id, label FROM session WHERE id IN (${chunk.map(() => "?").join(", ")}) AND (tenant_id IS NULL OR tenant_id = ?)`)
+    const r = await db.prepare(`/*perf-site:src%2Fchat%2Fhandles.ts:110:21:r:15f4e038*/ SELECT id, label FROM session WHERE id IN (${chunk.map(() => "?").join(", ")}) AND (tenant_id IS NULL OR tenant_id = ?)`)
       .bind(...chunk, tenant_id).all<{ id: string; label: string | null }>();
     for (const s of r.results) sessions.set(s.id, s);
   }

@@ -110,7 +110,7 @@ ${d.entries?.length ? kitTable("Code files",[{label:"Type"},{label:"Name"}],d.en
     if (file) {
       const f = await run<{ text: string | null; binary: boolean; size: number }>(ctx, "repo.file", { project: project.slug, path: file, ...(ref ? { ref } : {}) });
       inspector = `<a class="back" href="${esc(link(dir))}">‹ Files</a><div class="head"><code>${esc(file)}</code><span>${f.size} bytes</span><a href="/${esc(project.slug)}/code?${ref ? `ref=${esc(encodeURIComponent(ref))}&amp;` : ""}">History</a></div>
-${f.binary ? `<p class="lede">Binary file.</p>` : f.text === null ? `<p class="lede">Too large to show here.</p>` : `<div class="wb-code">${kitTable(file,[{label:"Line"},{label:"Source"}],f.text.replace(/\n$/, "").split("\n").slice(0,5000).map((l,i)=>({cells:[{html:String(i+1),className:"ln"},{html:`<code>${esc(l)}</code>`}]})))}</div>`}`;
+${f.binary ? `<p class="lede">Binary file.</p>` : f.text === null ? `<p class="lede">Too large to show here.</p>` : `<div class="wb-code">${kitTable(file,[{label:"Line"},{label:"Source"}],f.text.replace(/\n$/, "").split("\n").slice(0,5000).map((l,i)=>({cells:[{html:`<span id="L${i+1}">${i+1}</span>`,className:"ln"},{html:`<code>${esc(l)}</code>`}]})))}</div>`}`;
     }
   } catch (e) {
     list = `${crumbs}${unavailable(e)}`;

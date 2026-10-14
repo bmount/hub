@@ -20,7 +20,7 @@ function decode(raw: string | null): Intent | null {
   } catch { return null; }
 }
 const keyFor = (ctx: Ctx, id: string) => `${RESPONSE_INTENT_PREFIX}${ctx.tenant!.id}:${id}:${ctx.identity!.id}`;
-const valueAt = async (ctx: Ctx, key: string) => (await ctx.db.prepare("/*perf-site:src%2Fmail%2FresponseIntent.ts:23:57:valueAt*/ SELECT value FROM meta WHERE key = ?")
+const valueAt = async (ctx: Ctx, key: string) => (await ctx.db.prepare("/*perf-site:src%2Fmail%2FresponseIntent.ts:23:57:valueAt:8bdf4327*/ SELECT value FROM meta WHERE key = ?")
   .bind(key).first<{ value: string }>())?.value ?? null;
 
 // Shared mail only, even for a human administrator/operator of a private agent.
@@ -33,7 +33,7 @@ const BASE = `m.id = ? AND m.tenant_id = ? AND m.recipient_id IS NULL
       AND am.tenant_id = m.tenant_id AND am.state = 'active' AND am.role IN ('member', 'admin'))`;
 async function evidence(ctx: Ctx, id: string) {
   const bindings = [id, ctx.tenant!.id, ctx.identity!.id];
-  const row = await ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseIntent.ts:36:21:row*/ SELECT m.id, m.tenant_id, m.project_id, m.identity_id,
+  const row = await ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseIntent.ts:36:21:row:e4288190*/ SELECT m.id, m.tenant_id, m.project_id, m.identity_id,
     m.from_email, m.to_address, m.message_id FROM inbound_mail m WHERE ${BASE}`)
     .bind(...bindings).first<Evidence>();
   if (!row) throw notFound();
@@ -73,7 +73,7 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
   const next: Intent = { revision: expected + 1, state, updated_at: ctx.now, change_id: ulid(ctx.now) };
   const value = JSON.stringify(next);
   const r = await ctx.db.batch([
-    ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseIntent.ts:76:5:r*/ INSERT INTO meta (key, value) SELECT ?, ? FROM inbound_mail m
+    ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseIntent.ts:76:5:r:af6385fa*/ INSERT INTO meta (key, value) SELECT ?, ? FROM inbound_mail m
       WHERE ${BASE} AND m.project_id IS ? AND m.identity_id = ? AND m.from_email = ? AND m.to_address = ? AND m.message_id = ?
         AND EXISTS (SELECT 1 FROM meta r WHERE r.key = ? AND r.value = ?)
         AND (? IS NULL OR EXISTS (SELECT 1 FROM meta previous WHERE previous.key = ? AND previous.value = ?))
@@ -86,7 +86,7 @@ export async function setResponseIntent(ctx: Ctx, id: string, state: Intent["sta
       ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE meta.value = ?`)
       .bind(key, value, ...e.bindings, e.row.project_id, e.row.identity_id, e.row.from_email, e.row.to_address, e.row.message_id,
         e.replayKey, e.replayRaw, raw, key, raw, state, p.key, p.raw, ctx.env.HUB_DOMAIN.toLowerCase(), ctx.env.HUB_DOMAIN.toLowerCase(), raw),
-    ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseIntent.ts:89:5:r*/ INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
+    ctx.db.prepare(`/*perf-site:src%2Fmail%2FresponseIntent.ts:89:5:r:d2e7a48c*/ INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
       SELECT ?, ?, ?, ?, 'mail.set_response_intent', 'inbound_mail', ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM meta WHERE key = ? AND value = ?)`)
       .bind(ulid(ctx.now), ctx.tenant!.id, ctx.identity!.id, ctx.session?.id ?? null, id,

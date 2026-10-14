@@ -38,10 +38,10 @@ export async function intentEvalRoute(request: Request, env: Env, waitUntil?: (p
   } catch { return json({ error: "bad_request", detail: "JSON body" }, 400); }
   const purpose = typeof b.purpose === "string" && ["fast", "reasoning", "assistant", "deep"].includes(b.purpose) ? b.purpose : "fast";
   const who = typeof b.attribute_to === "string" ? b.attribute_to.trim().toLowerCase() : "";
-  const agent = await env.HUB_DB.prepare(`/*perf-site:src%2Fintent%2FevalRoute.ts:41:23:agent*/ SELECT i.id, m.tenant_id FROM identity i JOIN membership m ON m.identity_id = i.id AND m.state = 'active'
+  const agent = await env.HUB_DB.prepare(`/*perf-site:src%2Fintent%2FevalRoute.ts:41:23:agent:cdb02f53*/ SELECT i.id, m.tenant_id FROM identity i JOIN membership m ON m.identity_id = i.id AND m.state = 'active'
     WHERE i.email = ? AND i.kind = 'agent' AND i.state = 'active' LIMIT 1`).bind(who).first<{ id: string; tenant_id: string }>();
   if (!agent) return json({ error: "bad_request", detail: "attribute_to must be an active agent's address" }, 400);
-  const project = typeof b.project === "string" && b.project ? await env.HUB_DB.prepare("/*perf-site:src%2Fintent%2FevalRoute.ts:44:70:project*/ SELECT id FROM project WHERE tenant_id = ? AND slug = ?").bind(agent.tenant_id, b.project).first<{ id: string }>() : null;
+  const project = typeof b.project === "string" && b.project ? await env.HUB_DB.prepare("/*perf-site:src%2Fintent%2FevalRoute.ts:44:70:project:5e5c9a14*/ SELECT id FROM project WHERE tenant_id = ? AND slug = ?").bind(agent.tenant_id, b.project).first<{ id: string }>() : null;
   if (typeof b.project === "string" && b.project && !project) return json({ error: "bad_request", detail: "no such project in the agent's organization" }, 400);
   const only = Array.isArray(b.only) ? b.only.filter((x): x is string => typeof x === "string").slice(0, 60) : undefined;
   const max = typeof b.max === "number" && b.max > 0 ? Math.min(60, Math.floor(b.max)) : 60;

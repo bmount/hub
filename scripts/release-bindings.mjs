@@ -10,7 +10,7 @@ export function compatibleRuntime(oldRuntime, freshRuntime, worker) {
 export function compatibleBindings(oldBindings, freshBindings) {
   const additive = b => (b.name === "WORKER_VERSION" && b.type === "version_metadata" && Object.keys(b).every(k => k === "name" || k === "type")) ||
     (b.name === "PERF" && b.type === "analytics_engine" && b.dataset === "pimwell_perf" && Object.keys(b).every(k => ["name", "type", "dataset"].includes(k))) ||
-    (b.name === "PERF_TENANT_KEY" && b.type === "secret_text" && Object.keys(b).every(k => k === "name" || k === "type"));
+    (["PERF_TENANT_KEY", "PERF_ANALYTICS_TOKEN"].includes(b.name) && b.type === "secret_text" && Object.keys(b).every(k => k === "name" || k === "type"));
   const normalize = bindings => JSON.stringify([...bindings].sort((a, b) => a.name.localeCompare(b.name)));
   const newBindings = freshBindings.filter(b => !oldBindings.some(old => old.name === b.name));
   return newBindings.every(additive) && normalize(oldBindings) === normalize(freshBindings.filter(b => !newBindings.includes(b)));

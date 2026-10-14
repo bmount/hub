@@ -16,7 +16,7 @@ const END = { type: "string", description: "An item as project#number, or new:<k
 const EDGE = { type: "object", properties: { prerequisite: END, dependent: END }, required: ["prerequisite", "dependent"], additionalProperties: false };
 
 async function slugs(ctx: Ctx): Promise<Map<string, string>> {
-  const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproposals.ts:19:23:rows*/ SELECT id, slug, kind FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id).all<{ id: string; slug: string; kind: string }>()).results;
+  const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproposals.ts:19:23:rows:9e2dd17f*/ SELECT id, slug, kind FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id).all<{ id: string; slug: string; kind: string }>()).results;
   return new Map(rows.filter((r) => projectFeatures(r.kind).includes("docket") && (!ctx.mcpProject || r.id === ctx.mcpProject.id)).map((r) => [r.id, r.slug]));
 }
 
@@ -35,7 +35,7 @@ async function proposalInProject(ctx: Ctx, p: Proposal): Promise<boolean> {
     ...(p.result_json ? (JSON.parse(p.result_json) as { items: Array<{ id: string }> }).items.map(i => i.id) : [])].filter((id): id is string => !!id);
   if (!ids.length) return change.new_items.length > 0;
   for (const id of ids) {
-    const item = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproposals.ts:38:24:item*/ SELECT project_id FROM work_item WHERE tenant_id = ? AND id = ?").bind(ctx.tenant!.id, id).first<{ project_id: string }>();
+    const item = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproposals.ts:38:24:item:ddd62640*/ SELECT project_id FROM work_item WHERE tenant_id = ? AND id = ?").bind(ctx.tenant!.id, id).first<{ project_id: string }>();
     if (!item || item.project_id !== ctx.mcpProject.id) return false;
   }
   return true;
@@ -47,7 +47,7 @@ type Shown = { id: string; state: "pending" | "approved" | "rejected"; for: stri
 async function show(ctx: Ctx, list: Proposal[]): Promise<Shown[]> {
   const g = await graphContext(ctx), names = await slugs(ctx);
   const ids = [...new Set(list.flatMap((p) => [p.created_by, p.decided_by]).filter((x): x is string => !!x))];
-  const who = new Map(ids.length ? (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fproposals.ts:50:43:who*/ SELECT id, email FROM identity WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<{ id: string; email: string }>()).results.map((r) => [r.id, r.email]) : []);
+  const who = new Map(ids.length ? (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fproposals.ts:50:43:who:eb8bafc7*/ SELECT id, email FROM identity WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<{ id: string; email: string }>()).results.map((r) => [r.id, r.email]) : []);
   const ref = (id: string) => (g.byId.has(id) ? g.refOf(id) : "(deleted item)");
   return list.map((p) => {
     const c = JSON.parse(p.change_json) as ProposalChange;
@@ -138,7 +138,7 @@ export const workProposals = defineVerb({
   run: async (ctx, p) => {
     if (!["pending", "approved", "rejected", "all"].includes(p.state)) throw badRequest("state is pending, approved, rejected or all");
     const where = p.state === "all" ? "" : p.state === "pending" ? "AND d.proposal_id IS NULL" : "AND d.decision = ?";
-    const rows = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fproposals.ts:141:25:rows*/ SELECT p.*, d.decision, d.note, d.result_json, d.decided_by, d.decided_at FROM work_proposal p
+    const rows = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fproposals.ts:141:25:rows:dea1cace*/ SELECT p.*, d.decision, d.note, d.result_json, d.decided_by, d.decided_at FROM work_proposal p
       LEFT JOIN work_proposal_decision d ON d.proposal_id = p.id WHERE p.tenant_id = ? ${where} ORDER BY p.created_at DESC, p.id DESC LIMIT ?`)
       .bind(...[ctx.tenant!.id, ...(p.state === "approved" || p.state === "rejected" ? [p.state] : []), p.limit]).all<Proposal>()).results;
     const visible: Proposal[] = [];
@@ -160,7 +160,7 @@ export const workReview = defineVerb({
     if (p.decision !== "approve" && p.decision !== "reject") throw badRequest("decision is approve or reject");
     const proposal = await getProposal(ctx.db, ctx.tenant!.id, p.id);
     if (!await proposalInProject(ctx, proposal)) throw notFound("no such proposal");
-    const proposer = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproposals.ts:163:29:proposer*/ SELECT email FROM identity WHERE id = ?").bind(proposal.created_by).first<{ email: string }>())?.email ?? "someone";
+    const proposer = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproposals.ts:163:29:proposer:fc431c77*/ SELECT email FROM identity WHERE id = ?").bind(proposal.created_by).first<{ email: string }>())?.email ?? "someone";
     await decideProposal(ctx.db, actor(ctx), proposal, p.decision === "approve" ? "approved" : "rejected", p.note, await slugs(ctx), proposer, ctx.now);
     return (await show(ctx, [await getProposal(ctx.db, ctx.tenant!.id, p.id)]))[0]!;
   },

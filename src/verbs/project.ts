@@ -26,7 +26,7 @@ async function setState(ctx: Ctx, nsSlug: string | null, slug: string, state: St
   const project = await getProjectByPath(ctx.db, ctx.tenant!.id, nsSlug, slug);
   // Channels are managed only through channel.* (ruling C-2).
   if (!project || project.kind === "channel" || project.kind === "agent-src") throw notFound("no such project");
-  if (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:29:13:setState*/ SELECT 1 FROM meta WHERE key = ?").bind(projectDeleteKey(ctx.tenant!.id, project.id)).first()) throw conflict("project deletion has started; sign in on the web to retry deletion");
+  if (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:29:13:setState:44558753*/ SELECT 1 FROM meta WHERE key = ?").bind(projectDeleteKey(ctx.tenant!.id, project.id)).first()) throw conflict("project deletion has started; sign in on the web to retry deletion");
   if (project.state === state) throw conflict(`project already ${state}`);
   if (!await setProjectState(ctx.db, ctx.tenant!.id, project.id, state)) throw conflict("project changed; reload and try again");
   const path = nsSlug ? `${nsSlug}/${slug}` : slug;
@@ -52,9 +52,9 @@ export const projectCreate = defineVerb({
     const existing = await getProjectByPath(ctx.db, ctx.tenant!.id, p.namespace, p.slug);
     const pendingKey = (id: string) => `repo-provision:${ctx.tenant!.id}:${id}`;
     const retry = existing?.kind === "repo" && p.kind === "repo" && ctx.env.GIT_BACKEND === "artifacts"
-      && await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:55:16:retry*/ SELECT 1 FROM meta WHERE key = ?").bind(pendingKey(existing.id)).first();
+      && await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:55:16:retry:44558753*/ SELECT 1 FROM meta WHERE key = ?").bind(pendingKey(existing.id)).first();
     if (retry && ctx.env.ARDI_REPO_CREATE !== "on") throw conflict("repository provisioning is disabled; pending project retained");
-    if (retry && (existing!.state !== "active" || await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:57:57:projectCreate*/ SELECT 1 FROM meta WHERE key = ?").bind(projectDeleteKey(ctx.tenant!.id, existing!.id)).first())) throw conflict("pending repository project is archived or being deleted");
+    if (retry && (existing!.state !== "active" || await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:57:57:projectCreate:44558753*/ SELECT 1 FROM meta WHERE key = ?").bind(projectDeleteKey(ctx.tenant!.id, existing!.id)).first())) throw conflict("pending repository project is archived or being deleted");
     const project = retry ? existing! : await createProject(ctx.db, { tenant_id: ctx.tenant!.id, namespace_id: ns?.id ?? null, slug: p.slug, kind: p.kind, display_name: p.display_name }, ctx.now);
     // Confirmed storage refusals roll back; ambiguous creates retain the ownership ID for a safe retry.
     if (project.kind === "repo" && ctx.env.ARDI_REPO_CREATE === "on") {
@@ -62,14 +62,14 @@ export const projectCreate = defineVerb({
         await createRepo(ctx.env, ctx.db, { identity_id: ctx.identity!.id, tenant_id: ctx.tenant!.id, org: ctx.tenant!.slug, name: project.slug }, ctx.now);
       } catch (e) {
         if (retry || e instanceof RepoProvisioningPending) {
-          await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:65:17:projectCreate*/ INSERT OR IGNORE INTO meta (key, value) VALUES (?, 'pending')").bind(pendingKey(project.id)).run();
+          await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:65:17:projectCreate:6a5b395e*/ INSERT OR IGNORE INTO meta (key, value) VALUES (?, 'pending')").bind(pendingKey(project.id)).run();
         } else {
-          await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:67:17:projectCreate*/ DELETE FROM project WHERE id = ? AND tenant_id = ?").bind(project.id, ctx.tenant!.id).run();
+          await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:67:17:projectCreate:2fbc2a3c*/ DELETE FROM project WHERE id = ? AND tenant_id = ?").bind(project.id, ctx.tenant!.id).run();
         }
         throw e;
       }
     }
-    await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:72:11:projectCreate*/ DELETE FROM meta WHERE key = ?").bind(pendingKey(project.id)).run();
+    await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproject.ts:72:11:projectCreate:a535e921*/ DELETE FROM meta WHERE key = ?").bind(pendingKey(project.id)).run();
     const path = ns ? `${ns.slug}/${project.slug}` : project.slug;
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "project.create", target_kind: "project", target_id: project.id, summary: `Created project ${path}` }, ctx.now);
     const channels = project.namespace_id === null ? await ensureProjectChannels(ctx.db, project, ctx.identity!.id, ctx.now, project.kind === "workspace" && ctx.identity!.kind === "agent") : [];

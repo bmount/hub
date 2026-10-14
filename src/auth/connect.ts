@@ -33,7 +33,7 @@ export async function createConnectLink(
   const token = randomToken(LINK_PREFIX);
   const id = ulid(now);
   const expires_at = now + CONNECT_LINK_TTL_MS;
-  await env.HUB_DB.prepare("/*perf-site:src%2Fauth%2Fconnect.ts:36:9:createConnectLink*/ INSERT INTO agent_connect_link (id, tenant_id, agent_id, token_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+  await env.HUB_DB.prepare("/*perf-site:src%2Fauth%2Fconnect.ts:36:9:createConnectLink:c0840996*/ INSERT INTO agent_connect_link (id, tenant_id, agent_id, token_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .bind(id, input.tenant.id, input.agent_id, await sha256Hex(token), input.created_by, now, expires_at).run();
   return { id, link: `https://${input.tenant.slug}.${env.HUB_DOMAIN.toLowerCase()}/connect/${token}`, expires_at };
 }
@@ -80,22 +80,22 @@ It was already used, it expired (links last 24 hours), or it isn't a Pimwell con
     console.log("connect rate failed", e instanceof Error ? e.name : "error");
   }
   if (!token.startsWith(LINK_PREFIX) || token.length > 100) return gone;
-  const link = await env.HUB_DB.prepare(`/*perf-site:src%2Fauth%2Fconnect.ts:83:22:link*/ UPDATE agent_connect_link SET claimed_at = ?, claimed_ip = ?
+  const link = await env.HUB_DB.prepare(`/*perf-site:src%2Fauth%2Fconnect.ts:83:22:link:1de341b5*/ UPDATE agent_connect_link SET claimed_at = ?, claimed_ip = ?
       WHERE token_hash = ? AND claimed_at IS NULL AND expires_at > ? AND tenant_id = (SELECT id FROM tenant WHERE slug = ? AND state = 'active')
       RETURNING id, tenant_id, agent_id, created_by`)
     .bind(now, ip.slice(0, 64), await sha256Hex(token), now, tenantSlug).first<{ id: string; tenant_id: string; agent_id: string; created_by: string }>();
   if (!link) return gone;
   const agent = await getAgentById(env.HUB_DB, link.agent_id);
   if (!agent || agent.tenant.id !== link.tenant_id || !(await agentCredentialOk(env.HUB_DB, agent.identity, link.tenant_id, null))) return gone;
-  await env.HUB_DB.prepare(`/*perf-site:src%2Fauth%2Fconnect.ts:90:9:claimConnectLink*/ UPDATE api_token SET revoked_at = ? WHERE identity_id = ? AND revoked_at IS NULL AND last_used_at IS NULL
+  await env.HUB_DB.prepare(`/*perf-site:src%2Fauth%2Fconnect.ts:90:9:claimConnectLink:f4319269*/ UPDATE api_token SET revoked_at = ? WHERE identity_id = ? AND revoked_at IS NULL AND last_used_at IS NULL
       AND id IN (SELECT api_token_id FROM agent_connect_link WHERE agent_id = ? AND api_token_id IS NOT NULL)`).bind(now, agent.identity.id, agent.identity.id).run();
   const expires_at = now + AGENT_TOKEN_TTL_DAYS * 86_400_000;
   const { token: t, plaintext } = await createApiToken(env.HUB_DB, {
     identity_id: agent.identity.id, tenant_id: link.tenant_id, name: `Connected ${day(now)}`, created_by: link.created_by, expires_at,
   }, now);
   await env.HUB_DB.batch([
-    env.HUB_DB.prepare("/*perf-site:src%2Fauth%2Fconnect.ts:97:5:claimConnectLink*/ UPDATE agent_connect_link SET api_token_id = ? WHERE id = ?").bind(t.id, link.id),
-    env.HUB_DB.prepare(`/*perf-site:src%2Fauth%2Fconnect.ts:98:5:claimConnectLink*/ INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at) VALUES (?, ?, ?, NULL, 'agent.connect', 'api_token', ?, ?, ?)`)
+    env.HUB_DB.prepare("/*perf-site:src%2Fauth%2Fconnect.ts:97:5:claimConnectLink:0a3708f3*/ UPDATE agent_connect_link SET api_token_id = ? WHERE id = ?").bind(t.id, link.id),
+    env.HUB_DB.prepare(`/*perf-site:src%2Fauth%2Fconnect.ts:98:5:claimConnectLink:dacb5c47*/ INSERT INTO event (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at) VALUES (?, ?, ?, NULL, 'agent.connect', 'api_token', ?, ?, ?)`)
       .bind(ulid(now), link.tenant_id, agent.identity.id, t.id, `Agent ${agent.identity.email} connected with a link`, now),
   ]);
   const mcp = agentMcpUrl(env, agent.tenant.slug);

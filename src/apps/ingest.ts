@@ -45,7 +45,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
   if (!scripts.length) return { accepted: 0, dropped: raw.length };
   const marks = scripts.map(() => "?").join(",");
   const sources = new Map((await db.prepare(
-    `/*perf-site:src%2Fapps%2Fingest.ts:47:34:sources*/ SELECT s.script_name, s.tenant_id, s.project_id, p.slug, p.display_name FROM app_source s JOIN project p ON p.id = s.project_id JOIN tenant t ON t.id = s.tenant_id
+    `/*perf-site:src%2Fapps%2Fingest.ts:47:34:sources:ccbc7d95*/ SELECT s.script_name, s.tenant_id, s.project_id, p.slug, p.display_name FROM app_source s JOIN project p ON p.id = s.project_id JOIN tenant t ON t.id = s.tenant_id
      WHERE s.script_name IN (${marks}) AND s.state = 'active' AND p.state = 'active' AND t.state = 'active'`,
   ).bind(...scripts).all<Source>()).results.map((s) => [s.script_name, s]));
   const mine = events.filter((e) => sources.has(e.script));
@@ -55,7 +55,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
   const versions = [...new Set(mine.map((e) => e.version).filter((v): v is string => !!v))];
   // Cloudflare tail items carry the version UUID, but not consistently its tag. Resolve the commit from
   // authenticated release records, scoped to the exact source tenant/project (never another tenant's record).
-  const deployRows = versions.length ? (await db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:58:47:deployRows*/ SELECT tenant_id, project_id, script_name, version_id, tag FROM app_deploy
+  const deployRows = versions.length ? (await db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:58:47:deployRows:39dd54d6*/ SELECT tenant_id, project_id, script_name, version_id, tag FROM app_deploy
     WHERE version_id IN (${versions.map(() => "?").join(",")}) OR substr(version_id, 1, 36) IN (${versions.map(() => "?").join(",")})`)
     .bind(...versions, ...versions).all<{ tenant_id: string; project_id: string; script_name: string; version_id: string; tag: string | null }>()).results : [];
   const known = new Set<string>();
@@ -82,7 +82,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
   }
   found.sort((a, b) => a.e.at - b.e.at);
   const fps = [...new Set(found.map((f) => f.fp))];
-  const groups = new Map(fps.length ? (await db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:85:46:groups*/ SELECT id, fingerprint, last_seen FROM app_error_group WHERE fingerprint IN (${fps.map(() => "?").join(",")})`)
+  const groups = new Map(fps.length ? (await db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:85:46:groups:0a026af3*/ SELECT id, fingerprint, last_seen FROM app_error_group WHERE fingerprint IN (${fps.map(() => "?").join(",")})`)
     .bind(...fps).all<{ id: string; fingerprint: string; last_seen: number }>()).results.map((g) => [g.fingerprint, g]) : []);
 
   const stmts: D1PreparedStatement[] = [];
@@ -100,11 +100,11 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
     counts.set(k, c);
   }
   for (const [k, c] of counts) {
-    stmts.push(db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:103:16:ingest*/ INSERT INTO app_stat (tenant_id, script_name, hour, requests, errors, exceptions) VALUES (?, ?, ?, ?, ?, ?)
+    stmts.push(db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:103:16:ingest:046608ba*/ INSERT INTO app_stat (tenant_id, script_name, hour, requests, errors, exceptions) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT (script_name, hour) DO UPDATE SET requests = requests + excluded.requests, errors = errors + excluded.errors, exceptions = exceptions + excluded.exceptions`)
       .bind(c.src.tenant_id, k.slice(0, k.lastIndexOf(":")), c.hour, c.requests, c.errors, c.exceptions));
   }
-  for (const s of scripts) if (sources.has(s)) stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:107:59:ingest*/ UPDATE app_source SET last_event_at = ? WHERE script_name = ?").bind(now, s));
+  for (const s of scripts) if (sources.has(s)) stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:107:59:ingest:ae2ead44*/ UPDATE app_source SET last_event_at = ? WHERE script_name = ?").bind(now, s));
   // Deploys: each version seen for the first time.
   const seenVersions = new Set<string>();
   for (const e of mine) {
@@ -114,11 +114,11 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
     seenVersions.add(k);
     const src = sources.get(e.script)!;
     if (known.has(k)) {
-      if (e.tag) stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:117:29:ingest*/ UPDATE app_deploy SET tag = ? WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ? AND tag IS NULL")
+      if (e.tag) stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:117:29:ingest:53947e97*/ UPDATE app_deploy SET tag = ? WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ? AND tag IS NULL")
         .bind(e.tag, e.script, e.version, src.tenant_id, src.project_id));
       continue;
     }
-    stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:121:16:ingest*/ INSERT OR IGNORE INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:121:16:ingest:fe51b459*/ INSERT OR IGNORE INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
       .bind(ulid(now), src.tenant_id, src.project_id, e.script, e.version, e.tag, e.message, e.at));
     notices.push({ src, text: `Deployed ${e.script}${e.tag ? ` ${e.tag}` : ""}${e.message ? `: ${e.message}` : ""} (version ${e.version.slice(0, 8)}).` });
   }
@@ -130,24 +130,24 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
     if (!g) {
       g = { id: ulid(now), fingerprint: f.fp, last_seen: f.e.at };
       groups.set(f.fp, g);
-      stmts.push(db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:133:18:ingest*/ INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, title, last_message, count, first_seen, last_seen, first_version, last_version)
+      stmts.push(db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:133:18:ingest:7a95f4f9*/ INSERT INTO app_error_group (id, tenant_id, project_id, script_name, fingerprint, kind, title, last_message, count, first_seen, last_seen, first_version, last_version)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`).bind(g.id, src.tenant_id, src.project_id, f.e.script, f.fp, f.p.kind, f.p.title, f.p.message, f.e.at, f.e.at, f.e.version, f.e.version));
       notices.push({ src, text: `New ${f.p.kind === "status" ? "server error" : f.p.kind} in ${f.e.script}: ${f.p.title}` });
     } else {
       if (now - g.last_seen > QUIET_MS) notices.push({ src, text: `Back again after a quiet day in ${f.e.script}: ${f.p.title}` });
       g.last_seen = f.e.at;
-      stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:139:18:ingest*/ UPDATE app_error_group SET count = count + 1, first_version = CASE WHEN ? < first_seen THEN ? ELSE first_version END, first_seen = MIN(first_seen, ?), last_message = CASE WHEN ? >= last_seen THEN ? ELSE last_message END, last_version = CASE WHEN ? >= last_seen THEN COALESCE(?, last_version) ELSE last_version END, last_seen = MAX(last_seen, ?) WHERE id = ?")
+      stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:139:18:ingest:092591c0*/ UPDATE app_error_group SET count = count + 1, first_version = CASE WHEN ? < first_seen THEN ? ELSE first_version END, first_seen = MIN(first_seen, ?), last_message = CASE WHEN ? >= last_seen THEN ? ELSE last_message END, last_version = CASE WHEN ? >= last_seen THEN COALESCE(?, last_version) ELSE last_version END, last_seen = MAX(last_seen, ?) WHERE id = ?")
         .bind(f.e.at, f.e.version, f.e.at, f.e.at, f.p.message, f.e.at, f.e.version, f.e.at, g.id));
     }
     const n = (perGroup.get(g.id) ?? 0) + 1;
     perGroup.set(g.id, n);
     if (n <= 3) {
-      stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:145:18:ingest*/ INSERT INTO app_event (id, tenant_id, group_id, version_id, at, method, path, status, ray, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:145:18:ingest:1bd8ab52*/ INSERT INTO app_event (id, tenant_id, group_id, version_id, at, method, path, status, ray, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(ulid(now), src.tenant_id, g.id, f.e.version, f.e.at, f.e.method, f.e.path, f.e.status, f.e.ray, f.p.message));
     }
   }
   for (const id of perGroup.keys()) {
-    stmts.push(db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:150:16:ingest*/ DELETE FROM app_event WHERE group_id = ? AND id NOT IN (SELECT id FROM app_event WHERE group_id = ? ORDER BY at DESC LIMIT ${EXAMPLES_PER_GROUP})`).bind(id, id));
+    stmts.push(db.prepare(`/*perf-site:src%2Fapps%2Fingest.ts:150:16:ingest:f21bc7a9*/ DELETE FROM app_event WHERE group_id = ? AND id NOT IN (SELECT id FROM app_event WHERE group_id = ? ORDER BY at DESC LIMIT ${EXAMPLES_PER_GROUP})`).bind(id, id));
   }
   // AI usage the app logged.
   for (const e of mine) {
@@ -168,7 +168,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
 /** Pimwell's own message in #<project>-ops; a project without that channel just doesn't get one. */
 async function postNotices(env: Env, notices: Array<{ src: Source; text: string }>, now: number): Promise<void> {
   for (const n of notices) {
-    const ch = await env.HUB_DB.prepare("/*perf-site:src%2Fapps%2Fingest.ts:171:22:ch*/ SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'channel' AND state = 'active'").bind(n.src.tenant_id, `${n.src.slug}-ops`).first<{ id: string }>();
+    const ch = await env.HUB_DB.prepare("/*perf-site:src%2Fapps%2Fingest.ts:171:22:ch:7caf507d*/ SELECT id FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'channel' AND state = 'active'").bind(n.src.tenant_id, `${n.src.slug}-ops`).first<{ id: string }>();
     if (!ch) continue;
     try {
       await (conversationStub(env, n.src.tenant_id, ch.id) as unknown as { notice(t: string, c: string, body: string, now: number): Promise<unknown> }).notice(n.src.tenant_id, ch.id, n.text.slice(0, 500), now);

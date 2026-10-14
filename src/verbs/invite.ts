@@ -50,7 +50,7 @@ export const inviteRevoke = defineVerb({
   name: "invite.revoke", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60, summary: "Revoke an open invite.",
   parse: (i) => ({ invite_id: reqString(i, "invite_id", { max: 26 }) }),
   run: async (ctx, p) => {
-    const invite = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Finvite.ts:53:26:invite*/ SELECT * FROM invite WHERE id = ? AND tenant_id = ?").bind(p.invite_id, ctx.tenant!.id).first<Invite>();
+    const invite = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Finvite.ts:53:26:invite:1eacef67*/ SELECT * FROM invite WHERE id = ? AND tenant_id = ?").bind(p.invite_id, ctx.tenant!.id).first<Invite>();
     if (!invite) throw notFound("no such invite");
     if (!inviteIsOpen(invite, ctx.now)) throw conflict(`invite is ${status(invite, ctx.now)}`);
     if (!(await revokeInvite(ctx.db, ctx.tenant!.id, invite.id, ctx.now))) throw conflict("invite is no longer open");

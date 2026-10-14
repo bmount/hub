@@ -120,13 +120,13 @@ async function takeRateAtomicImpl(db: D1Database, bucket: RateBucket, subject: s
   const key = `${bucket}:${await sha256Hex(subject.trim().toLowerCase())}`;
   try {
     const row = await db.prepare(
-      `/*perf-site:src%2Frate.ts:122:23:row*/ INSERT INTO rate_counter ("key", "window", count, expires_at) VALUES (?, ?, 1, ?)
+      `/*perf-site:src%2Frate.ts:122:23:row:93ffeb7e*/ INSERT INTO rate_counter ("key", "window", count, expires_at) VALUES (?, ?, 1, ?)
        ON CONFLICT("key", "window") DO UPDATE SET count = count + 1 RETURNING count`,
     ).bind(key, window, (window + 2) * windowMs).first<{ count: number }>();
     const count = row?.count ?? 1;
     if (count === 1) {
       // A new window for this key: sweep counters whose window is long over.
-      await db.prepare("/*perf-site:src%2Frate.ts:129:13:takeRateAtomicImpl*/ DELETE FROM rate_counter WHERE expires_at < ?").bind(now).run().catch(() => undefined);
+      await db.prepare("/*perf-site:src%2Frate.ts:129:13:takeRateAtomicImpl:e81a02ad*/ DELETE FROM rate_counter WHERE expires_at < ?").bind(now).run().catch(() => undefined);
     }
     return { ok: count <= limit, first: count === limit + 1, retryAfterS };
   } catch (e) {
@@ -150,12 +150,12 @@ async function takeRatesAtomicImpl(db: D1Database, buckets: RateBucket[], subjec
   });
   try {
     const rows = await db.batch(plan.map((x) => db.prepare(
-      `/*perf-site:src%2Frate.ts:152:49:rows*/ INSERT INTO rate_counter ("key", "window", count, expires_at) VALUES (?, ?, 1, ?)
+      `/*perf-site:src%2Frate.ts:152:49:rows:93ffeb7e*/ INSERT INTO rate_counter ("key", "window", count, expires_at) VALUES (?, ?, 1, ?)
        ON CONFLICT("key", "window") DO UPDATE SET count = count + 1 RETURNING count`,
     ).bind(`${x.bucket}:${hash}`, x.window, (x.window + 2) * x.windowMs)));
     const counts = rows.map((r) => (r.results[0] as { count: number } | undefined)?.count ?? 1);
     if (counts.some((c) => c === 1)) {
-      const sweep = db.prepare("/*perf-site:src%2Frate.ts:158:21:sweep*/ DELETE FROM rate_counter WHERE expires_at < ?").bind(now).run().catch(() => undefined);
+      const sweep = db.prepare("/*perf-site:src%2Frate.ts:158:21:sweep:e81a02ad*/ DELETE FROM rate_counter WHERE expires_at < ?").bind(now).run().catch(() => undefined);
       if (defer) defer(sweep); else await sweep;
     }
     return plan.map((x, i) => ({ bucket: x.bucket, ok: counts[i]! <= x.limit, first: counts[i] === x.limit + 1, retryAfterS: x.retryAfterS }));

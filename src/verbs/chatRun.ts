@@ -54,7 +54,7 @@ export const chatRunClaim = defineVerb({
     if (ch.state !== "active") throw conflict("channel is archived");
     const controls = await getControls(ctx.db, ch.tenant_id, ctx.now);
     if (!controls.agents_enabled || controls.muted.includes(v.identity.id) || ch.agent_policy === "muted") throw forbidden("agent runs are disabled or muted here");
-    const author = await ctx.db.prepare("/*perf-site:src%2Fverbs%2FchatRun.ts:57:26:author*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id WHERE i.id = ? AND i.kind = 'human' AND i.state = 'active' AND m.tenant_id = ? AND m.state = 'active'")
+    const author = await ctx.db.prepare("/*perf-site:src%2Fverbs%2FchatRun.ts:57:26:author:1e4033de*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id WHERE i.id = ? AND i.kind = 'human' AND i.state = 'active' AND m.tenant_id = ? AND m.state = 'active'")
       .bind(p.source.author_id, ch.tenant_id).first();
     // Recorded authorship survives offboarding, but must not create new conversational work for an inactive member.
     if (!author) throw forbidden("source author is not an active human member of this tenant");

@@ -43,13 +43,13 @@ export async function createInvite(
     accepted_at: null, accepted_session_id: null, revoked_at: null,
   };
   await db.prepare(
-    "/*perf-site:src%2Fdb%2Finvites.ts:45:9:createInvite*/ INSERT INTO invite (id, tenant_id, email, role, display_name, token_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "/*perf-site:src%2Fdb%2Finvites.ts:45:9:createInvite:7c8980bb*/ INSERT INTO invite (id, tenant_id, email, role, display_name, token_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).bind(invite.id, invite.tenant_id, invite.email, invite.role, invite.display_name, invite.token_hash, invite.created_by, invite.created_at, invite.expires_at).run();
   return { invite, token };
 }
 
 export async function findInviteByToken(db: D1Database, token: string): Promise<Invite | null> {
-  return db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:52:10:findInviteByToken*/ SELECT * FROM invite WHERE token_hash = ?").bind(await sha256Hex(token)).first<Invite>();
+  return db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:52:10:findInviteByToken:58c90f9f*/ SELECT * FROM invite WHERE token_hash = ?").bind(await sha256Hex(token)).first<Invite>();
 }
 
 export function inviteIsOpen(invite: Invite, now: number): boolean {
@@ -61,7 +61,7 @@ export async function acceptInvite(db: D1Database, invite: Invite, now: number):
   const pre = await getIdentityByEmail(db, invite.email);
   if (pre && (pre.state !== "active" || pre.kind !== "human")) return null;
   const claim = await db.prepare(
-    "/*perf-site:src%2Fdb%2Finvites.ts:63:23:claim*/ UPDATE invite SET accepted_at = ? WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
+    "/*perf-site:src%2Fdb%2Finvites.ts:63:23:claim:41069035*/ UPDATE invite SET accepted_at = ? WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
   ).bind(now, invite.id, now).run();
   if (claim.meta.changes !== 1) return null;
 
@@ -80,12 +80,12 @@ export async function acceptInvite(db: D1Database, invite: Invite, now: number):
       if (!identity) throw e;
       if (identity.state !== "active") return null;
       if (invite.role === "root" && identity.is_root !== 1) {
-        await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:83:15:acceptInvite*/ UPDATE identity SET is_root = 1 WHERE id = ?").bind(identity.id).run();
+        await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:83:15:acceptInvite:eea8ff91*/ UPDATE identity SET is_root = 1 WHERE id = ?").bind(identity.id).run();
         identity = { ...identity, is_root: 1 };
       }
     }
   } else if (invite.role === "root" && identity.is_root !== 1) {
-    await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:88:11:acceptInvite*/ UPDATE identity SET is_root = 1 WHERE id = ?").bind(identity.id).run();
+    await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:88:11:acceptInvite:eea8ff91*/ UPDATE identity SET is_root = 1 WHERE id = ?").bind(identity.id).run();
     identity = { ...identity, is_root: 1 };
   }
   let membershipAdded = invite.role === "root";
@@ -99,15 +99,15 @@ export async function acceptInvite(db: D1Database, invite: Invite, now: number):
 }
 
 export async function setInviteAcceptedSession(db: D1Database, invite_id: string, session_id: string): Promise<void> {
-  await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:102:9:setInviteAcceptedSession*/ UPDATE invite SET accepted_session_id = ? WHERE id = ?").bind(session_id, invite_id).run();
+  await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:102:9:setInviteAcceptedSession:8ff7d4fd*/ UPDATE invite SET accepted_session_id = ? WHERE id = ?").bind(session_id, invite_id).run();
 }
 
 export async function revokeInvite(db: D1Database, tenant_id: string, id: string, now: number): Promise<boolean> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:106:19:r*/ UPDATE invite SET revoked_at = ? WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL AND accepted_at IS NULL").bind(now, id, tenant_id).run();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:106:19:r:df31f95b*/ UPDATE invite SET revoked_at = ? WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL AND accepted_at IS NULL").bind(now, id, tenant_id).run();
   return r.meta.changes === 1;
 }
 
 export async function listInvites(db: D1Database, tenant_id: string): Promise<Invite[]> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:111:19:r*/ SELECT * FROM invite WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenant_id).all<Invite>();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Finvites.ts:111:19:r:7c67f68d*/ SELECT * FROM invite WHERE tenant_id = ? ORDER BY created_at DESC").bind(tenant_id).all<Invite>();
   return r.results;
 }

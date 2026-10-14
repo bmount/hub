@@ -35,8 +35,8 @@ async function metered(
         client: opts.client ?? "pimwell", ok, ms: Date.now() - started, input_tokens: inT, output_tokens: outT, error, created_at: now,
       }),
       ok
-        ? db.prepare("/*perf-site:src%2Fmodels%2Fask.ts:38:11:record*/ UPDATE provider_credential SET last_used_at = ? WHERE id = ?").bind(now, cred.id)
-        : db.prepare("/*perf-site:src%2Fmodels%2Fask.ts:39:11:record*/ UPDATE provider_credential SET last_used_at = ?, last_error = ?, last_error_at = ? WHERE id = ?").bind(now, error, now, cred.id),
+        ? db.prepare("/*perf-site:src%2Fmodels%2Fask.ts:38:11:record:5354a72f*/ UPDATE provider_credential SET last_used_at = ? WHERE id = ?").bind(now, cred.id)
+        : db.prepare("/*perf-site:src%2Fmodels%2Fask.ts:39:11:record:e2518a9d*/ UPDATE provider_credential SET last_used_at = ?, last_error = ?, last_error_at = ? WHERE id = ?").bind(now, error, now, cred.id),
     ]);
   try {
     const key = await open(env.HUB_SECRETS_KEY, { ciphertext: cred.secret_ciphertext, iv: cred.secret_iv });

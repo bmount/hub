@@ -17,10 +17,10 @@ export async function createTenant(db: D1Database, input: { slug: string; displa
   if (await slugReserved(db, input.slug)) throw conflict("that name belonged to a deleted organization and stays reserved until its git data is purged");
   const row: Tenant = { id: ulid(now), slug: input.slug, display_name: input.display_name.trim(), state: "active", created_at: now };
   try {
-    const stmts = [db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:20:20:stmts*/ INSERT INTO tenant (id, slug, display_name, state, created_at) VALUES (?, ?, ?, ?, ?)")
+    const stmts = [db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:20:20:stmts:4a09ec5e*/ INSERT INTO tenant (id, slug, display_name, state, created_at) VALUES (?, ?, ?, ?, ?)")
       .bind(row.id, row.slug, row.display_name, row.state, row.created_at)];
     // Self-service creation must never leave a new organization without its admin.
-    if (creatorId) stmts.push(db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:23:31:createTenant*/ INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, 'admin', 'active', ?)").bind(ulid(now), creatorId, row.id, now));
+    if (creatorId) stmts.push(db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:23:31:createTenant:a846c37a*/ INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES (?, ?, ?, 'admin', 'active', ?)").bind(ulid(now), creatorId, row.id, now));
     await db.batch(stmts);
   } catch (e) {
     if (String(e).includes("UNIQUE")) throw conflict("tenant slug exists");
@@ -30,19 +30,19 @@ export async function createTenant(db: D1Database, input: { slug: string; displa
 }
 
 export function getTenantBySlug(db: D1Database, slug: string): Promise<Tenant | null> {
-  return db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:33:10:getTenantBySlug*/ SELECT * FROM tenant WHERE slug = ?").bind(slug).first<Tenant>();
+  return db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:33:10:getTenantBySlug:d9bfee79*/ SELECT * FROM tenant WHERE slug = ?").bind(slug).first<Tenant>();
 }
 
 export function getTenantById(db: D1Database, id: string): Promise<Tenant | null> {
-  return db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:37:10:getTenantById*/ SELECT * FROM tenant WHERE id = ?").bind(id).first<Tenant>();
+  return db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:37:10:getTenantById:43d7714f*/ SELECT * FROM tenant WHERE id = ?").bind(id).first<Tenant>();
 }
 
 export async function listTenants(db: D1Database, state: State): Promise<Tenant[]> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:41:19:r*/ SELECT * FROM tenant WHERE state = ? ORDER BY slug").bind(state).all<Tenant>();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:41:19:r:959af30f*/ SELECT * FROM tenant WHERE state = ? ORDER BY slug").bind(state).all<Tenant>();
   return r.results;
 }
 
 export async function setTenantState(db: D1Database, id: string, state: State, _now: number): Promise<boolean> {
-  const r = await db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:46:19:r*/ UPDATE tenant SET state = ? WHERE id = ? AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'tenant_delete:v1:' || tenant.id)").bind(state, id, state).run();
+  const r = await db.prepare("/*perf-site:src%2Fdb%2Ftenants.ts:46:19:r:909c95ca*/ UPDATE tenant SET state = ? WHERE id = ? AND state <> ? AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'tenant_delete:v1:' || tenant.id)").bind(state, id, state).run();
   return r.meta.changes === 1;
 }

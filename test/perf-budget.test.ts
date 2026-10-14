@@ -1,6 +1,6 @@
 // Performance budget (overnight plan 2, N4): every signed-in page stays within a fixed number of D1 round trips.
 // A batch is one round trip. If a page needs more, read in one batch, or record a ruling and raise its budget here.
-import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, deferredTrace, meteredD1, hasSpan, exclusiveDuration, type TimingSpan } from "../src/perf";
+import { timedEnv, withTrace, newTrace, span, traceFields, writeTrace, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, type TimingSpan } from "../src/perf";
 import worker, { app } from "../src/index";
 import gitWorker from "../git-proxy/index";
 import { Conversation } from "../src/chat/conversationDO";
@@ -63,6 +63,14 @@ describe("request tracing guardrails", () => {
     const root=make(0,0,10,100), a=make(1,0,20,40), b=make(2,0,40,40), detail=make(3,1,20,40,"d1.statement");
     expect(exclusiveDuration(root,[a,b,detail],110)).toBe(40);
     expect(exclusiveDuration(a,[a,b,detail],110)).toBe(40);
+    const concurrent=Object.assign(newTrace(),{started:10,ended:110,parent:0,spans:[a,b,detail]});
+    const attributed=attributedDurations(concurrent,110);
+    expect(attributed.get(0)).toBe(40);expect(attributed.get(1)).toBe(30);expect(attributed.get(2)).toBe(30);expect(attributed.has(3)).toBe(false);
+    expect([...attributed.values()].reduce((n,v)=>n+v,0)).toBe(100);
+    concurrent.spans.push(make(4,1,30,20));
+    const nested=attributedDurations(concurrent,110);
+    expect(nested.get(1)).toBe(15);expect(nested.get(4)).toBe(15);
+    expect([...nested.values()].reduce((n,v)=>n+v,0)).toBe(100);
     const trace=newTrace(), c=collector();
     await withTrace(trace, () => span("auth.buildContext", () => 1));
     trace.ended=performance.now(); await writeTrace(c.measured,trace);
@@ -166,7 +174,7 @@ describe("request tracing guardrails", () => {
     await withTrace(trace,async()=>{
       for(const [,catalog] of [first,second]) {
         const s=catalog.sites[0]!;
-        await db.prepare(`/*perf-site:${encodeURIComponent(s.file)}:${s.line}:${s.column}:${encodeURIComponent(s.fn)}*/ SELECT 'user-secret-must-not-export'`).all();
+        await db.prepare(`/*perf-site:${encodeURIComponent(s.file)}:${s.line}:${s.column}:${encodeURIComponent(s.fn)}:${catalog.sourceHash}*/ SELECT 'user-secret-must-not-export'`).all();
       }
     });
     expect(trace.spans[0]!.fingerprint).not.toBe(trace.spans[1]!.fingerprint);

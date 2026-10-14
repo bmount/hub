@@ -87,6 +87,29 @@ export function exclusiveDuration(s: TimingSpan, spans: TimingSpan[], snapshot: 
   for (const [a,b] of children) { covered += Math.max(0,b-Math.max(cursor,a)); cursor=Math.max(cursor,b); }
   return Math.max(0,end-start-covered);
 }
+/** Each wall-clock interval belongs to the deepest active work; concurrent leaves share it. */
+export function attributedDurations(trace: Trace, snapshot: number): Map<number,number> {
+  const start=trace.started,end=Math.max(start,trace.ended??snapshot),root=trace.parent;
+  const events:Array<{at:number;id:number;parent:number;add:boolean}>=[];
+  for(const s of trace.spans) {
+    if(s.name==="d1.statement") continue;
+    const original=s.started??start,a=Math.max(start,original),b=Math.min(end,s.finished===false?snapshot:original+s.ms);
+    if(b>a) {events.push({at:a,id:s.id,parent:s.parent,add:true},{at:b,id:s.id,parent:s.parent,add:false});}
+  }
+  events.push({at:end,id:root,parent:-1,add:false});events.sort((a,b)=>a.at-b.at);
+  const active=new Map<number,number>([[root,-1]]),result=new Map<number,number>();let previous=start;
+  for(const event of events) {
+    if(event.at>previous) {
+      const parents=new Set(active.values()),leaves=[...active.keys()].filter(id=>id!==root&&!parents.has(id));
+      if(!leaves.length) leaves.push(root);
+      const share=(event.at-previous)/leaves.length;
+      for(const id of leaves)result.set(id,(result.get(id)??0)+share);
+      previous=event.at;
+    }
+    if(event.add)active.set(event.id,event.parent);else active.delete(event.id);
+  }
+  return result;
+}
 function fingerprint(sql: string, caller?: Function): string {
   // Literal values and comments are discarded before hashing. No SQL text is exported.
   let normalized = normalizedSQL.get(sql);
@@ -103,7 +126,7 @@ function fingerprint(sql: string, caller?: Function): string {
     try { Error.stackTraceLimit = 1; Error.captureStackTrace(holder, caller); site = holder.stack?.split("\n")[1]?.trim() ?? site; }
     finally { Error.stackTraceLimit = limit; }
   } else site = new Error().stack?.split("\n")[3]?.trim() ?? site;
-  const marker=/^\/\*perf-site:([^:]+):(\d+):(\d+):([^*]+)\*\//.exec(sql);
+  const marker=/^\/\*perf-site:([^:]+):(\d+):(\d+):([^:]+):([0-9a-f]{8})\*\//.exec(sql);
   const key = normalized + (marker?.[0] ?? site);
   let value = fingerprints.get(key);
   if (!value) {
@@ -120,7 +143,7 @@ function fingerprint(sql: string, caller?: Function): string {
       const text=marker[0]+" ";
       for(let i=0;i<text.length;i++)siteHash=Math.imul(siteHash^text.charCodeAt(i),16777619);
       const siteCode="site-"+(siteHash>>>0).toString(16).padStart(8,"0"), candidate=SQL_CATALOG[siteCode];
-      if(candidate?.sites.some(s=>encodeURIComponent(s.file)===marker[1]&&s.line===Number(marker[2])&&s.column===Number(marker[3])&&encodeURIComponent(s.fn)===marker[4])) {code=siteCode;catalog=candidate;}
+      if(candidate&&candidate.sourceHash===marker[5]&&candidate.sites.some(s=>encodeURIComponent(s.file)===marker[1]&&s.line===Number(marker[2])&&s.column===Number(marker[3])&&encodeURIComponent(s.fn)===marker[4])) {code=siteCode;catalog=candidate;}
     }
     if (catalog && (code.startsWith("site-") || catalog.text === normalized)) {
       if (sqlSources.size >= 512) sqlSources.clear();
@@ -318,13 +341,17 @@ export async function writeTrace(env: Pick<Env, "PERF" | "WORKER_VERSION" | "PER
   if (!env.PERF) return;
   try {
     const tenant = await tenantHash(trace.tenant, env.PERF_TENANT_KEY ?? env.HUB_INTERNAL_SECRET ?? env.HUB_SECRETS_KEY ?? "");
-    const version = env.WORKER_VERSION?.id ?? "unknown", snapshot = performance.now();
-    const write = (kind: string, s: TimingSpan) => env.PERF!.writeDataPoint({
+    const version = env.WORKER_VERSION?.id ?? "unknown", snapshot = performance.now(), attributed=attributedDurations(trace,snapshot);
+    const write = (kind: string, s: TimingSpan) => {
+      const wall=kind==="other"?0:attributed.get(kind===trace.kind?trace.parent:s.id)??0;
+      const execution=s.execution===undefined||s.execution<0?-1:wall*Math.min(1,s.ms>0?s.execution/s.ms:0);
+      env.PERF!.writeDataPoint({
       indexes: [version],
       blobs: [site, worker, version, trace.colo, tenant, trace.id, kind, trace.route, trace.method, `${Math.floor(trace.status/100)}xx`, trace.auth,
         trace.verb, trace.tool, s.name, s.fingerprint ?? "", s.region ?? "", s.provider ?? "", s.model ?? "", s.source ? JSON.stringify(s.source) : "", s.sqlCode ?? ""],
-      doubles: [s.finished === false ? snapshot - s.started! : s.ms, +trace.cold, s.id, s.parent, +s.failed, s.execution ?? -1, s.read ?? -1, s.written ?? -1, s.primary === undefined ? -1 : +s.primary, s.firstToken ?? -1, kind === "other" ? trace.other : 1, 0, 0, s.finished === false ? 0 : 1, Math.max(0,(s.started ?? trace.started)-trace.started), trace.at + ((s.started ?? trace.started)-trace.started), exclusiveDuration(s.name === "request" ? {...s,id:trace.parent} : s, trace.spans, snapshot), trace.kind === "rpc" ? 1 : 0, 0, 2],
+      doubles: [s.finished === false ? snapshot - s.started! : s.ms, +trace.cold, s.id, s.parent, +s.failed, s.execution ?? -1, s.read ?? -1, s.written ?? -1, s.primary === undefined ? -1 : +s.primary, s.firstToken ?? -1, kind === "other" ? trace.other : 1, 0, 0, s.finished === false ? 0 : 1, kind==="other"?0:Math.max(0,(s.started ?? trace.started)-trace.started), kind==="other"?0:trace.at + ((s.started ?? trace.started)-trace.started), wall, trace.kind === "rpc" ? 1 : 0, execution, 2],
     });
+    };
     write(trace.kind, { name: "request", id: 0, parent: trace.parent, started:trace.started, source:SPAN_CATALOG["request"] ?? FUNCTION_CATALOG["writeTrace"], ms: (trace.ended ?? performance.now())-trace.started, failed: trace.status >= 500 });
     for (const s of trace.spans) write("span", s);
     if (trace.other) {

@@ -39,7 +39,7 @@ export async function usagePage(request: Request, env: Env): Promise<Response> {
   const filterLabel = [selectedWork?.ref, selectedProject ? `project ${selectedProject.ref}` : null].filter(Boolean).join(" in ");
   const q = usageQueries(ctx.db, ctx.tenant.id, since, scopeId, selectedWork, selectedProject);
   const [t, w, m, s, d, work, calls] = await ctx.db.batch([q.total, q.byWho, q.byModel, q.bySource, q.byDay, q.byWork,
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FusagePages.ts:42:5:%5Bt%2C%20w%2C%20m%2C%20s%2C%20d%2C%20work%2C%20calls%5D*/ SELECT m.created_at, m.source, m.client, m.purpose, m.provider, m.model, m.input_tokens, m.output_tokens, m.cost_micros, m.cost_source, m.ok,
+    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FusagePages.ts:42:5:%5Bt%2C%20w%2C%20m%2C%20s%2C%20d%2C%20work%2C%20calls%5D:bb12cc8e*/ SELECT m.created_at, m.source, m.client, m.purpose, m.provider, m.model, m.input_tokens, m.output_tokens, m.cost_micros, m.cost_source, m.ok,
         CASE WHEN w.id IS NULL THEN NULL ELSE p.slug || '#' || w.number END AS ref
       FROM model_call m LEFT JOIN identity i ON i.id = m.identity_id
       LEFT JOIN work_item w ON w.id = m.work_item_id AND w.tenant_id = m.tenant_id AND w.project_id = m.project_id

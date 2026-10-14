@@ -17,7 +17,7 @@ export async function canRead(db: D1Database, v: Viewer, ch: ChannelRow): Promis
   if (ch.tenant_id !== v.tenant.id || rank(v.role) < rank("reader")) return false;
   if (ch.kind === "direct" || ch.kind === "group") {
     if (!ch.members!.includes(v.identity.id)) return false;
-    return !!await db.prepare(`/*perf-site:src%2Fchat%2Faccess.ts:20:20:canRead*/ SELECT 1 FROM conversation_member cm JOIN membership m ON m.tenant_id = cm.tenant_id AND m.identity_id = cm.identity_id
+    return !!await db.prepare(`/*perf-site:src%2Fchat%2Faccess.ts:20:20:canRead:b08c1a83*/ SELECT 1 FROM conversation_member cm JOIN membership m ON m.tenant_id = cm.tenant_id AND m.identity_id = cm.identity_id
       JOIN identity i ON i.id = m.identity_id WHERE cm.tenant_id = ? AND cm.conversation_id = ? AND cm.identity_id = ?
       AND cm.removed_at IS NULL AND m.state = 'active' AND i.state = 'active'`).bind(ch.tenant_id, ch.project_id, v.identity.id).first();
   }

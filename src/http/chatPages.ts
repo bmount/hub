@@ -225,7 +225,7 @@ export async function permalinkPage(request: Request, env: Env, msgId: string): 
   if (!ULID.test(msgId)) return notFoundPage();
   const pc = await pageCtx(request, env);
   if (pc instanceof Response) return pc;
-  const row = await env.HUB_DB.prepare("/*perf-site:src%2Fhttp%2FchatPages.ts:228:21:row*/ SELECT conversation_id FROM msg_index WHERE tenant_id = ? AND msg_id = ? LIMIT 1").bind(pc.ctx.tenant!.id, msgId).first<{ conversation_id: string }>();
+  const row = await env.HUB_DB.prepare("/*perf-site:src%2Fhttp%2FchatPages.ts:228:21:row:3e0e8b0d*/ SELECT conversation_id FROM msg_index WHERE tenant_id = ? AND msg_id = ? LIMIT 1").bind(pc.ctx.tenant!.id, msgId).first<{ conversation_id: string }>();
   const ch = row ? await getChannelById(env.HUB_DB, pc.ctx.tenant!.id, row.conversation_id) : null;
   if (!ch) return notFoundPage(pc.extra);
   try {
@@ -235,7 +235,7 @@ export async function permalinkPage(request: Request, env: Env, msgId: string): 
     const versions = h.versions.map((x) => `<article><p>r${x.rev} ${when(x.created_at)} ${tagHtml(x.author)}${x.retracted ? " <em>retracted</em>" : ""}</p>`
       + `${x.retracted ? "" : `<pre style="white-space:pre-wrap;margin:.25rem 0">${esc(x.body)}</pre>`}</article>`).join("");
     // History authorization precedes the work lookup; a recorded link cannot grant channel access.
-    const related = await pc.ctx.db.prepare(`/*perf-site:src%2Fhttp%2FchatPages.ts:238:27:related*/ SELECT w.id, p.slug AS project, w.number, w.kind, w.state, w.title,
+    const related = await pc.ctx.db.prepare(`/*perf-site:src%2Fhttp%2FchatPages.ts:238:27:related:932f252c*/ SELECT w.id, p.slug AS project, w.number, w.kind, w.state, w.title,
       CASE WHEN w.source_kind = 'message' AND w.source_ref = ? THEN 'filed' ELSE 'linked' END AS relationship
       FROM msg_index mi JOIN work_item w ON w.tenant_id = mi.tenant_id
       JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')

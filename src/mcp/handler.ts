@@ -87,7 +87,7 @@ export async function handleProjectMcp(request: Request, env: Env, slug: string,
   const now = Date.now();
   const auth = agent ? await agentMcpAuth(request, env, host.slug, now, waitUntil) : await mcpAuth(request, env, host.slug, now, waitUntil);
   if (auth.kind === "deny") return auth.response;
-  const project = await env.HUB_DB.prepare(`/*perf-site:src%2Fmcp%2Fhandler.ts:90:25:project*/ SELECT p.id, p.slug, p.kind, p.display_name, CASE WHEN n.slug IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END AS path FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id
+  const project = await env.HUB_DB.prepare(`/*perf-site:src%2Fmcp%2Fhandler.ts:90:25:project:88bb96b4*/ SELECT p.id, p.slug, p.kind, p.display_name, CASE WHEN n.slug IS NULL THEN p.slug ELSE n.slug || '/' || p.slug END AS path FROM project p LEFT JOIN namespace n ON n.id = p.namespace_id AND n.tenant_id = p.tenant_id
     WHERE p.tenant_id = ? AND p.slug = ? AND ((? IS NULL AND p.namespace_id IS NULL) OR n.slug = ?) AND p.state = 'active' AND p.kind IN ('repo','tracker','wiki','workspace')`)
     .bind(auth.ctx.tenant!.id, slug, namespace, namespace).first<NonNullable<Ctx["mcpProject"]>>();
   if (!project || !auth.ctx.role) return notFoundPage();

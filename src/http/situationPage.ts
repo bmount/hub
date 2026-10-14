@@ -14,15 +14,15 @@ export async function situationsPage(request: Request, env: Env): Promise<Respon
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
-  const groups = (await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FsituationPage.ts:17:25:groups*/ SELECT g.id, g.title, g.script_name, ${errorOriginColumns()} FROM app_error_group g
+  const groups = (await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FsituationPage.ts:17:25:groups:25540b85*/ SELECT g.id, g.title, g.script_name, ${errorOriginColumns()} FROM app_error_group g
     JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
     WHERE g.tenant_id = ? AND g.first_seen BETWEEN ? AND ? ORDER BY g.first_seen DESC, g.id DESC LIMIT 20`)
     .bind(ctx.tenant.id, ctx.now - 7 * 86_400_000, ctx.now).all<{ id: string; title: string; script_name: string; first_deploy: string | null; first_commit: string | null }>()).results;
   const newErrors = `<h2>New error groups · last 7 days</h2>${groups.length ? kitTable("New errors",[{label:"App"},{label:"Error"},{label:"First deploy",className:"hide-s"},{label:"First commit",className:"hide-s"}],groups.map(g=>({cells:[{html:esc(g.script_name)},{html:`<a href="/apps?g=${esc(g.id)}">${esc(g.title)}</a>`},{html:g.first_deploy ? `<a href="/apps?d=${esc(g.first_deploy)}">${esc(g.first_deploy)}</a>` : "unknown",className:"hide-s"},{html:esc(g.first_commit ?? "unknown"),className:"hide-s"}]}))) : '<p class="lede">No new groups recorded.</p>'}`;
   const sel = new URL(request.url).searchParams.get("s") ?? "";
-  const rows = (await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FsituationPage.ts:23:23:rows*/ SELECT s.id, s.title, s.question, s.report, s.outcome, s.created_at, s.thread_id, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id
+  const rows = (await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FsituationPage.ts:23:23:rows:6733e5ae*/ SELECT s.id, s.title, s.question, s.report, s.outcome, s.created_at, s.thread_id, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id
     WHERE s.tenant_id = ? ORDER BY s.created_at DESC LIMIT 100`).bind(ctx.tenant.id).all<Row>()).results;
-  const one = rows.find((r) => r.id === sel) ?? (sel ? await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FsituationPage.ts:25:62:one*/ SELECT s.id, s.title, s.question, s.report, s.outcome, s.created_at, s.thread_id, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id
+  const one = rows.find((r) => r.id === sel) ?? (sel ? await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FsituationPage.ts:25:62:one:35c28ef2*/ SELECT s.id, s.title, s.question, s.report, s.outcome, s.created_at, s.thread_id, i.display_name AS who FROM situation s JOIN identity i ON i.id = s.identity_id
     WHERE s.tenant_id = ? AND s.id = ?`).bind(ctx.tenant.id, sel).first<Row>() : null);
   const list = `<div class="head"><h1>Situations</h1><span>${rows.length}</span></div>
 <p class="lede">Investigate a problem using the record; nothing is changed.</p>

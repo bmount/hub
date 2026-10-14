@@ -32,7 +32,7 @@ async function presenceSubjects(ctx: Ctx, tenant_id: string, conversation_id: st
   // The DO bounds rows to 200; chunk below D1's bound-parameter limit (including tenant/channel).
   for (let i = 0; i < ids.length; i += 90) {
     const chunk = ids.slice(i, i + 90);
-    const result = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2FchatPresence.ts:35:26:result*/ SELECT i.id AS identity_id, i.kind, i.display_name, m.handle
+    const result = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2FchatPresence.ts:35:26:result:2d5c3256*/ SELECT i.id AS identity_id, i.kind, i.display_name, m.handle
       FROM membership m JOIN identity i ON i.id = m.identity_id
       WHERE m.tenant_id = ? AND m.state = 'active' AND i.state = 'active'
         AND i.id IN (${chunk.map(() => "?").join(",")})
