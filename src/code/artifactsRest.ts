@@ -194,6 +194,7 @@ export class ArtifactsRest {
   }
   async create(namespace: string, repo: string, description: string): Promise<void> {
     await this.call(namespace, "/repos", { name: repo, description, default_branch: "main" });
+    await this.invalidateRepoTokens(namespace, repo);
   }
   async fork(namespace: string, repo: string, target: string, description?: string): Promise<void> {
     this.repoPath(target);
@@ -230,10 +231,7 @@ export class ArtifactsRest {
       // A retry after a lost response must be safe.
       if (!(error instanceof HubError) || error.status !== 404) throw error;
     }
-    for (const key of tokens.keys()) if (key.startsWith(`${this.account}/${namespace}/${repo}/`)) tokens.delete(key);
-    await Promise.all((["read", "write"] as const).map(async scope => {
-      try { await caches.default.delete((await this.tokenCache(namespace, repo, scope)).url); } catch { /* Best-effort eviction; tokens still expire. */ }
-    }));
+    await this.invalidateRepoTokens(namespace, repo);
   }
   async deleteTemporary(namespace: string, repo: string, id: string): Promise<void> {
     if (repo !== `pimwell-stage-${id}` || !/^[0-9a-f-]{36}$/.test(id)) throw new HubError(400, "bad_request", "not a temporary repository");
@@ -271,6 +269,12 @@ export class ArtifactsRest {
   remote(namespace: string, repo: string): string {
     this.base(namespace);this.repoPath(repo);
     return `https://${this.account}.artifacts.cloudflare.net/git/${namespace}/${repo}.git`;
+  }
+  private async invalidateRepoTokens(namespace: string, repo: string): Promise<void> {
+    for (const key of tokens.keys()) if (key.startsWith(`${this.account}/${namespace}/${repo}/`)) tokens.delete(key);
+    await Promise.all((["read", "write"] as const).map(async scope => {
+      try { await caches.default.delete((await this.tokenCache(namespace, repo, scope)).url); } catch { /* Best-effort eviction; tokens still expire. */ }
+    }));
   }
   private async tokenCache(namespace: string, repo: string, scope: "read" | "write"): Promise<{ key: string; url: string; secret: string }> {
     this.base(namespace);this.repoPath(repo);

@@ -200,7 +200,7 @@ describe("Artifacts REST transport", () => {
     expect(await api.repoToken("acme", "site", "read")).toBe("opaque-4");
     expect(fake).toHaveBeenCalledTimes(4);
   });
-  it("evicts both scoped edge tokens when an owned project repository is deleted", async () => {
+  it("evicts both scoped edge tokens when a repository is deleted or created", async () => {
     const api = configured(), owner = "Pimwell tenant t project p";
     let count = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
@@ -214,6 +214,9 @@ describe("Artifacts REST transport", () => {
     await api.deleteProject("acme", "site", owner);
     expect(await api.repoToken("acme", "site", "read")).toBe("opaque-3");
     expect(await api.repoToken("acme", "site", "write")).toBe("opaque-4");
+    await api.create("acme", "site", owner);
+    expect(await api.repoToken("acme", "site", "read")).toBe("opaque-5");
+    expect(await api.repoToken("acme", "site", "write")).toBe("opaque-6");
   });
   it("does not send client credentials, cookies, or claimed identities to storage", async () => {
     const token = issued();

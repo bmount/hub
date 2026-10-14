@@ -75,6 +75,25 @@ function metadata(response: Response | null, env: Env): Pick<Observation,"versio
   return { version: response?.headers.get("x-pimwell-version") ?? env.WORKER_VERSION?.id ?? "unknown", colo: response?.headers.get("x-pimwell-colo") ?? response?.headers.get("cf-ray")?.split("-").at(-1) ?? "unknown" };
 }
 
+/** Fixed fixture setup and the public exchange are both inside the Git journey timer. */
+export async function gitLsRemote(env: Env, journeyFetch: (url: string, init?: RequestInit) => Promise<Response>, authorization: string, now: number): Promise<Pick<Observation, "version" | "colo">> {
+  // A mapped fixture was already provisioned. The public Git handler still checks
+  // live storage ownership, so another provisioning info call/write is redundant.
+  const mapped = !!await env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:82:26:gitLsRemote:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = 'perf-synthetic-repo'").bind(SYNTHETIC_TENANT).first();
+  const provision = () => createRepo(env, env.HUB_DB, { identity_id: SYNTHETIC_MEMBER, tenant_id: SYNTHETIC_TENANT, org: "perf-synthetic", name: "fixture" }, now);
+  if (!mapped) await provision();
+  const exchange = () => journeyFetch(`https://perf-synthetic.${env.HUB_DOMAIN}/fixture.git/info/refs?service=git-upload-pack`, { headers: { authorization }, signal: AbortSignal.timeout(25_000) });
+  let response = await exchange();
+  // Preserve recovery if storage disappeared behind a still-present local marker.
+  // Never retry permission/ownership failures with provisioning authority.
+  if (mapped && response.status === 404) {
+    await response.body?.cancel();await provision();response = await exchange();
+  }
+  if (!response.ok || !response.headers.get("content-type")?.includes("application/x-git-upload-pack-advertisement")) throw new Error("Synthetic Git failed");
+  parseAdvertisedRefs(new Uint8Array(await response.arrayBuffer()));
+  return metadata(response, env);
+}
+
 /** All destinations and fixture arguments are fixed in code; credentials never leave this Worker/browser service. */
 export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<void> {
   const now = Date.now(), completed = new Set<Journey>();
@@ -150,22 +169,15 @@ export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<voi
     let posted = false;
     await observe("chat-post", async () => { const result = await api("chat.post", { c: "synthetic", body: `Synthetic check ${Math.floor(now/300_000)}`, idempotency_key: `synthetic-${Math.floor(now/300_000)}` }); posted = true; return result.info; });
     await observe("chat-read", async () => { const result = await api("chat.read", { c: "synthetic", limit: 1 }); if (!posted || !JSON.stringify(result.data).includes(`Synthetic check ${Math.floor(now/300_000)}`)) throw new Error("Synthetic read did not see post"); return result.info; });
-    await observe("git-ls-remote", async () => {
-      await createRepo(env, env.HUB_DB, { identity_id: SYNTHETIC_MEMBER, tenant_id: SYNTHETIC_TENANT, org: "perf-synthetic", name: "fixture" }, now);
-      // Git's protocol-v0 ls-remote is exactly this advertisement exchange (no pack download).
-      const response = await journeyFetch(base+"/fixture.git/info/refs?service=git-upload-pack", { headers: { authorization: `Basic ${btoa("synthetic:"+git!.token)}`, "x-pimwell-synthetic": web!.token }, signal: AbortSignal.timeout(25_000) });
-      if (!response.ok || !response.headers.get("content-type")?.includes("application/x-git-upload-pack-advertisement")) throw new Error("Synthetic Git failed");
-      parseAdvertisedRefs(new Uint8Array(await response.arrayBuffer()));
-      return metadata(response,env);
-    });
+    await observe("git-ls-remote", () => gitLsRemote(env, journeyFetch, `Basic ${btoa("synthetic:"+git!.token)}`, now));
   } catch { /* Setup failures are observations, never swallowed as a successful tick. */ }
   finally {
     try { await browser?.close(); } catch { /* credentials still expire */ }
     try { await mcp?.close(); } catch { /* D1 grant expiry is the authorization boundary */ }
     await env.HUB_DB.batch([
-      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:166:7:runSynthetic:3e8499a3*/ UPDATE event SET session_id = NULL WHERE identity_id = ?").bind(SYNTHETIC_MEMBER),
-      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:167:7:runSynthetic:ab06c962*/ DELETE FROM oauth_grant WHERE identity_id = ? AND (expires_at <= ? OR approved_by_session_id = ?)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? ""),
-      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:168:7:runSynthetic:7986d436*/ DELETE FROM session WHERE identity_id = ? AND (expires_at <= ? OR id IN (?, ?)) AND id NOT IN (SELECT session_id FROM oauth_grant)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? "", git?.id ?? ""),
+      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:178:7:runSynthetic:3e8499a3*/ UPDATE event SET session_id = NULL WHERE identity_id = ?").bind(SYNTHETIC_MEMBER),
+      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:179:7:runSynthetic:ab06c962*/ DELETE FROM oauth_grant WHERE identity_id = ? AND (expires_at <= ? OR approved_by_session_id = ?)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? ""),
+      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:180:7:runSynthetic:7986d436*/ DELETE FROM session WHERE identity_id = ? AND (expires_at <= ? OR id IN (?, ?)) AND id NOT IN (SELECT session_id FROM oauth_grant)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? "", git?.id ?? ""),
     ]);
     for (const journey of SYNTHETIC_JOURNEYS) if (!completed.has(journey)) await recordSynthetic(env, journey, { ...origin, duration: Math.max(0,Date.now()-now), failed: true });
   }

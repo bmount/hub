@@ -16,7 +16,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import puppeteer from "@cloudflare/puppeteer";
 import * as ardi from "../src/code/ardi";
-import { runSynthetic, recordSynthetic, syntheticMarker, SYNTHETIC_TENANT, SYNTHETIC_MEMBER, SYNTHETIC_JOURNEYS } from "../src/synthetic";
+import { runSynthetic, gitLsRemote, recordSynthetic, syntheticMarker, SYNTHETIC_TENANT, SYNTHETIC_MEMBER, SYNTHETIC_JOURNEYS } from "../src/synthetic";
 import { listMembers } from "../src/db/memberships";
 import { sha256Hex } from "../src/ids";
 import { createProject } from "../src/db/projects";
@@ -388,6 +388,35 @@ describe("isolated synthetic journeys", () => {
     expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation").first("n")).toBe(2);
     expect(c.points.every(p=>p.blobs?.[6]==="synthetic")).toBe(true);
     expect(c.points[0]?.blobs?.slice(2,4)).toEqual(["synthetic-version","DFW"]);
+  });
+  it.each(["new", "mapped", "missing-storage"])("avoids repeated fixture provisioning for %s while retaining storage repair", async mode => {
+    if (mode !== "new") await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id,project_id,imported_at) VALUES (?,'perf-synthetic-repo',0)").bind(SYNTHETIC_TENANT).run();
+    const provision = vi.spyOn(ardi, "createRepo").mockResolvedValue();
+    let requests = 0;
+    const exchange = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe("https://perf-synthetic.pimwell.test/fixture.git/info/refs?service=git-upload-pack");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Basic synthetic-fixture-only");
+      requests++;
+      if (mode === "missing-storage" && requests === 1) return new Response("missing", { status: 404 });
+      return new Response("001e# service=git-upload-pack\n00000000", { headers: { "content-type": "application/x-git-upload-pack-advertisement", "x-pimwell-colo": "DFW", "x-pimwell-version": "fixture-test" } });
+    });
+    try {
+      expect(await gitLsRemote(env, exchange, "Basic synthetic-fixture-only", Date.now())).toEqual({ colo: "DFW", version: "fixture-test" });
+      expect(provision).toHaveBeenCalledTimes(mode === "mapped" ? 0 : 1);
+      expect(exchange).toHaveBeenCalledTimes(mode === "missing-storage" ? 2 : 1);
+      if (mode !== "mapped") {
+        expect(provision.mock.calls[0]![2]).toEqual({ identity_id: SYNTHETIC_MEMBER, tenant_id: SYNTHETIC_TENANT, org: "perf-synthetic", name: "fixture" });
+        expect(typeof provision.mock.calls[0]![3]).toBe("number");
+      }
+    } finally { vi.restoreAllMocks(); }
+  });
+  it.each([403, 503])("does not use fixture provisioning to retry authorization/storage ownership failures (%s)", async status => {
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id,project_id,imported_at) VALUES (?,'perf-synthetic-repo',0)").bind(SYNTHETIC_TENANT).run();
+    const provision = vi.spyOn(ardi, "createRepo").mockResolvedValue();
+    try {
+      await expect(gitLsRemote(env, async () => new Response("denied", { status }), "Basic synthetic-fixture-only", Date.now())).rejects.toThrow("Synthetic Git failed");
+      expect(provision).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); }
   });
   it("runs the fixed browser/MCP/chat/Git journeys through live handlers and deletes ephemeral credentials", async () => {
     const c=collector(); let cookies="",current="",html="";
