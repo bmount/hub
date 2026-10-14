@@ -17,7 +17,12 @@ Parents (`parent`, the quest an item belongs to) and links (`work.link`) are inf
 | `work.claim` / `work.release` | Take an item for an hour (claim again to renew) / hand it back to open. |
 | `work.delete` `{id, confirm}` | Delete an item for good. `confirm` repeats its `project#number`. |
 
-`work.read` and `work.list` show each item's readiness too.
+`work.read` and `work.list` show each item's readiness too. After resolving an item,
+`work.read` batches its project, parent, children, comments, links and readiness
+inputs in one D1 snapshot. It loads only incident dependency neighbors and live
+holders of the item's resource names, not the unrelated tenant graph. Organization
+reads retain cross-project dependency and resource references. Project-scoped MCP
+continues to refuse graphs crossing project boundaries rather than hiding blockers.
 
 ## CLI and REST schemas
 

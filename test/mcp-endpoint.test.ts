@@ -103,6 +103,11 @@ describe("project MCP", () => {
     expect(await env.HUB_DB.prepare("SELECT 1 FROM wiki_revision r JOIN project p ON p.id = r.project_id WHERE p.slug = 'other'").first()).toBeNull();
     const create = async (project: string) => (await (await apiPost("acme.pimwell.test", "work.create", { project, kind: "errand", title: `Item in ${project}` }, bearer(op.token))).json() as any).result.item;
     const ownItem = await create("desk"), otherItem = await create("other");
+    const ownRead = await rpcBody(await projectRpc("desk", agent.token, "tools/call", { name: "work_read", arguments: { id: ownItem.id } }));
+    expect(ownRead.result.structuredContent.item.id).toBe(ownItem.id);
+    const deniedRead = await rpcBody(await projectRpc("desk", agent.token, "tools/call", { name: "work_read", arguments: { id: otherItem.id } }));
+    expect(deniedRead.result.isError).toBe(true);
+    expect(JSON.stringify(deniedRead)).not.toContain("Item in other");
     const deniedWrite = await rpcBody(await projectRpc("desk", agent.token, "tools/call", { name: "work_update", arguments: { id: otherItem.id, state: "done" } }));
     expect(deniedWrite.result.isError).toBe(true);
     expect((await env.HUB_DB.prepare("SELECT state FROM work_item WHERE id = ?").bind(otherItem.id).first<any>()).state).toBe("open");
@@ -118,6 +123,9 @@ describe("project MCP", () => {
     const review = await rpcBody(await projectRpc("other", agent.token, "tools/call", { name: "work_review", arguments: { id: proposed.result.structuredContent.id, decision: "approve" } }));
     expect(review.result.isError).toBe(true);
     await apiPost("acme.pimwell.test", "work.depend", { id: ownItem.id, on: [otherItem.id] }, bearer(op.token));
+    const crossingRead = await rpcBody(await projectRpc("desk", agent.token, "tools/call", { name: "work_read", arguments: { id: ownItem.id } }));
+    expect(crossingRead.result.isError).toBe(true);
+    expect(JSON.stringify(crossingRead)).not.toContain("Item in other");
     const graph = await rpcBody(await projectRpc("desk", agent.token, "tools/call", { name: "work_graph", arguments: {} }));
     expect(graph.result.isError).toBe(true);
     expect(JSON.stringify(graph)).not.toContain("Item in other");

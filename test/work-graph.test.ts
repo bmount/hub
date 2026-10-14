@@ -7,7 +7,8 @@ import { rpcBody } from "./oauth-helpers";
 import { describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
 import { claimWork, getWork, LEASE_MS } from "../src/db/work";
-import { changeDeps } from "../src/work/graphEdit";
+import { changeDeps, graphFrom, itemGraphStatements, loadGraph } from "../src/work/graphEdit";
+import { viewGraph } from "../src/work/graphView";
 import { closure, criticalPath, findCycle, rankReady, readiness, topoOrder, type Edge, type GraphNode } from "../src/work/graph";
 import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
@@ -128,6 +129,44 @@ describe("CLI arguments", () => {
 });
 
 describe("work graph acceptance", () => {
+  it("reads only incident neighbors and live resource holders, matching whole-graph readiness", async () => {
+    const w = await world();
+    await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: null, slug: "other", kind: "tracker", display_name: "Other" }, Date.now());
+    const a = await w.file("Inspect", { body: "Full description" });
+    const prereq = await w.ok<{ item: Item; ref: string }>(await w.call.pat("work.create", { project: "other", kind: "errand", title: "Prerequisite", state: "dropped" }));
+    const dependent = await w.file("Dependent", { after: a.ref });
+    const holder = await w.ok<{ item: Item; ref: string }>(await w.call.pat("work.create", { project: "other", kind: "errand", title: "Holder" }));
+    const unrelated = await w.file("Unrelated");
+    const expired = await w.file("Expired");
+    const child = await w.file("Child", { parent: a.item.number });
+    await w.ok(await w.call.pat("work.comment", { id: a.ref, body: "Retain this comment" }));
+    await w.ok(await w.call.pat("work.link", { id: a.ref, target_kind: "url", target_ref: "https://example.com", note: "Evidence" }));
+    for (const id of [a.ref, holder.ref, expired.ref]) await w.ok(await w.call.pat("work.resources", { id, resources: ["database"] }));
+    await w.ok(await w.call.pat("work.claim", { id: holder.ref }));
+    await env.HUB_DB.prepare("UPDATE work_item SET state = 'doing', owner_id = ?, lease_until = 1 WHERE id = ?").bind(w.pat.identity.id, expired.item.id).run();
+    const compare = async () => {
+      const now = Date.now();
+      const focused = graphFrom(await env.HUB_DB.batch(itemGraphStatements(env.HUB_DB, w.t.id, a.item.id, now)));
+      const full = await loadGraph(env.HUB_DB, w.t.id);
+      expect(viewGraph(focused, now).readinessOf(a.item.id)).toEqual(viewGraph(full, now).readinessOf(a.item.id));
+      expect(focused.nodes.map(n => n.id)).not.toContain(unrelated.item.id);
+      expect(focused.nodes.map(n => n.id)).not.toContain(expired.item.id);
+      expect(focused.nodes.map(n => n.id)).not.toContain(child.item.id);
+      return w.ok<any>(await w.call.pat("work.read", { id: a.ref }));
+    };
+    expect(await compare()).toMatchObject({ readiness: { status: "conflict", with: [holder.ref] }, dependents: [dependent.ref],
+      item: { body: "Full description" }, children: [{ id: child.item.id }], comments: [{ body: "Retain this comment", author: "pat" }], links: [{ note: "Evidence" }] });
+    await w.ok(await w.call.pat("work.depend", { id: a.ref, on: [prereq.ref] }));
+    expect(await compare()).toMatchObject({ readiness: { status: "blocked", waiting_on: [prereq.ref] }, prerequisites: [prereq.ref] });
+    await w.ok(await w.call.pat("work.update", { id: prereq.ref, state: "done" }));
+    expect((await compare()).readiness.status).toBe("conflict");
+    await w.ok(await w.call.pat("work.release", { id: holder.ref }));
+    expect((await compare()).readiness.status).toBe("ready");
+    await w.ok(await w.call.pat("work.claim", { id: a.ref }));
+    expect((await compare()).readiness.status).toBe("claimed");
+    await w.ok(await w.call.pat("work.update", { id: a.ref, state: "done" }));
+    expect((await compare()).readiness.status).toBe("closed");
+  });
   it("keeps canonical namespaced references in readiness, graph and frontier", async () => {
     const w = await world();
     const ns = "research-" + "n".repeat(26), slug = "project-" + "p".repeat(26), path = `${ns}/${slug}`;

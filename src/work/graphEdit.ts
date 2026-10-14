@@ -25,6 +25,31 @@ export function graphStatements(db: D1Database, tenant_id: string): D1PreparedSt
   ];
 }
 
+/** One item's incident edges and resource holders, not the unrelated tenant graph.
+ * Keep cross-project neighbors for organization reads; MCP's project guard still refuses crossing graphs.
+ */
+export function itemGraphStatements(db: D1Database, tenant_id: string, item_id: string, now: number): D1PreparedStatement[] {
+  const related = `WITH related(id) AS (
+    SELECT ? UNION SELECT prereq_id FROM work_dep WHERE tenant_id = ? AND dependent_id = ?
+    UNION SELECT dependent_id FROM work_dep WHERE tenant_id = ? AND prereq_id = ?
+    UNION SELECT r.item_id FROM work_resource r JOIN work_item h ON h.id = r.item_id
+      WHERE r.tenant_id = ? AND r.name IN (SELECT name FROM work_resource WHERE tenant_id = ? AND item_id = ?)
+      AND h.tenant_id = ? AND h.state = 'doing' AND h.owner_id IS NOT NULL AND h.lease_until >= ?
+  )`;
+  return [
+    db.prepare("SELECT 0 AS rev"),
+    db.prepare(`${related} SELECT w.id, w.kind, w.state, w.owner_id, w.lease_until, w.priority, w.estimate, w.created_at, w.title, w.project_id,
+      (${projectPathSql()}) || '#' || w.number AS ref, o.email AS owner_email
+      FROM related JOIN work_item w ON w.id = related.id JOIN project p ON p.id = w.project_id LEFT JOIN identity o ON o.id = w.owner_id
+      WHERE w.tenant_id = ?`).bind(item_id, tenant_id, item_id, tenant_id, item_id, tenant_id, tenant_id, item_id, tenant_id, now, tenant_id),
+    db.prepare("SELECT prereq_id, dependent_id FROM work_dep WHERE tenant_id = ? AND (prereq_id = ? OR dependent_id = ?)").bind(tenant_id, item_id, item_id),
+    db.prepare(`SELECT item_id, name, mode FROM work_resource WHERE tenant_id = ? AND
+      (item_id = ? OR (name IN (SELECT name FROM work_resource WHERE tenant_id = ? AND item_id = ?)
+      AND item_id IN (SELECT id FROM work_item WHERE tenant_id = ? AND state = 'doing' AND owner_id IS NOT NULL AND lease_until >= ?)))`)
+      .bind(tenant_id, item_id, tenant_id, item_id, tenant_id, now),
+  ];
+}
+
 export function graphFrom(results: D1Result[]): Graph {
   const [rev, nodes, edges, resources] = results;
   return { rev: (rev!.results[0] as { rev: number }).rev, nodes: nodes!.results as GraphItem[], edges: edges!.results as Edge[], resources: resources!.results as Resource[] };
