@@ -378,6 +378,14 @@ describe("isolated synthetic journeys", () => {
     await env.HUB_DB.prepare("UPDATE session SET expires_at = 0 WHERE id = 'synthetic-test'").run();
     expect(await syntheticMarker(c.measured,token)).toBe(false);
   });
+  it("classifies the fixed Git tenant as synthetic without an anonymous marker", async () => {
+    const c = collector();
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id,project_id,imported_at) VALUES (?,'perf-synthetic-repo',0)").bind(SYNTHETIC_TENANT).run();
+    const response = await app.fetch(new Request("https://perf-synthetic.pimwell.test/fixture.git/info/refs?service=git-upload-pack"), { ...c.measured, GIT_BACKEND: "artifacts" }, c.ctx);
+    expect(response.status).toBe(401);await c.flush();
+    expect(c.points.length).toBeGreaterThan(0);
+    expect(c.points.every(point => point.blobs?.[6] === "synthetic")).toBe(true);
+  });
   it("records each journey as synthetic, opens one Situation per failure episode, and never retains content", async () => {
     const c=collector(),point={duration:12,version:"synthetic-version",colo:"DFW",failed:true};
     await recordSynthetic(c.measured,"mail",point);
@@ -420,9 +428,10 @@ describe("isolated synthetic journeys", () => {
   });
   it("runs the fixed browser/MCP/chat/Git journeys through live handlers and deletes ephemeral credentials", async () => {
     const c=collector(); let cookies="",current="",html="";
+    let intercept: ((request: any) => void) | undefined;
     const measured={...c.measured,SYNTHETIC_BROWSER:{} as Fetcher};
     const page={
-      setRequestInterception:async()=>{},on:()=>{},setCookie:async(p:{value:string})=>{cookies="pmw_session="+p.value;},
+      setRequestInterception:async()=>{},on:(event: string, fn: (request: any) => void)=>{if(event === "request") intercept = fn;},setCookie:async(p:{value:string})=>{cookies="pmw_session="+p.value;},
       goto:async(url:string)=>{
         current=url;
         const response=await app.fetch(new Request(url,{headers:{cookie:cookies}}),measured,c.ctx);
@@ -451,6 +460,12 @@ describe("isolated synthetic journeys", () => {
       const rows=(await env.HUB_DB.prepare("SELECT journey,failed FROM synthetic_run ORDER BY journey").all<{journey:string;failed:number}>()).results;
       expect(rows).toEqual([...SYNTHETIC_JOURNEYS].sort().map(journey=>({journey,failed:0})));
       expect(close).toHaveBeenCalledOnce();
+      const forwardedHeaders: Array<Record<string, string>> = [];
+      const check = (url: string) => intercept!({ url: () => url, headers: () => ({ "x-pimwell-synthetic": "discarded" }), continue: ({ headers }: { headers: Record<string, string> }) => { forwardedHeaders.push(headers); }, abort: () => {} });
+      check("https://perf-synthetic.pimwell.test/fixture.git/info/refs?service=git-upload-pack");
+      check("https://pimwell.test/login");
+      expect(Object.hasOwn(forwardedHeaders[0]!, "x-pimwell-synthetic")).toBe(false);
+      expect(Object.hasOwn(forwardedHeaders[1]!, "x-pimwell-synthetic")).toBe(true);
       expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM oauth_grant WHERE identity_id = ?").bind(SYNTHETIC_MEMBER).first("n")).toBe(0);
       expect(await env.OAUTH_KV.list({prefix:"client:"})).toMatchObject({keys:[]});
     } finally {vi.restoreAllMocks();}
