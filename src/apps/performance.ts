@@ -167,7 +167,7 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   const [hist,splitRows,exemplars,triggers]=await Promise.all([
     query(`SELECT ${histogram} AS bucket, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${selected} GROUP BY bucket ORDER BY bucket`),
     s.kind==="interactions"||s.kind==="spinners" ? originClientSplits(query,scope.where,selected) : Promise.all(Object.entries(splits).map(async ([name,column])=>[name,await query(`SELECT ${column} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label ORDER BY n * p50 DESC LIMIT 100`)] as const)),
-    query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY double20 DESC, IF(blob19 != '' OR blob20 != '', 1, 0) DESC, duration DESC LIMIT 5`),
+    query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, double20 AS generation, IF(blob19 != '' OR blob20 != '', 1, 0) AS sourced, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY sourced DESC, generation DESC, duration DESC LIMIT 5`),
     s.kind==="spinners"?query(`SELECT blob8 AS label, blob19 AS previous, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label, previous ORDER BY total DESC LIMIT 20`):Promise.resolve([]),
   ]);
   const ids=exemplars.map(r=>String(r.request)).filter(id=>/^[0-9a-f-]{36}$/.test(id));
