@@ -9,7 +9,7 @@ import { projectStatusVerb } from "./status";
 import { reviewAi } from "./reviewAi";
 import { workBoard, workBulkUpdate } from "./board";
 import { reviewComment, reviewList, reviewRead, reviewRequest, reviewVerdict } from "./review";
-import { repoBranches, repoCommit, repoConnect, repoDiff, repoFile, repoList, repoLog, repoSearch } from "./code";
+import { repoBranches, repoCommit, repoConnect, repoDiff, repoFile, repoList, repoLog, repoSearch, repoCreate } from "./code";
 import { messageSearch, searchQuery, workSearch } from "./search";
 import { mailReply, mailSend, mailSending } from "./mailOut";
 import { siteList, siteRead, siteRegister } from "./sites";
@@ -67,7 +67,7 @@ export function registerAllVerbs(): void {
     mailReply, mailSend, mailSending,
     workSearch, messageSearch, searchQuery,
     workDepend, workResources, workGraph, workFrontier, workRelease, workDelete, workPropose, workProposals, workReview,
-    repoBranches, repoLog, repoCommit, repoFile, repoDiff, repoSearch, repoList, repoConnect,
+    repoBranches, repoLog, repoCommit, repoFile, repoDiff, repoSearch, repoList, repoConnect, repoCreate,
     reviewRequest, reviewList, reviewRead, reviewComment, reviewVerdict,
     workBoard, workBulkUpdate,
     projectStatusVerb, reviewAi,

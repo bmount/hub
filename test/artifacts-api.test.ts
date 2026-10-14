@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { authorizeGit } from "../src/code/gitAccess";
 import { artifactRead } from "../src/code/artifactRead";
 import { artifactGit } from "../src/http/artifactGit";
 import { repoOwnership } from "../src/code/artifactPush";
@@ -48,7 +49,7 @@ async function setup(role: "member" | "reader" = "member") {
     if (url.hostname.endsWith(".artifacts.cloudflare.net")) return new Response(concat(packet("# service=git-upload-pack\n"), new TextEncoder().encode("0000"),
       packet(`${hash(4)} HEAD\0symref=HEAD:refs/heads/main\n`), packet(`${hash(4)} refs/heads/main\n`), packet(`${hash(50)} refs/tags/v1\n`), packet(`${hash(4)} refs/tags/v1^{}\n`), new TextEncoder().encode("0000")));
     if (url.pathname.endsWith("/tokens")) return Response.json({ success: true, result: { plaintext: "opaque-synthetic-token", expires_at: new Date(Date.now() + 300_000).toISOString() } });
-    if (url.pathname.endsWith("/repos/site")) return Response.json({ success: true, result: { name: "site", remote, description, default_branch: "main", read_only: false } });
+    if (/\/repos\/(site|site-secondary)$/.test(url.pathname)) { const name = url.pathname.split("/").at(-1)!; return Response.json({ success: true, result: { name, remote: remote.replace("site.git", `${name}.git`), description, default_branch: "main", read_only: false } }); }
     if (url.pathname.endsWith("/log")) {
       expect(url.searchParams.get("ref")).toMatch(/^[0-9a-f]{40}$/);
       return Response.json({ success: true, result: [commits.get(url.searchParams.get("ref")!)].filter(Boolean) });
@@ -65,6 +66,30 @@ async function setup(role: "member" | "reader" = "member") {
 }
 
 describe("Artifacts compatibility adapter", () => {
+  it("routes named repositories with isolated history and attribution while preserving the default", async () => {
+    const s = await setup();
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(s.tenant.id, s.project.id, Date.now()).run();
+    await env.HUB_DB.prepare("INSERT INTO repository (tenant_id, project_id, name, storage_name, is_default, created_at) VALUES (?, ?, 'secondary', 'site-secondary', 0, ?)").bind(s.tenant.id, s.project.id, Date.now()).run();
+    await indexCommitNodes(env.HUB_DB, s.tenant.id, s.project.id, [{...metadata(4), parents: []}], "secondary");
+    await env.HUB_DB.prepare("INSERT INTO code_event (tenant_id, project_id, repo, ardi_id, kind, identity_id, target, at) VALUES (?, ?, '', 1, 'commit', ?, ?, ?)").bind(s.tenant.id, s.project.id, s.human.identity.id, hash(4), Date.now()).run();
+    const named = await s.read<{commits: Array<{oid: string; principal: string|null}>}>("log", {repo: "site/secondary"});
+    expect(named.result.commits.map(c => c.oid)).toEqual([hash(4)]);
+    expect(named.result.commits[0]!.principal).toBeNull();
+    const original = await s.read<{commits: Array<{oid: string; principal: string|null}>}>("log");
+    expect(original.result.commits.map(c => c.oid)).toEqual([hash(4), hash(3), hash(2), hash(1)]);
+    expect(original.result.commits[0]!.principal).toBe(s.human.identity.id);
+    const request = (name: string) => new Request(`https://acme.pimwell.test/site/${name}.git/info/refs?service=git-upload-pack`, {headers: {authorization: s.auth}});
+    expect((await artifactGit(request("secondary"), s.configured, "acme")).status).toBe(200);
+    expect(s.requests.some(p => p.includes("site-secondary.git"))).toBe(true);
+    expect(await authorizeGit(s.configured, s.auth, "acme", "site/missing")).toBeNull();
+    expect(await authorizeGit(s.configured, s.auth, "foreign", "site/secondary")).toBeNull();
+    await env.HUB_DB.prepare("UPDATE membership SET role = 'reader' WHERE identity_id = ?").bind(s.human.identity.id).run();
+    expect((await authorizeGit(s.configured, s.auth, "acme", "site/secondary"))?.write).toBe(false);
+    const push = new Request("https://acme.pimwell.test/site/secondary.git/info/refs?service=git-receive-pack", {headers:{authorization:s.auth}});
+    expect((await artifactGit(push, s.configured, "acme")).status).toBe(403);
+    await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ?").bind(s.human.identity.id).run();
+    expect(await authorizeGit(s.configured, s.auth, "acme", "site/secondary")).toBeNull();
+  });
   it("includes merged branch commits in all-parent history, with the old OID cursor format", async () => {
     const s = await setup();
     const first = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "HEAD", limit: 2 });

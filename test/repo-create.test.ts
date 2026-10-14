@@ -1,5 +1,9 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createProject } from "../src/db/projects";
+import { repoCreate, repoList } from "../src/verbs/code";
+import { ArtifactsRest } from "../src/code/artifactsRest";
+import { HubError } from "../src/errors";
 import { projectCreate } from "../src/verbs/project";
 import type { Ctx } from "../src/auth/context";
 import { setArdiForTest } from "../src/code/ardi";
@@ -48,6 +52,33 @@ describe("Artifacts repository provisioning", () => {
     });
     return { ctx, input, fetch, mode(value: string) { mode = value; } };
   }
+  it("creates named repositories idempotently without moving the default, validates names and supports workspace defaults", async () => {
+    const s = await setup();
+    await projectCreate.run(s.ctx, s.input);
+    const info = vi.spyOn(ArtifactsRest.prototype, "info").mockRejectedValue(new HubError(404, "not_found"));
+    const create = vi.spyOn(ArtifactsRest.prototype, "create").mockResolvedValue(undefined);
+    for (const name of ["api", "web"]) {
+      const first = await repoCreate.run(s.ctx, repoCreate.parse({project:"site", name}));
+      const again = await repoCreate.run(s.ctx, repoCreate.parse({project:"site", name}));
+      expect(again).toEqual(first);
+    }
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls.every(c => c[1].length <= 63)).toBe(true);
+    const list = await repoList.run(s.ctx, repoList.parse({project: "site"}));
+    expect(list.repos.map(r => [r.name, r.is_default, r.clone_url])).toEqual([
+      ["default", true, "https://acme.pimwell.test/site.git"],
+      ["api", false, "https://acme.pimwell.test/site/api.git"],
+      ["web", false, "https://acme.pimwell.test/site/web.git"],
+    ]);
+    for (const name of ["UPPER", "../escape", "nested/name", "", "x".repeat(64)]) {
+      await expect(async () => repoCreate.run(s.ctx, repoCreate.parse({project:"site", name}))).rejects.toThrow();
+    }
+    await createProject(env.HUB_DB, {tenant_id: s.ctx.tenant!.id, namespace_id:null, slug:"desk", kind:"workspace", display_name:"Desk"}, Date.now());
+    const first = await repoCreate.run(s.ctx, repoCreate.parse({project:"desk", name:"source"}));
+    expect(first).toMatchObject({is_default:true, clone_url:"https://acme.pimwell.test/desk.git"});
+    expect(await env.HUB_DB.prepare("SELECT storage_name FROM repository WHERE project_id = (SELECT id FROM project WHERE slug = 'site') AND is_default = 1").first<string>("storage_name")).toBe("site");
+    info.mockRestore();create.mockRestore();
+  });
   it("creates an owned repo and records its mapping", async () => {
     const s = await setup();
     await projectCreate.run(s.ctx, s.input);

@@ -21,7 +21,9 @@ async function dispatch(request: Request, env: ProxyEnv, ctx: ExecutionContext):
       traceFields({ tenant: tenant.id, auth: "git", route: "/:repo.git/*" });
       if (url.pathname.startsWith("/agent-src/")) return env.GIT_BACKEND === "artifacts" ? artifactGit(request, env, tenant.slug) : notFoundPage();
       const repo = url.pathname.slice(1, url.pathname.indexOf(".git/"));
-      return await usesArtifacts(env, tenant.slug, repo) ? artifactGit(request, env, tenant.slug) : fencedLegacyGit(request, env, tenant.slug, repo);
+      if (await usesArtifacts(env, tenant.slug, repo)) return artifactGit(request, env, tenant.slug);
+      if (repo.includes("/")) return notFoundPage();
+      return fencedLegacyGit(request, env, tenant.slug, repo);
     }
     // Existing agent helpers use this URL. Keep Git session renewal independent of a broken hub deploy too.
     if (host.kind === "tenant" && url.pathname === "/api/session.start" && request.method === "POST") return handleApi(request, env, promise => ctx.waitUntil(promise));

@@ -26,6 +26,7 @@ function fakeArdi(seen: Array<{ path: string; auth: string | null; body: Record<
       const verb = url.pathname.split("/api/")[1];
       const ok = (result: unknown, next: string | null = null) => Response.json({ ok: true, result, next });
       const commit = (oid: string, parents: string[], summary: string) => ({ oid, parents, summary, tree: "t", author_name: "Bruno", author_email: "b@example.com", author_time: 1791000000, committer_name: "Bruno", committer_email: "b@example.com", commit_time: 1791000000, principal: pusher, session: "S1", trailer_principal: null, trailer_session: null });
+      if (verb === "snapshot") return ok({oid:B, files:[{path:"README.md", text:`Needle in ${body.repo}`, binary:false, size:30}]});
       if (verb === "refs.list") return ok({ refs: [{ name: "refs/heads/main", target: B }, { name: "refs/heads/pio/topic", target: C }] });
       if (verb === "log") return ok({ commits: [commit(B, [A], "Fix two (site#1)"), commit(A, [], "Start")] }, "cursor1");
       if (verb === "commit.show") return ok({ ...commit(String(body.oid), body.oid === B ? [A] : [], body.oid === B ? "Fix two (site#1)" : "Start"), message: "Fix two (site#1)\n\nCareful now.",
@@ -52,6 +53,36 @@ async function world() {
 }
 
 describe("recorded commit/work evidence", () => {
+  it("searches all project repositories, limits to a named repo, and keeps same-SHA work evidence separate", async () => {
+    const w = await world();
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(w.t.id, w.p.id, Date.now()).run();
+    for (const name of ["api", "web"]) await env.HUB_DB.prepare("INSERT INTO repository (tenant_id, project_id, name, storage_name, is_default, created_at) VALUES (?, ?, ?, ?, 0, ?)").bind(w.t.id, w.p.id, name, `storage-${name}`, Date.now()).run();
+    const all = await w.call(w.h, "repo.search", {project:"site", q:"needle"});
+    expect(all.status).toBe(200);
+    expect(all.result.matches).toEqual(expect.arrayContaining([expect.objectContaining({repo:"default"}), expect.objectContaining({repo:"api"}), expect.objectContaining({repo:"web"})]));
+    const only = await w.call(w.h, "repo.search", {project:"site", repo:"api", q:"needle"});
+    expect(only.result.matches).toEqual([expect.objectContaining({repo:"api"})]);
+    expect(w.seen.at(-1)!.body.repo).toBe("site/api");
+    const item = (await w.call(w.h, "work.create", {project:"site", kind:"errand", title:"Named commit"})).result.item as {id:string};
+    await w.call(w.h, "work.link", {id:item.id, target_kind:"commit", target_ref:`site/api@${B}`});
+    const named = await w.call(w.h, "repo.commit", {project:"site", repo:"api", oid:B});
+    expect(named.result.relatedWork).toEqual([expect.objectContaining({id:item.id})]);
+    const original = await w.call(w.h, "repo.commit", {project:"site", oid:B});
+    expect(original.result.relatedWork).toEqual([]);
+    const review = await w.call(w.h, "review.request", {project:"site",repo:"api",branch:"feature",idempotency_key:"named-review"});
+    expect(review.result).toMatchObject({ref:"site!1",review:{repo:"api"}});
+    const read = await w.call(w.h, "review.read", {id:"site!1"});
+    expect(read.result).toMatchObject({relatedWorkCommit:`site/api@${B}`, relatedWork:[{id:item.id}]});
+    expect((await w.call(w.h, "review.request", {project:"site",repo:"web",branch:"feature",idempotency_key:"named-review"})).status).toBe(409);
+    const deploy = await w.call(w.h, "deploy.record", {project:"site",repo:"api",commit:B});
+    const record = deploy.result.deploy as {id:string};
+    expect(record).toMatchObject({repo:"api"});
+    const deployed = await w.call(w.h, "deploy.read", {id:record.id});
+    expect(deployed.result).toMatchObject({commitRef:`site/api@${B}`,relatedWork:[{id:item.id}]});
+    expect((await w.call(w.h,"repo.commit",{project:"site",oid:B})).result).toMatchObject({after:{shipped:null}});
+    expect((await w.call(w.h,"repo.commit",{project:"site",repo:"api",oid:B})).result).toMatchObject({after:{shipped:{id:record.id}}});
+    expect((await w.call(w.h, "repo.log", {project:"site", repo:"missing"})).status).toBe(404);
+  });
   it("joins deduplicated full references and exact URLs across API/UI/MCP, not short ids or alternate URLs", async () => {
     const w = await world();
     const url = `https://${HOST}/site/code?c=${B}`;

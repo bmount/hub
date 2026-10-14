@@ -155,9 +155,9 @@ describe("git forwarding to Ardi", () => {
     expect(await healthz.text()).toBe("ok");
   });
 
-  it("matches only top-level .git smart-HTTP paths", () => {
+  it("matches top-level and named .git smart-HTTP paths", () => {
     for (const p of ["/site.git/info/refs", "/a.b_c-d.git/git-upload-pack", "/Site9.git/git-receive-pack"]) expect({ p, ok: isGitPath(p) }).toEqual({ p, ok: true });
-    for (const p of ["/site/info/refs", "/a/b.git/info/refs", "/site.git/info/refs/", "/-x.git/info/refs", "/site.git/objects/info/packs", "/site.git"]) expect({ p, ok: isGitPath(p) }).toEqual({ p, ok: false });
+    for (const p of ["/site/info/refs", "/a/b/c.git/info/refs", "/site.git/info/refs/", "/-x.git/info/refs", "/site.git/objects/info/packs", "/site.git"]) expect({ p, ok: isGitPath(p) }).toEqual({ p, ok: false });
   });
 
   it("answers 503 when the ARDI binding is missing", async () => {

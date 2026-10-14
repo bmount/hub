@@ -26,6 +26,25 @@ function timeline(events: ArdiEvent[], seen: Array<Record<string, unknown>>, fai
 }
 
 describe("push sync", () => {
+  it("syncs each named repository independently and links an initial named commit exactly once", async () => {
+    const t = await seedTenant("acme");
+    const p = await createProject(env.HUB_DB, {tenant_id:t.id, namespace_id:null, slug:"site", kind:"repo", display_name:"Site"}, Date.now());
+    const ada = await seedHuman("ada@example.com", {memberships:[{tenant_id:t.id, role:"admin"}]});
+    await apiPost("acme.pimwell.test", "work.create", {project:"site",kind:"snag",title:"Linked"}, cookieHeaders(ada.token,"acme.pimwell.test"));
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(t.id,p.id,Date.now()).run();
+    for (const name of ["api","web"]) await env.HUB_DB.prepare("INSERT INTO repository (tenant_id,project_id,name,storage_name,is_default,created_at) VALUES (?,?,?,?,0,?)").bind(t.id,p.id,name,`storage-${name}`,Date.now()).run();
+    setArdiForTest({fetch: async (_input: RequestInfo|URL, init?:RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      const id = body.repo === "site/api" ? 10 : body.repo === "site/web" ? 20 : 1;
+      const events = Number(body.since ?? 0) < id ? [{id,kind:"commit",principal:ada.identity.id,session:null,ref:"refs/heads/main",target:"a".repeat(40),summary:"Fix site#1",time:1791000000}] : [];
+      return Response.json({ok:true,result:{events},next:null});
+    }} as unknown as Fetcher);
+    expect((await syncAll(env,Date.now())).repos).toBe(3);
+    await syncAll(env,Date.now());
+    expect((await env.HUB_DB.prepare("SELECT target_ref FROM work_link ORDER BY target_ref").all()).results).toEqual([{target_ref:`site/api@${"a".repeat(40)}`},{target_ref:`site/web@${"a".repeat(40)}`}]);
+    expect((await env.HUB_DB.prepare("SELECT repo FROM repository_sync ORDER BY repo").all()).results).toEqual([{repo:"api"},{repo:"web"}]);
+    expect((await env.HUB_DB.prepare("SELECT repo FROM code_event ORDER BY ardi_id").all()).results).toEqual([{repo:""},{repo:"api"},{repo:"web"}]);
+  });
   it("takes history quietly, then links commits that mention work and says so in #<project>-ops", async () => {
     const t = await seedTenant("acme");
     await createProject(env.HUB_DB, { tenant_id: t.id, namespace_id: null, slug: "site", kind: "repo", display_name: "Site" }, Date.now());

@@ -1,3 +1,4 @@
+import { resolveRepository } from "./repositories";
 import type { Env } from "../env";
 import { credentialUsable, rank, roleFor } from "../auth/context";
 import { getSessionByToken, touchSession } from "../db/sessions";
@@ -8,7 +9,7 @@ import type { Identity, Role, Session, Tenant } from "../db/types";
 
 export type GitGrant = {
   identity: Identity; session: Session; tenant: Tenant;
-  project: { id: string; slug: string }; write: boolean; refPrefixes?: string[];
+  project: { id: string; slug: string }; repository?: { name: string; storage_name: string; is_default: number }; write: boolean; refPrefixes?: string[];
 };
 
 export type GitCaller = { identity: Identity; session: Session; tenant: Tenant; role: Role };
@@ -44,9 +45,14 @@ export async function authorizeGit(env: Env, authorization: string | null, tenan
   const caller = await gitCaller(env, authorization, tenantSlug, now);
   if (!caller) return null;
   const { identity, session, tenant, role } = caller;
-  const project = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FgitAccess.ts:47:25:authorizeGit:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind = 'repo'")
-    .bind(tenant.id, repo).first<{ id: string; slug: string }>();
+  const [projectSlug, repoName, extra] = repo.split("/");
+  if (extra !== undefined) return null;
+  const project = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FgitAccess.ts:47:25:authorizeGit:abead50e*/ SELECT id, slug FROM project WHERE tenant_id = ? AND slug = ? AND kind IN ('repo', 'workspace') AND state = 'active'")
+    .bind(tenant.id, projectSlug).first<{ id: string; slug: string }>();
   if (!project) return null;
+  let repository;
+  try { repository = await resolveRepository(env.HUB_DB, tenant.id, project.id, repoName); }
+  catch { if (repoName) return null; }
   if (session.kind === "git") await touchSession(env.HUB_DB, session, now);
-  return { identity, session, tenant, project, write: rank(role) >= rank("member") };
+  return { identity, session, tenant, project, repository, write: rank(role) >= rank("member") };
 }

@@ -21,7 +21,7 @@ const SYNC_SLUG = "pimwell-sync";
 const REF_IN_TEXT = /\b([a-z][a-z0-9-]{1,62})#(\d{1,8})\b/g;
 
 type Tenant = { id: string; slug: string };
-type Repo = { id: string; slug: string };
+type Repo = { id: string; slug: string; repo?: string };
 
 /** The organization's sync agent and its sealed token, created the first time. Null without an admin to answer to. */
 export async function syncCredential(env: Env, t: Tenant, now: number): Promise<{ identity_id: string; token: string } | null> {
@@ -53,7 +53,7 @@ export async function syncCredential(env: Env, t: Tenant, now: number): Promise<
 
 /** Sync every repository of every active organization. Errors are recorded per repository and never stop the rest. */
 export async function syncAll(env: Env, now: number): Promise<{ repos: number; events: number }> {
-  const tenants = (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Fsync.ts:56:26:syncAll:840ce3ea*/ SELECT DISTINCT t.id, t.slug FROM tenant t JOIN project p ON p.tenant_id = t.id WHERE t.state = 'active' AND p.kind = 'repo' AND p.state = 'active'").all<Tenant>()).results;
+  const tenants = (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Fsync.ts:56:26:syncAll:840ce3ea*/ SELECT DISTINCT t.id, t.slug FROM tenant t JOIN project p ON p.tenant_id = t.id WHERE t.state = 'active' AND p.kind IN ('repo', 'workspace') AND p.state = 'active'").all<Tenant>()).results;
   let repos = 0, events = 0;
   for (const t of tenants) {
     const cred = await syncCredential(env, t, now);
@@ -62,7 +62,7 @@ export async function syncAll(env: Env, now: number): Promise<{ repos: number; e
     const { session, token } = await createAgentSession(env.HUB_DB, { identity_id: cred.identity_id, tenant_id: t.id, label: "push sync", parent_token_id: tok!.ref_id, ttl_s: 900 }, now);
     try {
       const auth = `Basic ${btoa(`${SYNC_SLUG}:${token}`)}`;
-      for (const r of (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Fsync.ts:65:30:syncAll:587e241c*/ SELECT id, slug FROM project WHERE tenant_id = ? AND kind = 'repo' AND state = 'active'").bind(t.id).all<Repo>()).results) {
+      for (const r of (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Fsync.ts:65:30:syncAll:587e241c*/ SELECT id, slug, '' AS repo FROM project WHERE tenant_id = ?1 AND kind = 'repo' AND state = 'active' UNION ALL SELECT p.id, p.slug || CASE WHEN r.is_default = 1 THEN '' ELSE '/' || r.name END, CASE WHEN r.is_default = 1 THEN '' ELSE r.name END AS repo FROM repository r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE p.tenant_id = ?1 AND p.state = 'active' AND (r.is_default = 0 OR p.kind = 'workspace')").bind(t.id).all<Repo>()).results) {
         repos++;
         events += await syncRepo(env, t, r, auth, now);
       }
@@ -75,15 +75,15 @@ export async function syncAll(env: Env, now: number): Promise<{ repos: number; e
 
 async function syncRepo(env: Env, t: Tenant, r: Repo, auth: string, now: number): Promise<number> {
   const db = env.HUB_DB;
-  const row = await db.prepare("/*perf-site:src%2Fcode%2Fsync.ts:78:21:syncRepo:246cc8ab*/ SELECT cursor FROM code_sync WHERE tenant_id = ? AND project_id = ?").bind(t.id, r.id).first<{ cursor: string | null }>();
+  const row = await db.prepare(r.repo ? "SELECT cursor FROM repository_sync WHERE tenant_id = ? AND project_id = ? AND repo = ?" : "SELECT cursor FROM code_sync WHERE tenant_id = ? AND project_id = ?").bind(t.id, r.id, ...(r.repo ? [r.repo] : [])).first<{ cursor: string | null }>();
   // Legacy checkpoints started at Ardi's newest page. Replay quietly from zero to recover omitted history.
   const state: GitSyncState = readGitSyncState(row?.cursor ?? null) ?? {
     version: 1, after: 0, cutoff: null, phase: "backfill", head: 0, head_at: null,
     imported_at: null, observed_at: null, caught_up_at: null,
   };
-  const save = (error: string | null) => db.prepare(`/*perf-site:src%2Fcode%2Fsync.ts:84:42:save:7f97f9bc*/ INSERT INTO code_sync (tenant_id, project_id, cursor, last_run_at, last_error) VALUES (?, ?, ?, ?, ?)
+  const save = (error: string | null) => db.prepare(r.repo ? `INSERT INTO repository_sync (tenant_id, project_id, repo, cursor, last_run_at, last_error) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(project_id, repo) DO UPDATE SET cursor=excluded.cursor, last_run_at=excluded.last_run_at, last_error=excluded.last_error` : `/*perf-site:src%2Fcode%2Fsync.ts:84:42:save:7f97f9bc*/ INSERT INTO code_sync (tenant_id, project_id, cursor, last_run_at, last_error) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (project_id) DO UPDATE SET cursor = excluded.cursor, last_run_at = excluded.last_run_at, last_error = excluded.last_error`)
-    .bind(t.id, r.id, JSON.stringify(state), now, error).run();
+    .bind(t.id, r.id, ...(r.repo ? [r.repo] : []), JSON.stringify(state), now, error).run();
   let total = 0;
   try {
     // Without since Ardi returns the newest page; since=0 walks all history forwards.
@@ -123,12 +123,12 @@ async function importPage(env: Env, t: Tenant, r: Repo, got: ArdiEvent[], cutoff
   const db = env.HUB_DB;
   const ids = [...new Set(got.map((e) => e.principal).filter((x): x is string => !!x))];
   const known = new Set(ids.length ? (await db.prepare(`/*perf-site:src%2Fcode%2Fsync.ts:125:45:importPage:c0c5116f*/ SELECT id FROM identity WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<{ id: string }>()).results.map((x) => x.id) : []);
-  const stmts: D1PreparedStatement[] = got.map((e) => db.prepare(`/*perf-site:src%2Fcode%2Fsync.ts:126:55:importPage:75c5e4bf*/ INSERT OR IGNORE INTO code_event (tenant_id, project_id, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(t.id, r.id, e.id, String(e.kind).slice(0, 40), e.principal && known.has(e.principal) ? e.principal : null, e.session, e.ref, e.target, (e.summary ?? "").slice(0, 300), e.time * 1000));
+  const stmts: D1PreparedStatement[] = got.map((e) => db.prepare(`/*perf-site:src%2Fcode%2Fsync.ts:126:55:importPage:75c5e4bf*/ INSERT OR IGNORE INTO code_event (tenant_id, project_id, repo, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(t.id, r.id, r.repo ?? "", e.id, String(e.kind).slice(0, 40), e.principal && known.has(e.principal) ? e.principal : null, e.session, e.ref, e.target, (e.summary ?? "").slice(0, 300), e.time * 1000));
   for (let i = 0; i < stmts.length; i += 100) await db.batch(stmts.slice(i, i + 100));
   const commits = got.filter((e) => e.id > cutoff && e.kind === "commit" && e.target);
   // Commits that mention project#n link to that work item, with an event on it.
-  for (const c of commits) {
+  for (const c of (r.repo ? got.filter(e => e.kind === "commit" && e.target) : commits)) {
     for (const m of (c.summary ?? "").matchAll(REF_IN_TEXT)) {
       const w = await db.prepare("/*perf-site:src%2Fcode%2Fsync.ts:133:23:importPage:08b6a668*/ SELECT w.id, w.tenant_id FROM work_item w JOIN project p ON p.id = w.project_id WHERE p.tenant_id = ? AND p.slug = ? AND w.number = ?")
         .bind(t.id, m[1], Number(m[2])).first<{ id: string; tenant_id: string }>();

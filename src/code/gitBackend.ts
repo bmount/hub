@@ -4,7 +4,7 @@ import { finishLegacyForward, migrationRepo, startLegacyForward } from "./gitMig
 export async function usesArtifacts(env: Env, tenant: string, repo: string): Promise<boolean> {
   if (env.GIT_BACKEND !== "artifacts") return false;
   return !!await env.HUB_DB.prepare(`/*perf-site:src%2Fcode%2FgitBackend.ts:6:18:usesArtifacts:65a9e5a9*/ SELECT 1 FROM git_repository g JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id JOIN tenant t ON t.id = g.tenant_id WHERE t.slug = ? AND p.slug = ?`)
-    .bind(tenant, repo).first();
+    .bind(tenant, repo.split("/")[0]).first() || !!await env.HUB_DB.prepare("SELECT 1 FROM repository r JOIN tenant t ON t.id = r.tenant_id JOIN project p ON p.id = r.project_id WHERE t.slug = ? AND p.slug = ? AND ((? IS NULL AND r.is_default = 1) OR r.name = ?)").bind(tenant, repo.split("/")[0], repo.split("/")[1] ?? null, repo.split("/")[1] ?? null).first();
 }
 
 /** Keep legacy clients, including unmigrated repositories, working without changing their URLs. */

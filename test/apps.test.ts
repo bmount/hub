@@ -48,6 +48,20 @@ async function world() {
 }
 
 describe("sites", () => {
+  it("carries a named repository through app registration, telemetry, releases and Site apps", async () => {
+    const w = await world();
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(w.t.id,w.p.id,Date.now()).run();
+    await env.HUB_DB.prepare("INSERT INTO repository (tenant_id,project_id,name,storage_name,is_default,created_at) VALUES (?,?,'api','storage-api',0,?)").bind(w.t.id,w.p.id,Date.now()).run();
+    expect((await w.call(w.root.token,"app.register",{project:"pricebench",repo:"api",script:"pricebench"})).status).toBe(200);
+    await ingest(env,[redact(tail())],Date.now());
+    expect(await env.HUB_DB.prepare("SELECT repo FROM app_deploy WHERE script_name = 'pricebench'").first<string>("repo")).toBe("api");
+    await w.call(w.pat.token,"site.register",{project:"pricebench",name:"prices.example.com",hostnames:["prices.example.com"],apps:["pricebench"]});
+    const sha = "a".repeat(40);
+    await w.call(w.pat.token,"deploy.record",{project:"pricebench",repo:"api",worker:"pricebench",commit:sha,version:"11111111-1111-4111-8111-111111111111",deployment:"22222222-2222-4222-8222-222222222222"});
+    expect((await w.call(w.pat.token,"site.read",{name:"prices.example.com"})).result).toMatchObject({site:{apps:[{repo:"api",currentVersion:{commitRef:`pricebench/api@${sha}`}}]}});
+    const reader = await seedHuman("reader@example.com",{memberships:[{tenant_id:w.t.id,role:"reader"}]});
+    expect((await w.call(reader.token,"repo.create",{project:"pricebench",name:"forbidden"})).status).toBe(403);
+  });
   it("shows sparse live trends without inventing another time bucket", () => {
     expect(sparkline([])).toContain("—");
     const sparse=sparkline([{bucket:35554,p50:118,n:546}]);

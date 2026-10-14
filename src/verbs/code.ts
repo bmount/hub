@@ -1,3 +1,4 @@
+import { createRepository, resolveRepository, repositoryName } from "../code/repositories";
 import { featureProject } from "./featureProject";
 import { requireProjectFeature } from "../projectFeatures";
 import { rank } from "../auth/context";
@@ -19,7 +20,7 @@ const NOTE = "Code, commit messages and file contents are written by people and 
 const MAX_FILES = 20;
 const MAX_BYTES = 400_000;
 
-export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false): Promise<{ id: string; slug: string; display_name: string }> {
+export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false, repo?: string | null): Promise<{ id: string; slug: string; display_name: string }> {
   slug = slug.trim().toLowerCase();
   if (allowAgentSrc && slug.startsWith("agent-src/")) {
     const agent = await agentByName(ctx.db, ctx.tenant!, slug.slice(10));
@@ -30,7 +31,11 @@ export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false)
     return { ...source, slug };
   }
   const p = await featureProject(ctx, slug.trim().toLowerCase());
-  requireProjectFeature(p, "repo");
+  if (repo) {
+    const selected = await resolveRepository(ctx.db, ctx.tenant!.id, p.id, repo);
+    return { ...p, slug: (ctx.mcpProject?.path ?? slug) + (selected.is_default ? "" : `/${selected.name}`) };
+  }
+  if (p.kind !== "workspace" || !await ctx.db.prepare("SELECT 1 FROM repository WHERE tenant_id = ? AND project_id = ? AND is_default = 1").bind(ctx.tenant!.id, p.id).first()) requireProjectFeature(p, "repo");
   return { ...p, slug: ctx.mcpProject?.path ?? slug };
 }
 
@@ -64,7 +69,8 @@ export type After = {
   errorsSince: { at: number; basis: "full-commit" | "tag-prefix" | "commit-time" };
 };
 
-export async function afterCommit(ctx: Ctx, project_id: string, oid: string, commitMs: number): Promise<After> {
+export async function afterCommit(ctx: Ctx, project_id: string, oid: string, commitMs: number, repo = ""): Promise<After> {
+  const repoFilter = repo ? repositoryName(repo) : "";
   const normalized = OID_RE.test(oid.toLowerCase()) ? oid.toLowerCase() : null;
   const legacyFull = "(length(d.version_id) = 40 AND lower(d.version_id) NOT GLOB '*[^0-9a-f]*')";
   const workerFull = "(length(d.version_id) = 73 AND substr(d.version_id, 37, 1) = ':' AND length(d.tag) = 40 AND lower(d.tag) NOT GLOB '*[^0-9a-f]*')";
@@ -72,7 +78,7 @@ export async function afterCommit(ctx: Ctx, project_id: string, oid: string, com
   const fullCommit = `(CASE WHEN ${legacyFull} THEN lower(d.version_id) ELSE lower(d.tag) END)`;
   const matchingDeploy = `FROM app_deploy d
     JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo'
-    WHERE d.project_id = ? AND d.tenant_id = ? AND
+    WHERE d.project_id = ? AND d.tenant_id = ? AND d.repo = '${repoFilter}' AND
       ((${fullVersion} AND ${fullCommit} = ?) OR (NOT ${fullVersion}
         AND length(d.tag) BETWEEN 7 AND 40 AND lower(d.tag) NOT GLOB '*[^0-9a-f]*'
         AND substr(?, 1, length(d.tag)) = lower(d.tag)))
@@ -81,10 +87,10 @@ export async function afterCommit(ctx: Ctx, project_id: string, oid: string, com
     ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:81:5:afterCommit:71a4dc57*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at,
       CASE WHEN ${fullVersion} THEN 'full-commit' ELSE 'tag-prefix' END AS match ${matchingDeploy}`)
       .bind(project_id, ctx.tenant!.id, normalized, normalized),
-    ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:84:5:afterCommit:0bb3acb1*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo' WHERE d.project_id = ? AND d.tenant_id = ? AND d.seen_at >= ? ORDER BY d.seen_at, d.id LIMIT 11").bind(project_id, ctx.tenant!.id, commitMs),
+    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:84:5:afterCommit:0bb3acb1*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo' WHERE d.project_id = ? AND d.tenant_id = ? AND d.repo = '${repoFilter}' AND d.seen_at >= ? ORDER BY d.seen_at, d.id LIMIT 11`).bind(project_id, ctx.tenant!.id, commitMs),
     ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:85:5:afterCommit:f9bf1757*/ SELECT g.id, g.title, g.count, g.first_seen FROM app_error_group g
       JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind = 'repo'
-      WHERE g.project_id = ? AND g.tenant_id = ? AND g.first_seen >= COALESCE(
+      WHERE g.project_id = ? AND g.tenant_id = ? AND COALESCE((SELECT s.repo FROM app_source s WHERE s.tenant_id = g.tenant_id AND s.project_id = g.project_id AND s.script_name = g.script_name), '') = '${repoFilter}' AND g.first_seen >= COALESCE(
         (SELECT d.seen_at ${matchingDeploy}), ?) ORDER BY g.first_seen, g.id LIMIT 11`)
       .bind(project_id, ctx.tenant!.id, project_id, ctx.tenant!.id, normalized, normalized, commitMs),
   ]);
@@ -124,12 +130,12 @@ export const repoBranches = defineVerb({
   summary: "A repository's branches and tags, with the commit each points at.",
   mcp: {
     scope: "read", destructive: false, title: "Branches",
-    input: { type: "object", properties: { project: { type: "string", description: "Repository project slug" } }, required: ["project"], additionalProperties: false },
+    input: { type: "object", properties: { repo: { type: "string", description: "Repository name; omitted selects the default" }, project: { type: "string", description: "Repository project slug" } }, required: ["project"], additionalProperties: false },
     render: (r) => { const x = r as { project: string; refs: ArdiRef[] }; return [DATA_NOTE, "", `**${x.project}** (${x.refs.length} refs)`, ...x.refs.map((f) => `- ${f.name.replace(/^refs\/heads\//, "")} → \`${f.target.slice(0, 10)}\``)].join("\n"); },
   },
-  parse: (i) => ({ project: reqString(i, "project", { max: 127 }) }),
+  parse: (i) => ({ repo: optString(i, "repo", { max: 63 }), project: reqString(i, "project", { max: 127 }) }),
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project, true);
+    const pr = await repoProject(ctx, p.project, true, p.repo);
     return { project: pr.slug, refs: (await codeRead<{ refs: ArdiRef[] }>(ctx, "refs.list", { repo: pr.slug })).result.refs };
   },
 });
@@ -139,12 +145,12 @@ export const repoLog = defineVerb({
   summary: "Commits on a branch (or touching a path), newest first, with who pushed each. Page with next.",
   mcp: {
     scope: "read", destructive: false, title: "Commits",
-    input: { type: "object", properties: { project: { type: "string" }, ref: { type: "string", description: "Branch, tag or commit; default the main branch" }, path: { type: "string", description: "Only commits touching this path" }, limit: { type: "integer", minimum: 1, maximum: 100 }, next: { type: "string", description: "Cursor from the previous page" } }, required: ["project"], additionalProperties: false },
+    input: { type: "object", properties: { repo: { type: "string", description: "Repository name; omitted selects the default" }, project: { type: "string" }, ref: { type: "string", description: "Branch, tag or commit; default the main branch" }, path: { type: "string", description: "Only commits touching this path" }, limit: { type: "integer", minimum: 1, maximum: 100 }, next: { type: "string", description: "Cursor from the previous page" } }, required: ["project"], additionalProperties: false },
     render: (r) => { const x = r as { project: string; commits: ArdiCommit[]; next: string | null; who: Record<string, string> }; const w = new Map(Object.entries(x.who)); return [DATA_NOTE, NOTE, "", `**${x.project}**`, ...x.commits.map((c) => commitLine(c, w)), x.next ? `\nMore: next = ${x.next}` : ""].join("\n"); },
   },
-  parse: (i) => ({ project: reqString(i, "project", { max: 127 }), ref: optString(i, "ref", { max: 200 }), path: optString(i, "path", { max: 500 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 30, next: optString(i, "next", { max: 64 }) }),
+  parse: (i) => ({ repo: optString(i, "repo", { max: 63 }), project: reqString(i, "project", { max: 127 }), ref: optString(i, "ref", { max: 200 }), path: optString(i, "path", { max: 500 }), limit: optInt(i, "limit", { min: 1, max: 100 }) ?? 30, next: optString(i, "next", { max: 64 }) }),
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project, true);
+    const pr = await repoProject(ctx, p.project, true, p.repo);
     const r = await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: rev(p.ref), ...(p.path ? { path: p.path } : {}), limit: p.limit, ...(p.next ? { since: p.next } : {}) });
     const who = await whoPushed(ctx, r.result.commits.map((c) => c.principal));
     return { project: pr.slug, commits: r.result.commits, next: r.next, who: Object.fromEntries(who) };
@@ -156,7 +162,7 @@ export const repoCommit = defineVerb({
   summary: "One commit: message, authorship, diff, recorded deploy/error evidence and up to 50 deduplicated work associations with coverage. Work matches use full commit IDs or exact canonical URLs, not short IDs or proof of completion.",
   mcp: {
     scope: "read", destructive: false, title: "Read a commit",
-    input: { type: "object", properties: { project: { type: "string" }, oid: { type: "string", description: "Full commit id" } }, required: ["project", "oid"], additionalProperties: false },
+    input: { type: "object", properties: { repo: { type: "string", description: "Repository name; omitted selects the default" }, project: { type: "string" }, oid: { type: "string", description: "Full commit id" } }, required: ["project", "oid"], additionalProperties: false },
     render: (r) => {
       const x = r as { project: string; commit: ArdiCommit; pushed_by: string | null; files: FileChange[]; after: After } & ReturnType<typeof commitWorkResults>;
       return [DATA_NOTE, NOTE, "", `**${x.project} ${x.commit.oid.slice(0, 10)}** by ${cleanText(x.commit.author_name)}${x.pushed_by ? `, pushed by ${cleanText(x.pushed_by)}` : ""}`, "```text", cleanText(x.commit.message ?? x.commit.summary).replace(/```/g, "'''"), "```",
@@ -172,13 +178,13 @@ export const repoCommit = defineVerb({
         "```diff", x.files.map((f) => (f.diff ? unified(f.path, f.diff) : `${f.path}: ${f.note ?? f.kind}\n`)).join("").slice(0, 40_000).replace(/```/g, "'''"), "```"].join("\n");
     },
   },
-  parse: (i) => { const oid = reqString(i, "oid", { max: 40 }).toLowerCase(); if (!OID_RE.test(oid)) throw badRequest("oid must be a full 40-character commit id"); return { project: reqString(i, "project", { max: 127 }), oid }; },
+  parse: (i) => { const oid = reqString(i, "oid", { max: 40 }).toLowerCase(); if (!OID_RE.test(oid)) throw badRequest("oid must be a full 40-character commit id"); return { repo: optString(i, "repo", { max: 63 }), project: reqString(i, "project", { max: 127 }), oid }; },
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project, true);
+    const pr = await repoProject(ctx, p.project, true, p.repo);
     const c = (await codeRead<ArdiCommit & { changes: ArdiChange[] }>(ctx, "commit.show", { repo: pr.slug, oid: p.oid })).result;
     const who = await whoPushed(ctx, [c.principal]);
-    const work = await commitWorkStatement(ctx, pr.id, p.oid).all<CommitWorkItem>();
-    return { project: pr.slug, commit: c, pushed_by: c.principal ? who.get(c.principal) ?? null : null, files: await commitDiff(ctx, pr.slug, c), after: await afterCommit(ctx, pr.id, c.oid, c.commit_time * 1000), ...commitWorkResults(work.results) };
+    const work = await commitWorkStatement(ctx, pr.id, p.oid, pr.slug === p.project ? "" : p.repo ?? "").all<CommitWorkItem>();
+    return { project: pr.slug, commit: c, pushed_by: c.principal ? who.get(c.principal) ?? null : null, files: await commitDiff(ctx, pr.slug, c), after: await afterCommit(ctx, pr.id, c.oid, c.commit_time * 1000, pr.slug === p.project ? "" : p.repo ?? ""), ...commitWorkResults(work.results) };
   },
 });
 
@@ -187,16 +193,16 @@ export const repoFile = defineVerb({
   summary: "A file's contents, or a directory's entries, at a branch, tag or commit.",
   mcp: {
     scope: "read", destructive: false, title: "Read a file",
-    input: { type: "object", properties: { project: { type: "string" }, path: { type: "string", description: "File or directory; empty for the root" }, ref: { type: "string", description: "Default the main branch" } }, required: ["project"], additionalProperties: false },
+    input: { type: "object", properties: { repo: { type: "string", description: "Repository name; omitted selects the default" }, project: { type: "string" }, path: { type: "string", description: "File or directory; empty for the root" }, ref: { type: "string", description: "Default the main branch" } }, required: ["project"], additionalProperties: false },
     render: (r) => {
       const x = r as { project: string; path: string; entries?: ArdiEntry[]; text?: string | null; binary?: boolean; size?: number };
       if (x.entries) return [DATA_NOTE, "", `**${x.project}/${x.path}**`, ...x.entries.map((e) => `- ${e.kind === "tree" ? `${e.name}/` : e.name}`)].join("\n");
       return [DATA_NOTE, NOTE, "", `**${x.project}/${x.path}** (${x.size} bytes)`, x.binary ? "Binary file." : x.text === null ? "Too large to show." : ["```text", (x.text ?? "").replace(/```/g, "'''").slice(0, 60_000), "```"].join("\n")].join("\n");
     },
   },
-  parse: (i) => ({ project: reqString(i, "project", { max: 127 }), path: (optString(i, "path", { max: 500 }) ?? "").replace(/^\/+|\/+$/g, ""), ref: optString(i, "ref", { max: 200 }) }),
+  parse: (i) => ({ repo: optString(i, "repo", { max: 63 }), project: reqString(i, "project", { max: 127 }), path: (optString(i, "path", { max: 500 }) ?? "").replace(/^\/+|\/+$/g, ""), ref: optString(i, "ref", { max: 200 }) }),
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project, true);
+    const pr = await repoProject(ctx, p.project, true, p.repo);
     const at = rev(p.ref);
     // A directory if the parent lists it as a tree (or it is the root).
     const parent = p.path.includes("/") ? p.path.slice(0, p.path.lastIndexOf("/")) : "";
@@ -216,12 +222,12 @@ export const repoDiff = defineVerb({
   summary: "What changed between two revisions of a repository, file by file. From must be an ancestor of to within 20 commits.",
   mcp: {
     scope: "read", destructive: false, title: "Compare",
-    input: { type: "object", properties: { project: { type: "string" }, from: { type: "string", description: "Base: branch, tag or commit" }, to: { type: "string", description: "Head: branch, tag or commit" } }, required: ["project", "from", "to"], additionalProperties: false },
+    input: { type: "object", properties: { repo: { type: "string", description: "Repository name; omitted selects the default" }, project: { type: "string" }, from: { type: "string", description: "Base: branch, tag or commit" }, to: { type: "string", description: "Head: branch, tag or commit" } }, required: ["project", "from", "to"], additionalProperties: false },
     render: (r) => { const x = r as { project: string; commits: number; files: Array<{ path: string; diff: FileDiff | null; note: string | null }> }; return [DATA_NOTE, NOTE, "", `**${x.project}**: ${x.commits} commits, ${x.files.length} files`, "```diff", x.files.map((f) => (f.diff ? unified(f.path, f.diff) : `${f.path}: ${f.note}\n`)).join("").slice(0, 40_000).replace(/```/g, "'''"), "```"].join("\n"); },
   },
-  parse: (i) => ({ project: reqString(i, "project", { max: 127 }), from: reqString(i, "from", { max: 200 }), to: reqString(i, "to", { max: 200 }) }),
+  parse: (i) => ({ repo: optString(i, "repo", { max: 63 }), project: reqString(i, "project", { max: 127 }), from: reqString(i, "from", { max: 200 }), to: reqString(i, "to", { max: 200 }) }),
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project, true);
+    const pr = await repoProject(ctx, p.project, true, p.repo);
     const head = (await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: rev(p.to), limit: 21 })).result.commits;
     const base = OID_RE.test(p.from) ? p.from : (await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: rev(p.from), limit: 1 })).result.commits[0]?.oid;
     if (!base) throw notFound("no such base");
@@ -241,7 +247,7 @@ export const repoDiff = defineVerb({
   },
 });
 
-export type CodeMatch = { path: string; line: number; text: string };
+export type CodeMatch = { repo?: string; path: string; line: number; text: string };
 export type CodeSearch = { matches: CodeMatch[]; truncated: boolean; searched: number; skipped_binary: number; skipped_large: number };
 
 /** Lines matching a literal (case-insensitive unless asked) or a regular expression, in path order. */
@@ -277,6 +283,7 @@ export const repoSearch = defineVerb({
   mcp: {
     scope: "read", destructive: false, title: "Search code",
     input: { type: "object", properties: {
+      repo: { type: "string", description: "One repository name; omitted searches all repositories in the project" },
       project: { type: "string", description: "Repository project slug" }, q: { type: "string", description: "Text to find, or a regular expression when regex is true" },
       ref: { type: "string", description: "Branch, tag or commit; default the main branch" }, path: { type: "string", description: "Only files under this path prefix" },
       regex: { type: "boolean", description: "Treat q as a JavaScript regular expression" }, case_sensitive: { type: "boolean" },
@@ -287,7 +294,8 @@ export const repoSearch = defineVerb({
       const lines: string[] = [];
       let file = "";
       for (const m of x.matches) {
-        if (m.path !== file) { file = m.path; lines.push("", `**${cleanText(m.path)}**`); }
+        const label = m.repo ? `${m.repo}/${m.path}` : m.path;
+        if (label !== file) { file = label; lines.push("", `**${cleanText(label)}**`); }
         lines.push(`- ${m.line}: \`${cleanText(m.text).replace(/`/g, "'")}\``);
       }
       const skipped = [x.skipped_binary ? `${x.skipped_binary} binary` : "", x.skipped_large ? `${x.skipped_large} over 400 KB` : ""].filter(Boolean).join(", ");
@@ -295,13 +303,41 @@ export const repoSearch = defineVerb({
         ...(x.matches.length ? lines : ["", "No matches."])].join("\n");
     },
   },
-  parse: (i) => ({ project: reqString(i, "project", { max: 127 }), q: reqString(i, "q", { max: 200 }), ref: optString(i, "ref", { max: 200 }),
+  parse: (i) => ({ repo: optString(i, "repo", { max: 63 }), project: reqString(i, "project", { max: 127 }), q: reqString(i, "q", { max: 200 }), ref: optString(i, "ref", { max: 200 }),
     path: (optString(i, "path", { max: 500 }) ?? "").replace(/^\/+/, ""), regex: optBool(i, "regex") ?? false, caseSensitive: optBool(i, "case_sensitive") ?? false,
     limit: optInt(i, "limit", { min: 1, max: 200 }) ?? 50 }),
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project);
-    const snap = (await codeRead<{ oid: string; files: SnapshotFile[] }>(ctx, "snapshot", { repo: pr.slug, rev: rev(p.ref) })).result;
-    return { project: pr.slug, commit: snap.oid, ...searchFiles(snap.files, p.q, p) };
+    const pr = await repoProject(ctx, p.project, false, p.repo);
+    const repos = p.repo ? [{ name: p.repo, is_default: pr.slug.includes("/") ? 0 : 1 }] : (await ctx.db.prepare("SELECT name, is_default FROM repository WHERE tenant_id = ? AND project_id = ? ORDER BY is_default DESC, name").bind(ctx.tenant!.id, pr.id).all<{ name: string; is_default: number }>()).results;
+    if (!repos.length) repos.push({ name: "default", is_default: 1 });
+    const results = [];
+    for (const r of repos) {
+      const path = p.repo ? pr.slug : pr.slug + (r.is_default ? "" : `/${r.name}`);
+      const snap = (await codeRead<{ oid: string; files: SnapshotFile[] }>(ctx, "snapshot", { repo: path, rev: rev(p.ref) })).result;
+      results.push({ repo: r.name, commit: snap.oid, ...searchFiles(snap.files, p.q, p) });
+    }
+    const matches = results.flatMap(r => r.matches.map(m => ({ ...m, repo: r.repo })));
+    return {
+      project: p.project, commit: results[0]!.commit, matches: matches.slice(0, p.limit),
+      searched: results.reduce((n, r) => n + r.searched, 0),
+      skipped_binary: results.reduce((n, r) => n + r.skipped_binary, 0),
+      skipped_large: results.reduce((n, r) => n + r.skipped_large, 0),
+      truncated: results.some(r => r.truncated) || matches.length > p.limit,
+      repositories: results,
+    };
+  },
+});
+
+export const repoCreate = defineVerb({
+  name: "repo.create", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
+  summary: "Create a named repository in a project. Unknown Git names are never created by a push.",
+  mcp: { scope: "write", destructive: false, title: "Create repository", input: { type: "object", properties: { project: { type: "string" }, name: { type: "string" } }, required: ["project", "name"], additionalProperties: false } },
+  parse: (i) => ({ project: reqString(i, "project", { max: 127 }), name: reqString(i, "name", { max: 63 }) }),
+  run: async (ctx, p) => {
+    const project = await featureProject(ctx, p.project);
+    if (!["repo", "workspace"].includes(project.kind)) throw badRequest("repositories belong to repo or workspace projects");
+    const repository = await createRepository(ctx.env, ctx.tenant!, project, p.name, ctx.now);
+    return { project: p.project, name: repository.name, is_default: !!repository.is_default, clone_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${p.project}${repository.is_default ? "" : `/${repository.name}`}.git` };
   },
 });
 
@@ -311,20 +347,21 @@ export const repoList = defineVerb({
   summary: "The organization's source repositories you can reach, with clone URLs and whether you can push. Pushes never overwrite history: force pushes and rewrites are refused.",
   mcp: {
     scope: "read", destructive: false, title: "Repositories",
-    input: { type: "object", properties: {}, additionalProperties: false },
+    input: { type: "object", properties: { project: { type: "string" }, repo: { type: "string" } }, additionalProperties: false },
     render: (r) => {
       const x = r as { access: string; repos: Array<{ slug: string; name: string; clone_url: string }>; connect: string };
       return [DATA_NOTE, "", `**Repositories** (${x.repos.length}); you can ${x.access}.`, ...x.repos.map((p) => `- ${cleanText(p.name)}: \`${p.clone_url}\``), "", x.connect].join("\n");
     },
   },
-  parse: () => ({}),
-  run: async (ctx) => {
+  parse: (i) => ({ project: optString(i, "project", { max: 127 }), repo: optString(i, "repo", { max: 63 }) }),
+  run: async (ctx, p) => {
+    if (p.project) await featureProject(ctx, p.project);
     const host = `${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN.toLowerCase()}`;
-    const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:323:25:repoList.run:602e7d9c*/ SELECT slug, display_name AS name FROM project WHERE tenant_id = ? AND kind = 'repo' AND state = 'active' AND (? IS NULL OR id = ?) ORDER BY slug").bind(ctx.tenant!.id, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).all<{ slug: string; name: string }>()).results;
+    const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:323:25:repoList.run:602e7d9c*/ SELECT p.slug, COALESCE(r.name, p.display_name) AS name, COALESCE(r.is_default, 1) AS is_default FROM project p LEFT JOIN repository r ON r.project_id = p.id AND r.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND (p.kind = 'repo' OR (p.kind = 'workspace' AND r.project_id IS NOT NULL)) AND p.state = 'active' AND (? IS NULL OR p.id = ?) AND (? IS NULL OR p.slug = ?) AND (? IS NULL OR r.name = ?) ORDER BY p.slug, r.is_default DESC, r.name").bind(ctx.tenant!.id, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null, p.project, p.project, p.repo, p.repo).all<{ slug: string; name: string; is_default: number }>()).results;
     const push = rank(ctx.role) >= rank("member");
     return {
       access: push ? "read and push (never force: history is kept)" : "read",
-      repos: rows.map((p) => ({ slug: ctx.mcpProject?.path ?? p.slug, name: p.name, clone_url: `https://${host}/${ctx.mcpProject?.path ?? p.slug}.git`, push })),
+      repos: rows.map((p) => ({ project: ctx.mcpProject?.path ?? p.slug, slug: (ctx.mcpProject?.path ?? p.slug) + (p.is_default ? "" : `/${p.name}`), name: p.name, is_default: !!p.is_default, clone_url: `https://${host}/${ctx.mcpProject?.path ?? p.slug}${p.is_default ? "" : `/${p.name}`}.git`, push })),
       connect: ctx.identity?.kind === "agent" ? "To clone or push, call repo_connect once for the git setup." : `To clone or push, make a git credential at https://${ctx.env.HUB_DOMAIN.toLowerCase()}/me.`,
     };
   },

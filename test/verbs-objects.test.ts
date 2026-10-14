@@ -424,6 +424,8 @@ describe("project deletion from the web", () => {
     const ctx = await buildContext(new Request(`https://${w.host}/`, {headers}), env);
     const made = await projectCreate.run(ctx, projectCreate.parse({slug: "tmp-repo", kind: "repo", display_name: "Repo"})) as {project: {id: string}};
     await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(w.tenant.id, made.project.id, Date.now()).run();
+    for (const name of ["api", "web"]) await env.HUB_DB.prepare("INSERT INTO repository (tenant_id, project_id, name, storage_name, is_default, created_at) VALUES (?, ?, ?, ?, 0, ?)").bind(w.tenant.id, made.project.id, name, `storage-${name}`, Date.now()).run();
+    await env.HUB_DB.prepare("INSERT INTO repository_sync (tenant_id, project_id, repo, cursor) VALUES (?, ?, 'api', 'cursor')").bind(w.tenant.id, made.project.id).run();
     ctx.env = {...env, ARTIFACTS_ACCOUNT_ID: "0".repeat(32), ARTIFACTS_API_TOKEN: "synthetic-test-token"};
     const deletion = vi.spyOn(ArtifactsRest.prototype, "deleteProject").mockRejectedValueOnce(new Error("storage outage")).mockResolvedValue(undefined);
     try {
@@ -433,8 +435,12 @@ describe("project deletion from the web", () => {
       expect((await apiPost(w.host, "project.delete", {project: "tmp-repo"}, bearer(other.token))).status).toBe(403);
       expect(deletion).toHaveBeenCalledTimes(1);
       const result = await projectDelete.run(ctx, projectDelete.parse({project: "tmp-repo"}));
-      expect(result.counts.repositories).toBe(1);
-      expect(deletion).toHaveBeenLastCalledWith("acme", "tmp-repo", `Pimwell tenant ${w.tenant.id} project ${made.project.id}`);
+      expect(result.counts.repositories).toBe(3);
+      expect(deletion).toHaveBeenCalledWith("acme", "storage-api", `Pimwell tenant ${w.tenant.id} project ${made.project.id}`);
+      expect(deletion).toHaveBeenCalledWith("acme", "storage-web", `Pimwell tenant ${w.tenant.id} project ${made.project.id}`);
+      expect(await w.count("repository", "project_id", made.project.id)).toBe(0);
+      expect(await w.count("repository_sync", "project_id", made.project.id)).toBe(0);
+      expect(deletion).toHaveBeenCalledWith("acme", "tmp-repo", `Pimwell tenant ${w.tenant.id} project ${made.project.id}`);
       expect((await env.HUB_DB.prepare("SELECT kind, identity_id FROM event WHERE target_id = ?").bind(made.project.id).all()).results).toEqual([{kind: "project.deleted", identity_id: w.bot.agent.identity.id}]);
     } finally { deletion.mockRestore(); }
   });

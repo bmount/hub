@@ -260,12 +260,16 @@ describe("live Pimwell Git authorization", () => {
 describe("Artifacts push recovery boundaries", () => {
   const account = "0".repeat(32), apiToken = "synthetic-api-credential", basic = (token: string) => `Basic ${btoa(`ignored:${token}`)}`;
   const oid = (n: number) => n.toString(16).padStart(40, "0");
-  async function grant() {
+  async function grant(named = false) {
     const tenant = await seedTenant("acme");
     const human = await seedHuman("git@example.invalid", { memberships: [{ tenant_id: tenant.id, role: "member" }] });
     await createProject(env.HUB_DB, { tenant_id: tenant.id, namespace_id: null, slug: "site", kind: "repo", display_name: "Website" }, Date.now());
     const git = await createGitSession(env.HUB_DB, { identity_id: human.identity.id, tenant_id: tenant.id, label: "synthetic laptop" }, Date.now());
-    return { grant: (await authorizeGit(env, basic(git.token), "acme", "site"))!, human, git };
+    if (named) {
+      const project = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'site'").bind(tenant.id).first<string>("id");
+      await env.HUB_DB.prepare("INSERT INTO repository (tenant_id, project_id, name, storage_name, is_default, created_at) VALUES (?, ?, 'secondary', 'site-secondary', 0, ?)").bind(tenant.id, project, Date.now()).run();
+    }
+    return { grant: (await authorizeGit(env, basic(git.token), "acme", named ? "site/secondary" : "site"))!, human, git };
   }
   function bucket() {
     const stored = new Map<string, Uint8Array>();
@@ -331,8 +335,8 @@ describe("Artifacts push recovery boundaries", () => {
     expect(res.status).toBe(200);expect(api.git).not.toHaveBeenCalled();
     expect((await env.HUB_DB.prepare("SELECT COUNT(*) n FROM git_push").first<{ n: number }>())!.n).toBe(0);
   });
-  it("indexes preserved rejected fork tips even when the staging advertisement lacks the renamed ref", async () => {
-    const { grant: g, git } = await grant(), r2 = bucket(), old = oid(1), rewritten = oid(5);
+  it.each([false, true])("indexes preserved rejected fork tips even when the staging advertisement lacks the renamed ref (named=%s)", async named => {
+    const { grant: g, git } = await grant(named), r2 = bucket(), old = oid(1), rewritten = oid(5);
     const body = join(packet(`${old} ${rewritten} refs/heads/main\0report-status\n`), flush, encode.encode("PACK"));
     let publishedRef = "";
     const api = {
@@ -340,7 +344,7 @@ describe("Artifacts push recovery boundaries", () => {
       async deleteTemporary() {},
       async log(_ns: string, _repo: string, ref: string) { return [{ hash: ref, parents: [] }]; },
       async readCommit(_ns: string, repo: string, hash: string) {
-        if (repo === "site") throw new HubError(404, "not_found", "missing");
+        if (repo === (named ? "site-secondary" : "site")) throw new HubError(404, "not_found", "missing");
         if (hash !== rewritten) throw new HubError(404, "not_found", "missing");
         return { hash, treeHash: oid(6), parents: [], committedAt: 50, message: "preserved\n", author: { name: "a", email: "a@example.invalid" }, committer: { name: "c", email: "c@example.invalid" }, authoredAt: 50 };
       },
@@ -353,7 +357,7 @@ describe("Artifacts push recovery boundaries", () => {
     };
     const res = await artifactPush(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", headers: { authorization: basic(git.token) }, body }), { ...env, GIT_PUSH_STAGING: r2 }, g, api as any);
     expect(res.status).toBe(200);expect(publishedRef).toMatch(/^refs\/ardi\/forks\/heads\/main\//);
-    expect((await env.HUB_DB.prepare("SELECT oid FROM git_commit").first<{ oid: string }>())!.oid).toBe(rewritten);
+    expect((await env.HUB_DB.prepare(named ? "SELECT oid FROM repository_commit WHERE repo = 'secondary'" : "SELECT oid FROM git_commit").first<{ oid: string }>())!.oid).toBe(rewritten);
     expect((await env.HUB_DB.prepare("SELECT target FROM code_event WHERE kind = 'commit'").first<{ target: string }>())!.target).toBe(rewritten);
   });
 
@@ -388,8 +392,8 @@ describe("Artifacts push recovery boundaries", () => {
     expect((await env.HUB_DB.prepare("SELECT state FROM git_push").first<{ state: string }>())!.state).toBe("complete");
   });
 
-  it("indexes tag-only peeled history and non-head commit refs with real attribution", async () => {
-    const { grant: g, human, git } = await grant(), r2 = bucket(), tagObject = oid(9), tagCommit = oid(3), parent = oid(2), change = oid(4);
+  it.each([false, true])("indexes tag-only peeled history and non-head commit refs with real attribution (named=%s)", async named => {
+    const { grant: g, human, git } = await grant(named), r2 = bucket(), tagObject = oid(9), tagCommit = oid(3), parent = oid(2), change = oid(4);
     const updates = [{ oldOid: ZERO_OID, newOid: tagObject, ref: "refs/tags/v1" }, { oldOid: ZERO_OID, newOid: change, ref: "refs/changes/1" }];
     const body = join(packet(`${ZERO_OID} ${tagObject} refs/tags/v1\0report-status\n`), packet(`${ZERO_OID} ${change} refs/changes/1\n`), flush, encode.encode("PACK"));
     const commits = new Map([[tagCommit, { parents: [parent], message: "tagged\n", committedAt: 30 }], [parent, { parents: [], message: "parent\n", committedAt: 20 }], [change, { parents: [], message: "change\n", committedAt: 40 }]]);
@@ -398,7 +402,7 @@ describe("Artifacts push recovery boundaries", () => {
       async deleteTemporary() {},
       async log() { return []; },
       async readCommit(_ns: string, repo: string, hash: string) {
-        if (repo === "site") throw new HubError(404, "not_found", "missing");
+        if (repo === (named ? "site-secondary" : "site")) throw new HubError(404, "not_found", "missing");
         const c = commits.get(hash);if (!c) throw new HubError(404, "not_found", "missing");
         return { hash, treeHash: oid(Number.parseInt(hash.at(-1)!, 16) + 20), parents: c.parents, committedAt: c.committedAt, message: c.message, author: { name: "a", email: "a@example.invalid" }, committer: { name: "c", email: "c@example.invalid" }, authoredAt: c.committedAt };
       },
@@ -410,7 +414,7 @@ describe("Artifacts push recovery boundaries", () => {
     };
     const res = await artifactPush(new Request("https://acme.pimwell.test/site.git/git-receive-pack", { method: "POST", headers: { authorization: basic(git.token) }, body }), { ...env, GIT_PUSH_STAGING: r2 }, g, api as any);
     expect(res.status).toBe(200);
-    const indexed = (await env.HUB_DB.prepare("SELECT oid FROM git_commit ORDER BY oid").all<{ oid: string }>()).results.map(r => r.oid);
+    const indexed = (await env.HUB_DB.prepare(named ? "SELECT oid FROM repository_commit WHERE repo = 'secondary' ORDER BY oid" : "SELECT oid FROM git_commit ORDER BY oid").all<{ oid: string }>()).results.map(r => r.oid);
     expect(indexed).toEqual([parent, tagCommit, change].sort());
     const event = await env.HUB_DB.prepare("SELECT identity_id, target FROM code_event WHERE kind = 'commit' ORDER BY target LIMIT 1").first<{ identity_id: string; target: string }>();
     expect(event?.identity_id).toBe(human.identity.id);

@@ -1,3 +1,4 @@
+import { resolveRepository } from "../code/repositories";
 // Apps reporting into projects (migration 0013): register an app, approve it (root, unless the project's repo declares the
 // Worker), and read what it reported: error groups (traces), deploys, and the app list. Agents do the registering as part of onboarding (skill: onboard).
 import { errorOriginColumns } from "../apps/origin";
@@ -26,7 +27,7 @@ async function project(ctx: Ctx, slug: string): Promise<{ id: string; slug: stri
 
 /** The wrangler config on the project's main branch that declares this Worker, or null (also when the code can't be read). */
 async function declaredBy(ctx: Ctx, pr: { slug: string; kind: string }, script: string): Promise<string | null> {
-  if (pr.kind !== "repo") return null;
+  if (!["repo", "workspace"].includes(pr.kind)) return null;
   try {
     const snap = (await codeRead<{ files: SnapshotFile[] }>(ctx, "snapshot", { repo: pr.slug, rev: "HEAD" })).result;
     return declaringConfig(snap.files, script);
@@ -40,28 +41,30 @@ export const appRegister = defineVerb({
   summary: "Register a Cloudflare Worker (by its script name) as an app that reports into a project. It reports at once when the project's repository declares the Worker in a wrangler config on main (or a root asks); otherwise once a root approves it.",
   mcp: {
     scope: "write", destructive: false, title: "Register an app",
-    input: { type: "object", properties: { project: { type: "string", description: "Project slug" }, script: { type: "string", description: "The Worker's name in its wrangler config" } }, required: ["project", "script"], additionalProperties: false },
+    input: { type: "object", properties: { repo: { type: "string" }, project: { type: "string", description: "Project slug" }, script: { type: "string", description: "The Worker's name in its wrangler config" } }, required: ["project", "script"], additionalProperties: false },
     render: (r) => { const x = r as { script: string; project: string; state: string; declared_in: string | null }; return `${DATA_NOTE}\n\n${x.script} → ${x.project}: ${x.state === "active" ? `active${x.declared_in ? ` (declared in ${x.declared_in})` : ""}; events count from now` : x.state === "disabled" ? "disabled by a root; ask a root to turn it back on" : "waiting for a root to approve: no wrangler config on the project's main branch names this Worker"}.`; },
   },
   parse: (i) => {
     const script = reqString(i, "script", { max: 63 }).trim().toLowerCase();
     if (!SCRIPT_RE.test(script)) throw badRequest("script must be a Worker name: lowercase letters, digits and dashes");
-    return { project: reqString(i, "project", { max: 63 }), script };
+    return { repo: optString(i, "repo", { max: 63 }), project: reqString(i, "project", { max: 63 }), script };
   },
   run: async (ctx, p) => {
     const pr = await project(ctx, p.project);
-    const existing = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fapps.ts:53:28:appRegister.run:d745933c*/ SELECT tenant_id, project_id, state FROM app_source WHERE script_name = ?").bind(p.script).first<{ tenant_id: string; project_id: string; state: string }>();
+    const existing = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fapps.ts:53:28:appRegister.run:d745933c*/ SELECT tenant_id, project_id, state, repo FROM app_source WHERE script_name = ?").bind(p.script).first<{ tenant_id: string; project_id: string; state: string; repo: string }>();
     if (existing && existing.tenant_id !== ctx.tenant!.id) throw conflict("that app already reports somewhere else; ask a root");
     const root = ctx.identity!.is_root === 1;
-    const kept = existing?.state === "active" && existing.project_id === pr.id;
+    const selected = p.repo ? await resolveRepository(ctx.db, ctx.tenant!.id, pr.id, p.repo) : null;
+    const repo = selected && !selected.is_default ? selected.name : "";
+    const kept = existing?.state === "active" && existing.project_id === pr.id && existing.repo === repo;
     // A disabled app stays off until a root turns it back on; the repo only proves who ships the Worker.
     const disabled = !root && existing?.state === "disabled";
-    const declared = root || kept || disabled ? null : await declaredBy(ctx, pr, p.script);
+    const declared = root || kept || disabled ? null : await declaredBy(ctx, { ...pr, slug: pr.slug + (repo ? `/${repo}` : "") }, p.script);
     const approved = root || declared !== null;
     const state = approved || kept ? "active" : disabled ? "disabled" : "pending";
-    await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fapps.ts:62:11:appRegister.run:b99261fb*/ INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_by, approved_by, created_at, approved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (script_name) DO UPDATE SET project_id = excluded.project_id, state = excluded.state, approved_by = excluded.approved_by, approved_at = excluded.approved_at`)
-      .bind(ulid(ctx.now), ctx.tenant!.id, pr.id, p.script, state, ctx.identity!.id, approved ? ctx.identity!.id : null, ctx.now, approved ? ctx.now : null).run();
+    await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fapps.ts:62:11:appRegister.run:b99261fb*/ INSERT INTO app_source (id, tenant_id, project_id, script_name, state, created_by, approved_by, created_at, approved_at, repo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (script_name) DO UPDATE SET repo = excluded.repo, project_id = excluded.project_id, state = excluded.state, approved_by = excluded.approved_by, approved_at = excluded.approved_at`)
+      .bind(ulid(ctx.now), ctx.tenant!.id, pr.id, p.script, state, ctx.identity!.id, approved ? ctx.identity!.id : null, ctx.now, approved ? ctx.now : null, repo).run();
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "app.register", target_kind: "project", target_id: pr.id,
       summary: `Registered app ${p.script} for ${pr.slug} (${state}${declared ? `, declared in ${declared}` : ""})` }, ctx.now);
     return { script: p.script, project: pr.slug, state, declared_in: declared };
@@ -80,10 +83,10 @@ export const appApprove = defineVerb({
   },
 });
 
-type AppRow = { script_name: string; project: string; state: string; last_event_at: number | null; requests: number; errors: number; groups: number; last_deploy: string | null };
+type AppRow = { script_name: string; project: string; repo: string; state: string; last_event_at: number | null; requests: number; errors: number; groups: number; last_deploy: string | null };
 
 export function appsStatement(db: D1Database, tenant_id: string, now: number) {
-  return db.prepare(`/*perf-site:src%2Fverbs%2Fapps.ts:86:10:appsStatement:a03d37c0*/ SELECT s.script_name, p.slug AS project, s.state, s.last_event_at,
+  return db.prepare(`/*perf-site:src%2Fverbs%2Fapps.ts:86:10:appsStatement:a03d37c0*/ SELECT s.script_name, p.slug AS project, s.repo, s.state, s.last_event_at,
       COALESCE((SELECT SUM(requests) FROM app_stat x WHERE x.script_name = s.script_name AND x.tenant_id = s.tenant_id AND x.hour >= ?), 0) AS requests,
       COALESCE((SELECT SUM(errors) FROM app_stat x WHERE x.script_name = s.script_name AND x.tenant_id = s.tenant_id AND x.hour >= ?), 0) AS errors,
       (SELECT COUNT(*) FROM app_error_group g WHERE g.script_name = s.script_name AND g.tenant_id = s.tenant_id AND g.project_id = s.project_id AND g.last_seen >= ?) AS groups,
@@ -191,6 +194,7 @@ export const deployRecord = defineVerb({
   mcp: {
     scope: "write", destructive: false, title: "Record a deploy",
     input: { type: "object", properties: {
+      repo: { type: "string" },
       project: { type: "string", minLength: 1, maxLength: 63 },
       commit: { type: "string", minLength: 7, maxLength: 64, pattern: "^([0-9a-fA-F]{7,64}|unknown)$", description: "Hex commit id, or explicitly unknown; Worker releases require a full 40-character commit or unknown." },
       worker: { type: "string", maxLength: 63 },
@@ -217,12 +221,14 @@ export const deployRecord = defineVerb({
     }
     const environment = (optString(i, "environment", { max: 30 }) ?? "production").toLowerCase();
     if (!/^[a-z0-9-]+$/.test(environment)) throw badRequest("environment is a short name");
-    return { project: reqString(i, "project", { max: 63 }), commit, environment, worker, version, deployment, deployed_at, triggered_by, message: optString(i, "message", { max: 200 }) };
+    return { repo: optString(i, "repo", { max: 63 }), project: reqString(i, "project", { max: 63 }), commit, environment, worker, version, deployment, deployed_at, triggered_by, message: optString(i, "message", { max: 200 }) };
   },
   run: async (ctx, p) => {
     if (ctx.identity!.kind !== "human" && ctx.identity!.kind !== "agent") throw forbidden();
     const pr = await project(ctx, p.project);
-    const id = ulid(ctx.now), script = p.worker ?? `${pr.slug}:${p.environment}`;
+    const selected = p.repo ? await resolveRepository(ctx.db, ctx.tenant!.id, pr.id, p.repo) : null;
+    const repo = selected && !selected.is_default ? selected.name : "";
+    const id = ulid(ctx.now), script = p.worker ?? `${pr.slug}${repo ? `/${repo}` : ""}:${p.environment}`;
     // Reuse existing columns: the composite runtime key separates deployments of the same version.
     const versionKey = p.worker ? `${p.version}:${p.deployment}` : p.commit;
     const message = p.worker ? JSON.stringify({ release: 1, version: p.version, deployment: p.deployment,
@@ -232,20 +238,20 @@ export const deployRecord = defineVerb({
       id: string; tenant_id: string; project_id: string; script_name: string; version_id: string;
       tag: string | null; message: string | null; seen_at: number;
     }>([
-      ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fapps.ts:235:7:deployRecord.run:ee702d69*/ INSERT INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fapps.ts:235:7:deployRecord.run:ee702d69*/ INSERT INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at, repo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (script_name, version_id) DO NOTHING RETURNING *`)
-        .bind(id, ctx.tenant!.id, pr.id, script, versionKey, p.worker ? p.commit.toLowerCase() : p.commit.slice(0, 12), message, p.deployed_at ?? ctx.now),
+        .bind(id, ctx.tenant!.id, pr.id, script, versionKey, p.worker ? p.commit.toLowerCase() : p.commit.slice(0, 12), message, p.deployed_at ?? ctx.now, repo),
       creationEventStatement(ctx.db, {
         tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null,
         kind: "deploy.record", target_kind: "project", target_id: pr.id,
         summary: `Deployed ${pr.slug} ${p.commit.slice(0, 12)} to ${p.environment}${p.message ? `: ${p.message}` : ""}`,
       }, ctx.now, { table: "app_deploy", id }),
-      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fapps.ts:243:7:deployRecord.run:cd533392*/ SELECT * FROM app_deploy WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ?")
-        .bind(script, versionKey, ctx.tenant!.id, pr.id),
+      ctx.db.prepare("/*perf-site:src%2Fverbs%2Fapps.ts:243:7:deployRecord.run:cd533392*/ SELECT * FROM app_deploy WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ? AND repo = ?")
+        .bind(script, versionKey, ctx.tenant!.id, pr.id, repo),
       // An event can arrive before its release report; backfill only this tenant/project/version.
       ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fapps.ts:246:7:deployRecord.run:622caf12*/ UPDATE app_deploy SET tag = (SELECT tag FROM app_deploy WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ?)
-        WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ? AND tag IS NULL`)
-        .bind(script, versionKey, ctx.tenant!.id, pr.id, script, p.version, ctx.tenant!.id, pr.id),
+        WHERE script_name = ? AND version_id = ? AND tenant_id = ? AND project_id = ? AND repo = ? AND tag IS NULL`)
+        .bind(script, versionKey, ctx.tenant!.id, pr.id, script, p.version, ctx.tenant!.id, pr.id, repo),
     ]);
     const deploy = results[2]!.results[0];
     // The legacy global script/version key can collide between tenants. Never return or audit a foreign row.

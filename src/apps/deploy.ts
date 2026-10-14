@@ -2,10 +2,10 @@ import type { Ctx } from "../auth/context";
 import type { WorkKind, WorkState } from "../work/names";
 
 export type DeployRow = { id: string; project: string; script_name: string; version_id: string; tag: string | null; message: string | null; seen_at: number; commit_project: string | null };
-const SELECT = `SELECT d.id, p.slug AS project, d.script_name, d.version_id, d.tag, d.message, d.seen_at,
-  CASE WHEN p.kind = 'repo' AND NOT EXISTS
+const SELECT = `SELECT d.id, p.slug AS project, d.script_name, d.version_id, d.tag, d.message, d.seen_at, d.repo,
+  CASE WHEN p.kind IN ('repo', 'workspace') AND NOT EXISTS
     (SELECT 1 FROM project other WHERE other.tenant_id = p.tenant_id AND other.slug = p.slug AND other.kind = 'repo' AND other.id <> p.id)
-    THEN p.slug ELSE NULL END AS commit_project
+    THEN p.slug || CASE WHEN d.repo = '' THEN '' ELSE '/' || d.repo END ELSE NULL END AS commit_project
   FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind NOT IN ('channel', 'agent-src')`;
 
 /** Latest reported production release, not a privileged live rollout check. */
@@ -57,7 +57,7 @@ export function deployWorkStatement(ctx: Ctx, row: DeployRow) {
       ((w.source_kind = 'url' AND w.source_ref = ?) OR EXISTS
         (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND
           ((l.target_kind = 'url' AND l.target_ref = ?) OR (l.target_kind = 'commit' AND lower(l.target_ref) = ?
-            AND substr(l.target_ref, 1, length(dp.slug) + 1) = dp.slug || '@'))))
+            AND substr(l.target_ref, 1, length(dp.slug || CASE WHEN d.repo = '' THEN '' ELSE '/' || d.repo END) + 1) = dp.slug || CASE WHEN d.repo = '' THEN '' ELSE '/' || d.repo END || '@'))))
     ORDER BY w.created_at DESC, w.id DESC LIMIT 51`)
     .bind(url, url, row.id, ctx.tenant!.id, url, url, commit);
 }

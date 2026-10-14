@@ -46,7 +46,7 @@ export function toolsFor(ctx: Ctx): VerbDef<unknown, unknown>[] {
   // Opt in only families whose resource references obey the endpoint's boundary.
   return verbs.filter(v => {
     const feature = families[v.name.split(".")[0]!];
-    if (feature) return features.includes(feature);
+    if (feature) return features.includes(feature) || (feature === "repo" && ctx.mcpProject!.kind === "workspace");
     return features.includes("docket") && (["mail.list", "mail.read", "mail.reply"].includes(v.name) || (ctx.identity?.kind === "human" && v.name === "mail.send"));
   });
 }

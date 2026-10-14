@@ -33,7 +33,7 @@ describe("project MCP", () => {
     expect(init.result.serverInfo).toMatchObject({ name: "pimwell-acme-desk", title: "Pimwell · ACME / desk" });
     const list = (await rpcBody(await projectRpc("desk", access, "tools/list"))).result.tools;
     expect(list.map((t: any) => t.name)).toEqual(expect.arrayContaining(["wiki_list", "research_list", "file_list", "person_list", "company_list", "connection_list", "graph_path", "work_list", "mail_list"]));
-    expect(list.some((t: any) => /^(repo|project|chat|search|usage|app|deploy|trace)_/.test(t.name))).toBe(false);
+    expect(list.some((t: any) => /^(project|chat|search|usage|app|deploy|trace)_/.test(t.name))).toBe(false);
     for (const t of list) {
       expect(t.inputSchema.properties.project).toBeUndefined();
       expect(t.inputSchema.required ?? []).not.toContain("project");

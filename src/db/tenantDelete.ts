@@ -6,7 +6,7 @@ import { badRequest, conflict, notFound } from "../errors";
 const TENANT_TABLES = [
   "contact_link", "contact_connection", "contact_entity",
   "work_proposal", "work_dep", "work_resource", "work_graph_rev",
-  "git_commit", "git_push", "git_legacy_forward", "git_repository",
+  "repository_sync", "repository_commit", "repository", "git_commit", "git_push", "git_legacy_forward", "git_repository",
   "document_delivery", "file_revision", "file_upload", "wiki_revision", "review_comment", "review",
   "situation", "assistant_message", "assistant_thread", "ardi_cred", "agent_mcp_session", "agent_connect_link", "code_event", "code_sync",
   "attention", "follow", "work_comment",

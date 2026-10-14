@@ -13,7 +13,7 @@ const HOUR = 3_600_000;
 const QUIET_MS = 24 * HOUR;          // an error group that comes back after a day is news again
 const EXAMPLES_PER_GROUP = 50;
 
-type Source = { script_name: string; tenant_id: string; project_id: string; slug: string; display_name: string };
+type Source = { repo: string; script_name: string; tenant_id: string; project_id: string; slug: string; display_name: string };
 type Problem = { kind: "exception" | "error" | "warn" | "status"; title: string; message: string; fingerprint?: string };
 
 function fnv(s: string): string {
@@ -45,7 +45,7 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
   if (!scripts.length) return { accepted: 0, dropped: raw.length };
   const marks = scripts.map(() => "?").join(",");
   const sources = new Map((await db.prepare(
-    `/*perf-site:src%2Fapps%2Fingest.ts:47:34:ingest:ccbc7d95*/ SELECT s.script_name, s.tenant_id, s.project_id, p.slug, p.display_name FROM app_source s JOIN project p ON p.id = s.project_id JOIN tenant t ON t.id = s.tenant_id
+    `/*perf-site:src%2Fapps%2Fingest.ts:47:34:ingest:ccbc7d95*/ SELECT s.repo, s.script_name, s.tenant_id, s.project_id, p.slug, p.display_name FROM app_source s JOIN project p ON p.id = s.project_id JOIN tenant t ON t.id = s.tenant_id
      WHERE s.script_name IN (${marks}) AND s.state = 'active' AND p.state = 'active' AND t.state = 'active'`,
   ).bind(...scripts).all<Source>()).results.map((s) => [s.script_name, s]));
   const mine = events.filter((e) => sources.has(e.script));
@@ -118,8 +118,8 @@ export async function ingest(env: Env, raw: unknown, now: number): Promise<{ acc
         .bind(e.tag, e.script, e.version, src.tenant_id, src.project_id));
       continue;
     }
-    stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:121:16:ingest:fe51b459*/ INSERT OR IGNORE INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(ulid(now), src.tenant_id, src.project_id, e.script, e.version, e.tag, e.message, e.at));
+    stmts.push(db.prepare("/*perf-site:src%2Fapps%2Fingest.ts:121:16:ingest:fe51b459*/ INSERT OR IGNORE INTO app_deploy (id, tenant_id, project_id, script_name, version_id, tag, message, seen_at, repo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(ulid(now), src.tenant_id, src.project_id, e.script, e.version, e.tag, e.message, e.at, src.repo));
     notices.push({ src, text: `Deployed ${e.script}${e.tag ? ` ${e.tag}` : ""}${e.message ? `: ${e.message}` : ""} (version ${e.version.slice(0, 8)}).` });
   }
   // Error groups.

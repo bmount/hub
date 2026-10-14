@@ -27,7 +27,7 @@ describe("agents and git", () => {
     const { token } = await connected();
     const list = await rpcBody(await agentMcp(token, "tools/call", { name: "repo_list", arguments: {} }));
     const r = list.result.structuredContent as { access: string; repos: Array<{ slug: string; clone_url: string; push: boolean }> };
-    expect(r.repos).toEqual([{ slug: "site", name: "Website", clone_url: "https://acme.pimwell.test/site.git", push: true }]);
+    expect(r.repos).toEqual([{ project: "site", is_default: true, slug: "site", name: "Website", clone_url: "https://acme.pimwell.test/site.git", push: true }]);
     const how = await rpcBody(await agentMcp(token, "tools/call", { name: "repo_connect", arguments: {} }));
     const text = (how.result.content as Array<{ text: string }>)[0]!.text;
     expect(text).toContain("https://acme.pimwell.test/git-credential-helper");

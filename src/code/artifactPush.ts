@@ -72,7 +72,7 @@ async function deletableBranch(update: RefUpdate, main: () => Promise<string>): 
 /** Stage the pack using native Git, prove allowed changes, then replay it to the published repo using Git's old-OID checks. */
 export async function artifactPush(request: Request, env: Env, grant: GitGrant, api: ArtifactsRest,
   // Access is checked again before publishing, by the same rule that granted it (project repo or agent source).
-  reauthorize: () => Promise<GitGrant | null> = () => authorizeGit(env, request.headers.get("authorization"), grant.tenant.slug, grant.project.slug)): Promise<Response> {
+  reauthorize: () => Promise<GitGrant | null> = () => authorizeGit(env, request.headers.get("authorization"), grant.tenant.slug, grant.project.slug + (grant.repository && !grant.repository.is_default ? `/${grant.repository.name}` : ""))): Promise<Response> {
   if (!env.GIT_PUSH_STAGING) throw new HubError(503, "unavailable", "Git push validation storage is not configured");
   if (!request.body) throw new HubError(400, "bad_request", "push body required");
   if (request.headers.get("content-encoding") && request.headers.get("content-encoding") !== "identity")
@@ -86,7 +86,8 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
   if (updates.some(update => !refAllowed(update.ref, grant.refPrefixes))) {
     await stream.cancel();throw new HubError(403, "forbidden", "push includes a reserved or unauthorized ref");
   }
-  const id = crypto.randomUUID(), namespace = artifactNamespace(grant.tenant.slug), repo = grant.project.slug;
+  const id = crypto.randomUUID(), namespace = artifactNamespace(grant.tenant.slug), repo = grant.repository?.storage_name ?? grant.project.slug;
+  const repoName = grant.repository && !grant.repository.is_default ? grant.repository.name : "";
   const shadow = `pimwell-stage-${id}`, replayKey = `git-push/${grant.tenant.id}/${grant.project.id}/${id}`;
   const db = env.HUB_DB, storage = env.GIT_PUSH_STAGING;
   api = api.withDeadline?.(300_000) ?? api;
@@ -150,7 +151,7 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
         for (const parent of commit.parents) queue.push(parent);
       }
     }
-    await indexCommitNodes(db, grant.tenant.id, grant.project.id, introduced);
+    await indexCommitNodes(db, grant.tenant.id, grant.project.id, introduced, repoName);
     await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:154:11:artifactPush:7b8c0c72*/ UPDATE git_push SET commits_json = ? WHERE id = ?").bind(JSON.stringify(introduced), id).run();
     let actual: RefOutcome[] = [];
     if (publish.length) {
@@ -176,8 +177,8 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
     const commits = introduced.filter(commit => accepted.has(commit.ref));
     const row = await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:177:23:artifactPush:4594633d*/ SELECT seq, identity_id FROM git_push WHERE id = ?").bind(id).first<{ seq: number; identity_id: string | null }>();
     const now = Date.now();
-    const events = commits.map((commit, index) => db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:179:51:artifactPush:75c5e4bf*/ INSERT OR IGNORE INTO code_event (tenant_id, project_id, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, 'commit', ?, ?, ?, ?, ?, ?)`)
-      .bind(grant.tenant.id, grant.project.id, 1_000_000_000_000 + row!.seq * 8192 + 4096 + index, row!.identity_id, grant.session.id, commit.ref, commit.hash, commit.summary, now));
+    const events = commits.map((commit, index) => db.prepare(`/*perf-site:src%2Fcode%2FartifactPush.ts:179:51:artifactPush:75c5e4bf*/ INSERT OR IGNORE INTO code_event (tenant_id, project_id, repo, ardi_id, kind, identity_id, session_id, ref, target, summary, at) VALUES (?, ?, ?, ?, 'commit', ?, ?, ?, ?, ?, ?)`)
+      .bind(grant.tenant.id, grant.project.id, repoName, 1_000_000_000_000 + row!.seq * 8192 + 4096 + index, row!.identity_id, grant.session.id, commit.ref, commit.hash, commit.summary, now));
     for (let offset = 0; offset < events.length; offset += 100) await db.batch(events.slice(offset, offset + 100));
     await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:182:11:artifactPush:0225ad0d*/ UPDATE git_push SET state = ?, outcomes_json = ?, published_json = ?, commits_json = ?, completed_at = ? WHERE id = ?").bind(state, JSON.stringify(outcomes), JSON.stringify(actual), JSON.stringify(commits), now, id).run();
     disposable = state === "complete";

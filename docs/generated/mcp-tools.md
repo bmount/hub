@@ -11,7 +11,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | Tool | Scope | Minimum role | Destructive hint | State | Arguments |
 | --- | --- | --- | --- | --- | --- |
 | `app_list` | read | reader | no | Implemented | — |
-| `app_register` | write | member | no | Implemented | **`project`**, **`script`** |
+| `app_register` | write | member | no | Implemented | **`project`**, `repo`, **`script`** |
 | `attention_done` | write | reader | no | Implemented | `all`, `ids` |
 | `attention_list` | read | reader | no | Implemented | `include_done` |
 | `capabilities` | read | public | no | Implemented | — |
@@ -39,7 +39,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `connection_remove` | write | member | no | Implemented | **`id`**, **`project`** |
 | `deploy_list` | read | reader | no | Implemented | `project` |
 | `deploy_read` | read | reader | no | Implemented | **`id`** |
-| `deploy_record` | write | member | no | Implemented | **`commit`**, `deployed_at`, `deployment`, `environment`, `message`, **`project`**, `triggered_by`, `version`, `worker` |
+| `deploy_record` | write | member | no | Implemented | **`commit`**, `deployed_at`, `deployment`, `environment`, `message`, **`project`**, `repo`, `triggered_by`, `version`, `worker` |
 | `doc_dispatch` | write | member | no | Implemented | **`note`**, `path`, **`project`**, **`recipients`**, `slug` |
 | `doc_share` | write | member | no | Implemented | **`note`**, `path`, **`project`**, **`recipients`**, `slug` |
 | `event_list` | read | member | no | Implemented | `cursor`, `limit`, `session_id` |
@@ -73,14 +73,15 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `project_list` | read | reader | no | Implemented | `state` |
 | `project_status` | read | reader | no | Implemented | **`project`**, `since` |
 | `ref_backlinks` | read | reader | no | Implemented | **`key`**, **`kind`**, `limit` |
-| `repo_branches` | read | reader | no | Implemented | **`project`** |
-| `repo_commit` | read | reader | no | Implemented | **`oid`**, **`project`** |
+| `repo_branches` | read | reader | no | Implemented | **`project`**, `repo` |
+| `repo_commit` | read | reader | no | Implemented | **`oid`**, **`project`**, `repo` |
 | `repo_connect` | read | reader | no | Implemented | — |
-| `repo_diff` | read | reader | no | Implemented | **`from`**, **`project`**, **`to`** |
-| `repo_file` | read | reader | no | Implemented | `path`, **`project`**, `ref` |
-| `repo_list` | read | reader | no | Implemented | — |
-| `repo_log` | read | reader | no | Implemented | `limit`, `next`, `path`, **`project`**, `ref` |
-| `repo_search` | read | reader | no | Implemented | `case_sensitive`, `limit`, `path`, **`project`**, **`q`**, `ref`, `regex` |
+| `repo_create` | write | member | no | Implemented | **`name`**, **`project`** |
+| `repo_diff` | read | reader | no | Implemented | **`from`**, **`project`**, `repo`, **`to`** |
+| `repo_file` | read | reader | no | Implemented | `path`, **`project`**, `ref`, `repo` |
+| `repo_list` | read | reader | no | Implemented | `project`, `repo` |
+| `repo_log` | read | reader | no | Implemented | `limit`, `next`, `path`, **`project`**, `ref`, `repo` |
+| `repo_search` | read | reader | no | Implemented | `case_sensitive`, `limit`, `path`, **`project`**, **`q`**, `ref`, `regex`, `repo` |
 | `research_list` | read | reader | no | Implemented | `after`, `org`, `person`, **`project`**, `status`, `topic` |
 | `research_save` | write | member | no | Implemented | **`expected_revision`**, `items`, **`note`**, `orgs`, `people`, **`project`**, **`slug`**, **`sources`**, **`status`**, **`summary`**, **`topic`** |
 | `review_ai` | write | member | no | Implemented | **`id`** |
@@ -88,7 +89,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `review_integrate` | write | member | no | Declared/planned | **`id`** |
 | `review_list` | read | reader | no | Implemented | `closed`, `project` |
 | `review_read` | read | reader | no | Implemented | **`id`** |
-| `review_request` | write | member | no | Implemented | `base`, **`branch`**, `idempotency_key`, **`project`**, `reviewers`, `summary`, `title` |
+| `review_request` | write | member | no | Implemented | `base`, **`branch`**, `idempotency_key`, **`project`**, `repo`, `reviewers`, `summary`, `title` |
 | `review_verdict` | write | member | no | Implemented | **`id`**, `reason`, **`verdict`** |
 | `search_query` | read | reader | no | Implemented | **`q`** |
 | `site_list` | read | reader | no | Implemented | `project` |

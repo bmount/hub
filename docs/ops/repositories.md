@@ -1,0 +1,70 @@
+# Repositories within projects
+
+A code project can have multiple repositories. Repository names are 1–63 lowercase
+letters, digits or hyphens, beginning with a letter or digit, and unique within the
+project. Exactly one is the default. Existing repositories retain the name
+`default` and their existing Artifacts storage location. Workspace projects can
+also host code: their first `repo_create` becomes their default repository.
+
+## Addresses and creation
+
+- `https://<org>.pimwell.com/<project>.git` always selects the default repository.
+- `https://<org>.pimwell.com/<project>/<name>.git` selects a named repository,
+  including an explicitly named default.
+- `repo_create {project, name}` (MCP), or `POST /api/repo.create`, requires the same
+  member permission as project creation. Repeating the same create returns the
+  existing repository. Names must be created explicitly; pushing an unknown name
+  never creates storage or a mapping.
+- `repo_list` returns repository names, their project, default status, clone URLs
+  and the caller's push access. It accepts optional `project` and `repo` filters.
+
+All repositories share their project's access boundary. Git uses the existing
+credential helper and rechecks live credentials, operator membership and push
+permission before publishing. Non-default repositories use the same private
+staging, append-only history validation, rewrite preservation and protected
+branch/tag rules as the default. See [git-history.md](git-history.md).
+Agent source repositories retain their separate, narrower access rules.
+
+## Reading, review and references
+
+`repo_branches`, `repo_log`, `repo_commit`, `repo_file`, `repo_diff` and
+`review_request` take an optional `repo` name. Omission selects the default.
+`repo_search` instead searches all repositories within the project unless a name
+is supplied. Search matches carry the repository; the overall limit bounds the
+combined matching-line result, with per-repository results and coverage included.
+
+Commit references are `<project>@<full-sha>` for the default and
+`<project>/<name>@<full-sha>` otherwise. Push sync tracks named repositories
+independently and links commit mentions of `<project>#<number>` to work items,
+using the repository-qualified reference. Initial named-repository history also
+gets links; historical imports remain quiet in project ops channels.
+The same SHA in two repositories does not merge their pusher attribution,
+commit/work associations or derived history traversal.
+
+Reviews retain a repository name alongside their project-wide review number.
+App registration and deploy recording accept `repo`; omit it for the default.
+App declaration checks read that repository, telemetry-derived deployments inherit
+it from their registered app, and Site app records expose it. Deployment commit
+references and commit/deploy associations retain the repository.
+
+## Storage and deletion
+
+`repository` maps `(project_id, name)` to an internal Artifacts `storage_name`.
+A partial unique index enforces one default per project. Additional storage names
+are deterministic hashes of the project ID and repository name, not public paths;
+renaming a public project does not require moving named Git storage.
+`git_repository` remains the legacy migration-completion marker. Its insert
+trigger seeds a default mapping for existing provisioning and agent-source paths.
+
+The additive migration copies only derived commit metadata into
+`repository_commit`, keyed by project, repository and SHA; no Git objects or
+Artifacts repositories move. A trigger keeps legacy default-repository metadata
+writes compatible. Named pushes write their own graph entries. Default sync
+checkpoints remain in `code_sync`; named checkpoints use `repository_sync`.
+Push recovery records already carry the exact storage repository.
+
+Project deletion preflights the full D1 cascade, then purges every mapped Git
+repository, private push staging and replay data before committing deletion.
+The same ownership checks apply to every purge. Tenant deletion also purges all
+repositories. The project schema-coverage test includes repository mappings,
+per-repository graphs and sync checkpoints.

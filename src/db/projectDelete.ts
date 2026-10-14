@@ -7,7 +7,7 @@ import { repoOwnership } from "../code/artifactPush";
 import { ulid } from "../ids";
 
 // Used by the cascade and the schema-coverage test; children precede their parents.
-export const PROJECT_DELETE_SCOPED_TABLES = ["contact_link", "contact_connection", "contact_entity", "document_delivery", "file_revision", "file_upload", "wiki_revision", "review", "app_error_group", "app_deploy", "site", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"] as const;
+export const PROJECT_DELETE_SCOPED_TABLES = ["repository_sync", "repository_commit", "repository", "contact_link", "contact_connection", "contact_entity", "document_delivery", "file_revision", "file_upload", "wiki_revision", "review", "app_error_group", "app_deploy", "site", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"] as const;
 export const PROJECT_DELETE_OTHER_TABLES = ["channel", "work_item"] as const;
 
 export const projectDeleteKey = (tenant: string, project: string) => `project_delete:v1:${tenant}:${project}`;
@@ -149,10 +149,11 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
       } while (cursor);
     }
   }
-  if (project.kind === "repo") {
+  if (project.kind === "repo" || project.kind === "workspace") {
     const mapped = await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:deleteProject:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).first();
-    if (!mapped && ctx.env.ARDI_REPO_CREATE === "on") throw conflict("repository is not mapped to Artifacts; migrate it before deleting the project");
-    if (mapped) {
+    if (project.kind === "repo" && !mapped && ctx.env.ARDI_REPO_CREATE === "on") throw conflict("repository is not mapped to Artifacts; migrate it before deleting the project");
+    const repositories = (await db.prepare("SELECT name, storage_name FROM repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).all<{name: string; storage_name: string}>()).results;
+    if (mapped || repositories.length) {
       const api = new ArtifactsRest(ctx.env), ns = artifactNamespace(ctx.tenant!.slug);
       const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:157:29:deleteProject:7181cbc4*/ SELECT id, namespace, shadow, replay_key FROM git_push WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id)
         .all<{ id: string; namespace: string; shadow: string; replay_key: string }>()).results;
@@ -166,8 +167,9 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
           await bucket.delete(push.replay_key);
         }
       }
-      await api.deleteProject(ns, project.slug, repoOwnership(tid, project.id));
-      counts.repositories = 1;
+      if (!repositories.length) repositories.push({name: "default", storage_name: project.slug});
+      for (const repo of repositories) await api.deleteProject(ns, repo.storage_name, repoOwnership(tid, project.id));
+      counts.repositories = repositories.length;
     }
   }
 

@@ -18,15 +18,15 @@ export async function findSite(ctx: Ctx, name: string): Promise<SiteRow> {
 }
 
 export async function siteView(ctx: Ctx, row: SiteRow) {
-  const apps = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsites.ts:21:23:siteView:a61b46ab*/ SELECT a.id, a.script_name, a.state FROM site_app sa JOIN app_source a ON a.id = sa.app_id
+  const apps = (await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsites.ts:21:23:siteView:a61b46ab*/ SELECT a.id, a.script_name, a.state, a.repo FROM site_app sa JOIN app_source a ON a.id = sa.app_id
     WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? ORDER BY a.script_name`)
-    .bind(row.id, ctx.tenant!.id, row.project_id).all<{ id: string; script_name: string; state: string }>()).results;
+    .bind(row.id, ctx.tenant!.id, row.project_id).all<{ id: string; script_name: string; state: string; repo: string }>()).results;
   const versions = apps.length ? await ctx.db.batch(apps.map(a => currentDeployStatement(ctx, row.project_id, a.script_name))) : [];
   return { id: row.id, name: row.name, hostnames: JSON.parse(row.hostnames) as string[], project: row.project,
     apps: apps.map((a, i) => {
       const d = versions[i]?.results[0] as DeployRow | undefined;
       const view = d ? deployView(d) : null;
-      return { script: a.script_name, state: a.state, currentVersion: view?.release ? {
+      return { script: a.script_name, state: a.state, repo: a.repo, currentVersion: view?.release ? {
         id: view.release.version as string, deployment: view.release.deployment as string,
         deployRecord: view.deploy.id, recordedAt: view.deploy.seen_at, commitRef: view.commitRef, commitHref: view.commitHref,
         source: "recorded-production-deploy" as const,
