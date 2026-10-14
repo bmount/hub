@@ -348,7 +348,10 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
       }).catch(function () { if (btn) btn.disabled = false; ambiguous(); });
   }
   document.addEventListener("submit", function (e) {
-    var f = e.target; if (e.defaultPrevented || f.getAttribute("data-reload") !== null) return;
+    var f = e.target;
+    // Native submission preserves file bytes; URLSearchParams cannot encode multipart bodies.
+    var encoding = e.submitter && e.submitter.getAttribute("formenctype") || f.enctype;
+    if (e.defaultPrevented || f.getAttribute("data-reload") !== null || encoding === "multipart/form-data") return;
     if (f.hasAttribute("data-inline")) { e.preventDefault(); inline(f); return; }
     var u = new URL(f.getAttribute("action") || location.href, location.href);
     if (u.origin !== location.origin || /^\/(login|logout|oauth|auth|invite)\b/.test(u.pathname)) return;

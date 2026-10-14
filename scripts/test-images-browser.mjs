@@ -141,6 +141,31 @@ try {
   const authorPopup = page.waitForEvent('popup');
   await page.getByRole('link',{name:'Open original · revision 1'}).click();
   await (await authorPopup).close();
+  // Files-page submissions must preserve bytes with progressive navigation active.
+  // Also remove the explicit escape hatch to exercise the script's multipart guard.
+  for (const nativeMarker of [true, false]) {
+    const filePath = `browser-${nativeMarker}.txt`;
+    const versions = [Buffer.from('First version\r\nUTF-8: café\n'), Buffer.from('Replacement\nDifferent bytes\r\n')];
+    for (const [index, bytes] of versions.entries()) {
+      await page.goto(base + '/visuals/documents?upload=1');
+      await expect.poll(() => page.evaluate(() => window.__pwCopy)).toBe(1);
+      await page.getByLabel('File', {exact:true}).setInputFiles({name:filePath,mimeType:'text/plain',buffer:bytes});
+      await page.getByLabel('Folder/name (blank uses filename)', {exact:true}).fill(filePath);
+      const form = page.locator('form[enctype="multipart/form-data"]');
+      await expect(form).toHaveAttribute('data-reload', '');
+      if (!nativeMarker) await form.evaluate(f => f.removeAttribute('data-reload'));
+      const submitted = page.waitForRequest(r => r.method() === 'POST' && r.url().endsWith('/documents/upload'));
+      await form.getByRole('button', {name:'Upload',exact:true}).click();
+      const request = await submitted;
+      expect(request.headers()['content-type']).toContain('multipart/form-data; boundary=');
+      expect(request.headers()['x-workbench']).toBeUndefined();
+      await expect(page.getByRole('heading', {name:'Upload a file or version'})).toHaveCount(0);
+      const stored = await verb(member,'file.get',{project:'visuals',path:filePath,revision:index+1,include_base64:true});
+      expect(Buffer.from(stored.base64,'base64')).toEqual(bytes);
+    }
+    const original = await verb(member,'file.get',{project:'visuals',path:filePath,revision:1,include_base64:true});
+    expect(Buffer.from(original.base64,'base64')).toEqual(versions[0]);
+  }
   await author.close();
   for (const token of [null,outsider]) {
     const ctx = await context(token,{width:390,height:900});
@@ -151,7 +176,7 @@ try {
     await expect(page.locator('.project-image img')).toHaveCount(0);
     await ctx.close();
   }
-  console.log('PASS image browser acceptance: reader desktop/mobile, original, work evidence, browser authoring, outsider/anonymous denial');
+  console.log('PASS image browser acceptance: reader desktop/mobile, original, work evidence, browser authoring, Files upload/version byte preservation with native marker and multipart guard, outsider/anonymous denial');
 } finally {
   await browser?.close();
   await mf?.dispose();
