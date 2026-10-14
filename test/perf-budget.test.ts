@@ -428,10 +428,10 @@ describe("isolated synthetic journeys", () => {
   });
   it("runs the fixed browser/MCP/chat/Git journeys through live handlers and deletes ephemeral credentials", async () => {
     const c=collector(); let cookies="",current="",html="";
-    const browserRequests: string[] = [];
+    let intercept: ((request: any) => void) | undefined;
     const measured={...c.measured,SYNTHETIC_BROWSER:{} as Fetcher};
     const page={
-      setRequestInterception:async()=>{},on:()=>{},setCookie:async(p:{value:string})=>{cookies="pmw_session="+p.value;},
+      setRequestInterception:async()=>{},on:(event: string, fn: (request: any) => void)=>{if(event === "request") intercept = fn;},setCookie:async(p:{value:string})=>{cookies="pmw_session="+p.value;},
       goto:async(url:string)=>{
         current=url;
         const response=await app.fetch(new Request(url,{headers:{cookie:cookies}}),measured,c.ctx);
@@ -440,7 +440,6 @@ describe("isolated synthetic journeys", () => {
       },
       url:()=>current,$:async()=>html.includes("/assets/timing.")?{}:null,evaluate:async(_fn:unknown,url?:string,options?:RequestInit)=>{
         if(!url)return;
-        browserRequests.push(url);
         const response=await fetch(url,{...options,headers:{...options?.headers,cookie:cookies,...(new URL(url).pathname==="/mcp"?{}:{origin:new URL(url).origin})}});
         return {status:response.status,headers:Array.from(response.headers.entries()),body:await response.text()};
       }
@@ -451,7 +450,6 @@ describe("isolated synthetic journeys", () => {
     const originalFetch=globalThis.fetch;
     vi.spyOn(globalThis,"fetch").mockImplementation(async(input,init)=>{
       const request=input instanceof Request?input:new Request(input,init),url=new URL(request.url);
-      if(url.pathname.includes(".git/")) { expect(init?.redirect).toBe("manual"); }
       if(url.pathname.includes(".git/"))return new Response("001e# service=git-upload-pack\n00000000",{headers:{"content-type":"application/x-git-upload-pack-advertisement","x-pimwell-colo":"DFW","x-pimwell-version":"test-version"}});
       if(url.hostname.endsWith(".pimwell.test")||url.hostname==="pimwell.test")return app.fetch(request,measured,c.ctx);
       return originalFetch(input,init);
@@ -462,7 +460,12 @@ describe("isolated synthetic journeys", () => {
       const rows=(await env.HUB_DB.prepare("SELECT journey,failed FROM synthetic_run ORDER BY journey").all<{journey:string;failed:number}>()).results;
       expect(rows).toEqual([...SYNTHETIC_JOURNEYS].sort().map(journey=>({journey,failed:0})));
       expect(close).toHaveBeenCalledOnce();
-      expect(browserRequests.some(url => url.includes(".git/info/refs"))).toBe(false);
+      const forwardedHeaders: Array<Record<string, string>> = [];
+      const check = (url: string) => intercept!({ url: () => url, headers: () => ({ "x-pimwell-synthetic": "discarded" }), continue: ({ headers }: { headers: Record<string, string> }) => { forwardedHeaders.push(headers); }, abort: () => {} });
+      check("https://perf-synthetic.pimwell.test/fixture.git/info/refs?service=git-upload-pack");
+      check("https://pimwell.test/login");
+      expect(Object.hasOwn(forwardedHeaders[0]!, "x-pimwell-synthetic")).toBe(false);
+      expect(Object.hasOwn(forwardedHeaders[1]!, "x-pimwell-synthetic")).toBe(true);
       expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM oauth_grant WHERE identity_id = ?").bind(SYNTHETIC_MEMBER).first("n")).toBe(0);
       expect(await env.OAUTH_KV.list({prefix:"client:"})).toMatchObject({keys:[]});
     } finally {vi.restoreAllMocks();}

@@ -114,7 +114,11 @@ export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<voi
     page.on("request", request => {
       const url = new URL(request.url());
       if (!([env.HUB_DOMAIN, `perf-synthetic.${env.HUB_DOMAIN}`].includes(url.hostname)) || url.protocol !== "https:") { void request.abort(); return; }
-      const headers: Record<string,string> = { ...request.headers(), "x-pimwell-synthetic": web!.token };
+      const headers: Record<string,string> = { ...request.headers() };
+      // Git already classifies this fixed tenant as synthetic. Its marker would
+      // repeat a live session lookup before the independently authorized exchange.
+      if (url.hostname === `perf-synthetic.${env.HUB_DOMAIN}` && url.pathname === "/fixture.git/info/refs") delete headers["x-pimwell-synthetic"];
+      else headers["x-pimwell-synthetic"] = web!.token;
       // Headless MCP clients have no Origin. Keep the server browser-origin policy unchanged.
       if (url.pathname === "/mcp") delete headers.origin;
       void request.continue({ headers });
@@ -169,15 +173,15 @@ export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<voi
     let posted = false;
     await observe("chat-post", async () => { const result = await api("chat.post", { c: "synthetic", body: `Synthetic check ${Math.floor(now/300_000)}`, idempotency_key: `synthetic-${Math.floor(now/300_000)}` }); posted = true; return result.info; });
     await observe("chat-read", async () => { const result = await api("chat.read", { c: "synthetic", limit: 1 }); if (!posted || !JSON.stringify(result.data).includes(`Synthetic check ${Math.floor(now/300_000)}`)) throw new Error("Synthetic read did not see post"); return result.info; });
-    await observe("git-ls-remote", () => gitLsRemote(env, (url, options) => fetch(url, { ...options, redirect: "manual" }), `Basic ${btoa("synthetic:"+git!.token)}`, now));
+    await observe("git-ls-remote", () => gitLsRemote(env, journeyFetch, `Basic ${btoa("synthetic:"+git!.token)}`, now));
   } catch { /* Setup failures are observations, never swallowed as a successful tick. */ }
   finally {
     try { await browser?.close(); } catch { /* credentials still expire */ }
     try { await mcp?.close(); } catch { /* D1 grant expiry is the authorization boundary */ }
     await env.HUB_DB.batch([
-      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:178:7:runSynthetic:3e8499a3*/ UPDATE event SET session_id = NULL WHERE identity_id = ?").bind(SYNTHETIC_MEMBER),
-      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:179:7:runSynthetic:ab06c962*/ DELETE FROM oauth_grant WHERE identity_id = ? AND (expires_at <= ? OR approved_by_session_id = ?)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? ""),
-      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:180:7:runSynthetic:7986d436*/ DELETE FROM session WHERE identity_id = ? AND (expires_at <= ? OR id IN (?, ?)) AND id NOT IN (SELECT session_id FROM oauth_grant)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? "", git?.id ?? ""),
+      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:182:7:runSynthetic:3e8499a3*/ UPDATE event SET session_id = NULL WHERE identity_id = ?").bind(SYNTHETIC_MEMBER),
+      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:183:7:runSynthetic:ab06c962*/ DELETE FROM oauth_grant WHERE identity_id = ? AND (expires_at <= ? OR approved_by_session_id = ?)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? ""),
+      env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:184:7:runSynthetic:7986d436*/ DELETE FROM session WHERE identity_id = ? AND (expires_at <= ? OR id IN (?, ?)) AND id NOT IN (SELECT session_id FROM oauth_grant)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? "", git?.id ?? ""),
     ]);
     for (const journey of SYNTHETIC_JOURNEYS) if (!completed.has(journey)) await recordSynthetic(env, journey, { ...origin, duration: Math.max(0,Date.now()-now), failed: true });
   }
