@@ -32,7 +32,8 @@ export function sparkline(rows:PerfRow[]):string {
   const values=rows.map(r=>number(r.p50)), max=Math.max(1,...values);
   const first=number(rows[0]!.bucket),last=number(rows.at(-1)!.bucket);
   const points=values.map((v,i)=>`${(96*(number(rows[i]!.bucket)-first)/Math.max(1,last-first)).toFixed(1)},${(22-v*20/max).toFixed(1)}`).join(" ");
-  return `<svg class="perf-spark" viewBox="0 0 100 24" width="100" height="24" role="img" aria-label="Median latency over time"><title>${esc(values.map(ms).join(", "))}</title><polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2"/></svg>`;
+  const plot=rows.length===1?`<circle cx="48" cy="${(22-values[0]!*20/max).toFixed(1)}" r="2" fill="var(--accent)"/>`:`<polyline points="${points}" fill="none" stroke="var(--accent)" stroke-width="2"/>`;
+  return `<svg class="perf-spark" viewBox="0 0 100 24" width="100" height="24" role="img" aria-label="Median latency over time"><title>${rows.length===1?"One observed time bucket: ":""}${esc(values.map(ms).join(", "))}</title>${plot}</svg>`;
 }
 function stacked(segments:Array<{name:string;value:number;recorded?:boolean}>):string {
   const total=segments.reduce((n,s)=>n+s.value,0);if(!total) return `<span class="lede">${segments.some(s=>s.recorded!==false)?"0 ms attributed":"Breakdown not recorded"}</span>`;

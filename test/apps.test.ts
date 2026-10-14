@@ -3,6 +3,7 @@ import siteMigration from "../migrations/0032_sites.sql?raw";
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appsPage } from "../src/http/appsPages";
+import { sparkline } from "../src/http/performancePage";
 import { clearPerformanceCache, performanceSelection, performanceScope } from "../src/apps/performance";
 import { buildContext } from "../src/auth/context";
 import { tenantHash } from "../src/perf";
@@ -47,6 +48,12 @@ async function world() {
 }
 
 describe("sites", () => {
+  it("shows sparse live trends without inventing another time bucket", () => {
+    expect(sparkline([])).toContain("—");
+    const sparse=sparkline([{bucket:35554,p50:118,n:546}]);
+    expect(sparse).toContain("<circle");expect(sparse).toContain("One observed time bucket: 118");expect(sparse).not.toContain("<polyline");
+    expect(sparkline([{bucket:1,p50:20},{bucket:2,p50:25}])).toContain("<polyline");
+  });
   it("shows weighted live-query performance in URL-selected workbench views without crossing site, tenant or app boundaries", async () => {
     const w=await world();
     await w.call(w.root.token,"app.register",{project:"pricebench",script:"pricebench"});
@@ -101,8 +108,10 @@ describe("sites", () => {
       expect(await (await get("&kind=tools&selected=work_read")).text()).toContain("work_read");
       expect((await get("&selected=foreign-org" )).status).toBe(404);
       expect((await get("&version=unknown-version")).status).toBe(404);
-      const outsider=await seedHuman("outsider@example.com");const before=sqls.length;
+      const outsider=await seedHuman("outsider@example.com"),rootOutsider=await seedHuman("global-root@example.com",{is_root:true});const before=sqls.length;
       expect((await get("",outsider.token)).status).toBe(404);expect(sqls).toHaveLength(before);
+      expect((await get("",rootOutsider.token)).status).toBe(404);expect(sqls).toHaveLength(before);
+      expect((await get("",w.root.token)).status).toBe(200);expect(sqls).toHaveLength(before);
       const other=await seedTenant("other");const foreign=await seedHuman("foreign@example.com",{memberships:[{tenant_id:other.id,role:"member"}]});
       expect((await get("",foreign.token,"other.pimwell.test")).status).toBe(404);expect(sqls).toHaveLength(before);
       expect((await appsPage(new Request(base.replace("project=pricebench","project=missing"),{headers:cookieHeaders(w.pat.token,HOST)}),measured)).status).toBe(404);
