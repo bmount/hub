@@ -51,6 +51,8 @@ describe("wrangler configuration", () => {
   it("allows only the approved hub synthetic browser addition", () => {
     const db={name:"HUB_DB",type:"d1",id:"database"},browser={name:"SYNTHETIC_BROWSER",type:"browser"};
     expect(compatibleBindings([db],[db,browser],"pimwell-hub")).toBe(true);
+    expect(compatibleBindings([db],[db,{...browser,version:2}],"pimwell-hub")).toBe(true);
+    expect(compatibleBindings([db],[db,{...browser,version:3}],"pimwell-hub")).toBe(false);
     expect(compatibleBindings([db],[db,browser],"pimwell-tail")).toBe(false);
     expect(compatibleBindings([db],[db,{...browser,name:"OTHER"}],"pimwell-hub")).toBe(false);
     expect(compatibleBindings([db],[db,{...browser,type:"service"}],"pimwell-hub")).toBe(false);

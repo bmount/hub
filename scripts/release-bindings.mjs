@@ -8,7 +8,7 @@ export function compatibleRuntime(oldRuntime, freshRuntime, worker) {
   return normalize({ ...oldRuntime, compatibility_flags: [...flags, "nodejs_compat"] }) === normalize(freshRuntime);
 }
 export function compatibleBindings(oldBindings, freshBindings, worker) {
-  const additive = b => (worker === "pimwell-hub" && b.name === "SYNTHETIC_BROWSER" && b.type === "browser" && Object.keys(b).every(k => k === "name" || k === "type")) ||
+  const additive = b => (worker === "pimwell-hub" && b.name === "SYNTHETIC_BROWSER" && b.type === "browser" && (b.version === undefined || b.version === 2) && Object.keys(b).every(k => ["name", "type", "version"].includes(k))) ||
     (b.name === "WORKER_VERSION" && b.type === "version_metadata" && Object.keys(b).every(k => k === "name" || k === "type")) ||
     (b.name === "PERF" && b.type === "analytics_engine" && b.dataset === "pimwell_perf" && Object.keys(b).every(k => ["name", "type", "dataset"].includes(k))) ||
     (["PERF_TENANT_KEY", "PERF_ANALYTICS_TOKEN"].includes(b.name) && b.type === "secret_text" && Object.keys(b).every(k => k === "name" || k === "type"));
