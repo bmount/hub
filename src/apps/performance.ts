@@ -110,17 +110,17 @@ async function originClientSplits(query:(sql:string)=>Promise<PerfRow[]>,scope:s
   });
 }
 export type PerformanceData = {overview:PerfRow[];spark:PerfRow[];breakdown:PerfRow[];browser:PerfRow[];histogram:PerfRow[];splits:Record<string,PerfRow[]>;sql:PerfRow[];exemplars:PerfRow[];waterfall:PerfRow[];comparison:PerfRow[];triggers:PerfRow[]};
-export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection):Promise<PerformanceData> {
+export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, detailOnly=false):Promise<PerformanceData> {
   const scope=await performanceScope(ctx,site,s.hours);
   const empty:PerformanceData={overview:[],spark:[],breakdown:[],browser:[],histogram:[],splits:{},sql:[],exemplars:[],waterfall:[],comparison:[],triggers:[]};
   if(!scope.scripts.length) return empty;
   const dim=dimensions[s.kind];
   const versionFilter=s.kind==="deploys"&&s.version&&s.previous?` AND blob3 IN (${quote(s.version)},${quote(s.previous)})`:s.version?` AND blob3 = ${quote(s.version)}`:"";
-  const filter=`${scope.where} AND ${population(s)}${versionFilter}`;
+  const filter=`${scope.where} AND ${population(s)}${versionFilter}${detailOnly&&s.selected?` AND ${dim} = ${quote(s.selected)}`:""}`;
   const query=(sql:string)=>analyticsQuery(ctx,sql);
   const bucket=s.hours===1?300:s.hours===24?7200:50400;
   const [overview,spark,breakdown,browser,comparison]=await Promise.all([
-    query(`SELECT ${dim} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${filter} GROUP BY label ORDER BY ${s.kind==="spinners"?"total":"n * p50"} DESC LIMIT 200`),
+    query(`SELECT ${dim} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${filter} GROUP BY label ORDER BY total DESC LIMIT 200`),
     query(`SELECT ${dim} AS label, intDiv(toUInt32(timestamp), ${bucket}) AS bucket, quantileWeighted(0.5)(double1, _sample_interval) AS p50, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${filter} GROUP BY label, bucket ORDER BY label, bucket LIMIT 3000`),
     s.kind==="routes" ? query(`SELECT blob8 AS label, blob14 AS name, blob7 AS kind, SUM(double17 * _sample_interval) AS attributed, SUM(IF(double19 > 0, double19, 0.0) * _sample_interval) AS execution, SUM(IF(double19 >= 0, double17, 0.0) * _sample_interval) AS known_wall, SUM(IF(double19 >= 0, _sample_interval, 0)) AS execution_n, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND double20 = 2 AND double18 = 0 AND blob7 IN ('request','span') AND blob14 != 'd1.statement'${s.version?` AND blob3 = ${quote(s.version)}`:""} GROUP BY label, name, kind LIMIT 2000`) : Promise.resolve([]),
     s.kind==="routes" ? query(`SELECT blob6 AS request, blob8 AS label, blob7 AS kind, blob3 AS version, blob14 AS name, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND (blob7 = 'request' OR (blob7 = 'client' AND ((blob9 = 'page' AND blob14 IN ('network','render')) OR blob9 IN ('fetch','paint')))) GROUP BY request, label, kind, version, name, phase LIMIT 5000`) : Promise.resolve([]),

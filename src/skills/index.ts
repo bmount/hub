@@ -35,6 +35,9 @@ export const SKILLS: Skill[] = [
 **Work loop**
 Find ready work with \`work_frontier\`, then take one item with \`work_claim\` (a one-hour lease; claim again to renew while working). Report blockers with \`work_comment\` and hand the item back with \`work_release\` if you cannot continue. Propose discovered work or missing prerequisites with \`work_propose\` (\`for\` = your item and a brief reason), rather than changing the live graph; another member approves it. Use \`work_graph\` to inspect dependencies.
 
+**Measuring a change**
+Use \`site_list\` to find the registered site. \`perf_summary\` ranks routes and interactions by total waiting time; \`perf_route\` takes site and selected (for example \`/:project/docket\`) for percentiles, breakdown and colo/version/cold-start splits. Set hours to 1, 24 (default) or 168, and optionally version; kind defaults to routes, or use interactions. Measure before and after with the same window and population. \`perf_compare\` takes version and previous for a side-by-side route comparison. \`perf_exemplar\` returns a slow request waterfall (optionally request from the exemplars); \`perf_statements\` returns slow D1 fingerprints and recorded call sites for selected. Missing or sampled telemetry is not proof of zero latency. All five tools follow the Performance view's membership and site/project boundaries.
+
 **Everything else you can reach**
 - **Work:** \`work_create\`, \`work_update\`, \`work_comment\` (@handle mentions), \`work_subscribe\`, \`work_board\`, \`work_bulk_update\`, \`work_search\`.
 - **Status:** \`project_status\` says what happened since a date, from the record only. Use it instead of guessing.

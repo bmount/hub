@@ -58,6 +58,11 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `mail_reply` | write | member | no | Implemented | `all`, **`body`**, **`id`** |
 | `mail_send` | write | member | no | Implemented | **`body`**, `cc`, `from_project`, **`subject`**, **`to`** |
 | `message_search` | read | reader | no | Implemented | `c`, **`q`** |
+| `perf_compare` | read | reader | no | Implemented | `hours`, **`previous`**, **`site`**, **`version`** |
+| `perf_exemplar` | read | reader | no | Implemented | `hours`, `kind`, `request`, **`selected`**, **`site`**, `version` |
+| `perf_route` | read | reader | no | Implemented | `hours`, `kind`, **`selected`**, **`site`**, `version` |
+| `perf_statements` | read | reader | no | Implemented | `hours`, `kind`, **`selected`**, **`site`**, `version` |
+| `perf_summary` | read | reader | no | Implemented | `hours`, **`site`**, `version` |
 | `person_list` | read | reader | no | Implemented | `after`, **`project`**, `q`, `tag` |
 | `person_merge` | write | member | no | Implemented | **`from`**, **`from_revision`**, **`into`**, **`into_revision`**, **`project`** |
 | `person_read` | read | reader | no | Implemented | **`id`**, **`project`** |

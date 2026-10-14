@@ -115,9 +115,21 @@ describe("sites", () => {
       const other=await seedTenant("other");const foreign=await seedHuman("foreign@example.com",{memberships:[{tenant_id:other.id,role:"member"}]});
       expect((await get("",foreign.token,"other.pimwell.test")).status).toBe(404);expect(sqls).toHaveLength(before);
       expect((await appsPage(new Request(base.replace("project=pricebench","project=missing"),{headers:cookieHeaders(w.pat.token,HOST)}),measured)).status).toBe(404);
-      const ctx=await buildContext(new Request(base,{headers:cookieHeaders(w.pat.token,HOST)}),measured);
+      const ctx={...await buildContext(new Request(base,{headers:cookieHeaders(w.pat.token,HOST)}),measured),playground:{scopes:["read"]}};
       const site=await ctx.db.prepare("SELECT s.*, 'pricebench' AS project FROM site s WHERE tenant_id = ?").bind(w.t.id).first<any>();
       await expect(performanceScope(ctx,{...site,tenant_id:other.id},24)).rejects.toMatchObject({status:404});
+      const perfArgs={site:"prices.example.com",selected:"/:project"};
+      expect((await callTool(ctx,"perf_summary",{site:perfArgs.site,hours:1})).structuredContent).toMatchObject({hours:1,routes:[{label:"/:project",total:4000}],interactions:[{label:"pane.swap",total:4000}]});
+      expect((await callTool(ctx,"perf_route",perfArgs)).structuredContent).toMatchObject({metrics:[{p50:25,p95:100,p99:250}],splits:{colo:[{label:"DFW"}],isolate:[{label:0},{label:1}]},browser:[{phase:"network"},{phase:"render"}]});
+      expect((await callTool(ctx,"perf_route",{...perfArgs,kind:"interactions",selected:"pane.swap"})).structuredContent).toMatchObject({metrics:[{label:"pane.swap"}],splits:{colo:[{label:"DFW"}]}});
+      expect((await callTool(ctx,"perf_compare",{site:perfArgs.site,version,previous})).structuredContent).toMatchObject({comparison:[{version,p95:100},{version:previous,p95:80}]});
+      expect((await callTool(ctx,"perf_statements",perfArgs)).structuredContent).toMatchObject({statements:[{fingerprint:"01234567",code,source:JSON.stringify(location)}]});
+      expect((await callTool(ctx,"perf_exemplar",{...perfArgs,request})).structuredContent).toMatchObject({waterfall:[{request,kind:"request"},{request,kind:"client"}]});
+      expect((await callTool(ctx,"perf_exemplar",{...perfArgs,request:previous})).structuredContent).toMatchObject({waterfall:[]});
+      for(const args of [{...perfArgs,hours:2},{...perfArgs,kind:"deploys"},{...perfArgs,version:"bad'"},{...perfArgs,request:"invalid"},{site:perfArgs.site}]) expect((await callTool(ctx,"perf_route",args)).isError).toBe(true);
+      const queryCount=sqls.length;
+      for(const restricted of [{...ctx,mcpProject:{...w.p,id:"foreign",path:"foreign"}}, {...ctx,tenant:other}, {...ctx,identity:rootOutsider.identity,role:"root" as const}]) expect((await callTool(restricted,"perf_route",perfArgs)).isError).toBe(true);
+      expect(sqls).toHaveLength(queryCount);
       await ctx.db.prepare("UPDATE app_source SET state = 'disabled' WHERE tenant_id = ?").bind(w.t.id).run();
       const noCalls=sqls.length;expect(await (await get()).text()).toContain("No performance data yet");expect(sqls).toHaveLength(noCalls);
       expect(performanceSelection(new URLSearchParams())).toMatchObject({kind:"routes",hours:24});
@@ -131,6 +143,9 @@ describe("sites", () => {
     try {
       const r=await appsPage(new Request(`https://${HOST}/apps?site=prices.example.com`,{headers:cookieHeaders(w.pat.token,HOST)}),{...env,ARTIFACTS_ACCOUNT_ID:"a".repeat(32),PERF_ANALYTICS_TOKEN:"secret-runtime-token"});
       const html=await r.text();expect(html).toContain("Performance unavailable");expect(html).not.toContain("foreign-org");expect(html).not.toContain("secret-runtime-token");
+      const ctx={...await buildContext(new Request(`https://${HOST}/apps`,{headers:cookieHeaders(w.pat.token,HOST)}),{...env,ARTIFACTS_ACCOUNT_ID:"a".repeat(32),PERF_ANALYTICS_TOKEN:"secret-runtime-token"}),playground:{scopes:["read"]}};
+      const result=await callTool(ctx,"perf_route",{site:"prices.example.com",selected:"/:project"});
+      expect(result.isError).toBe(true);expect(JSON.stringify(result)).toContain("performance_unavailable");expect(JSON.stringify(result)).not.toContain("secret-runtime-token");expect(JSON.stringify(result)).not.toContain("foreign-org");
     } finally {mock.mockRestore();clearPerformanceCache();}
   });
   it("seeds only MCC code projects and their own registered apps", async () => {
