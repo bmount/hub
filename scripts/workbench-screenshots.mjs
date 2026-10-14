@@ -73,7 +73,7 @@ try {
       else if(sql.includes('GROUP BY label, previous')) data=[{label:'/:project/docket',previous:'/:project',...metric}];
       else if(sql.includes('AS mean')) data=[{request:rid,label:'/:project/docket',kind:'request',version,name:'request',phase:'GET',mean:180,n:120},{request:rid,label:'/:project/docket',kind:'client',version,name:'pane.swap',phase:'fetch',mean:220,n:120},{request:rid,label:'/:project/docket',kind:'client',version,name:'pane.swap',phase:'paint',mean:250,n:120}];
       else if(sql.includes('AS cold')) data=[{request:rid,version,colo:'LHR',auth:'cookie',cold:0,weight:1}];
-      else if(sql.includes('blob6 AS request')) data=[{request:rid,version,colo:'LHR',duration:180,weight:1}];
+      else if(sql.includes('blob6 AS request')&&!sql.includes('double17')) data=[{request:rid,version,colo:'LHR',duration:180,weight:1}];
       else if(sql.includes('SELECT blob15')) data=[{fingerprint:'abcdef01',code,source,version,...metric}];
       else if(sql.includes('IF(double1 < 10')) data=[{bucket:1,n:60},{bucket:2,n:30},{bucket:4,n:20},{bucket:7,n:10}];
       else if(sql.includes('double17')) data=[{label:'/:project/docket',name:'request',kind:'request',attributed:2400,execution:0,n:120},{label:'/:project/docket',name:'auth.buildContext',kind:'span',attributed:2400,execution:0,n:120},{label:'/:project/docket',name:'d1.first',kind:'span',attributed:12000,execution:2400,known_wall:12000,execution_n:120,n:120},{label:'/:project/docket',name:'do.stub.CONVERSATION.fetch',kind:'span',attributed:4800,execution:0,n:120}];
@@ -809,6 +809,10 @@ try {
       await flushTiming();
       const selectId = selection.headers()['x-request-id'];
       for (const name of ['navigation','pane.swap','inspector.open']) await joinedPoint(selectId,p => p.blobs[13] === name);
+      for (const phase of ['ready','fetch','render']) await joinedPoint(selectId,p => p.blobs[13] === 'docket.select' && p.blobs[8] === phase);
+      const ready = perfPoints.find(p => p.blobs[5] === selectId && p.blobs[13] === 'docket.select' && p.blobs[8] === 'ready');
+      const fetched = perfPoints.find(p => p.blobs[5] === selectId && p.blobs[13] === 'docket.select' && p.blobs[8] === 'fetch');
+      expect(ready.doubles[0]).toBeGreaterThanOrEqual(fetched.doubles[0]);
       await joinedPoint(selectId,p => p.blobs[8] === 'spinner');
       await joinedPoint(selectId,p => ['docket.select','list.select'].includes(p.blobs[13]) && p.blobs[8] === 'paint');
       // A real server mutation, not a manufactured browser event.

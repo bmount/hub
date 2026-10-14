@@ -62,6 +62,7 @@ export const CLIENT_TIMING_JS = `var timingPath = ${timingPath.toString()};\nvar
     // Event Timing replaces this fallback where the browser supplies it.
     requestAnimationFrame(function () { setTimeout(function () {
       action.paint = point(name, 'paint', performance.now() - action.started, action.id, action.path, action.previous);
+      if (!action.async) point(name, 'ready', performance.now() - action.started, action.id, action.path, action.previous);
     }, 0); });
   }
   ['click','submit','input','keydown'].forEach(function (type) { document.addEventListener(type, function (e) {
@@ -70,6 +71,7 @@ export const CLIENT_TIMING_JS = `var timingPath = ${timingPath.toString()};\nvar
   }, true); });
   function start(name) {
     var action = latest && (!name || latest.name === name) && performance.now() - latest.started < 1500 ? latest : null;
+    if (action) action.async = true;
     return {name:name || (action && action.name) || 'pane.swap', started:performance.now(), id:currentId, path:current, previous:previous, action:action};
   }
   function response(op, res) {
@@ -78,19 +80,27 @@ export const CLIENT_TIMING_JS = `var timingPath = ${timingPath.toString()};\nvar
     if (op.action) { op.action.id = id; if (op.action.paint) op.action.paint.request = id; }
   }
   function end(op, spinner) {
-    point(op.name, 'fetch', performance.now() - op.started, op.id, op.path, op.previous);
+    op.fetched = op.fetched || performance.now();
+    point(op.name, 'fetch', op.fetched - op.started, op.id, op.path, op.previous);
     if (spinner) point(op.name, 'spinner', performance.now() - op.started, op.id, op.path, op.previous);
+    if (!op.navigated) requestAnimationFrame(function () { setTimeout(function () {
+      point(op.name, 'ready', performance.now() - (op.action ? op.action.started : op.started), op.id, op.path, op.previous);
+      point(op.name, 'render', Math.max(0, performance.now() - op.fetched), op.id, op.path, op.previous);
+    }, 0); });
   }
   function navigate(url, op) {
+    op.navigated = true;
     previous = current; current = timingPath(url); currentId = op.id;
     point('navigation', 'page', performance.now() - op.started, op.id, current, previous);
     var path = current, prev = previous, inspector = document.body.getAttribute('data-focus') === 'inspector';
     requestAnimationFrame(function () { setTimeout(function () {
+      point(op.name, 'ready', performance.now() - (op.action ? op.action.started : op.started), op.id, path, prev);
+      point(op.name, 'render', Math.max(0, performance.now() - (op.fetched || op.started)), op.id, path, prev);
       point('pane.swap', 'paint', performance.now() - op.started, op.id, path, prev);
       if (inspector) point('inspector.open', 'paint', performance.now() - op.started, op.id, path, prev);
     }, 0); });
   }
-  window.pimwellTiming = {start:start, response:response, end:end, navigate:navigate, point:point, id:function () { return currentId; }};
+  window.pimwellTiming = {start:start, response:response, end:end, navigate:navigate, body:function(op) { op.fetched = performance.now(); }, point:point, id:function () { return currentId; }};
   var lcp = null, cls = 0, clsAt = 0, clsStart = 0, clsWindow = 0, clsChanged = false;
   function observe(type, cb, extra) {
     try { var observer = new PerformanceObserver(function (list) { cb(list.getEntries()); }); observer.observe(Object.assign({type:type,buffered:true},extra || {})); } catch (_) {}
@@ -117,7 +127,7 @@ export const CLIENT_TIMING_JS = `var timingPath = ${timingPath.toString()};\nvar
       point('cls','page',cls,pageId,pagePath,pagePrevious);
       if (nativeAction) {
         point(nativeAction.name,'fetch',n.responseEnd,pageId,pagePath,pagePrevious);
-        requestAnimationFrame(function () { setTimeout(function () { point(nativeAction.name,'paint',Date.now()-nativeAction.at,pageId,pagePath,pagePrevious); },0); });
+        requestAnimationFrame(function () { setTimeout(function () { point(nativeAction.name,'paint',Date.now()-nativeAction.at,pageId,pagePath,pagePrevious); point(nativeAction.name,'ready',Date.now()-nativeAction.at,pageId,pagePath,pagePrevious); },0); });
       }
     }, 0);
   }

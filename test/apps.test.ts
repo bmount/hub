@@ -3,8 +3,8 @@ import siteMigration from "../migrations/0032_sites.sql?raw";
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appsPage } from "../src/http/appsPages";
-import { sparkline } from "../src/http/performancePage";
-import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser } from "../src/apps/performance";
+import { sparkline, routeBreakdown } from "../src/http/performancePage";
+import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser, population, weightedMetrics, tripAttribution, type PerformanceData } from "../src/apps/performance";
 import { buildContext } from "../src/auth/context";
 import { tenantHash } from "../src/perf";
 import { SQL_CATALOG } from "../src/perfCatalog";
@@ -48,6 +48,34 @@ async function world() {
 }
 
 describe("sites", () => {
+  it("separates errors/background/ready traffic and bounds trip attribution", () => {
+    expect(weightedMetrics).not.toContain("IN ('4xx','5xx')");
+    expect(weightedMetrics).toContain("double14 = 0");
+    expect(weightedMetrics).toContain("AS client_errors");
+    const selection=performanceSelection(new URLSearchParams());
+    expect(population(selection)).toContain("AND NOT");
+    expect(population({...selection,kind:"background"})).toContain("blob7 IN ('request','rpc')");
+    expect(population({...selection,kind:"interactions"})).toContain("blob9 = 'ready'");
+    const data:PerformanceData={overview:[],spark:[],browser:[],histogram:[],splits:{},sql:[],exemplars:[],waterfall:[],comparison:[],triggers:[],breakdown:[
+      {label:"docket",kind:"request",name:"request",n:1,root_wall:132,attributed:20},
+      {label:"docket",kind:"span",name:"d1.batch",n:1,attributed:468.6,known_wall:468.6,execution:30,execution_n:1},
+    ]};
+    const server=routeBreakdown(data,"docket").filter(r=>!r.name.startsWith("Browser"));
+    expect(server.reduce((sum,r)=>sum+r.value,0)).toBeCloseTo(132);
+    expect(server.find(r=>r.name==="D1 transport / queue")!.value).toBeLessThan(132);
+    const trips=tripAttribution([
+      {tenant:'private',request:'trip',label:'docket',kind:'request',name:'request',n:10,root_wall:1320,attributed:200},
+      {tenant:'private',request:'trip',label:'docket',kind:'span',name:'d1.batch',n:100,attributed:10000,known_wall:10000,execution:1000,execution_n:100},
+    ]);
+    expect(trips.reduce((sum,r)=>sum+Number(r.attributed),0)).toBe(1200);
+    expect(trips.find(r=>r.name==='d1.batch')!.attributed).toBe(1000);
+    expect(JSON.stringify(trips)).not.toContain('private');
+    const bounded=tripAttribution([
+      {tenant:'private',request:'trip',label:'docket',kind:'request',name:'request',n:1,root_wall:132,attributed:20},
+      {tenant:'private',request:'trip',label:'docket',kind:'span',name:'d1.batch',n:1,attributed:468.6},
+    ]);
+    expect(bounded.reduce((sum,r)=>sum+Number(r.attributed),0)).toBeCloseTo(132);
+  });
   it("carries a named repository through app registration, telemetry, releases and Site apps", async () => {
     const w = await world();
     await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, ?)").bind(w.t.id,w.p.id,Date.now()).run();
@@ -92,7 +120,7 @@ describe("sites", () => {
       else if(sql.includes("GROUP BY label, previous")) data=[{label:"/:project",previous:"/",...metric}];
       else if(sql.includes("AS mean")) data=[{request,label:"/:project",kind:"request",version,name:"request",phase:"GET",mean:30,n:100},{request,label:"/:project",kind:"client",version,name:"pane.swap",phase:"fetch",mean:120,n:100},{request,label:"/:project",kind:"client",version,name:"pane.swap",phase:"paint",mean:140,n:100}];
       else if(sql.includes("AS cold")) data=[{request,version,colo:"DFW",auth:"cookie",cold:0,weight:1}];
-      else if(sql.includes("blob6 AS request")) data=[{request,version,colo:"DFW",duration:100,weight:1}];
+      else if(sql.includes("blob6 AS request")&&!sql.includes("double17")) data=[{request,version,colo:"DFW",duration:100,weight:1}];
       else if(sql.includes("SELECT blob15")) data=[{fingerprint:"01234567",code,source:JSON.stringify(location),version,...metric}];
       else if(sql.includes("IF(double1 < 10")) data=[{bucket:1,n:100}];
       else if(sql.includes("double17")) data=[{label:"/:project",name:"request",kind:"request",attributed:1000,execution:0,n:100},{label:"/:project",name:"d1.first",kind:"span",attributed:2000,execution:500,known_wall:2000,execution_n:100,n:100}];
@@ -175,7 +203,7 @@ describe("sites", () => {
       const metric={n:mine?10:110,p50:20,p95:100,p99:200,errors:0,total:mine?200:2200};
       let data:Record<string,string|number>[]=[];
       if(sql.includes("AS schema")) {expect(sql).toContain(`blob5 = '${tenant}'`);data=[{request,kind:"span",name:"d1.first",fingerprint:"abc123",duration:25,span:1,parent:0,started:1000,schema:2}];}
-      else if(sql.includes("ORDER BY duration DESC LIMIT 5")) data=[{tenant,request,duration:200,weight:1}];
+      else if(sql.includes("duration DESC LIMIT 5")) data=[{tenant,request,duration:200,weight:1}];
       else if(sql.includes("AS mean")) data=[{tenant:own,request,kind:"request",label:"/:project/docket",mean:20,n:10},{tenant:foreign,request,kind:"client",label:"/:project/docket",name:"network",phase:"page",mean:100,n:100}];
       else if(sql.includes("AS cold")) data=[{tenant:own,request,colo:"DFW",auth:"cookie",cold:0,weight:1}];
       else if(sql.includes("timestamp AS at")) data=[{tenant:foreign,request,duration:100,weight:1}];

@@ -20,7 +20,7 @@ export const performanceVerbs = Object.entries(descriptions).map(([operation, de
       site: { type: "string", description: "Registered site name; discover with site_list." },
       only_my_org: { type: "boolean", default: false, description: "Only the viewer’s organization; default includes every organization and unscoped traffic on this site." },
       hours: { type: "integer", enum: [1, 24, 168], default: 24 },
-      ...(operation !== "summary" && operation !== "compare" ? { kind: { type: "string", enum: ["routes", "interactions", "verbs", "tools", "spinners"], default: "routes" }, selected: { type: "string", description: "Normalized route or interaction label." } } : {}),
+      ...(operation !== "summary" && operation !== "compare" ? { kind: { type: "string", enum: ["routes", "interactions", "verbs", "tools", "spinners", "background"], default: "routes" }, selected: { type: "string", description: "Normalized route or interaction label." } } : {}),
       ...(operation !== "compare" ? { version: { type: "string" } } : { version: { type: "string" }, previous: { type: "string" } }),
       ...(operation === "exemplar" ? { request: { type: "string", description: "Optional exemplar request ID; defaults to slowest." } } : {}),
     }, required: ["site", ...(operation === "compare" ? ["version", "previous"] : operation === "summary" ? [] : ["selected"])], additionalProperties: false,
@@ -30,7 +30,7 @@ export const performanceVerbs = Object.entries(descriptions).map(([operation, de
     if (operation !== "summary" && operation !== "compare") reqString(i, "selected", { max: 200 });
     if (operation === "compare") { reqString(i, "version", { max: 64 }); reqString(i, "previous", { max: 64 }); }
     if (i.hours !== undefined && (typeof i.hours !== "number" || ![1, 24, 168].includes(i.hours))) throw badRequest("invalid performance range");
-    if (i.kind !== undefined && !["routes", "interactions", "verbs", "tools", "spinners"].includes(String(i.kind))) throw badRequest("invalid performance kind");
+    if (i.kind !== undefined && !["routes", "interactions", "verbs", "tools", "spinners", "background"].includes(String(i.kind))) throw badRequest("invalid performance kind");
     for (const key of ["kind", "selected", "version", "previous", "request"]) if (i[key] !== undefined && typeof i[key] !== "string") throw badRequest(`${key} must be a string`);
     if (i.only_my_org !== undefined && typeof i.only_my_org !== "boolean") throw badRequest("only_my_org must be a boolean");
     const params = new URLSearchParams();

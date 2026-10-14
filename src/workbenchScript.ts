@@ -262,6 +262,7 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
       timing(res.headers.get("server-timing"));
       return res.text().then(function (html) {
         if (mine !== busy || controller.signal.aborted) return;
+        window.pimwellTiming.body(perfOp);
         phase = "render"; changePhase("render");
         var doc = new DOMParser().parseFromString(html, "text/html");
         if (!doc.body || !doc.body.classList.contains("wb")) {

@@ -4,9 +4,9 @@ import type { SiteRow } from "../verbs/sites";
 import { badRequest, notFound } from "../errors";
 
 export type PerfRow = Record<string,string|number>;
-export type PerfKind = "routes"|"verbs"|"tools"|"interactions"|"spinners"|"deploys";
+export type PerfKind = "routes"|"verbs"|"tools"|"interactions"|"spinners"|"background"|"deploys";
 export type PerfSelection = {kind:PerfKind;hours:1|24|168;selected:string;version:string;previous:string;request:string;onlyMyOrg?:boolean};
-const dimensions = {routes:"blob8",verbs:"substring(blob14,6)",tools:"substring(blob14,5)",interactions:"blob14",spinners:"blob14",deploys:"blob8"} as const;
+const dimensions = {routes:"blob8",background:"blob8",verbs:"substring(blob14,6)",tools:"substring(blob14,5)",interactions:"blob14",spinners:"blob14",deploys:"blob8"} as const;
 export function performanceSelection(params:URLSearchParams):PerfSelection {
   const kind=params.get("kind")??"routes", hours=Number(params.get("hours")??24);
   if (!Object.hasOwn(dimensions,kind) || ![1,24,168].includes(hours)) throw badRequest("invalid performance view");
@@ -20,7 +20,8 @@ export const weightedMetrics = `SUM(_sample_interval) AS n,
   quantileWeighted(0.5)(double1, _sample_interval) AS p50,
   quantileWeighted(0.95)(double1, _sample_interval) AS p95,
   quantileWeighted(0.99)(double1, _sample_interval) AS p99,
-  SUM(IF(blob7 = 'request', IF(blob10 IN ('4xx','5xx'), 1.0, 0.0), double5) * _sample_interval) / SUM(_sample_interval) * 100 AS errors,
+  SUM(IF(blob10 = '5xx' OR double5 = 1 OR double14 = 0, 1.0, 0.0) * _sample_interval) / SUM(_sample_interval) * 100 AS errors,
+  SUM(IF(blob10 = '4xx', _sample_interval, 0)) AS client_errors,
   SUM(double1 * _sample_interval) AS total`;
 const quote = (s:string) => `'${s.replace(/\\/g,"\\\\").replace(/'/g,"''")}'`;
 const cache=new Map<string,{until:number;rows:PerfRow[];bytes:number}>();
@@ -68,10 +69,12 @@ export async function performanceScope(ctx:Ctx, site:SiteRow, hours:number, only
 export function population(selection:PerfSelection):string {
   const dim=dimensions[selection.kind];
   if(selection.kind==="spinners") return "blob7 = 'client' AND blob9 = 'spinner'";
-  if(selection.kind==="interactions") return "blob7 = 'client' AND blob9 = 'paint'";
+  if(selection.kind==="interactions") return "blob7 = 'client' AND blob9 = 'ready'";
+  const background="(blob9 IN ('scheduled','tail','alarm','rpc') OR blob8 IN ('scheduled','tail','rpc.ingest') OR blob8 LIKE 'alarm%')";
+  if(selection.kind==="background") return `blob7 IN ('request','rpc') AND ${background}`;
   if(selection.kind==="verbs") return "blob7 = 'span' AND blob14 LIKE 'verb.%' AND double14 = 1";
   if(selection.kind==="tools") return "blob7 = 'span' AND blob14 LIKE 'mcp.%' AND substring(blob14,5) NOT LIKE '%.%' AND double14 = 1";
-  return `blob7 = 'request' AND ${dim} != ''`;
+  return `blob7 = 'request' AND ${dim} != '' AND NOT ${background}`;
 }
 export function pairedBrowser(rows:PerfRow[],version=""):PerfRow[] {
   const roots=new Map(rows.filter(r=>r.kind==="request"&&(!version||r.version===version)).map(r=>[String(r.tenant??"")+":"+String(r.request),r]));
@@ -111,6 +114,30 @@ async function originClientSplits(query:(sql:string)=>Promise<PerfRow[]>,scope:s
     return [name,[...groups].map(([label,rows])=>({label,...sampleMetrics(rows)}))] as const;
   });
 }
+/** Detail and root indexes sample independently. Allocate each trip against its root,
+ * then weight that allocation with the root's weight, never the detail's weight. */
+export function tripAttribution(rows:PerfRow[]):PerfRow[] {
+  if(!rows.some(r=>r.request)) return rows;
+  const trips=new Map<string,PerfRow[]>(), groups=new Map<string,PerfRow>();
+  for(const row of rows) {const key=String(row.tenant)+':'+String(row.request);trips.set(key,[...(trips.get(key)??[]),row]);}
+  for(const points of trips.values()) {
+    const root=points.find(r=>r.kind==='request');
+    if(!root||Number(root.n)<=0) continue;
+    const weight=Number(root.n),wall=Number(root.root_wall)/weight;
+    const total=points.reduce((sum,r)=>sum+Number(r.attributed)/Number(r.n),0);
+    const scale=total>wall&&total>0?wall/total:1;
+    for(const row of points) {
+      const key=JSON.stringify([root.label,row.name,row.kind]);
+      const group=groups.get(key)??{label:root.label!,name:row.name!,kind:row.kind!,n:0,root_wall:0,attributed:0,execution:0,known_wall:0,execution_n:0};
+      for(const field of ['attributed','execution','known_wall']) group[field]=Number(group[field])+Number(row[field]??0)/Number(row.n)*scale*weight;
+      group.n=Number(group.n)+weight;
+      group.root_wall=Number(group.root_wall)+(row.kind==='request'?wall*weight:0);
+      group.execution_n=Number(group.execution_n)+Number(row.execution_n??0)/Number(row.n)*weight;
+      groups.set(key,group);
+    }
+  }
+  return [...groups.values()];
+}
 export type PerformanceData = {overview:PerfRow[];spark:PerfRow[];breakdown:PerfRow[];browser:PerfRow[];histogram:PerfRow[];splits:Record<string,PerfRow[]>;sql:PerfRow[];exemplars:PerfRow[];waterfall:PerfRow[];comparison:PerfRow[];triggers:PerfRow[]};
 export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, detailOnly=false):Promise<PerformanceData> {
   const scope=await performanceScope(ctx,site,s.hours,s.onlyMyOrg);
@@ -124,11 +151,15 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   const [overview,spark,breakdown,browser,comparison]=await Promise.all([
     query(`SELECT ${dim} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${filter} GROUP BY label ORDER BY total DESC LIMIT 200`),
     query(`SELECT ${dim} AS label, intDiv(toUInt32(timestamp), ${bucket}) AS bucket, quantileWeighted(0.5)(double1, _sample_interval) AS p50, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${filter} GROUP BY label, bucket ORDER BY label, bucket LIMIT 3000`),
-    s.kind==="routes" ? query(`SELECT blob8 AS label, blob14 AS name, blob7 AS kind, SUM(double17 * _sample_interval) AS attributed, SUM(IF(double19 > 0, double19, 0.0) * _sample_interval) AS execution, SUM(IF(double19 >= 0, double17, 0.0) * _sample_interval) AS known_wall, SUM(IF(double19 >= 0, _sample_interval, 0)) AS execution_n, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND double20 = 2 AND double18 = 0 AND blob7 IN ('request','span') AND blob14 != 'd1.statement'${s.version?` AND blob3 = ${quote(s.version)}`:""} GROUP BY label, name, kind LIMIT 2000`) : Promise.resolve([]),
+    s.kind==="routes" ? query(`SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob14 AS name, blob7 AS kind, SUM(double1 * _sample_interval) AS root_wall, SUM(double17 * _sample_interval) AS attributed, SUM(IF(double19 > 0, double19, 0.0) * _sample_interval) AS execution, SUM(IF(double19 >= 0, double17, 0.0) * _sample_interval) AS known_wall, SUM(IF(double19 >= 0, _sample_interval, 0)) AS execution_n, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND double20 = 2 AND double18 = 0 AND blob7 IN ('request','span') AND blob14 != 'd1.statement'${s.version?` AND blob3 = ${quote(s.version)}`:""} GROUP BY tenant, request, label, name, kind LIMIT 5000`) : Promise.resolve([]),
     s.kind==="routes" ? query(`SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob7 AS kind, blob3 AS version, blob14 AS name, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND (blob7 = 'request' OR (blob7 = 'client' AND ((blob9 = 'page' AND blob14 IN ('network','render')) OR blob9 IN ('fetch','paint')))) GROUP BY tenant, request, label, kind, version, name, phase LIMIT 5000`) : Promise.resolve([]),
     s.kind==="deploys" && s.version && s.previous ? query(`SELECT blob8 AS label, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'request' AND blob3 IN (${quote(s.version)},${quote(s.previous)}) GROUP BY label, version ORDER BY label LIMIT 400`) : Promise.resolve([]),
   ]);
-  const result={...empty,overview,spark,breakdown,browser:pairedBrowser(browser,s.version),comparison};
+  const result={...empty,overview,spark,breakdown:tripAttribution(breakdown),browser:pairedBrowser(browser,s.version),comparison};
+  if(s.kind==="interactions") {
+    const phases=await query(`SELECT blob14 AS label, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'client' AND blob9 IN ('fetch','render','paint')${versionFilter} GROUP BY label, phase LIMIT 600`);
+    for(const row of overview) for(const phase of ['fetch','render','paint']) { const p=phases.find(p=>p.label===row.label&&p.phase===phase); if(p) row[phase]=p.mean!; }
+  }
   if(!s.selected || !(s.kind==="deploys"?comparison:overview).some(r=>r.label===s.selected)) return result;
   const selected=`${filter} AND ${dim} = ${quote(s.selected)}`;
   const histogram=[10,25,50,100,250,500,1000,2500,5000].reduceRight((expr,bound,index)=>`IF(double1 < ${bound}, ${index}, ${expr})`,"9");
@@ -136,13 +167,13 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   const [hist,splitRows,exemplars,triggers]=await Promise.all([
     query(`SELECT ${histogram} AS bucket, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${selected} GROUP BY bucket ORDER BY bucket`),
     s.kind==="interactions"||s.kind==="spinners" ? originClientSplits(query,scope.where,selected) : Promise.all(Object.entries(splits).map(async ([name,column])=>[name,await query(`SELECT ${column} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label ORDER BY n * p50 DESC LIMIT 100`)] as const)),
-    query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY duration DESC LIMIT 5`),
+    query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY double20 DESC, IF(blob19 != '' OR blob20 != '', 1, 0) DESC, duration DESC LIMIT 5`),
     s.kind==="spinners"?query(`SELECT blob8 AS label, blob19 AS previous, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label, previous ORDER BY total DESC LIMIT 20`):Promise.resolve([]),
   ]);
   const ids=exemplars.map(r=>String(r.request)).filter(id=>/^[0-9a-f-]{36}$/.test(id));
   const exemplarScope=exemplars.filter(r=>ids.includes(String(r.request))).map(r=>`(blob6 = ${quote(String(r.request))}${r.tenant!==undefined?` AND blob5 = ${quote(String(r.tenant))}`:""})`).join(" OR ")||"blob6 = ''";
   const statementScope=s.kind==="interactions"||s.kind==="spinners" ? `(${exemplarScope})` : `${s.kind==="verbs"?"blob12":s.kind==="tools"?"blob13":dim} = ${quote(s.selected)}`;
-  result.sql=await query(`SELECT blob15 AS fingerprint, blob20 AS code, blob19 AS source, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'span' AND double14 = 1 AND blob15 != '' AND ${statementScope}${s.version&&s.kind!=="interactions"&&s.kind!=="spinners"?` AND blob3 = ${quote(s.version)}`:""} GROUP BY fingerprint, code, source, version ORDER BY p95 DESC LIMIT 20`);
+  result.sql=await query(`SELECT blob15 AS fingerprint, blob20 AS code, blob19 AS source, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'span' AND double14 = 1 AND blob15 != '' AND ${statementScope}${s.version&&s.kind!=="interactions"&&s.kind!=="spinners"?` AND blob3 = ${quote(s.version)}`:""} GROUP BY fingerprint, code, source, version ORDER BY IF(code != '' OR source != '', 1, 0) DESC, p95 DESC LIMIT 20`);
   result.histogram=hist;result.splits=Object.fromEntries(splitRows);result.exemplars=exemplars.map(({tenant: _tenant,...row})=>row);result.triggers=triggers;
   const request=s.request ? ids.includes(s.request)?s.request:"" : ids[0]??"";
   const exemplarTenant=exemplars.find(r=>r.request===request)?.tenant;
