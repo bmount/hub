@@ -1,6 +1,6 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { ArtifactsRest } from "../src/code/artifactsRest";
+import { ArtifactsRest, validationRepository } from "../src/code/artifactsRest";
 import { repoOwnership } from "../src/code/artifactPush";
 import { buildContext } from "../src/auth/context";
 import { tenantDelete } from "../src/verbs/tenant";
@@ -92,11 +92,16 @@ describe("tenant.delete", () => {
     const bucket = env.GIT_PUSH_STAGING!;
     await bucket.put(`project-files/${w.old.id}/x/file`, "old");
     await bucket.put(`project-files/${w.keep.id}/x/file`, "keep");
+    const replay = `git-push/${w.old.id}/${repo.id}/cache-test`;
+    await bucket.put(replay, "pack");
+    await env.HUB_DB.prepare("INSERT INTO git_push (id, tenant_id, project_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, ?, ?, 'oldorg', 'repo', ?, ?, '[]', 'complete', ?)").bind(crypto.randomUUID(), w.old.id, repo.id, await validationRepository("repo"), replay, Date.now()).run();
+    const temporary = vi.spyOn(ArtifactsRest.prototype, "deleteTemporary").mockRejectedValue(new Error("shared cache is not temporary"));
     const args = tenantDelete.parse({ slug: "oldorg", confirm: "oldorg" });
     await expect(tenantDelete.run(ctx, args)).rejects.toThrow("storage outage");
     expect((await apiPost(HOST, "tenant.unarchive", { slug: "oldorg" }, w.h)).status).toBe(409);
     await tenantDelete.run(ctx, args);
     expect(del).toHaveBeenLastCalledWith("oldorg", "repo", repoOwnership(w.old.id, repo.id));
+    expect(temporary).not.toHaveBeenCalled();expect(await bucket.get(replay)).toBeNull();
     expect(await bucket.get(`project-files/${w.old.id}/x/file`)).toBeNull();
     expect(await bucket.get(`project-files/${w.keep.id}/x/file`)).not.toBeNull();
     expect(await count("SELECT COUNT(*) AS n FROM git_repository WHERE tenant_id = ?", w.old.id)).toBe(0);

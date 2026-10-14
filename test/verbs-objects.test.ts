@@ -10,7 +10,7 @@ import type { Conversation } from "../src/chat/conversationDO";
 import type { ChatUpdate } from "../src/chat/updates";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
 import { projectDelete, projectCreate } from "../src/verbs/project";
-import { ArtifactsRest } from "../src/code/artifactsRest";
+import { ArtifactsRest, validationRepository } from "../src/code/artifactsRest";
 import { vi } from "vitest";
 import { PROJECT_DELETE_SCOPED_TABLES, PROJECT_DELETE_OTHER_TABLES } from "../src/db/projectDelete";
 import { cleanupFileObjects, FILE_ORPHAN_GRACE_MS, FILE_CLEANUP_CURSOR, FILE_CLEANUP_LIMIT } from "../src/db/fileCleanup";
@@ -427,6 +427,10 @@ describe("project deletion from the web", () => {
     for (const name of ["api", "web"]) await env.HUB_DB.prepare("INSERT INTO repository (tenant_id, project_id, name, storage_name, is_default, created_at) VALUES (?, ?, ?, ?, 0, ?)").bind(w.tenant.id, made.project.id, name, `storage-${name}`, Date.now()).run();
     await env.HUB_DB.prepare("INSERT INTO repository_sync (tenant_id, project_id, repo, cursor) VALUES (?, ?, 'api', 'cursor')").bind(w.tenant.id, made.project.id).run();
     ctx.env = {...env, ARTIFACTS_ACCOUNT_ID: "0".repeat(32), ARTIFACTS_API_TOKEN: "synthetic-test-token"};
+    const replay = `git-push/${w.tenant.id}/${made.project.id}/cache-test`;
+    await env.GIT_PUSH_STAGING!.put(replay, "pack");
+    await env.HUB_DB.prepare("INSERT INTO git_push (id, tenant_id, project_id, namespace, repo, shadow, replay_key, updates_json, state, created_at) VALUES (?, ?, ?, 'acme', 'storage-api', ?, ?, '[]', 'complete', ?)").bind(crypto.randomUUID(), w.tenant.id, made.project.id, await validationRepository("storage-api"), replay, Date.now()).run();
+    const temporary = vi.spyOn(ArtifactsRest.prototype, "deleteTemporary").mockRejectedValue(new Error("shared cache is not temporary"));
     const deletion = vi.spyOn(ArtifactsRest.prototype, "deleteProject").mockRejectedValueOnce(new Error("storage outage")).mockResolvedValue(undefined);
     try {
       await expect(projectDelete.run(ctx, projectDelete.parse({project: "tmp-repo"}))).rejects.toThrow("storage outage");
@@ -436,6 +440,7 @@ describe("project deletion from the web", () => {
       expect(deletion).toHaveBeenCalledTimes(1);
       const result = await projectDelete.run(ctx, projectDelete.parse({project: "tmp-repo"}));
       expect(result.counts.repositories).toBe(3);
+      expect(temporary).not.toHaveBeenCalled();expect(await env.GIT_PUSH_STAGING!.get(replay)).toBeNull();
       expect(deletion).toHaveBeenCalledWith("acme", "storage-api", `Pimwell tenant ${w.tenant.id} project ${made.project.id}`);
       expect(deletion).toHaveBeenCalledWith("acme", "storage-web", `Pimwell tenant ${w.tenant.id} project ${made.project.id}`);
       expect(await w.count("repository", "project_id", made.project.id)).toBe(0);

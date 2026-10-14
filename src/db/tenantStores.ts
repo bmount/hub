@@ -1,7 +1,7 @@
 import type { Ctx } from "../auth/context";
 import type { Tenant } from "./types";
 import { conflict, HubError } from "../errors";
-import { ArtifactsRest, artifactNamespace } from "../code/artifactsRest";
+import { ArtifactsRest, artifactNamespace, validationRepository } from "../code/artifactsRest";
 import { repoOwnership } from "../code/artifactPush";
 import { privateChats } from "./privateChat";
 import { conversationStub, inboxStub } from "../chat/stubs";
@@ -14,13 +14,13 @@ export async function purgeTenantStores(ctx: Ctx, tenant: Tenant): Promise<void>
   if (ctx.env.ARDI_REPO_CREATE === "on" && repos.some(r => !r.mapped)) throw conflict("repository is not mapped to Artifacts; migrate it before deleting the organization");
   const ns = artifactNamespace(tenant.slug);
   const api = () => new ArtifactsRest(ctx.env);
-  const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FtenantStores.ts:17:25:purgeTenantStores:c2773013*/ SELECT id, project_id, namespace, shadow, replay_key FROM git_push WHERE tenant_id = ?")
-    .bind(tid).all<{ id: string; project_id: string; namespace: string; shadow: string; replay_key: string }>()).results;
+  const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FtenantStores.ts:17:25:purgeTenantStores:1f806383*/ SELECT id, project_id, namespace, repo, shadow, replay_key FROM git_push WHERE tenant_id = ?")
+    .bind(tid).all<{ id: string; project_id: string; namespace: string; repo: string; shadow: string; replay_key: string }>()).results;
   for (const push of pushes) {
     if (push.namespace !== ns || (push.replay_key && !push.replay_key.startsWith(`git-push/${tid}/${push.project_id}/`))) throw conflict("repository staging ownership mismatch");
     if (push.replay_key) {
       if (!bucket) throw new HubError(503, "unavailable", "git staging storage unavailable");
-      try { await api().deleteTemporary(ns, push.shadow, push.id); }
+      try { if (push.shadow !== await validationRepository(push.repo)) await api().deleteTemporary(ns, push.shadow, push.id); }
       catch (e) { if (!(e instanceof HubError) || e.status !== 404) throw e; }
       await bucket.delete(push.replay_key);
     }

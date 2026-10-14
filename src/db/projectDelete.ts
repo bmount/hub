@@ -2,7 +2,7 @@ import type { Ctx } from "../auth/context";
 import type { Project } from "./types";
 import { conflict, HubError } from "../errors";
 import { conversationStub, inboxStub } from "../chat/stubs";
-import { ArtifactsRest, artifactNamespace } from "../code/artifactsRest";
+import { ArtifactsRest, artifactNamespace, validationRepository } from "../code/artifactsRest";
 import { repoOwnership } from "../code/artifactPush";
 import { ulid } from "../ids";
 
@@ -155,14 +155,14 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
     const repositories = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:155:33:deleteProject:cf63d832*/ SELECT name, storage_name FROM repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id).all<{name: string; storage_name: string}>()).results;
     if (mapped || repositories.length) {
       const api = new ArtifactsRest(ctx.env), ns = artifactNamespace(ctx.tenant!.slug);
-      const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:158:29:deleteProject:7181cbc4*/ SELECT id, namespace, shadow, replay_key FROM git_push WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id)
-        .all<{ id: string; namespace: string; shadow: string; replay_key: string }>()).results;
+      const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:158:29:deleteProject:66af9d38*/ SELECT id, namespace, repo, shadow, replay_key FROM git_push WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id)
+        .all<{ id: string; namespace: string; repo: string; shadow: string; replay_key: string }>()).results;
       for (const push of pushes) {
         if (push.namespace !== ns) throw conflict("repository staging ownership mismatch");
         if (push.replay_key) {
           if (!bucket) throw new HubError(503, "unavailable", "git staging storage unavailable");
           if (!push.replay_key.startsWith(`git-push/${tid}/${project.id}/`)) throw conflict("repository replay ownership mismatch");
-          try { await api.deleteTemporary(ns, push.shadow, push.id); }
+          try { if (push.shadow !== await validationRepository(push.repo)) await api.deleteTemporary(ns, push.shadow, push.id); }
           catch (e) { if (!(e instanceof HubError) || e.status !== 404) throw e; }
           await bucket.delete(push.replay_key);
         }
