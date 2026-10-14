@@ -59,8 +59,8 @@ function replaceV2Head(bytes: Uint8Array, branch: string, target: string): Uint8
     if (!length) { out.push(bytes.subarray(offset, offset + 4));offset += 4;continue; }
     if (offset + length > bytes.length) throw new Error("truncated advertisement");
     const text = pktDecode.decode(bytes.subarray(offset + 4, offset + length));
-    if (/^[0-9a-f]{40} HEAD(?: |\n)/.test(text)) {
-      const attrs = text.replace(/^[0-9a-f]{40} HEAD/, "").replace(/symref-target:[^ \n]+/, `symref-target:refs/heads/${branch}`);
+    if (/^(?:[0-9a-f]{40}|unborn) HEAD(?: |\n)/.test(text)) {
+      const attrs = text.replace(/^(?:[0-9a-f]{40}|unborn) HEAD/, "").replace(/symref-target:[^ \n]+/, `symref-target:refs/heads/${branch}`);
       out.push(packet(`${target} HEAD${attrs}`));sawHead = true;
     } else out.push(bytes.subarray(offset, offset + length));
     offset += length;
@@ -76,9 +76,9 @@ function advertisedHead(bytes: Uint8Array, branch?: string): { head: boolean; ta
     if (!length) { offset += 4;continue; }
     if (offset + length > bytes.length) throw new Error("truncated advertisement");
     const line = pktDecode.decode(bytes.subarray(offset + 4, offset + length)).split("\0", 1)[0]!;
-    const ref = /^([0-9a-f]{40}) ([^ \n]+)(?: |\n|$)/.exec(line);
+    const ref = /^([0-9a-f]{40}|unborn) ([^ \n]+)(?: |\n|$)/.exec(line);
     if (ref?.[2] === "HEAD") head = true;
-    if (branch && ref?.[2] === `refs/heads/${branch}`) target = ref[1];
+    if (branch && ref?.[2] === `refs/heads/${branch}` && ref[1] !== "unborn") target = ref[1];
     offset += length;
   }
   return { head, target };

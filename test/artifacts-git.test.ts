@@ -238,8 +238,8 @@ describe("Artifacts REST transport", () => {
     expect(await response.text()).toContain(`${OID} HEAD symref-target:refs/heads/release`);
     expect(fake.mock.calls.filter(([url]) => String(url).includes("/log?"))).toHaveLength(1);
   });
-  it("normalizes compressed v2 ls-refs HEAD without decoding pack responses", async () => {
-    const token = issued(), stale = "1".repeat(40), main = "2".repeat(40), plain = join(packet("command=ls-refs\n"), flush, packet("symrefs\n"), flush), compressed = await gzip(plain);
+  it.each(["1".repeat(40), "unborn"])("normalizes compressed v2 ls-refs HEAD (%s) without decoding pack responses", async stale => {
+    const token = issued(), main = "2".repeat(40), plain = join(packet("command=ls-refs\n"), flush, packet("symrefs\n"), flush), compressed = await gzip(plain);
     let sawUpstreamBody = false;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       const text = String(url);
@@ -256,6 +256,18 @@ describe("Artifacts REST transport", () => {
     const response = await configured().git("acme", "site", "git-upload-pack", new Request("https://acme.pimwell.test/site.git/git-upload-pack", { method: "POST", headers: { "content-encoding": "gzip" } }), body, false);
     expect(sawUpstreamBody).toBe(true);
     expect(new TextDecoder().decode(await response.arrayBuffer())).toContain(`${main} HEAD symref-target:refs/heads/main\n`);
+  });
+  it("preserves unborn v2 HEAD when the configured branch has no commits", async () => {
+    const bytes = join(packet("unborn HEAD symref-target:refs/heads/main\n"), flush);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async url => {
+      const text = String(url);
+      if (text.endsWith("/tokens")) return Response.json({ success: true, result: issued() });
+      if (text.endsWith("/repos/site")) return Response.json({ success: true, result: { name: "site", remote: configured().remote("acme", "site"), default_branch: "main" } });
+      if (text.includes("/log?")) return Response.json({ success: true, result: [] });
+      return new Response(bytes);
+    });
+    const response = await configured().git("acme", "site", "git-upload-pack", new Request("https://acme.pimwell.test/site.git/git-upload-pack", { method: "POST" }), stream(join(packet("command=ls-refs\n"), flush)), false);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
   });
   it("deletes only the exact owned project repository and handles a missing repository on retry", async () => {
     const api = configured(), ownership = "Pimwell tenant tid project pid";
