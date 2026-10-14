@@ -291,7 +291,9 @@ export class Inbox extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, timedEnv(env));
     this.#storage = timedStorage(ctx.storage, "Inbox");
-    for (const s of SCHEMA) this.#storage.sql.exec(s);
+    this.#storage.transactionSync(() => {
+      for (const s of SCHEMA) this.#storage.sql.exec(s);
+    });
   }
 
   #q<T extends Record<string, SqlStorageValue>>(query: string, ...binds: SqlStorageValue[]): T[] {

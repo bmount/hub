@@ -80,11 +80,14 @@ export class Conversation extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, timedEnv(env));
     this.#storage = timedStorage(ctx.storage, "Conversation");
-    for (const s of SCHEMA) this.#storage.sql.exec(s);
-    for (const u of UPGRADES) {
-      const has = this.#storage.sql.exec<{ name: string }>(`SELECT name FROM pragma_table_info('${u.table}')`).toArray().some((c) => c.name === u.column);
-      if (!has) this.#storage.sql.exec(u.ddl);
-    }
+    // One durable commit on a cold object, not one for each schema statement.
+    this.#storage.transactionSync(() => {
+      for (const s of SCHEMA) this.#storage.sql.exec(s);
+      for (const u of UPGRADES) {
+        const has = this.#storage.sql.exec<{ name: string }>(`SELECT name FROM pragma_table_info('${u.table}')`).toArray().some((c) => c.name === u.column);
+        if (!has) this.#storage.sql.exec(u.ddl);
+      }
+    });
   }
 
   #q<T extends Record<string, SqlStorageValue>>(query: string, ...binds: SqlStorageValue[]): T[] {
