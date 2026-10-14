@@ -94,10 +94,11 @@ describe("latency budget situations", () => {
     const query = async (sql: string) => {
       if (sql.includes("AS duration")) {
         expect(sql).toContain("blob4 = 'SIN'");
+        expect(sql).toContain("ORDER BY at DESC LIMIT 2");
         return durations.map((duration, i) => ({duration, at: times[i]!}));
       }
       if (sql.includes("blob11 = 'cookie'")) return [{route:"/docket",p95:500,samples}];
-      if (sql.includes("concat(blob8")) return [{route:"git-ls-remote @SIN",p95:1200,samples:2}];
+      if (sql.includes("blob4 AS colo")) return [{route:"git-ls-remote",colo:"SIN",p95:1200,samples:2}];
       return [];
     };
     const count = () => env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation WHERE outcome IS NULL").first("n");
@@ -115,6 +116,16 @@ describe("latency budget situations", () => {
     samples = 4; durations = [1200,900];
     await checkPerformance(env,f.target,f.current,null,f.now+4,query);
     expect(await count()).toBe(0);
+  });
+  it("never compares synthetic regression samples across vantage colos", async () => {
+    const f = await fixture();
+    const query = async (sql: string) => {
+      if (!sql.includes("blob4 AS colo")) return [];
+      expect(sql).toContain("GROUP BY route, colo");
+      return [{route:"git-ls-remote",colo:sql.includes(f.current.version) ? "SIN" : "SJC",p95:sql.includes(f.current.version) ? 2000 : 500,samples:200}];
+    };
+    await checkPerformance(env,f.target,f.current,f.previous,f.now,query);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation").first("n")).toBe(0);
   });
   it("does not call analytics before 30 minutes or within an hour of a successful check", async () => {
     const f = await fixture();

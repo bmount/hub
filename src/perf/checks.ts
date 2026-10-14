@@ -19,12 +19,13 @@ export async function checkPerformance(env: Env, target: CheckTarget, current: R
   const populations = [...BUDGETS, {id: "route", ms: Infinity, where: "blob7 = 'request' AND blob9 IN ('GET','POST','PUT','PATCH','DELETE','HEAD','OPTIONS')"}];
   for (const budget of populations) {
     const synthetic = budget.id === "git";
-    const routeColumn = synthetic ? "concat(blob8, ' @', blob4)" : "blob8";
-    const rows = await query(`SELECT ${routeColumn} AS route, ${metrics} FROM pimwell_perf WHERE ${scope} AND ${range} AND blob3 = ${quote(current.version)} AND (${budget.where}) GROUP BY route LIMIT 1000`);
-    const baseline = previous ? await query(`SELECT ${routeColumn} AS route, ${metrics} FROM pimwell_perf WHERE ${scope} AND timestamp >= toDateTime(${Math.floor(Math.max(previous.seen_at,current.seen_at-3_600_000)/1000)}) AND timestamp < toDateTime(${Math.floor(current.seen_at/1000)}) AND blob3 = ${quote(previous.version)} AND (${budget.where}) GROUP BY route LIMIT 1000`) : [];
+    const vantage = synthetic ? ", blob4 AS colo" : "";
+    const grouping = synthetic ? "route, colo" : "route";
+    const rows = await query(`SELECT blob8 AS route${vantage}, ${metrics} FROM pimwell_perf WHERE ${scope} AND ${range} AND blob3 = ${quote(current.version)} AND (${budget.where}) GROUP BY ${grouping} LIMIT 1000`);
+    const baseline = previous ? await query(`SELECT blob8 AS route${vantage}, ${metrics} FROM pimwell_perf WHERE ${scope} AND timestamp >= toDateTime(${Math.floor(Math.max(previous.seen_at,current.seen_at-3_600_000)/1000)}) AND timestamp < toDateTime(${Math.floor(current.seen_at/1000)}) AND blob3 = ${quote(previous.version)} AND (${budget.where}) GROUP BY ${grouping} LIMIT 1000`) : [];
     if (budget.id !== "route" && rows.length) { measured++; if (rows.every(r => Number(r.p95) <= budget.ms)) met++; }
     for (const row of rows) {
-      const route = String(row.route), old = baseline.find(r => r.route === row.route);
+      const route = synthetic ? `${row.route} @${row.colo}` : String(row.route), old = baseline.find(r => r.route === row.route && (!synthetic || r.colo === row.colo));
       const regressionKnown = !!old && Number(old.samples) >= MIN_REGRESSION_SAMPLES && Number(row.samples) >= MIN_REGRESSION_SAMPLES && Number(old.p95) > 0;
       for (const kind of ["budget", "regression"] as const) {
         if (budget.id === "route" && kind === "budget") continue;
@@ -33,18 +34,18 @@ export async function checkPerformance(env: Env, target: CheckTarget, current: R
         let failed = kind === "budget" ? Number(row.samples) >= MIN_BUDGET_SAMPLES && Number(row.p95) > budget.ms : Number(row.p95) >= Number(old!.p95) * REGRESSION_RATIO;
         if (synthetic && kind === "budget") {
           const colo = route.slice(route.lastIndexOf(" @") + 2);
-          const runs = await query(`SELECT double1 AS duration, double16 AS at FROM pimwell_perf WHERE ${scope} AND ${range} AND blob3 = ${quote(current.version)} AND (${budget.where}) AND blob4 = ${quote(colo)} ORDER BY timestamp DESC LIMIT 2`);
+          const runs = await query(`SELECT double1 AS duration, double16 AS at FROM pimwell_perf WHERE ${scope} AND ${range} AND blob3 = ${quote(current.version)} AND (${budget.where}) AND blob4 = ${quote(colo)} ORDER BY at DESC LIMIT 2`);
           // Distinct runs, not repeated checks of one observation.
           failed = runs.length === 2 && Number(runs[0]!.at) > Number(runs[1]!.at) && runs.every(r => Number(r.duration) > budget.ms);
         }
         const key = [target.site_id, target.script_name, kind, budget.id, route];
         const alert = await db.prepare("/*perf-site:src%2Fperf%2Fchecks.ts:33:29:checkPerformance:131189a6*/ SELECT a.situation_id, s.outcome FROM perf_alert a JOIN situation s ON s.id = a.situation_id WHERE a.site_id = ? AND a.script_name = ? AND a.kind = ? AND a.budget = ? AND a.route = ?").bind(...key).first<{situation_id:string;outcome:string|null}>();
         if (!failed) {
-          if (alert && !alert.outcome) await db.prepare("/*perf-site:src%2Fperf%2Fchecks.ts:35:46:checkPerformance:033b2589*/ UPDATE situation SET outcome = 'Performance recovered in the latest measured window.', outcome_at = ? WHERE id = ? AND tenant_id = ?").bind(now,alert.situation_id,target.tenant_id).run();
+          if (alert && !alert.outcome) await db.prepare("/*perf-site:src%2Fperf%2Fchecks.ts:35:46:checkPerformance:033b2589*/ UPDATE situation SET outcome = 'No longer qualifies under the latest measured performance evidence (budget recovery, insufficient retained samples, or unconfirmed synthetic breach).', outcome_at = ? WHERE id = ? AND tenant_id = ?").bind(now,alert.situation_id,target.tenant_id).run();
           continue;
         }
         if (alert && !alert.outcome) continue;
-        const spans = previous ? await query(`SELECT blob14 AS span, blob3 AS version, ${metrics} FROM pimwell_perf WHERE ${scope} AND timestamp >= toDateTime(${Math.floor(Math.max(previous.seen_at,current.seen_at-3_600_000)/1000)}) AND timestamp < toDateTime(${Math.floor(now/1000)}) AND blob8 = ${quote(route)} AND blob7 = 'span' AND blob3 IN (${quote(current.version)},${quote(previous.version)}) GROUP BY span, version LIMIT 1000`) : [];
+        const spans = previous ? await query(`SELECT blob14 AS span, blob3 AS version, ${metrics} FROM pimwell_perf WHERE ${scope} AND timestamp >= toDateTime(${Math.floor(Math.max(previous.seen_at,current.seen_at-3_600_000)/1000)}) AND timestamp < toDateTime(${Math.floor(now/1000)}) AND blob8 = ${quote(String(row.route))}${synthetic ? ` AND blob4 = ${quote(String(row.colo))}` : ''} AND blob7 = 'span' AND blob3 IN (${quote(current.version)},${quote(previous.version)}) GROUP BY span, version LIMIT 1000`) : [];
         const growth = spans.filter(s => s.version === current.version && spans.some(p => p.span === s.span && p.version === previous?.version)).map(s => ({name:String(s.span),delta:Number(s.p95)-Number(spans.find(p => p.span === s.span && p.version === previous?.version)?.p95 ?? 0)})).sort((a,b) => b.delta-a.delta)[0];
         const span = growth?.name ?? null, id = ulid(now), thread = ulid(now);
         const actor = await db.prepare("/*perf-site:src%2Fperf%2Fchecks.ts:42:29:checkPerformance:ed4a7206*/ SELECT id FROM identity WHERE id = 'perf-synthetic-member'").first<{id:string}>();
