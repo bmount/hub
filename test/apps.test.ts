@@ -154,7 +154,7 @@ describe("sites", () => {
         expect(sql).toContain('GROUP BY label');expect(sql).not.toContain('LIMIT 200');
         return Response.json({data:['/:project/docket','/mcp'].map(label=>({label,n:1,weighted_root_wall:101,weighted_d1_wall:23,weighted_d1_n:1}))});
       }
-      if(sql.includes('AS mean')||sql.includes('intDiv')||sql.includes('AS schema')||sql.includes('SELECT blob15')||sql.includes('blob6 AS request')||sql.includes('IF(double1 < 10')||sql.includes('blob2 AS label')||sql.includes('blob3 AS label')||sql.includes('blob4 AS label')||sql.includes('blob11 AS label')) return Response.json({data:[]});
+      if(sql.includes('AS mean')||sql.includes('intDiv')||sql.includes('AS schema')||sql.includes('SELECT blob15')||sql.includes('blob6 AS request')||sql.includes('blob2 AS label')||sql.includes('blob3 AS label')||sql.includes('blob4 AS label')||sql.includes('blob11 AS label')) return Response.json({data:[]});
       return Response.json({data:[{label:'/:project/docket',n:100,p50:101},{label:'/mcp',n:13,p50:101}]});
     });
     try {
@@ -201,24 +201,29 @@ describe("sites", () => {
     await w.call(w.pat.token,"deploy.record",{project:"pricebench",worker:"pricebench",commit:"a".repeat(40),version,deployment:"44444444-4444-4444-8444-444444444444"});
     const measured={...env,ARTIFACTS_ACCOUNT_ID:"a".repeat(32),PERF_ANALYTICS_TOKEN:"runtime-read-only",PERF_TENANT_KEY:"test-tenant-hash-key"};
     const code=Object.keys(SQL_CATALOG)[0]!,location=SQL_CATALOG[code]!.sites[0]!;
+    let releaseSplit!:()=>void, waterfallStarted!:()=>void;
+    const splitGate=new Promise<void>(resolve=>{releaseSplit=resolve;});
+    const waterfallReady=new Promise<void>(resolve=>{waterfallStarted=resolve;});
+    let gateSplit=true;
     const sqls:string[]=[];
     clearPerformanceCache();
     const mock=vi.spyOn(globalThis,"fetch").mockImplementation(async (input,init)=>{
       expect(String(input)).toBe(`https://api.cloudflare.com/client/v4/accounts/${"a".repeat(32)}/analytics_engine/sql`);
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer runtime-read-only");
       const sql=String(init?.body);sqls.push(sql);
+      if(gateSplit&&sql.includes("blob4 AS label")) await splitGate;
+      if(sql.includes("AS schema")) waterfallStarted();
       expect(sql).toContain("_sample_interval");expect(sql).not.toContain("COUNT(*)");
       // index1 changed at #230; blob filters must span both sampling schemes.
       expect(sql).not.toContain("index1");
       let data:Record<string,string|number>[];
-      const metric={n:"100",p50:25,p95:100,p99:250,errors:2,total:4000};
+      const metric={n:"100",p50:25,p95:100,p99:250,errors:2,total:4000,hist1:100};
       if(sql.includes("AS schema")) data=[{request,kind:"request",name:"request",phase:"GET",source:JSON.stringify(location),code:"",fingerprint:"",version,worker:"pricebench",duration:100,span:0,parent:0,complete:1,offset:0,started:1000,schema:2,weight:1},{request,kind:"client",name:"pane.swap",phase:"fetch",source:"/:project",code:"",fingerprint:"",version,worker:"pricebench",duration:120,span:0,parent:0,complete:1,offset:0,started:0,schema:0,weight:1}];
       else if(sql.includes("GROUP BY label, previous")) data=[{label:"/:project",previous:"/",...metric}];
       else if(sql.includes("AS mean")) data=[{request,label:"/:project",kind:"request",version,name:"request",phase:"GET",mean:30,n:100},{request,label:"/:project",kind:"client",version,name:"pane.swap",phase:"fetch",mean:120,n:100},{request,label:"/:project",kind:"client",version,name:"pane.swap",phase:"paint",mean:140,n:100}];
       else if(sql.includes("AS cold")) data=[{request,version,colo:"DFW",auth:"cookie",cold:0,weight:1}];
       else if(sql.includes("blob6 AS request")&&!sql.includes("double17")) data=[{request,version,colo:"DFW",duration:100,weight:1}];
       else if(sql.includes("SELECT blob15")) data=[{fingerprint:"01234567",code,source:JSON.stringify(location),version,...metric}];
-      else if(sql.includes("IF(double1 < 10")) data=[{bucket:1,n:100}];
       else if(sql.includes("double17")) data=[{label:"/:project",n:100,weighted_root_wall:3000,weighted_d1_wall:2000,weighted_d1_execution:500,weighted_d1_known_wall:2000,weighted_d1_execution_n:100,weighted_d1_n:100}];
       else if(sql.includes("intDiv")) data=[{label:"/:project",bucket:1,p50:20,n:50},{label:"/:project",bucket:2,p50:25,n:50}];
       else if(sql.includes("GROUP BY label, version")) data=[{label:"/:project",version,...metric},{label:"/:project",version:previous,...metric,p95:80}];
@@ -232,10 +237,19 @@ describe("sites", () => {
     try {
       const base=`https://${HOST}/apps?project=pricebench&site=prices.example.com&view=performance`;
       const get=(suffix="",token=w.pat.token,host=HOST)=>appsPage(new Request(base.replace(HOST,host)+suffix,{headers:cookieHeaders(token,host)}),measured);
-      const selected=await get("&selected=%2F%3Aproject");expect(selected.status).toBe(200);
+      const pending=get("&selected=%2F%3Aproject");
+      try {
+        await Promise.race([waterfallReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error("waterfall waited for unrelated split")),2000))]);
+      } finally {gateSplit=false;releaseSplit();}
+      const selected=await pending;expect(selected.status).toBe(200);
       const html=(await selected.text()).replaceAll('\u00a0',' ');
       for(const label of ["Performance","Where the time goes","Latency histogram","Cold / warm isolates","Slowest D1 statements","Request waterfall","Version comparison","Browser network residual","D1 transport / queue"]) expect(html).toContain(label);
       expect(html).toContain("100 ms");expect(html).toContain("pricebench/files?ref="+"a".repeat(40));expect(html).toContain('id="inspector"');
+      expect(sqls.some(sql=>sql.includes("GROUP BY bucket"))).toBe(false);
+      const listSQL=sqls.find(sql=>sql.includes("AS hist0"))!;
+      expect(listSQL).toContain("SUM(IF(double1 < 10, _sample_interval, 0)) AS hist0");
+      expect(listSQL).toContain("SUM(IF(double1 >= 10 AND double1 < 25, _sample_interval, 0)) AS hist1");
+      expect(listSQL).toContain("SUM(IF(double1 >= 5000 AND 1 = 1, _sample_interval, 0)) AS hist9");
       expect(html).not.toContain(measured.PERF_ANALYTICS_TOKEN);
       const hash=await tenantHash(w.t.id,measured.PERF_TENANT_KEY);
       for(const sql of sqls) {expect(sql).not.toContain(`blob5 = '${hash}'`);expect(sql).toContain("blob1 = 'prices.example.com'");expect(sql).toContain("blob2 IN ('pricebench')");}

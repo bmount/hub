@@ -69,7 +69,7 @@ try {
       if(new URL(request.url).hostname !== 'api.cloudflare.com') return new Response('Local acceptance denies network access', {status:503});
       if (new URL(request.url).pathname.includes('/artifacts/')) return request.method === 'GET' ? new Response('',{status:404}) : Response.json({success:true,result:{}});
       const sql=await request.text(), version='11111111-1111-4111-8111-111111111111',previous='22222222-2222-4222-8222-222222222222',rid='33333333-3333-4333-8333-333333333333';
-      const metric={n:120,p50:40,p95:180,p99:500,errors:1.2,total:15000}, label=sql.includes('substring(blob14,6) AS label')?'work.read':sql.includes('substring(blob14,5) AS label')?'work_read':sql.includes('blob14 AS label')?'pane.swap':'/:project/docket';
+      const metric={n:120,p50:40,p95:180,p99:500,errors:1.2,total:15000,hist1:60,hist2:30,hist4:20,hist7:10}, label=sql.includes('substring(blob14,6) AS label')?'work.read':sql.includes('substring(blob14,5) AS label')?'work_read':sql.includes('blob14 AS label')?'pane.swap':'/:project/docket';
       const code=Object.keys(SQL_CATALOG)[0],source=JSON.stringify(SQL_CATALOG[code].sites[0]);
       let data;
       if(sql.includes('AS schema')) data=[{request:rid,kind:'request',name:'request',phase:'GET',source,code:'',fingerprint:'',version,worker:'sample-worker',duration:180,span:0,parent:0,complete:1,offset:0,started:now,schema:2,weight:1},{request:rid,kind:'span',name:'d1.first',phase:'GET',source,code,fingerprint:'abcdef01',version,worker:'sample-worker',duration:100,span:1,parent:0,complete:1,offset:20,started:now+20,schema:2,weight:1},{request:rid,kind:'client',name:'pane.swap',phase:'fetch',source:JSON.stringify({file:'src/clientTimingScript.ts',line:19,fn:'point'}),code:'',fingerprint:'',version,worker:'sample-worker',duration:220,span:0,parent:0,complete:1,offset:0,started:now-10,schema:2,weight:1}];
@@ -78,7 +78,6 @@ try {
       else if(sql.includes('AS cold')) data=[{request:rid,version,colo:'LHR',auth:'cookie',cold:0,weight:1}];
       else if(sql.includes('blob6 AS request')&&!sql.includes('double17')) data=[{request:rid,version,colo:'LHR',duration:180,weight:1}];
       else if(sql.includes('SELECT blob15')) data=[{fingerprint:'abcdef01',code,source,version,...metric}];
-      else if(sql.includes('IF(double1 < 10')) data=[{bucket:1,n:60},{bucket:2,n:30},{bucket:4,n:20},{bucket:7,n:10}];
       else if(sql.includes('double17')) data=[{label:'/:project/docket',n:120,weighted_root_wall:21600,weighted_auth_wall:2400,weighted_auth_n:120,weighted_d1_wall:12000,weighted_d1_execution:2400,weighted_d1_known_wall:12000,weighted_d1_execution_n:120,weighted_d1_n:120,weighted_do_wall:4800,weighted_do_n:120}];
       else if(sql.includes('intDiv')) data=Array.from({length:12},(_,i)=>({label,bucket:i,p50:30+i*4,n:10}));
       else if(sql.includes('GROUP BY label, version')) data=[{label,version,...metric},{label,version:previous,...metric,p95:140}];
