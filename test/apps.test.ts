@@ -161,7 +161,7 @@ describe("sites", () => {
       const url=`https://${HOST}/apps?project=pricebench&site=prices.example.com&view=performance`;
       const get=(suffix:string)=>appsPage(new Request(url+suffix,{headers:cookieHeaders(w.pat.token,HOST)}),measured);
       const unselected=await (await get('')).text();
-      const selected=await (await get('&selected=%2F%3Aproject%2Fdocket')).text();
+      const selected=await (await get('&selected=%2F%3Aproject%2Fdocket&details=1')).text();
       expect(unselected.match(/class="perf-stack"/g)).toHaveLength(2);
       expect(selected.match(/class="perf-stack"/g)).toHaveLength(3); // two rows + inspector
       expect(selected).toContain('Unattributed server: 78');
@@ -218,7 +218,7 @@ describe("sites", () => {
     let releaseSplit!:()=>void, waterfallStarted!:()=>void;
     const splitGate=new Promise<void>(resolve=>{releaseSplit=resolve;});
     const waterfallReady=new Promise<void>(resolve=>{waterfallStarted=resolve;});
-    let gateSplit=true;
+    let gateSplit=true, excludeOverview=false;
     const sqls:string[]=[];
     clearPerformanceCache();
     const mock=vi.spyOn(globalThis,"fetch").mockImplementation(async (input,init)=>{
@@ -248,12 +248,20 @@ describe("sites", () => {
       else if(sql.includes("blob4 AS label")) data=[{label:"DFW",...metric}];
       else if(sql.includes("blob3 AS label")) data=[{label:version,...metric}];
       else if(sql.includes("blob11 AS label")) data=[{label:"cookie",...metric}];
-      else data=[{label:sql.includes("substring(blob14,6) AS label")?"work.read":sql.includes("substring(blob14,5) AS label")?"work_read":sql.includes("blob14 AS label")?"pane.swap":"/:project",...metric}];
+      else data=[{label:excludeOverview?"/higher-volume":sql.includes("substring(blob14,6) AS label")?"work.read":sql.includes("substring(blob14,5) AS label")?"work_read":sql.includes("blob14 AS label")?"pane.swap":"/:project",...metric}];
       return Response.json({data});
     });
     try {
       const base=`https://${HOST}/apps?project=pricebench&site=prices.example.com&view=performance`;
-      const get=(suffix="",token=w.pat.token,host=HOST)=>appsPage(new Request(base.replace(HOST,host)+suffix,{headers:cookieHeaders(token,host)}),measured);
+      const get=(suffix="",token=w.pat.token,host=HOST)=>appsPage(new Request(base.replace(HOST,host)+suffix+"&details=1",{headers:cookieHeaders(token,host)}),measured);
+      const summary=await appsPage(new Request(base+"&selected=%2F%3Aproject",{headers:cookieHeaders(w.pat.token,HOST)}),measured);
+      const summaryHtml=await summary.text();
+      expect(summary.status).toBe(200);
+      expect(summaryHtml).toContain('data-performance-load=');expect(summaryHtml).toContain('aria-busy="true"');
+      expect(summaryHtml.replaceAll('\u00a0',' ')).toContain('100 ms');
+      expect(summaryHtml).not.toContain('Histogram: none');expect(summaryHtml).not.toContain('Waterfall: no retained points');
+      expect(sqls).toHaveLength(1);expect(sqls[0]).toContain('GROUP BY label ORDER BY total DESC LIMIT 200');
+      clearPerformanceCache();sqls.length=0;
       const pending=get("&selected=%2F%3Aproject");
       try {
         await Promise.race([waterfallReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error("waterfall waited for unrelated split")),2000))]);
@@ -276,10 +284,20 @@ describe("sites", () => {
       expect(ownHtml).toContain('name="only_my_org" value="true"');
       for(const sql of sqls.slice(ownStart)) expect(sql).toContain(`blob5 = '${hash}'`);
       expect(sqls.slice(ownStart).some(sql=>sql.includes("ORDER BY n * p50"))).toBe(false); // Complete weighted points need no split fan-out.
+      const fragment=await appsPage(new Request(base+"&selected=%2F%3Aproject&details=1",{headers:{...cookieHeaders(w.pat.token,HOST),"x-performance-details":"1"}}),measured);
+      expect(fragment.headers.get('cache-control')).toBe('private, no-store');
+      const panes=await fragment.json() as {list:string;inspector:string};
+      expect(panes.inspector).toContain('Weighted latency histogram');expect(panes.inspector).not.toContain('data-performance-load');
+      expect(panes.list).toContain('Median latency over time');
       const calls=sqls.length;await get("&selected=%2F%3Aproject");expect(sqls).toHaveLength(calls);
       const date=vi.spyOn(Date,"now").mockReturnValue(Date.now()+61_000);await get("&selected=%2F%3Aproject");date.mockRestore();expect(sqls.length).toBeGreaterThan(calls);
       expect((await (await get(`&kind=deploys&version=${version}&previous=${previous}`)).text()).replaceAll("\u00a0"," ")).toContain("+20 ms");
       expect(sqls.some(sql => sql.includes(`blob3 IN ('${version}','${previous}')`))).toBe(true);
+      clearPerformanceCache();excludeOverview=true;
+      const outside=await get(`&kind=deploys&version=${version}&previous=${previous}&selected=%2F%3Aproject`);
+      expect(outside.status).toBe(200);expect(await outside.text()).toContain('Weighted latency histogram');
+      expect(sqls.some(sql=>sql.startsWith('SELECT SUM(IF(double1 < 10')&&sql.includes("blob8 = '/:project'"))).toBe(true);
+      excludeOverview=false;clearPerformanceCache();
       await get(`&version=${version}`);
       expect(sqls.some(sql => sql.includes(`blob3 = '${version}'`))).toBe(true);
       expect(await (await get("&kind=spinners&selected=pane.swap")).text()).toContain("Time shown");

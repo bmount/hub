@@ -32,6 +32,41 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
       var li = document.createElement("li"), a = document.createElement("a"); li.setAttribute("data-fragment", "1"); a.href = location.pathname + location.search + location.hash; a.textContent = label; a.setAttribute("aria-current", "page"); li.appendChild(a); crumb.appendChild(li);
     }
   }
+  // Details never hold up the summary response. Observe pane swaps as well as
+  // initial navigation, and never apply a response to a superseded selection.
+  function loadPerformance() {
+    $$("[data-performance-load]").forEach(function (el) {
+      if (el.dataset.started) return;
+      el.dataset.started = "1";
+      var page = location.href, url = el.getAttribute("data-performance-load");
+      fetch(url, { credentials: "same-origin", cache: "no-store", redirect: "error", headers: { "x-performance-details": "1" }, signal: AbortSignal.timeout(30000) })
+        .then(function (res) { if (!res.ok) throw new Error("Details unavailable"); return res.json(); })
+        .then(function (data) {
+          if (!el.isConnected || location.href !== page) return;
+          if (typeof data.list !== "string" || typeof data.inspector !== "string") throw new Error("Details unavailable");
+          var list = $("#list"), inspector = $("#inspector");
+          // Clear keys so a later navigation cannot retain summary-only markup.
+          list.removeAttribute("data-key"); inspector.removeAttribute("data-key");
+          var top = list.scrollTop;
+          list.innerHTML = data.list; list.scrollTop = top;
+          inspector.innerHTML = data.inspector;
+        }).catch(function () {
+          if (!el.isConnected || location.href !== page) return;
+          el.setAttribute("aria-busy", "false");
+          $$("[data-performance-pending]", $("#list")).forEach(function (p) { p.textContent = "Unavailable"; });
+          $$("[role=status]", el).forEach(function (p) { p.textContent = "Details unavailable; not evidence of missing observations."; });
+          var retry = document.createElement("button"); retry.textContent = "Retry details";
+          retry.onclick = function () {
+            retry.remove(); delete el.dataset.started; el.setAttribute("aria-busy", "true");
+            $$("[role=status]", el).concat($$("[data-performance-pending]", $("#list"))).forEach(function (p) { p.textContent = "Loading…"; });
+            loadPerformance();
+          };
+          el.appendChild(retry);
+        });
+    });
+  }
+  new MutationObserver(loadPerformance).observe(document.body, { childList: true, subtree: true });
+  loadPerformance();
   function closeRail() { ["#rail", "#explorer"].forEach(function (id) { var r = $(id); if (r) r.classList.remove("open"); }); if (location.hash === "#rail" || location.hash === "#explorer") history.replaceState(history.state, "", location.pathname + location.search); }
   function explorerKey(el) { return "wb:explorer:" + el.getAttribute("data-preference") + ":" + el.getAttribute("data-project"); }
   function branchKey(el) { var s = $("summary", el), a = s && $("a", s); if (a) { var url = new URL(a.href, location.href); return url.pathname + url.search + url.hash; } return s ? s.textContent : ""; }

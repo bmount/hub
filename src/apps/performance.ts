@@ -191,7 +191,7 @@ export function interactionPhases(ready:PerfRow[],phases:PerfRow[]):PerfRow[] {
   return [...groups.values()].map(g=>({label:g.label,phase:g.phase,mean:g.total/g.n,n:g.n}));
 }
 export type PerformanceData = {overview:PerfRow[];spark:PerfRow[];breakdown:PerfRow[];browser:PerfRow[];histogram:PerfRow[];splits:Record<string,PerfRow[]>;sql:PerfRow[];exemplars:PerfRow[];waterfall:PerfRow[];comparison:PerfRow[];triggers:PerfRow[]};
-export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, detailOnly=false):Promise<PerformanceData> {
+export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, detailOnly=false, summaryOnly=false):Promise<PerformanceData> {
   const scope=await performanceScope(ctx,site,s.hours,s.onlyMyOrg);
   const empty:PerformanceData={overview:[],spark:[],breakdown:[],browser:[],histogram:[],splits:{},sql:[],exemplars:[],waterfall:[],comparison:[],triggers:[]};
   if(!scope.scripts.length) return empty;
@@ -233,15 +233,16 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
     return {splits:Object.fromEntries(splitRows),triggers,...details};
   };
   // Start the dependent exemplar chain before independent list/distribution work fills fetch slots.
-  const inspectorRead=s.selected?readInspector():Promise.resolve(null);
+  const inspectorRead=s.selected&&!summaryOnly?readInspector():Promise.resolve(null);
   const [[overview,spark,browser,comparison,breakdown],inspector]=await Promise.all([Promise.all([
     query(`SELECT ${dim} AS label, ${weightedMetrics}, ${histogramMetrics} FROM pimwell_perf WHERE ${overviewFilter} GROUP BY label ORDER BY total DESC LIMIT 200`),
-    query(`SELECT ${dim} AS label, intDiv(toUInt32(timestamp), ${bucket}) AS bucket, quantileWeighted(0.5)(double1, _sample_interval) AS p50, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${overviewFilter} GROUP BY label, bucket ORDER BY label, bucket LIMIT 3000`),
-    s.kind==="routes" ? query(`SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob7 AS kind, blob3 AS version, blob14 AS name, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND (blob7 = 'request' OR (blob7 = 'client' AND ((blob9 = 'page' AND blob14 IN ('network','render')) OR blob9 IN ('fetch','paint')))) GROUP BY tenant, request, label, kind, version, name, phase LIMIT 5000`) : Promise.resolve([]),
+    summaryOnly ? Promise.resolve([]) : query(`SELECT ${dim} AS label, intDiv(toUInt32(timestamp), ${bucket}) AS bucket, quantileWeighted(0.5)(double1, _sample_interval) AS p50, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${overviewFilter} GROUP BY label, bucket ORDER BY label, bucket LIMIT 3000`),
+    !summaryOnly && s.kind==="routes" ? query(`SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob7 AS kind, blob3 AS version, blob14 AS name, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND (blob7 = 'request' OR (blob7 = 'client' AND ((blob9 = 'page' AND blob14 IN ('network','render')) OR blob9 IN ('fetch','paint')))) GROUP BY tenant, request, label, kind, version, name, phase LIMIT 5000`) : Promise.resolve([]),
     s.kind==="deploys" && s.version && s.previous ? query(`SELECT blob8 AS label, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'request' AND blob3 IN (${quote(s.version)},${quote(s.previous)}) GROUP BY label, version ORDER BY label LIMIT 400`) : Promise.resolve([]),
-    s.kind==="routes" ? query(routeAttributionSQL(`${scope.where} AND blob8 != '' AND NOT ${background}${versionFilter}${detailOnly&&s.selected?` AND blob8 = ${quote(s.selected)}`:''}`)) : Promise.resolve([]),
+    !summaryOnly && s.kind==="routes" ? query(routeAttributionSQL(`${scope.where} AND blob8 != '' AND NOT ${background}${versionFilter}${detailOnly&&s.selected?` AND blob8 = ${quote(s.selected)}`:''}`)) : Promise.resolve([]),
   ]),inspectorRead]);
   const result={...empty,overview,spark,breakdown:routeAttributionSummary(breakdown),browser:pairedBrowser(browser,s.version),comparison};
+  if(summaryOnly) return result;
   if(s.kind==="interactions") {
     const ready=await query(`SELECT blob5 AS tenant, blob6 AS request, blob14 AS label, _sample_interval AS weight, timestamp AS at FROM pimwell_perf WHERE ${overviewFilter} ORDER BY at DESC LIMIT 2000`);
     const readyScope=ready.filter(r=>/^[0-9a-f-]{36}$/.test(String(r.request))).map(r=>`(blob5 = ${quote(String(r.tenant??''))} AND blob6 = ${quote(String(r.request))})`).join(' OR ');
@@ -252,7 +253,8 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   if(!s.selected || !(s.kind==="deploys"?comparison:overview).some(r=>r.label===s.selected)) return result;
   // The list aggregate already scans precisely this population; count buckets there,
   // rather than making another remote scan. Never derive a distribution from quantiles.
-  const selectedRow=overview.find(r=>r.label===s.selected);
+  // Comparison can select routes outside the overview's top 200.
+  const selectedRow=overview.find(r=>r.label===s.selected) ?? (s.kind==="deploys" ? (await query(`SELECT ${histogramMetrics} FROM pimwell_perf WHERE ${filter} AND ${dim} = ${quote(s.selected)}`))[0] : undefined);
   const histogram=selectedRow?bounds.concat(Infinity).flatMap((_,bucket)=>Number(selectedRow[`hist${bucket}`])>0?[{bucket,n:selectedRow[`hist${bucket}`]!}]:[]):[];
   return {...result,...inspector,histogram};
 }

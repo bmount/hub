@@ -477,6 +477,37 @@ try {
           await page.reload();await expect(page.locator('#list h1')).toHaveText('Performance');
         }
         if(name === 'performanceRoute') {
+          // Hold back the detail HTTP response: the route summary must already
+          // be usable and must not describe pending observations as absent.
+          let releaseDetails;
+          const detailsGate=new Promise(resolve=>{releaseDetails=resolve;});
+          const detailURL=url=>url.searchParams.get('details')==='1';
+          await page.route(detailURL,async route=>{await detailsGate;await route.fallback();});
+          await page.reload();
+          await expect(page.locator('#inspector')).toContainText('Represented events');
+          await expect(page.locator('[data-performance-load]')).toHaveAttribute('aria-busy','true');
+          await expect(page.locator('#inspector')).not.toContainText('Histogram: none');
+          releaseDetails();
+          await expect(page.locator('[data-performance-load]')).toHaveCount(0);
+          await page.unroute(detailURL);
+          await page.route(detailURL,route=>route.fulfill({status:503,body:'Controlled failure'}));
+          await page.reload();
+          await expect(page.locator('#inspector')).toContainText('Details unavailable; not evidence of missing observations.');
+          await expect(page.locator('#inspector')).toContainText('Represented events');
+          await page.unroute(detailURL);
+          await page.getByRole('button',{name:'Retry details',exact:true}).click();
+          await expect(page.locator('[data-performance-load]')).toHaveCount(0);
+          let releaseStale;
+          const staleGate=new Promise(resolve=>{releaseStale=resolve;});
+          await page.route(detailURL,async route=>{await staleGate;await route.fallback();});
+          await page.reload();await expect(page.locator('[data-performance-load]')).toHaveCount(1);
+          await page.locator('#inspector .back').evaluate(a=>a.click()); // Back is phone-only visually.
+          await expect(page.locator('#inspector')).toBeHidden();
+          const staleResponse=page.waitForResponse(res=>new URL(res.url()).searchParams.get('details')==='1');
+          releaseStale();await staleResponse;await page.unroute(detailURL);
+          await page.waitForTimeout(100);
+          await expect(page.locator('#inspector')).toBeHidden();
+          await page.goto(base+route);await expect(page.locator('[data-performance-load]')).toHaveCount(0);
           await expect(page.locator('#inspector')).toContainText('Where the time goes');
           await expect(page.locator('#inspector a[href*="/files?ref="]').first()).toHaveAttribute('href',/ref=b{40}/);
         }
