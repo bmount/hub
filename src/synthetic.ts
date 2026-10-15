@@ -113,7 +113,7 @@ export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<voi
       const request = route.request();
       const url = new URL(request.url());
       if (!([env.HUB_DOMAIN, `perf-synthetic.${env.HUB_DOMAIN}`].includes(url.hostname)) || url.protocol !== "https:") { await route.abort(); return; }
-      const headers: Record<string,string | undefined> = { ...request.headers(), "x-pimwell-synthetic": web!.token };
+      const headers: Record<string,string | undefined> = { ...await request.allHeaders(), "x-pimwell-synthetic": web!.token };
       // Headless MCP clients have no Origin. Keep the server browser-origin policy unchanged.
       if (url.pathname === "/mcp") headers.origin = undefined;
       // Playwright removes headers with undefined values; the SDK's types omit that case.

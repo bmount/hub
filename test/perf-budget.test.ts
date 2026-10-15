@@ -526,11 +526,11 @@ describe("isolated synthetic journeys", () => {
     vi.spyOn(browserSdk,"launch").mockResolvedValue({newContext:async()=>({
       route:async(_pattern:string,guard:(route:unknown)=>Promise<void>)=>{
         const abort=vi.fn(),proceed=vi.fn();
-        const request=(url:string)=>({url:()=>url,headers:()=>({origin:"https://pimwell.test"})});
+        const request=(url:string)=>({url:()=>url,allHeaders:async()=>({origin:"https://pimwell.test",authorization:"Bearer fixture"})});
         await guard({request:()=>request("https://third-party.test/"),abort,continue:proceed});
         expect(abort).toHaveBeenCalledOnce();expect(proceed).not.toHaveBeenCalled();
         await guard({request:()=>request("https://perf-synthetic.pimwell.test/mcp"),abort,continue:proceed});
-        expect(proceed).toHaveBeenCalledWith({headers:{origin:undefined,"x-pimwell-synthetic":expect.any(String)}});
+        expect(proceed).toHaveBeenCalledWith({headers:{origin:undefined,authorization:"Bearer fixture","x-pimwell-synthetic":expect.any(String)}});
       },newPage:async()=>page,
       addCookies:async([p]:{value:string}[])=>{cookies="pmw_session="+p!.value;}
     }),close} as never);
