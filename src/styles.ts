@@ -240,12 +240,15 @@ code,kbd{font-size:15px}.pill{font-size:13px;padding:1px 7px}.meta{font-size:var
 .tabs a[aria-current]{color:var(--accent);box-shadow:inset 0 3px 0 var(--accent)}.tabs .n{font-size:13px;min-width:22px;padding:0 6px;border-radius:11px;background:var(--accent);color:var(--panel);text-align:center;line-height:20px}
 .hide-s{display:none}.timeline li{grid-template-columns:1fr;gap:0;padding:8px 0}.timeline time{font-size:14px}}
 /* Tactile treatments deliberately change no geometry: the same rows fit on screen. */
-.rail{background:var(--rail)}.pane{background:var(--panel)}
-.bar,.status{background:var(--group);box-shadow:var(--bevel)}
-.wb-section h2,.railhead{color:var(--blue)}
-button,.button,.wb-toolbar .wb-actions a.primary{background:var(--primary-gradient);color:var(--on-primary);border-color:var(--primary-bottom);box-shadow:var(--bevel),var(--elevation-1)}
-button:hover,.button:hover,.wb-toolbar .wb-actions a.primary:hover{background:var(--primary-hover);color:var(--on-primary);border-color:var(--primary-bottom);box-shadow:var(--elevation-2)}
-button.quiet,.button.quiet,.wb-toolbar a:not(.wb-tabs a):not(.primary),.wb-toolbar button,.wb-close{background:var(--raised);color:var(--ink);border-color:var(--line-strong);box-shadow:var(--bevel),var(--elevation-1)}
+.rail{background:var(--rail)}.pane{background:var(--panel);box-shadow:inset 0 0 0 1px var(--line),var(--elevation-1)}
+.bar{background:linear-gradient(110deg,var(--selected),var(--group));box-shadow:var(--bevel),var(--elevation-1)}.status{background:var(--group);box-shadow:var(--bevel)}
+.pane h2,.pane h3,.explorer h2,.railhead{color:var(--blue);font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.08em}
+table{box-shadow:var(--elevation-1)}th{background:var(--group)}
+button,.button{background:var(--secondary-gradient);color:var(--ink);border-color:var(--line-strong);box-shadow:var(--bevel),var(--elevation-1)}
+button.primary,.button.primary,.wb-toolbar button.primary,.wb-toolbar .wb-actions a.primary,:where(form[method=post]) button:not(:where([type=button],.quiet,.link,.destructive)),.composer .send,.landing-create>summary{background:var(--primary-gradient);color:var(--on-primary);border-color:var(--primary-bottom);box-shadow:var(--bevel),var(--elevation-2)}
+button:hover,.button:hover{background:var(--hover);color:var(--ink);border-color:var(--accent);box-shadow:var(--elevation-2)}
+button.primary:hover,.button.primary:hover,.wb-toolbar button.primary:hover,.wb-toolbar .wb-actions a.primary:hover,:where(form[method=post]) button:not(:where([type=button],.quiet,.link,.destructive)):hover,.composer .send:hover{background:var(--primary-hover);color:var(--on-primary);border-color:var(--primary-bottom);box-shadow:var(--elevation-2)}
+button.quiet,.button.quiet,.wb-toolbar a:not(.wb-tabs a):not(.primary),.wb-toolbar button,.wb-close{background:var(--secondary-gradient);color:var(--ink);border-color:var(--line-strong);box-shadow:var(--bevel),var(--elevation-1)}
 button.quiet:hover,.button.quiet:hover,.wb-toolbar a:not(.wb-tabs a):not(.primary):hover,.wb-toolbar button:hover,.wb-close:hover{background:var(--hover);border-color:var(--accent)}
 button.link{color:var(--accent);text-decoration:underline;background:none;box-shadow:none}
 button.link:hover{background:var(--hover);color:var(--accent)}
@@ -264,10 +267,18 @@ tr[aria-selected=true] td,.wb-table tr[aria-selected=true]{background:var(--sele
 tr[aria-selected=true] td:first-child{box-shadow:inset 3px 0 var(--accent)}
 .wb-tree a:hover,.wb-tree summary:hover,.rail li:hover{background:var(--hover)}
 .rail li:has(a[aria-current]){background:transparent;box-shadow:none}
-.wb-tree a[aria-current],.rail li>a[aria-current],.wb-tabs a[aria-current],.tabs a[aria-current]{background:var(--selected-gradient);color:var(--accent);box-shadow:inset 2px 0 var(--accent)}
+.wb-tree a[aria-current],.rail li>a[aria-current],.wb-tabs a[aria-current],.tabs a[aria-current]{background:var(--selected);color:var(--accent);box-shadow:inset 3px 0 var(--accent);border-radius:0;font-weight:700}
 .wb-chevron{color:var(--blue);background:var(--group);border-radius:var(--r-xs)}
 .wb-tree ul ul{border-color:var(--line-strong)}
 .wb-chip{background:var(--group);box-shadow:var(--bevel)}
+.wb-state{background:none;box-shadow:none}
+.landing-create>summary{display:inline-block;border:1px solid var(--primary-bottom);border-radius:var(--r-sm);padding:3px 10px;cursor:pointer;font-weight:600}
+.landing-create>summary:hover{background:var(--primary-hover)}
+button.primary:active,.button.primary:active,.wb-toolbar button.primary:active,.composer .send:active{background:var(--selected);color:var(--ink);box-shadow:var(--inset)}
+button.primary:disabled,.wb-toolbar button.primary:disabled,.composer .send:disabled{background:var(--group);color:var(--muted);box-shadow:none}
+td a{text-decoration-color:color-mix(in srgb,currentColor 40%,transparent)}td a:hover{text-decoration-color:currentColor}
+:is(.k-wish,.k-snag,.k-errand,.k-quest,.k-call,.k-spark,.wb-tone-wish,.wb-tone-snag,.wb-tone-errand,.wb-tone-quest,.wb-tone-call,.wb-tone-spark){background:color-mix(in srgb,currentColor 12%,var(--panel))}
+.composer{background:none}.composer textarea{background:none;box-shadow:none}
 .wb-tone-attention{color:var(--attention)}.wb-tone-progress{color:var(--progress)}.wb-tone-success{color:var(--success)}.wb-tone-warning{color:var(--warning)}.wb-tone-error{color:var(--error)}
 .tabs .n{background:var(--primary-bottom);color:var(--on-primary)}
 @media (prefers-reduced-motion:reduce){.rail,.explorer{transition:none}}

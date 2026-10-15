@@ -113,7 +113,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind === "apex") {
-    const createForm = `<section><h2>New organization</h2><form data-reload method="post" action="/api/tenant.create"><label>Organization slug <input name="slug" pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="63" required></label><label>Display name <input name="display_name" maxlength="80" required></label><button type="submit" class="quiet">Create organization</button></form></section>`;
+    const createForm = `<section><h2>New organization</h2><form data-reload method="post" action="/api/tenant.create"><label>Organization slug <input name="slug" pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="63" required></label><label>Display name <input name="display_name" maxlength="80" required></label><button type="submit" class="primary">Create organization</button></form></section>`;
     if (!ctx.identity) return htmlResponse(LANDING_HTML.replace("</body>", `${createForm}</body>`), 200, extra);
     const allMemberships = await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id, true);
     const memberships = allMemberships.filter((m) => m.tenant.state === "active" && m.membership.state === "active");

@@ -34,6 +34,10 @@ describe("workbench kit", () => {
     expect(THEME_CSS).toContain('--row-h:28px');
     expect(THEME_CSS).toContain('--row-h:44px');
     expect(COMPONENTS_CSS).toContain('button:active');
+    expect(COMPONENTS_CSS).toContain('.wb-state{background:none;box-shadow:none}');
+    expect(COMPONENTS_CSS).toContain('box-shadow:inset 3px 0 var(--accent);border-radius:0;font-weight:700');
+    expect(COMPONENTS_CSS).toContain('.composer textarea{background:none;box-shadow:none}');
+    expect(COMPONENTS_CSS).toContain('currentColor 40%,transparent');
     expect(COMPONENTS_CSS).toContain('button:disabled');
     expect(COMPONENTS_CSS).toContain('outline:var(--focus-width) solid var(--focus)!important');
     for (const tone of ['attention','progress','success','warning','error'] as const) expect(statusChip(tone,tone)).toContain(`wb-tone-${tone}`);

@@ -511,7 +511,7 @@ describe("the workbench", () => {
     expect((await SELF.fetch(`https://${HOST}/assets/app.old.css`)).status).toBe(404);
     expect(html).not.toContain("<style>");
     expect(html).not.toContain('<h4>Your account</h4>');
-    expect(html).toContain('class="button quiet file"');
+    expect(html).toContain('class="button primary file"');
     expect(html).toContain('>Sign out</button>');
     expect(html).toContain('action="/api/session.end" data-reload><input type="hidden" name="_back" value="/signed-out">');
     const out = await SELF.fetch(`https://${HOST}/api/session.end`, { method: "POST", redirect: "manual", headers: { ...w.h, origin: `https://${HOST}`, "content-type": "application/x-www-form-urlencoded" }, body: "_back=%2Fsigned-out" });

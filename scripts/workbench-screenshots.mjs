@@ -111,6 +111,16 @@ try {
     return token;
   }
   const member = await human('dev', tenant, 'admin');
+  const rootToken = await human('root',tenant,'admin');
+  if (process.env.WORKBENCH_AUDIT === '1') {
+    // The root-site screenshots sign in as root, not the organization member.
+    const identity = await db.prepare("SELECT id FROM identity WHERE email = 'root@example.test'").first();
+    for (const slug of ['studio', 'operations']) {
+      const tid = id();
+      await db.prepare('INSERT INTO tenant (id,slug,display_name,created_at) VALUES (?,?,?,?)').bind(tid, slug, slug === 'studio' ? 'Design studio' : 'Operations', now).run();
+      await db.prepare('INSERT INTO membership (id,identity_id,tenant_id,role,created_at) VALUES (?,?,?,?,?)').bind(id(), identity.id, tid, 'admin', now).run();
+    }
+  }
   const reader = await human('reader', tenant, 'reader');
   const peer = await human('peer', tenant, 'member');
   const outsider = await human('outsider', otherTenant, 'admin');
@@ -171,7 +181,6 @@ try {
     await verb(member, 'file.put', {project:'knowledge',path:'handbook/notes.txt',content_type:'text/plain',expected_revision:0,base64:Buffer.from('Folder fixture.').toString('base64')});
     await verb(member,'person.upsert',{project:'knowledge',id:contact.entity.id,expected_revision:1,name:'Alex Example',title:'Designer',emails:['alex@example.test'],links:[{kind:'research',ref:'findings'},{kind:'file',ref:'notes.txt'}]});
   }
-  const rootToken = await human('root',tenant,'admin');
   await db.prepare("UPDATE identity SET is_root = 1 WHERE email = 'root@example.test'").run();
   await verb(member,'agent.create',{tenant:'acme',slug:'build',display_name:'Build agent'});
   await verb(member,'usage.report',{provider:'openai',model:'synthetic-model',input_tokens:1200,output_tokens:400,cost_usd:0.02,work:'sample#2'});
@@ -312,11 +321,11 @@ try {
       }
       const geometryFile = path.join(artifacts,`before-${name}-${label}-rows.json`);
       if (phase === 'before') await writeFile(geometryFile, JSON.stringify(await rowGeometry(page)));
-      if (process.env.WORKBENCH_AUDIT === '1' && phase === 'after') {
-        expect(await rowGeometry(page), name+' unchanged row heights').toEqual(JSON.parse(await readFile(geometryFile,'utf8')));
+      if (process.env.WORKBENCH_AUDIT === '1') {
+        if (phase === 'after') expect(await rowGeometry(page), name+' unchanged row heights').toEqual(JSON.parse(await readFile(geometryFile,'utf8')));
         for (const scheme of ['light','dark']) {
           await page.emulateMedia({colorScheme:scheme});
-          await auditControls(page,`${name} ${label} ${scheme}`);
+          if (phase === 'after') await auditControls(page,`${name} ${label} ${scheme}`);
           const file = `${phase}-${name}-${scheme}-${label}.png`;
           await page.screenshot({path:path.join(artifacts,file),fullPage:false});
           manifest.push({phase,name,route,viewport,scheme,file,audit:{textContrast:'WCAG AA',keyboardFocus:'visible, >=3:1',rowHeights:'unchanged'}});
@@ -345,7 +354,7 @@ try {
           expect(Math.abs(rect.x - searchPosition), name+' stable search position').toBeLessThan(1);
         }
         if (name === 'newWork') await expect(page.locator('.bar .file')).toHaveCount(0);
-        else if (!route.startsWith('https:')) await expect(page.locator('.bar .file')).toHaveClass(/quiet/);
+        else if (!route.startsWith('https:')) await expect(page.locator('.bar .file')).toHaveClass(/primary/);
         if (route.startsWith('https:')) await expect(page.locator('.status .keys')).toHaveText('');
         if (name === 'search') {
           await expect(page.locator('#list input[name=q]')).toHaveCount(0);
