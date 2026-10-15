@@ -8,6 +8,12 @@ export function esc(s: string): string {
 }
 
 /** Kit slots named `html` contain trusted, already-escaped server markup; labels are plain text. */
+/** One link and one tab stop, even when the card contains several visual cues. */
+export function organizationCard(org: { slug: string; name: string; role: string }, domain: string): string {
+  const address = `${org.slug}.${domain}`;
+  return `<a class="wb-org-card" href="https://${esc(address)}/" data-reload><span class="wb-org-heading"><strong>${esc(org.name)}</strong><span class="wb-org-role">${esc(org.role)}</span></span><span class="wb-org-address">${esc(address)}</span><span class="wb-org-open">Open organization <span aria-hidden="true">↗</span></span></a>`;
+}
+
 export type KitLink = { label: string; href: string; current?: boolean; count?: number; selection?: boolean };
 const kitHref = (href: string) => esc(/^(\/(?!\/)|https?:\/\/|mailto:|#)/i.test(href) ? href : "#");
 const kitLink = (l: KitLink) => `<a href="${kitHref(l.href)}"${l.current ? ' aria-current="page"' : ""}>${esc(l.label)}${l.count !== undefined && l.count > 0 ? `<span class="wb-count">${esc(String(l.count))}</span>` : ""}</a>`;

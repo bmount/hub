@@ -2,7 +2,7 @@ import { sameOrigin } from "./login";
 import type { Env } from "../env";
 import { shellFor } from "./shell";
 import { orgHomePage } from "./orgPages";
-import { localTime, esc, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
+import { localTime, esc, organizationCard, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
 import { classifyHost } from "../tenant";
 import { findInviteByToken, inviteIsOpen } from "../db/invites";
 import { getTenantById, listTenants } from "../db/tenants";
@@ -98,14 +98,14 @@ function setupCard(env: Env, orgs: Array<{ slug: string; name: string }>): strin
   const connect = (o: { slug: string; name: string }) => `<a href="https://${esc(o.slug)}.${esc(env.HUB_DOMAIN)}/people?connect=1" data-reload>${orgs.length > 1 ? esc(o.name) : "Connect an agent"}</a>`;
   const where = orgs.length === 0 ? "In your organization, open People and agents → Connect an agent"
     : orgs.length === 1 ? `Make a connect link: ${connect(orgs[0]!)}` : `Make a connect link in ${orgs.map(connect).join(", ")}`;
-  return `<div class="wb-section"><h3>Set up with your agent</h3>
+  return `<section class="landing-setup"><h2>Set up with your agent</h2>
 <p>For Claude Code, Codex or any agent in a terminal or on a server:</p>
 <ol>
 <li>${where}. Name the agent; you get a link that works once, for 24 hours.</li>
 <li>Paste the link to your agent and say: <b>"set up pimwell.com with this link"</b>.</li>
 <li>The agent claims the link, connects with its own key, and follows <a href="/setup" data-reload>${esc(env.HUB_DOMAIN)}/setup</a>: it reports its AI usage and wires your apps' errors and deploys in.</li>
 </ol>
-<p class="lede">The agent answers to you and can do what you can, up to a member's rights. For Claude or ChatGPT in a browser or on your phone, add a custom connector instead, with <code>https://&lt;org&gt;.${esc(env.HUB_DOMAIN)}/mcp</code>.</p></div>`;
+<p class="lede">The agent answers to you and can do what you can, up to a member's rights. For Claude or ChatGPT in a browser or on your phone, add a custom connector instead, with <code>https://&lt;org&gt;.${esc(env.HUB_DOMAIN)}/mcp</code>.</p></section>`;
 }
 
 export async function homePage(request: Request, env: Env): Promise<Response> {
@@ -117,26 +117,29 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
     if (!ctx.identity) return htmlResponse(LANDING_HTML.replace("</body>", `${createForm}</body>`), 200, extra);
     const allMemberships = await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id, true);
     const memberships = allMemberships.filter((m) => m.tenant.state === "active" && m.membership.state === "active");
-    const card = (slug: string, name: string, note: string) => `<a class="wb-section" href="https://${esc(slug)}.${esc(env.HUB_DOMAIN)}/" data-reload><h3>${esc(name)}</h3><p>${esc(note)}</p><p><code>${esc(slug)}.${esc(env.HUB_DOMAIN)}</code></p></a>`;
-    let body = `<h1>Hello, ${esc(ctx.identity.display_name)}</h1>
-${intentBox({ placeholder: "What do you want to do? Say it or type it" })}
-<p class="lede">AI can do a lot. Ask here, pick an organization below, or ask from Claude or ChatGPT over MCP.</p>
-${setupCard(env, memberships.filter((m) => m.membership.role !== "reader" || ctx.identity!.is_root === 1).map((m) => ({ slug: m.tenant.slug, name: m.tenant.display_name })))}`;
+    const card = (slug: string, name: string, role: string) => organizationCard({ slug, name, role }, env.HUB_DOMAIN);
+    let body = `<div class="landing"><header class="landing-hero"><h1>Hello, ${esc(ctx.identity.display_name)}</h1>
+<p class="lede">What would you like to move forward? Ask here or open your team's organization.</p>
+${intentBox({ placeholder: "What do you want to do? Say it or type it" })}</header>`;
+    body += `<section aria-labelledby="your-orgs"><div class="landing-heading"><h2 id="your-orgs">Your organizations</h2></div>` + (memberships.length ? `<div class="wb-org-grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, m.membership.role)).join("")}</div>` : `<p class="lede">None yet. Create an organization or accept an invitation.</p>`);
+    if (ctx.identity.kind === "human") body += `<details class="landing-create"><summary role="button">New organization</summary>${createForm}</details>`;
+    body += `</section>`;
     if (memberships.length) body += `<section aria-label="Organization chat"><h2>Chat with your team</h2><p class="chips">${memberships.map((m) => `<a class="chip" href="https://${esc(m.tenant.slug)}.${esc(env.HUB_DOMAIN)}/c" data-reload>${esc(m.tenant.display_name)} chat</a>`).join(" ")}</p></section>`;
-    body += `<h2>Your organizations</h2>` + (memberships.length ? `<div class="wb-list">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, `You are ${m.membership.role}`)).join("")}</div>` : `<p class="lede">None yet. Create an organization below, or accept an invitation.</p>`);
+    body += setupCard(env, memberships.filter((m) => m.membership.role !== "reader" || ctx.identity!.is_root === 1).map((m) => ({ slug: m.tenant.slug, name: m.tenant.display_name })));
+    body += `<div class="landing-secondary">`;
     if (ctx.identity.kind === "human") {
-      body += createForm;
-      body += `<h2>Manage your organizations</h2>` + allMemberships.filter(m => m.membership.role === "admin" || ctx.identity!.is_root === 1).map(m => {
+      body += `<details><summary>Manage your organizations</summary>` + allMemberships.filter(m => m.membership.role === "admin" || ctx.identity!.is_root === 1).map(m => {
         const slug = esc(m.tenant.slug), archived = m.tenant.state === "archived";
         return `<section><h3>${esc(m.tenant.display_name)} (${slug})</h3><form data-reload method="post" action="/api/tenant.${archived ? "unarchive" : "archive"}"><input type="hidden" name="slug" value="${slug}"><button class="quiet${archived ? "" : " destructive"}">${archived ? "Unarchive" : "Archive"} organization</button></form>${archived ? `<form data-reload method="post" action="/api/tenant.delete"><input type="hidden" name="slug" value="${slug}"><label>Type ${slug} to delete permanently <input name="confirm" required autocomplete="off"></label><button class="quiet destructive">Delete permanently</button><p>This cannot be undone. All organization data and repositories will be removed.</p></form>` : ""}</section>`;
-      }).join("");
+      }).join("") + `</details>`;
     }
     if (ctx.identity.is_root === 1) {
       const mine = new Set(memberships.map((m) => m.tenant.id));
       const others = (await listTenants(env.HUB_DB, "active")).filter((t) => !mine.has(t.id));
-      if (others.length) body += `<h2>Other organizations</h2><div class="wb-list">${others.map((t) => card(t.slug, t.display_name, "You see this as root")).join("")}</div>`;
+      if (others.length) body += `<h2>Other organizations</h2><div class="wb-org-grid">${others.map((t) => card(t.slug, t.display_name, "root")).join("")}</div>`;
       body += `<h2>Hub administration</h2><p><a href="/admin/orgs">Organizations</a> · <a href="/admin/models">Models and keys</a></p>`;
     }
+    body += `</div></div>`;
     return htmlResponse(page("Pimwell", body, shellFor(ctx, env, "home", "apex")), 200, extra);
   }
   if (!ctx.tenant || !ctx.role) return notFoundPage(extra);

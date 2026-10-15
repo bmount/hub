@@ -3,9 +3,19 @@ import { SELF } from "cloudflare:test";
 import { ASSETS } from "../src/assets";
 import { THEME_CSS } from "../src/theme";
 import { COMPONENTS_CSS } from "../src/styles";
-import { breadcrumb, emptyState, esc, formRow, HTML_CSP, htmlResponse, inspectorSection, kitList, kitTable, kitTabs, kitTree, page, statusChip, toolbar, utcTime, workbench } from "../src/html";
+import { organizationCard, breadcrumb, emptyState, esc, formRow, HTML_CSP, htmlResponse, inspectorSection, kitList, kitTable, kitTabs, kitTree, page, statusChip, toolbar, utcTime, workbench } from "../src/html";
 
 describe("workbench kit", () => {
+  it.each(["member", "admin"])("renders an organization card for %s with one link", role => {
+    const html = organizationCard({ slug: "acme", name: "Acme & partners", role }, "pimwell.com");
+    expect(html).toContain('href="https://acme.pimwell.com/"');
+    expect(html).toContain('<strong>Acme &amp; partners</strong>');
+    expect(html).toContain(`class="wb-org-role">${role}</span>`);
+    expect(html).toContain('class="wb-org-address">acme.pimwell.com</span>');
+    expect(html).toContain("Open organization");
+    expect(html.match(/<a /g)).toHaveLength(1);
+    expect(html).not.toMatch(/<(button|input)|tabindex=/);
+  });
   it("keeps AA text contrast across both palettes and primary control states", () => {
     const sets = [...THEME_CSS.matchAll(/:root\{([^}]+)\}/g)].map(m => Object.fromEntries([...m[1]!.matchAll(/(--[\w-]+):([^;]+)(?:;|$)/g)].map(v => [v[1],v[2]])));
     const light = sets[0], dark = {...light, ...sets[1]};

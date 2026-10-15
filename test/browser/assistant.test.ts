@@ -105,6 +105,33 @@ async function open(augment?: (html: string) => string, setup?: (context: Browse
   return { context, page };
 }
 
+it("captures the signed-in landing page in both themes and widths", async () => {
+  const { context, page } = await open();
+  try {
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme });
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.goto("https://pimwell.test/");
+        await browserExpect(page.getByRole("heading", { name: "Hello, Brian" })).toBeVisible();
+        const card = page.locator('.wb-org-card');
+        await browserExpect(card).toHaveAttribute('href', 'https://acme.pimwell.test/');
+        await card.focus();
+        await browserExpect(card).toBeFocused();
+        const create = page.getByRole('button', { name: 'New organization', exact: true });
+        await create.focus();
+        await page.keyboard.press('Enter');
+        await browserExpect(page.getByLabel('Organization slug')).toBeVisible();
+        await page.keyboard.press('Enter');
+        await browserExpect(page.getByLabel('Organization slug')).toBeHidden();
+        await page.locator('h1').click();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        if (process.env.LANDING_ARTIFACTS) await page.screenshot({ path: `${process.env.LANDING_ARTIFACTS}/${process.env.LANDING_PHASE || "after"}-${width}-${colorScheme}.png`, fullPage: true });
+      }
+    }
+  } finally { await context.close(); }
+});
+
 async function ask(page: Page, text: string) {
   await page.getByRole("textbox", { name: "Your message", exact: true }).fill(text);
   const response = page.waitForResponse(`${BASE}/assistant/chat`);

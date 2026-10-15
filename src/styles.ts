@@ -1,6 +1,15 @@
 // Components for every page, written only in the theme's variables (src/theme.ts).
 export const COMPONENTS_CSS = `
 /* Shared workbench kit. Scoped classes let later passes migrate one view at a time. */
+.wb-org-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-3);margin:var(--space-3) 0}
+.wb-org-card{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;padding:var(--space-4);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r);background:linear-gradient(120deg,var(--accent-soft),var(--panel));color:var(--ink);text-decoration:none;box-shadow:var(--elevation-1);transition:box-shadow .15s,border-color .15s}
+.wb-org-card:hover{border-color:var(--accent);box-shadow:var(--elevation-2)}
+.wb-org-heading{display:flex;align-items:start;justify-content:space-between;gap:var(--space-2)}.wb-org-heading strong{font-size:var(--fs-h1);overflow-wrap:anywhere}.wb-org-role{font-size:var(--fs-xs);border:1px solid var(--line);border-radius:var(--r-sm);padding:2px 7px;background:var(--panel);color:var(--muted)}
+.wb-org-address{font-family:var(--mono);font-size:var(--fs-sm);color:var(--muted);overflow-wrap:anywhere}.wb-org-open{color:var(--accent);font-weight:600;margin-top:var(--space-2)}
+.landing{max-width:960px}.landing-hero{padding:var(--space-3) 0}.landing-hero .lede{margin-bottom:var(--space-3)}.landing-heading{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);flex-wrap:wrap}.landing-heading h2{margin:0;font-size:var(--fs-h1)}
+.landing-setup{margin-top:var(--space-4);padding:var(--space-4);background:var(--sunk);border:1px solid var(--line);border-radius:var(--r)}.landing-setup h2{margin:0;font-size:var(--fs-h1)}.landing-setup ol{padding-left:20px}.landing-setup li{margin:var(--space-2) 0}.landing-secondary{margin-top:var(--space-4);border-top:1px solid var(--line);padding-top:var(--space-3)}
+.landing-create{margin:var(--space-3) 0}.landing-create>summary{display:inline-flex;align-items:center;list-style:none;cursor:pointer;background:var(--accent);color:var(--on-primary);border:1px solid var(--accent);border-radius:var(--r-sm);padding:6px 12px;font-weight:600}.landing-create>summary::-webkit-details-marker{display:none}.landing-create[open]>summary{margin-bottom:var(--space-2)}
+@media(max-width:760px){.wb-org-grid{grid-template-columns:1fr}.landing-create>summary{min-height:var(--tap)}}
 .wb-breadcrumb ol{display:flex;flex-wrap:wrap;list-style:none;padding:0;margin:0 0 var(--space-2);gap:var(--space-1);font-size:var(--fs-sm)}
 .wb-breadcrumb li+li:before{content:"›";margin-right:var(--space-1);color:var(--faint)}
 .wb-breadcrumb a{color:var(--muted);text-decoration:none}
