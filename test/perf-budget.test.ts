@@ -530,7 +530,7 @@ describe("isolated synthetic journeys", () => {
         await guard({request:()=>request("https://third-party.test/"),abort,continue:proceed});
         expect(abort).toHaveBeenCalledOnce();expect(proceed).not.toHaveBeenCalled();
         await guard({request:()=>request("https://perf-synthetic.pimwell.test/mcp"),abort,continue:proceed});
-        expect(proceed).toHaveBeenCalledWith({headers:{"x-pimwell-synthetic":expect.any(String)}});
+        expect(proceed).toHaveBeenCalledWith({headers:{origin:undefined,"x-pimwell-synthetic":expect.any(String)}});
       },newPage:async()=>page,
       addCookies:async([p]:{value:string}[])=>{cookies="pmw_session="+p!.value;}
     }),close} as never);
