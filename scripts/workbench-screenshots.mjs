@@ -666,7 +666,9 @@ try {
         await expect(page.locator('#list .card, #list .grid, #list .onramp')).toHaveCount(0);
         await expect(page.locator(`#list .wb-toolbar[aria-label="${name === 'home' ? 'Home actions' : 'Project actions'}"]`)).toHaveCount(1);
         if (viewport.width === 1440 && name === 'home') {
-          expect(await page.locator('#list').evaluate(el => el.scrollHeight <= el.clientHeight), name+' fits without scrolling').toBe(true);
+          const connector = page.locator('#list .mcp-connect');
+          await expect(connector).toBeVisible();
+          expect(await connector.evaluate(el => el.getBoundingClientRect().bottom <= window.innerHeight), 'connector steps fit above the fold').toBe(true);
         }
         await page.evaluate(() => { window.overviewList = document.getElementById('list'); });
         const link = page.locator('#list tr[data-href] a').first();

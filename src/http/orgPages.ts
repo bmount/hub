@@ -1,3 +1,4 @@
+import { mcpConnectCard } from "./mcpConnect";
 import { PART_CONTENT } from "../verbs/project";
 import type { ProjectFeature } from "../projectFeatures";
 import { projectControls } from "./projectControls";
@@ -62,6 +63,7 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   if (selected !== null && !chosen) return notFoundPage(extra);
   const actions = `${rank(ctx.role) >= rank("member") ? '<a href="/projects/new">New project</a><a href="/people?connect=1">Connect an agent</a>' : ""}${rank(ctx.role) >= rank("admin") ? '<a href="/people?invite=1">Invite a person</a>' : ""}${rank(ctx.role) >= rank("member") ? '<a href="/new">File</a>' : ""}<a href="/archive">Archive</a>`;
   const list = `<div class="head"><h1>${esc(t.display_name)}</h1><span>${plural(rows.length,"project")}</span></div>${toolbar("Home actions", actions)}<p class="wb-hint">${esc(shellFor(ctx,env,"home")!.tip)}</p>
+${mcpConnectCard(env, [{ slug: t.slug, name: t.display_name }])}
 <h2>Projects</h2>${kitTable("Projects", [{label:"Project"},{label:"Kind"},{label:"Open work"},{label:"Needs me"},{label:"Last activity"}], rows.map(p => {
     const href = `/?project=${encodeURIComponent(p.path)}`;
     return {href, selected: p.path === selected, cells: [{html:`<a href="${esc(href)}">${esc(p.display_name)}</a> <small>${esc(p.path)}</small>`},{html:esc(p.kind)},{html:String(p.open_work)},{html:String(p.needs)},{html:ago(ctx.now,p.last_activity)}]};

@@ -1,6 +1,7 @@
 import { sameOrigin } from "./login";
 import type { Env } from "../env";
 import { shellFor } from "./shell";
+import { mcpConnectCard } from "./mcpConnect";
 import { orgHomePage } from "./orgPages";
 import { localTime, esc, organizationCard, htmlResponse, inspectorSection, kitTable, page, toolbar, workbench } from "../html";
 import { classifyHost } from "../tenant";
@@ -105,7 +106,7 @@ function setupCard(env: Env, orgs: Array<{ slug: string; name: string }>): strin
 <li>Paste the link to your agent and say: <b>"set up pimwell.com with this link"</b>.</li>
 <li>The agent claims the link, connects with its own key, and follows <a href="/setup" data-reload>${esc(env.HUB_DOMAIN)}/setup</a>: it reports its AI usage and wires your apps' errors and deploys in.</li>
 </ol>
-<p class="lede">The agent answers to you and can do what you can, up to a member's rights. For Claude or ChatGPT in a browser or on your phone, add a custom connector instead, with <code>https://&lt;org&gt;.${esc(env.HUB_DOMAIN)}/mcp</code>.</p></section>`;
+<p class="lede">The agent answers to you and can do what you can, up to a member's rights. </p></section>`;
 }
 
 export async function homePage(request: Request, env: Env): Promise<Response> {
@@ -121,6 +122,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
     let body = `<div class="landing"><header class="landing-hero"><h1>Hello, ${esc(ctx.identity.display_name)}</h1>
 <p class="lede">What would you like to move forward? Ask here or open your team's organization.</p>
 ${intentBox({ placeholder: "What do you want to do? Say it or type it" })}</header>`;
+    body += mcpConnectCard(env, memberships.map((m) => ({ slug: m.tenant.slug, name: m.tenant.display_name })));
     body += `<section aria-labelledby="your-orgs"><div class="landing-heading"><h2 id="your-orgs">All organizations</h2></div>` + (memberships.length ? `<div class="wb-org-grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, m.membership.role)).join("")}</div>` : `<p class="lede">None yet. Create an organization or accept an invitation.</p>`);
     if (ctx.identity.kind === "human") body += `<details class="landing-create"><summary role="button">New organization</summary>${createForm}</details>`;
     body += `</section>`;

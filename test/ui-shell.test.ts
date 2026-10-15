@@ -35,6 +35,34 @@ describe("the signed-in shell", () => {
     }
   });
 
+  it("shows copyable connector URLs on both homes for active memberships", async () => {
+    const w = await world();
+    const other = await seedTenant("other");
+    await seedTenant("hidden");
+    const reader = await seedHuman("reader@example.com", { memberships: [
+      { tenant_id: w.t.id, role: "reader" }, { tenant_id: other.id, role: "member" },
+    ] });
+    for (const [host, urls] of [[HOST, ["acme"]], ["pimwell.test", ["acme", "other"]]] as const) {
+      const html = await (await w.get("/", reader.token, host)).text();
+      expect(html).toContain("Connect Claude or ChatGPT");
+      expect(html).toContain("add a custom connector");
+      expect(html).toContain("approve read and write");
+      for (const [i, slug] of urls.entries()) {
+        expect(html).toContain(`id="mcp-connect-url-${i}" type="text" readonly value="https://${slug}.pimwell.test/mcp"`);
+        expect(html).toContain(`data-copy="#mcp-connect-url-${i}"`);
+      }
+      expect(html).not.toContain("https://hidden.pimwell.test/mcp");
+      if (host === HOST) expect(html).not.toContain("https://other.pimwell.test/mcp");
+    }
+    const apex = await (await w.get("/", w.pat.token, "pimwell.test")).text();
+    expect(apex).toContain("Set up with your agent");
+    expect(apex).toContain('href="https://acme.pimwell.test/people?connect=1"');
+    expect(apex).not.toContain("https://&lt;org&gt;");
+    expect(apex.indexOf('class="mcp-connect"')).toBeLessThan(apex.indexOf('aria-labelledby="your-orgs"'));
+    const anonymous = await (await SELF.fetch("https://pimwell.test/")).text();
+    expect(anonymous).not.toContain('class="mcp-connect"');
+  });
+
   it("reports server time on every page", async () => {
     const w = await world();
     for (const path of ["/", "/docket", "/site"]) expect((await w.get(path)).headers.get("server-timing"), path).toMatch(/^app;dur=\d+(?:\.\d+)?, db;desc="\d+ round trips, \d+ statements";dur=\d+(?:\.\d+)?, span0;/);
