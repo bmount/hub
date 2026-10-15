@@ -806,6 +806,35 @@ try {
   await db.prepare('INSERT INTO project (id,tenant_id,slug,kind,display_name,created_at) VALUES (?,?,?,\'repo\',?,?)')
     .bind(id(), tenant, 'site', 'Site', now).run();
   await verb(member, 'work.create', { project: 'site', kind: 'snag', title: 'Browser list retention' });
+  // The same domain-scoped session must survive org → hub → another org.
+  await db.prepare("INSERT INTO membership (id,identity_id,tenant_id,role,created_at) SELECT ?, identity_id, ?, 'member', ? FROM session WHERE token_hash = ?")
+    .bind(id(), otherTenant, now, createHash('sha256').update(member).digest('hex')).run();
+  for (const width of [1440, 390]) {
+    const switchCtx = await context(member, { width, height: 1000 });
+    const page = await switchCtx.newPage();
+    await page.goto('https://pimwell.test/');
+    await page.getByRole('link', { name: 'ACME', exact: true }).click();
+    await page.goto(base + '/site/w/1'); // Direct nested link, then refresh.
+    await page.reload();
+    await expect(page.locator('#inspector')).toContainText('Browser list retention');
+    async function allOrganizations() {
+      if (width === 390) await page.getByRole('link', { name: 'Menu', exact: true }).click();
+      await page.getByRole('link', { name: 'All organizations', exact: true }).click();
+      await expect(page).toHaveURL('https://pimwell.test/');
+      await expect(page.getByRole('heading', { name: 'Your organizations', exact: true })).toBeVisible();
+      await expect(page.getByRole('link', { name: 'OTHER', exact: true })).toBeVisible();
+    }
+    await allOrganizations();
+    await page.getByRole('link', { name: 'OTHER', exact: true }).click();
+    await expect(page).toHaveURL('https://other.pimwell.test/people?connect=1');
+    await allOrganizations();
+    await page.goBack();
+    await expect(page).toHaveURL('https://other.pimwell.test/people?connect=1');
+    await page.reload();
+    await allOrganizations();
+    await switchCtx.close();
+    console.log('PASS organization return journey at ' + width + 'px');
+  }
   const workCtx = await context(member, { width: 1440, height: 1000 });
   const workPage = await workCtx.newPage();
   await workPage.goto(`${base}/site/docket?kind=snag`);

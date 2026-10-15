@@ -34,6 +34,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
     const link = (href: string, label: string, section: Section | null, count?: number) => ({ href, label, active: section === active && key !== "search", ...(count !== undefined ? { count } : {}) });
     const nav = [
       link("/", "Home", "home"),
+      link(hub, "All organizations", null),
       link("/attention", "Needs me", "attention", r?.needs),
       link("/docket", "Docket", "docket", r?.open),
       link("/docket?owner=me", "Mine", "mine", r?.mine),

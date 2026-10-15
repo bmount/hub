@@ -21,13 +21,14 @@ const hasTip = (html: string) => TIPS.some((t) => html.includes(t.replace(/'/g, 
 describe("the signed-in shell", () => {
   it("frames every organization page with the same navigation, the current section marked, and a reminder", async () => {
     const w = await world();
-    for (const [path, label] of [["/", "Home"], ["/docket", "Docket"], ["/mail", "Mail"], ["/c", "Chat"], ["/people", "People and agents"]] as const) {
+    for (const [path, label] of [["/", "Home"], ["/docket", "Docket"], ["/mail", "Mail"], ["/c", "Chat"], ["/people", "People and agents"], ["/site/w/1", "Docket"]] as const) {
       const res = await w.get(path);
       expect(res.status, path).toBe(200);
       const html = await res.text();
       expect(html, path).toContain('<nav class="wb-tree" aria-label="Primary">');
       expect(html.slice(html.indexOf('<aside id="rail"'), html.indexOf('<aside id="explorer"')), path).toMatch(new RegExp(`aria-current="page">${label}(?:<span class="wb-count">\\d+</span>)?</a>`));
       expect(html, path).toContain('class="wb-breadcrumb" aria-label="Breadcrumb"');
+      expect(html, path).toContain('href="https://pimwell.test/">All organizations</a>');
       expect(html, path).toContain('aria-label="Project explorer"');
       expect(hasTip(html), path).toBe(path === "/");
       expect(html.slice(html.indexOf('<footer class="status"')), path).not.toContain('class="tip"');
