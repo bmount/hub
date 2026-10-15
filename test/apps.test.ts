@@ -260,7 +260,7 @@ describe("sites", () => {
       expect(summaryHtml).toContain('data-performance-load=');expect(summaryHtml).toContain('aria-busy="true"');
       expect(summaryHtml.replaceAll('\u00a0',' ')).toContain('100 ms');
       expect(summaryHtml).not.toContain('Histogram: none');expect(summaryHtml).not.toContain('Waterfall: no retained points');
-      expect(sqls).toHaveLength(1);expect(sqls[0]).toContain('GROUP BY label ORDER BY total DESC LIMIT 200');
+      expect(sqls).toHaveLength(1);expect(sqls[0]).toContain('GROUP BY label ORDER BY total DESC LIMIT 200');expect(sqls[0]).not.toContain('AS hist0');
       clearPerformanceCache();sqls.length=0;
       const pending=get("&selected=%2F%3Aproject");
       try {
@@ -272,10 +272,11 @@ describe("sites", () => {
       expect(html).toContain("100 ms");expect(html).toContain("pricebench/files?ref="+"a".repeat(40));expect(html).toContain('id="inspector"');
       expect(sqls.filter(sql=>sql.includes("ORDER BY n * p50"))).toHaveLength(4); // Sentinel falls back to exact aggregates.
       expect(sqls.some(sql=>sql.includes("GROUP BY bucket"))).toBe(false);
-      const listSQL=sqls.find(sql=>sql.includes("AS hist0"))!;
-      expect(listSQL).toContain("SUM(IF(double1 < 10, _sample_interval, 0)) AS hist0");
-      expect(listSQL).toContain("SUM(IF(double1 >= 10 AND double1 < 25, _sample_interval, 0)) AS hist1");
-      expect(listSQL).toContain("SUM(IF(double1 >= 5000 AND 1 = 1, _sample_interval, 0)) AS hist9");
+      const histogramSQL=sqls.find(sql=>sql.includes("AS hist0"))!;
+      expect(histogramSQL).toContain("blob8 = '/:project'");expect(histogramSQL).not.toContain('LIMIT 200');
+      expect(histogramSQL).toContain("SUM(IF(double1 < 10, _sample_interval, 0)) AS hist0");
+      expect(histogramSQL).toContain("SUM(IF(double1 >= 10 AND double1 < 25, _sample_interval, 0)) AS hist1");
+      expect(histogramSQL).toContain("SUM(IF(double1 >= 5000 AND 1 = 1, _sample_interval, 0)) AS hist9");
       expect(html).not.toContain(measured.PERF_ANALYTICS_TOKEN);
       const hash=await tenantHash(w.t.id,measured.PERF_TENANT_KEY);
       for(const sql of sqls) {expect(sql).not.toContain(`blob5 = '${hash}'`);expect(sql).toContain("blob1 = 'prices.example.com'");expect(sql).toContain("blob2 IN ('pricebench')");}

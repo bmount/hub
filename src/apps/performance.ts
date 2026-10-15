@@ -211,6 +211,7 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
     // At the sentinel, retain the four exact remote aggregates rather than truncate splits.
     const points=query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, double20 AS generation, IF(blob19 != '' OR blob20 != '', 1, 0) AS sourced, _sample_interval AS weight${client?"":", blob11 AS auth, double2 AS isolate, blob10 AS status, double5 AS failed, double14 AS complete"} FROM pimwell_perf WHERE ${selected} ORDER BY sourced DESC, generation DESC, duration DESC LIMIT ${client?5:5000}`);
     const exemplarRows=points.then(rows=>rows.slice(0,5).map(({auth:_auth,isolate:_isolate,status:_status,failed:_failed,complete:_complete,...row})=>row));
+    const histogramRead=query(`SELECT ${histogramMetrics} FROM pimwell_perf WHERE ${selected}`).then(rows=>bounds.concat(Infinity).flatMap((_,bucket)=>Number(rows[0]?.[`hist${bucket}`])>0?[{bucket,n:rows[0]![`hist${bucket}`]!}]:[]));
     const distribution=Promise.all([
       client ? originClientSplits(query,scope.where,selected) : points.then(rows=>rows.length<5000?sampleSplits(rows,splits):Promise.all(Object.entries(splits).map(async ([name,column])=>[name,await query(`SELECT ${column} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label ORDER BY n * p50 DESC LIMIT 100`)] as const))),
       s.kind==="spinners"?query(`SELECT blob8 AS label, blob19 AS previous, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label, previous ORDER BY total DESC LIMIT 20`):Promise.resolve([]),
@@ -229,13 +230,13 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
       const [sql,spans]=await Promise.all([statements,waterfall]);
       return {exemplars:exemplars.map(({tenant: _tenant,...row})=>row),sql,waterfall:spans};
     })();
-    const [[splitRows,triggers],details]=await Promise.all([distribution,detail]);
-    return {splits:Object.fromEntries(splitRows),triggers,...details};
+    const [[splitRows,triggers],details,histogram]=await Promise.all([distribution,detail,histogramRead]);
+    return {splits:Object.fromEntries(splitRows),triggers,...details,histogram};
   };
   // Start the dependent exemplar chain before independent list/distribution work fills fetch slots.
   const inspectorRead=s.selected&&!summaryOnly?readInspector():Promise.resolve(null);
   const [[overview,spark,browser,comparison,breakdown],inspector]=await Promise.all([Promise.all([
-    query(`SELECT ${dim} AS label, ${weightedMetrics}, ${histogramMetrics} FROM pimwell_perf WHERE ${overviewFilter} GROUP BY label ORDER BY total DESC LIMIT 200`),
+    query(`SELECT ${dim} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${overviewFilter} GROUP BY label ORDER BY total DESC LIMIT 200`),
     summaryOnly ? Promise.resolve([]) : query(`SELECT ${dim} AS label, intDiv(toUInt32(timestamp), ${bucket}) AS bucket, quantileWeighted(0.5)(double1, _sample_interval) AS p50, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${overviewFilter} GROUP BY label, bucket ORDER BY label, bucket LIMIT 3000`),
     !summaryOnly && s.kind==="routes" ? query(`SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob7 AS kind, blob3 AS version, blob14 AS name, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND (blob7 = 'request' OR (blob7 = 'client' AND ((blob9 = 'page' AND blob14 IN ('network','render')) OR blob9 IN ('fetch','paint')))) GROUP BY tenant, request, label, kind, version, name, phase LIMIT 5000`) : Promise.resolve([]),
     s.kind==="deploys" && s.version && s.previous ? query(`SELECT blob8 AS label, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'request' AND blob3 IN (${quote(s.version)},${quote(s.previous)}) GROUP BY label, version ORDER BY label LIMIT 400`) : Promise.resolve([]),
@@ -251,10 +252,5 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
     for(const row of overview) for(const phase of ['fetch','render','paint']) { const p=phases.find(p=>p.label===row.label&&p.phase===phase); if(p) row[phase]=p.mean!; }
   }
   if(!s.selected || !(s.kind==="deploys"?comparison:overview).some(r=>r.label===s.selected)) return result;
-  // The list aggregate already scans precisely this population; count buckets there,
-  // rather than making another remote scan. Never derive a distribution from quantiles.
-  // Comparison can select routes outside the overview's top 200.
-  const selectedRow=overview.find(r=>r.label===s.selected) ?? (s.kind==="deploys" ? (await query(`SELECT ${histogramMetrics} FROM pimwell_perf WHERE ${filter} AND ${dim} = ${quote(s.selected)}`))[0] : undefined);
-  const histogram=selectedRow?bounds.concat(Infinity).flatMap((_,bucket)=>Number(selectedRow[`hist${bucket}`])>0?[{bucket,n:selectedRow[`hist${bucket}`]!}]:[]):[];
-  return {...result,...inspector,histogram};
+  return {...result,...inspector};
 }

@@ -119,6 +119,13 @@ export async function performancePage(request:Request,env:Env,ctx:Ctx,site:SiteR
   const url=new URL(request.url);
   let s:PerfSelection;
   try {s=performanceSelection(url.searchParams);} catch {return notFoundPage(extra);}
+  const full=url.searchParams.get("details")==="1";
+  const fragment=request.headers.get("x-performance-details")==="1";
+  const progressive=!!s.selected&&!full;
+  // Unfiltered summaries do not depend on deployment metadata. Overlap that D1
+  // read with scope authorization and analytics; consume failures in the usual UI.
+  const earlyData=!s.version&&!s.previous&&s.kind!=="deploys"
+    ? readPerformance(ctx,site,s,false,progressive).then(data=>({data}),error=>({error})) : undefined;
   const deployments=(await deploysStatement(ctx,site.project,site.id).all<DeployRow>()).results;
   const versions:Version[]=[];
   for(const row of deployments) {const view=deployView(row),id=view.release?.version;if(typeof id==="string"&&!versions.some(v=>v.id===id)) versions.push({id,worker:row.script_name,commit:view.commitRef?.split("@")[1]??null,repository:(row.repository_count ?? 0)>1 ? row.repo || row.default_repository : undefined});}
@@ -129,13 +136,12 @@ export async function performancePage(request:Request,env:Env,ctx:Ctx,site:SiteR
     s.previous ||= versions.slice(versions.findIndex(v=>v.id===s.version)+1).find(v=>v.worker===current?.worker)?.id??"";
     if(s.previous&&versions.find(v=>v.id===s.previous)?.worker!==current?.worker) return notFoundPage(extra);
   }
-  const full=url.searchParams.get("details")==="1";
-  const fragment=request.headers.get("x-performance-details")==="1";
-  const progressive=!!s.selected&&!full;
   const href=(changes:Record<string,string|null>)=>{const q=new URLSearchParams(url.searchParams);q.delete("details");q.set("project",site.project);q.set("site",site.name);q.set("view","performance");q.set("kind",s.kind);q.set("hours",String(s.hours));if(s.version)q.set("version",s.version);if(s.previous)q.set("previous",s.previous);for(const [k,v] of Object.entries(changes))v===null?q.delete(k):q.set(k,v);return `/apps?${q}`;};
   let markup:{list:string;inspector:string|null}, listDigest="unavailable";
   try {
-    const data=await readPerformance(ctx,site,s,false,progressive);
+    const read=earlyData?await earlyData:{data:await readPerformance(ctx,site,s,false,progressive)};
+    if("error" in read) throw read.error;
+    const data=read.data;
     if(s.selected&&!(s.kind==="deploys"?data.comparison:data.overview).some(r=>r.label===s.selected)) return notFoundPage(extra);
     listDigest=await sha256Hex(JSON.stringify([data.overview,data.spark,data.breakdown,data.browser,data.comparison,versions]));
     markup=performanceMarkup(site,s,data,versions,href,progressive?href({details:"1"}):undefined);
