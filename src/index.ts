@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "./env";
-import { installFetchTiming, tracedInvocation } from "./perf";
+import { installFetchTiming, tracedInvocation, markHttpEntry } from "./perf";
 
 export { Conversation } from "./chat/conversationDO";
 export { Inbox } from "./chat/inboxDO";
@@ -10,6 +10,7 @@ installFetchTiming();
 
 export default {
   async fetch(request: Request, env, ctx) {
+    markHttpEntry(request);
     return (await import("./hub")).default.fetch(request, env, ctx);
   },
   async email(message, env, ctx) {

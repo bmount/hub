@@ -4,7 +4,7 @@ import { validClientPoint, timingPath } from "../src/clientTiming";
 import { situationReport } from "../src/http/situationPage";
 import { checkPerformance, runPerformanceChecks, type CheckTarget } from "../src/perf/checks";
 import { BUDGETS } from "../src/perf/budgets";
-import { instrumentDurableObject, requestId, timedEnv, withTrace, newTrace, span, traceFields, writeTrace, writeClientPoints, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, applicationSource, type TimingSpan } from "../src/perf";
+import { instrumentDurableObject, requestId, timedEnv, withTrace, newTrace, markHttpEntry, newHttpTrace, transferredTrace, span, traceFields, writeTrace, writeClientPoints, deferredTrace, meteredD1, hasSpan, exclusiveDuration, attributedDurations, applicationSource, type TimingSpan } from "../src/perf";
 import worker from "../src/index";
 import { app } from "../src/hub";
 import gitWorker from "../git-proxy/index";
@@ -356,6 +356,55 @@ describe("request tracing guardrails", () => {
     for (const point of c.points) expect(point.blobs?.[4]).toMatch(/^[0-9a-f]{32}$/);
     const serialized = JSON.stringify(c.points);
     for (const secret of [human.token, agent.longLived, tenant.id, human.identity.email, "private-project-name", "private-search", "private-repository"]) expect(serialized).not.toContain(secret);
+  });
+
+  it("includes deferred HTTP initialization once without inflating warm or receiver roots", async () => {
+    const clock = vi.spyOn(performance, "now");
+    const wall = vi.spyOn(Date, "now");
+    try {
+      const first = new Request("https://" + HOST + "/");
+      const overlapping = new Request(first.url);
+      clock.mockReturnValue(100); wall.mockReturnValue(1000);
+      markHttpEntry(first);
+      clock.mockReturnValue(120); wall.mockReturnValue(1020);
+      markHttpEntry(overlapping);
+      clock.mockReturnValue(150); wall.mockReturnValue(1050);
+      const cold = newHttpTrace(first);
+      const concurrent = newHttpTrace(overlapping);
+      expect([cold.started, cold.at, concurrent.started, concurrent.at]).toEqual([100, 1000, 120, 1020]);
+      // Consumed entry cannot backdate a second trace; receiver paths ignore it.
+      expect(newHttpTrace(first).started).toBe(150);
+      expect(transferredTrace(first).started).toBe(150);
+      cold.ended = 180;
+      const c = collector();
+      await writeTrace(c.measured, cold);
+      const roots = c.points.filter(p => p.blobs?.[6] === "request");
+      expect(roots).toHaveLength(1);
+      expect(roots[0]!.doubles?.[0]).toBe(80);
+      expect(roots[0]!.doubles?.[15]).toBe(1000);
+      const warm = new Request(first.url);
+      clock.mockReturnValue(200); markHttpEntry(warm);
+      clock.mockReturnValue(201);
+      expect(newHttpTrace(warm).started).toBe(200);
+      expect(newHttpTrace(new Request(first.url)).started).toBe(201);
+    } finally { clock.mockRestore(); wall.mockRestore(); }
+  });
+
+  it("uses the HTTP entry start for both the header and the single recorded server root", async () => {
+    const request = new Request("https://" + HOST + "/");
+    const clock = vi.spyOn(performance, "now");
+    const c = collector();
+    try {
+      clock.mockReturnValue(100);
+      markHttpEntry(request);
+      clock.mockReturnValue(175);
+      const response = await app.fetch(request, c.measured, c.ctx);
+      expect(response.headers.get("server-timing")).toMatch(/^app;dur=75.0,/);
+      await response.text(); await c.flush();
+      const roots = c.points.filter(p => p.blobs?.[6] === "request");
+      expect(roots).toHaveLength(1);
+      expect(roots[0]!.doubles?.[0]).toBe(75);
+    } finally { clock.mockRestore(); }
   });
 
   it("isolates overlapping traces, preserves failures and folds excess spans into other", async () => {

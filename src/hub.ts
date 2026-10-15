@@ -18,7 +18,7 @@ import { assetResponse } from "./assets";
 import { htmlResponse, page } from "./html";
 import { Hono } from "hono";
 import type { Env } from "./env";
-import { meteredD1, serverTiming, type Meter, newTrace, withTrace, span, timedEnv, deferredTrace, tracedInvocation, spanFunction, traceFields } from "./perf";
+import { meteredD1, serverTiming, type Meter, newHttpTrace, withTrace, span, timedEnv, deferredTrace, tracedInvocation, spanFunction, traceFields } from "./perf";
 import { emit, note, requestLine } from "./log";
 import { handleApi } from "./http/api";
 import { handleChatApi } from "./http/chatApi";
@@ -76,10 +76,9 @@ for (const method of ["get", "post", "put", "delete", "patch", "options", "all"]
 // Performance is first-class (overnight plan task 7): every hub response says how long the Worker spent on it.
 // Workers' clock only advances across I/O, so this is wall time spent waiting on D1, KV and other services.
 app.use("*", async (c, next) => {
-  const started = Date.now();
   const meter: Meter = { trips: 0, statements: 0, ms: 0 };
   // This request's own copy of the bindings, with D1 metered; other requests are unaffected.
-  const trace = newTrace(c.req.method, String(c.req.raw.cf?.colo ?? ""));
+  const trace = newHttpTrace(c.req.raw);
   const rawEnv = c.env;
   c.env = { ...timedEnv(c.env), HUB_DB: meteredD1(c.env.HUB_DB, meter) };
   trace.route = c.req.matchedRoutes.at(-1)?.path ?? "not_found";
@@ -93,7 +92,7 @@ app.use("*", async (c, next) => {
   headers.set("x-request-id", trace.id);
   headers.set("x-pimwell-version", rawEnv.WORKER_VERSION?.id ?? "unknown");
   headers.set("x-pimwell-colo", String(c.req.raw.cf?.colo ?? "unknown"));
-  headers.set("server-timing", serverTiming(Date.now() - started, meter, trace) + `, request;desc="${trace.id}"`);
+  headers.set("server-timing", serverTiming(trace.ended - trace.started, meter, trace) + `, request;desc="${trace.id}"`);
   c.res = new Response(c.res.body, { status: c.res.status, statusText: c.res.statusText, headers,
     ...(c.res.webSocket ? { webSocket: c.res.webSocket } : {}) });
   c.executionCtx.waitUntil(deferredTrace(rawEnv, trace));
@@ -103,7 +102,7 @@ app.use("*", async (c, next) => {
     console.error("request exception");
   }
   // Logging must never break a response.
-  try { emit(requestLine(c.req.raw, c.res?.status ?? 500, Date.now() - started, meter)); } catch { /* ignore */ }
+  try { emit(requestLine(c.req.raw, c.res?.status ?? 500, trace.ended - trace.started, meter)); } catch { /* ignore */ }
 });
 
 app.use("*", async (c, next) => {

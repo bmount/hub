@@ -22,6 +22,19 @@ export function newTrace(method = "", colo = ""): Trace {
   cold = false;
   return trace;
 }
+// Request identity keeps concurrent lazy imports independent; never trust a header
+// or an isolate-wide offset, which would also inflate warm/receiver traces.
+const httpEntries = new WeakMap<Request, { started: number; at: number }>();
+export function markHttpEntry(request: Request): void {
+  httpEntries.set(request, { started: performance.now(), at: Date.now() });
+}
+export function newHttpTrace(request: Request): Trace {
+  const entry = httpEntries.get(request);
+  httpEntries.delete(request);
+  const trace = newTrace(request.method, String(request.cf?.colo ?? ""));
+  if (entry) Object.assign(trace, entry);
+  return trace;
+}
 export function withTrace<T>(trace: Trace, fn: () => T): T { return context.run({ trace, parent: trace.parent }, fn); }
 export function traceColo(): string { return context.getStore()?.trace.colo ?? ""; }
 export function traceFields(fields: Partial<Pick<Trace, "route" | "auth" | "verb" | "tool" | "tenant">>): void {
