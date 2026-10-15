@@ -28,21 +28,35 @@ const cache=new Map<string,{until:number;rows:PerfRow[];bytes:number}>();
 let cacheBytes=0;
 export function clearPerformanceCache():void {cache.clear();cacheBytes=0;}
 export class PerformanceUnavailable extends Error {}
-export async function analyticsQuery(ctx:Pick<Ctx,"env">, sql:string):Promise<PerfRow[]> {
+export async function analyticsQuery(ctx:Pick<Ctx,"env">, sql:string, critical=false):Promise<PerfRow[]> {
   const account=ctx.env.ARTIFACTS_ACCOUNT_ID, token=ctx.env.PERF_ANALYTICS_TOKEN;
   if(!account || !/^[0-9a-f]{32}$/.test(account) || !token) throw new PerformanceUnavailable("Performance reporting is not connected.");
   for(const [key,value] of cache) if(value.until<=Date.now()) {cache.delete(key);cacheBytes-=value.bytes;}
   const key=account+":"+sql, hit=cache.get(key);
   if(hit) return structuredClone(hit.rows);
-  let response:Response;
-  try {
-    response=await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/analytics_engine/sql`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"text/plain"},body:sql,signal:AbortSignal.timeout(10_000)});
-  } catch {throw new PerformanceUnavailable("Performance reporting is temporarily unavailable.");}
-  if(!response.ok) throw new PerformanceUnavailable("Performance reporting is temporarily unavailable.");
-  let payload:{data?:unknown};
-  try {payload=await response.json() as {data?:unknown};} catch {throw new PerformanceUnavailable("Performance reporting returned an invalid result.");}
-  if(!payload || !Array.isArray(payload.data) || payload.data.length>5000 || payload.data.some(r=>!r || typeof r!=="object" || Object.values(r).some(v=>typeof v!=="string" && typeof v!=="number"))) throw new PerformanceUnavailable("Performance reporting returned an invalid result.");
-  const rows=payload.data as PerfRow[];
+  const read=async(signal:AbortSignal):Promise<PerfRow[]>=>{
+    let response:Response;
+    try {
+      response=await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/analytics_engine/sql`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"text/plain"},body:sql,signal});
+    } catch {throw new PerformanceUnavailable("Performance reporting is temporarily unavailable.");}
+    if(!response.ok) throw new PerformanceUnavailable("Performance reporting is temporarily unavailable.");
+    let payload:{data?:unknown};
+    try {payload=await response.json() as {data?:unknown};} catch {throw new PerformanceUnavailable("Performance reporting returned an invalid result.");}
+    if(!payload || !Array.isArray(payload.data) || payload.data.length>5000 || payload.data.some(r=>!r || typeof r!=="object" || Object.values(r).some(v=>typeof v!=="string" && typeof v!=="number"))) throw new PerformanceUnavailable("Performance reporting returned an invalid result.");
+    return payload.data as PerfRow[];
+  };
+  let rows:PerfRow[];
+  if(!critical) rows=await read(AbortSignal.timeout(10_000));
+  else {
+    // Only the two serialized inspector reads may hedge; at most nine cold requests
+    // on the complete-population path, versus twelve before batching.
+    const primary=new AbortController(),backup=new AbortController();
+    let timer:ReturnType<typeof setTimeout>;
+    const second=new Promise<PerfRow[]>((resolve,reject)=>{timer=setTimeout(()=>{void read(AbortSignal.any([backup.signal,AbortSignal.timeout(10_000)])).then(resolve,reject);},100);});
+    try {rows=await Promise.any([read(AbortSignal.any([primary.signal,AbortSignal.timeout(10_000)])),second]);}
+    catch(e) {throw e instanceof AggregateError?e.errors[0]:e;}
+    finally {clearTimeout(timer!);primary.abort();backup.abort();}
+  }
   const bytes=JSON.stringify(rows).length*2;
   if(bytes<=4_000_000) {
     const replaced=cache.get(key);if(replaced){cacheBytes-=replaced.bytes;cache.delete(key);}
@@ -199,7 +213,7 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   const versionFilter=s.kind==="deploys"&&s.version&&s.previous?` AND blob3 IN (${quote(s.version)},${quote(s.previous)})`:s.version?` AND blob3 = ${quote(s.version)}`:"";
   const filter=`${scope.where} AND ${population(s)}${versionFilter}`;
   const overviewFilter=`${filter}${detailOnly&&s.selected?` AND ${dim} = ${quote(s.selected)}`:""}`;
-  const query=(sql:string)=>analyticsQuery(ctx,sql);
+  const query=(sql:string,critical=false)=>analyticsQuery(ctx,sql,critical);
   const bucket=s.hours===1?300:s.hours===24?7200:50400;
   const bounds=[10,25,50,100,250,500,1000,2500,5000];
   const histogramMetrics=bounds.concat(Infinity).map((bound,index)=>`SUM(IF(${index?`double1 >= ${bounds[index-1]} AND `:""}${Number.isFinite(bound)?`double1 < ${bound}`:"1 = 1"}, _sample_interval, 0)) AS hist${index}`).join(", ");
@@ -209,7 +223,7 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
     const client=s.kind==="interactions"||s.kind==="spinners";
     // A strict under-limit result is the entire weighted population, not a recent sample.
     // At the sentinel, retain the four exact remote aggregates rather than truncate splits.
-    const points=query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, double20 AS generation, IF(blob19 != '' OR blob20 != '', 1, 0) AS sourced, _sample_interval AS weight${client?"":", blob11 AS auth, double2 AS isolate, blob10 AS status, double5 AS failed, double14 AS complete"} FROM pimwell_perf WHERE ${selected} ORDER BY sourced DESC, generation DESC, duration DESC LIMIT ${client?5:5000}`);
+    const points=query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, double20 AS generation, IF(blob19 != '' OR blob20 != '', 1, 0) AS sourced, _sample_interval AS weight${client?"":", blob11 AS auth, double2 AS isolate, blob10 AS status, double5 AS failed, double14 AS complete"} FROM pimwell_perf WHERE ${selected} ORDER BY sourced DESC, generation DESC, duration DESC LIMIT ${client?5:5000}`,true);
     const exemplarRows=points.then(rows=>rows.slice(0,5).map(({auth:_auth,isolate:_isolate,status:_status,failed:_failed,complete:_complete,...row})=>row));
     const distribution=Promise.all([
       client ? originClientSplits(query,scope.where,selected) : points.then(rows=>rows.length<5000?sampleSplits(rows,splits):Promise.all(Object.entries(splits).map(async ([name,column])=>[name,await query(`SELECT ${column} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label ORDER BY n * p50 DESC LIMIT 100`)] as const))),
@@ -225,7 +239,7 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
       const request=s.request ? ids.includes(s.request)?s.request:"" : ids[0]??"";
       const exemplarTenant=exemplars.find(r=>r.request===request)?.tenant;
       // Keep a client-supplied request ID within its exemplar tenant, even in site-wide views.
-      const waterfall=request?query(`SELECT blob6 AS request, blob7 AS kind, blob14 AS name, blob9 AS phase, IF(blob7 = 'client', blob20, blob19) AS source, IF(blob7 = 'client', '', blob20) AS code, blob15 AS fingerprint, blob3 AS version, blob2 AS worker, double1 AS duration, double3 AS span, double4 AS parent, double14 AS complete, double15 AS offset, double16 AS started, double20 AS schema, _sample_interval AS weight FROM pimwell_perf WHERE ${scope.where} AND blob6 = ${quote(request)}${exemplarTenant!==undefined?` AND blob5 = ${quote(String(exemplarTenant))}`:""} AND blob7 IN ('request','rpc','span','client','other') AND NOT (blob7 = 'client' AND blob14 = 'cls') ORDER BY started, span LIMIT 300`):Promise.resolve([]);
+      const waterfall=request?query(`SELECT blob6 AS request, blob7 AS kind, blob14 AS name, blob9 AS phase, IF(blob7 = 'client', blob20, blob19) AS source, IF(blob7 = 'client', '', blob20) AS code, blob15 AS fingerprint, blob3 AS version, blob2 AS worker, double1 AS duration, double3 AS span, double4 AS parent, double14 AS complete, double15 AS offset, double16 AS started, double20 AS schema, _sample_interval AS weight FROM pimwell_perf WHERE ${scope.where} AND blob6 = ${quote(request)}${exemplarTenant!==undefined?` AND blob5 = ${quote(String(exemplarTenant))}`:""} AND blob7 IN ('request','rpc','span','client','other') AND NOT (blob7 = 'client' AND blob14 = 'cls') ORDER BY started, span LIMIT 300`,true):Promise.resolve([]);
       const [sql,spans]=await Promise.all([statements,waterfall]);
       return {exemplars:exemplars.map(({tenant: _tenant,...row})=>row),sql,waterfall:spans};
     })();
