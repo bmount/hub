@@ -537,7 +537,7 @@ try {
       await expect(page.locator('[data-presence-toggle]')).toHaveText('Share presence in this channel');
       await expect(page.locator('[data-presence-sharing]')).toContainText('Delivery is uncertain');
       // Heartbeat was genuinely accepted; response rejection is not write rejection.
-      expect((await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev').state).toBe('online');
+      await expect.poll(async () => (await verb(member, 'chat.presence', { c: 'general' })).entries.find(e => e.handle === 'dev')?.state).toBe('online');
       const boundedStart = presenceCalls.length;
       await page.clock.fastForward(30000);
       await expect(page.locator('[data-presence-connection]')).toContainText('snapshot refreshed');
@@ -945,8 +945,9 @@ try {
     await expect(boardPage.locator('.closure-report h2')).toHaveText('Recorded closures by person');
     await expect(boardPage.getByRole('table',{name:'Recorded closures',exact:true}).locator('tbody tr')).toHaveCount(1);
     await expect(boardPage.getByRole('table',{name:'Recorded closures',exact:true}).locator('tbody td').last()).toHaveText('1');
-    const coverage = boardPage.locator('.closure-report small');
-    await expect(coverage).toHaveText('Unrecorded closures: 0');
+    // Closure coverage lives on Board now, not the former velocity lede.
+    const coverage = boardPage.getByText('Unrecorded closures: 0', { exact: true });
+    await expect(coverage).toBeVisible();
     await expect(coverage).toHaveAttribute('title', /including reopened items/);
     await expect(coverage).toHaveAttribute('title', /Historical prose events are not attributed/);
     await expect(boardPage.locator('.closure-report img')).toHaveCount(0);
