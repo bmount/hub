@@ -88,24 +88,24 @@ async function setup(role: "member" | "reader" = "member") {
 describe("Artifacts compatibility adapter", () => {
   it("reads a live review tip without repeated immutable fetches or ancestry traversal", async () => {
     const s = await setup();
-    const first = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "main", limit: 1 });
+    const first = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "main", limit: 1, tipOnly: true });
     expect(first.result.commits.map(c => c.oid)).toEqual([hash(4)]);
     expect(s.requests.filter(p => p.endsWith("/log"))).toHaveLength(1);
     expect(s.requests.filter(p => p.includes("/commit/"))).toHaveLength(0);
     s.requests.length = 0;
-    await s.read("log", { ref: "main", limit: 1 });
+    await s.read("log", { ref: "main", limit: 1, tipOnly: true });
     expect(s.requests.filter(p => p.endsWith("/log") || p.includes("/commit/"))).toHaveLength(0);
     expect(s.requests.filter(p => p.endsWith("/info/refs"))).toHaveLength(1);
     expect(s.requests.filter(p => p.endsWith("/repos/site"))).toHaveLength(0);
     s.setHead(hash(2));
-    const moved = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "main", limit: 1 });
+    const moved = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "main", limit: 1, tipOnly: true });
     expect(moved.result.commits.map(c => c.oid)).toEqual([hash(2)]);
     s.setHead(hash(3));s.setDescription("foreign ownership");
-    await expect(s.read("log", { ref: "main", limit: 1 })).rejects.toMatchObject({ status: 503 });
+    await expect(s.read("log", { ref: "main", limit: 1, tipOnly: true })).rejects.toMatchObject({ status: 503 });
     s.setHead(hash(4));
     await env.HUB_DB.prepare("UPDATE membership SET state = 'revoked' WHERE tenant_id = ? AND identity_id = ?")
       .bind(s.tenant.id, s.human.identity.id).run();
-    await expect(s.read("log", { ref: "main", limit: 1 })).rejects.toMatchObject({ status: 403 });
+    await expect(s.read("log", { ref: "main", limit: 1, tipOnly: true })).rejects.toMatchObject({ status: 403 });
   });
   it("resolves log routing and authorization in one live repository lookup", async () => {
     const s = await setup();
@@ -193,6 +193,9 @@ describe("Artifacts compatibility adapter", () => {
     const first = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "HEAD", limit: 2 });
     expect(first.result.commits.map(commit => commit.oid)).toEqual([hash(4), hash(3)]);
     expect(first.next).toBe(hash(3));
+    const single = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "main", limit: 1 });
+    expect(single.result.commits.map(commit => commit.oid)).toEqual([hash(4)]);
+    expect(single.next).toBe(hash(4));
     const next = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "HEAD", limit: 2, since: first.next });
     expect(next.result.commits.map(commit => commit.oid)).toEqual([hash(2), hash(1)]);expect(next.next).toBeNull();
   });

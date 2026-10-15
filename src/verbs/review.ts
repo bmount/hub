@@ -78,7 +78,7 @@ export const reviewRequest = defineVerb({
     if (prior !== null) return requestReplay(ctx, prior, fingerprint!, pr.id);
     const emails = [...new Set(p.reviewers.map(e => e.trim().toLowerCase()))];
     const [page, reviewers] = await Promise.all([
-      codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: `refs/heads/${p.branch}`, limit: 1 }),
+      codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: `refs/heads/${p.branch}`, limit: 1, tipOnly: true }),
       emails.length ? ctx.db.prepare(`SELECT i.id, i.email FROM identity i
         LEFT JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ?
         WHERE i.email IN (${emails.map(() => "?").join(",")}) AND i.state = 'active'

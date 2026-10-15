@@ -82,7 +82,7 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
   }
   // Like immutable file/snapshot hits, a cached commit was ownership-checked when
   // filled. Resolve the branch live and still check scoped index/attribution now.
-  if (verb === "log" && Number(body.limit) === 1 && !body.path && !body.since && revision !== "HEAD") {
+  if (verb === "log" && body.tipOnly === true && Number(body.limit) === 1 && !body.path && !body.since && revision !== "HEAD") {
     const oid = liveRefs ? findRef(await liveRefs, revision) : revision;
     const hit = oid ? await caches.default.match(cacheKey("commit", oid)) : null;
     const commit = hit ? await hit.json() as ArtifactCommit : null;
@@ -215,7 +215,7 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
     const indexed = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactRead.ts:130:27:artifactRead:9d06043d*/ SELECT 1 FROM repository_commit WHERE tenant_id = ? AND project_id = ? AND repo = ? AND oid = ?").bind(grant.tenant.id, grant.project.id, repoName, head.hash).first();
     if (!indexed) throw new HubError(503, "unavailable", "repository history metadata is not ready");
     // Opening a review needs only the live branch tip, not its entire ancestry.
-    if (limit === 1 && !path && !cursor) return page({ commits: [await metadata(head)] });
+    if (body.tipOnly === true && limit === 1 && !path && !cursor) return page({ commits: [await metadata(head)] });
     const nodes = (await env.HUB_DB.prepare(`/*perf-site:src%2Fcode%2FartifactRead.ts:132:26:artifactRead:a9639cf3*/ WITH RECURSIVE reachable(oid) AS (
       SELECT ? UNION SELECT parent.value FROM reachable r JOIN repository_commit c ON c.oid = r.oid AND c.project_id = ? AND c.repo = ? JOIN json_each(c.parents_json) parent
     ) SELECT c.oid, c.tree_hash, c.parents_json FROM reachable r JOIN repository_commit c ON c.oid = r.oid AND c.project_id = ? AND c.tenant_id = ? AND c.repo = ? ORDER BY c.generation DESC, c.commit_time DESC, c.oid DESC`)
