@@ -835,6 +835,11 @@ export class Conversation extends DurableObject<Env> {
     return { head: this.#head(), since, new_messages: counts.n, agent_messages: counts.agents, mentions_me, mentions_truncated, my_threads, my_threads_truncated, threads, authors, refs };
   }
 
+  /** Read-only first-touch startup may overlap the D1 deletion preflight. */
+  async preparePurge(): Promise<void> {
+    this.#storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'").toArray();
+  }
+
   /** Internal RPC only. A tombstone rejects already-authorized, in-flight posts after deletion. */
   async purge(tenant_id: string, conversation_id: string): Promise<number> {
     // Reject mismatched RPC bindings outside the input gate: expected validation
@@ -845,14 +850,16 @@ export class Conversation extends DurableObject<Env> {
     }
     return this.ctx.blockConcurrencyWhile(async () => {
       await this.#draining;
-      let n = 0;
+      let n = 0, hadPresence = false;
       this.#storage.transactionSync(() => {
         this.#run(SCHEMA[0]!);
         bindOnce(this.#storage.sql, tenant_id, conversation_id);
-        const prior = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = 'deleted'")[0];
-        if (prior) { n = Number(prior.value); return; }
         // Inspect authoritative local storage, never D1 indexes: unindexed messages still get removed.
         const tables = new Set(this.#q<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").map(r => r.name));
+        // Heartbeats initialize the messaging schema before writing presence.
+        hadPresence = tables.has("artifact");
+        const prior = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = 'deleted'")[0];
+        if (prior) { n = Number(prior.value); return; }
         if (tables.has("artifact")) n = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM artifact")[0]!.n;
         for (const table of ["artifact", "msg", "ref", "thread_sub", "scope_state", "pair_block", "idem", "inbox_outbox", "update_outbox", "index_outbox"]) {
           if (tables.has(table)) this.#run(`DELETE FROM ${table}`);
@@ -860,7 +867,10 @@ export class Conversation extends DurableObject<Env> {
         this.#run("DELETE FROM meta WHERE key NOT IN ('tenant_id', 'owner_id')");
         this.#run("INSERT INTO meta (key, value) VALUES ('deleted', ?)", String(n));
       });
-      await Promise.all([this.#storage.delete("presence:v1"), this.#storage.deleteAlarm()]);
+      await Promise.all([
+        ...(hadPresence ? [this.#storage.delete("presence:v1")] : []),
+        this.#storage.deleteAlarm(),
+      ]);
       return n;
     });
   }

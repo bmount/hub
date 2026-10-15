@@ -400,6 +400,8 @@ describe("project deletion from the web", () => {
     const tables = () => runInDurableObject(stub, (_instance, state) =>
       state.storage.sql.exec<{name: string}>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").toArray().map(r => r.name));
     expect(await tables()).toEqual([]);
+    await stub.preparePurge();
+    expect(await tables()).toEqual([]);
     expect(await stub.purge(tenant, channel)).toBe(0);
     expect(await tables()).toEqual(["meta"]);
     expect(await stub.purge(tenant, channel)).toBe(0);
@@ -456,7 +458,7 @@ describe("project deletion from the web", () => {
     const wrapped = {...ctx, db, env: {...env,
       CONVERSATION: {
         idFromName: (name: string) => name,
-        get: () => ({purge: async () => {
+        get: () => ({preparePurge: async () => {}, purge: async () => {
           conversationActive++;
           await new Promise(resolve => setTimeout(resolve, 5));
           conversationActive--;
