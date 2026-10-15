@@ -36,7 +36,8 @@
     "miniflare": "5.20260815.0-alpha",
     "typescript": "^5.6.0",
     "vitest": "~4.1.0",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.0.0",
+    "ws": "8.21.0"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,

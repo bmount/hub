@@ -3,6 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { test } from "node:test";
+import { createServer } from "node:http";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { WebSocketServer } from "ws";
 
 const root = new URL("../", import.meta.url);
 const require = createRequire(new URL("package.json", root));
@@ -77,6 +84,66 @@ test("patched native Sharp decodes SVG and resizes/re-encodes PNG", async () => 
   const { data, info } = await sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
   assert.equal(info.channels, 3);
   assert.deepEqual([...data], Array(4).fill([255, 0, 0]).flat());
+});
+
+test("compressed chat probe captures 100 real compressed frames and reconciles a dropped ack without resubmission", async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'chat-compression-'));
+  const records = new Map(); let sends = 0, reads = 0;
+  const server = createServer(async (req, res) => {
+    let body = ''; for await (const chunk of req) body += chunk;
+    const params = body ? JSON.parse(body) : {};
+    let result;
+    if (req.url === '/api/session.start') result = { session_token: 'synthetic-session' };
+    else if (req.url === '/chat/v1/getChats') result = { conversations: [{ channel: 'tmp-test', id: 'conversation' }] };
+    else if (req.url === '/api/chat.read') result = { head: sends };
+    else if (req.url === '/api/chat.post_status') {
+      reads++;
+      assert.equal(records.get(params.idempotency_key).text, params.intent.body);
+      assert.equal(records.get(params.idempotency_key).reply_to, params.intent.reply_to);
+      result = { head: sends, record: { committed: { seq: sends } }, intent_check: { matches: true } };
+    } else { res.writeHead(404).end(); return; }
+    res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ ok: true, result }));
+  });
+  const wss = new WebSocketServer({ server, perMessageDeflate: true });
+  wss.on('connection', ws => {
+    ws.send(JSON.stringify({ type: 'connected' }));
+    ws.on('message', data => {
+      const command = JSON.parse(data); sends++;
+      assert.equal(command.method, 'sendMessage');
+      assert.ok(!records.has(command.params.client_id), 'no mutation retries');
+      records.set(command.params.client_id, command.params);
+      ws.send(JSON.stringify({ ok: true, request_id: command.request_id, server_request_id: `root-${sends}`, result: { head: sends, msg_id: `message-${sends}` } }));
+    });
+  });
+  try {
+    await writeFile(join(dir, 'token'), 'synthetic-token', { mode: 0o600 });
+    server.listen(0, '127.0.0.1'); await once(server, 'listening');
+    for (const drop of [false, true]) {
+      const captureDir = join(dir, drop ? 'stall' : 'run');
+      const child = spawn(process.execPath, ['scripts/probe-chat-compression.mjs'], { cwd: root, env: { ...process.env,
+        PIMWELL_ORIGIN: `http://127.0.0.1:${server.address().port}`, PIMWELL_CHANNEL: 'tmp-test', PIMWELL_CAPTURE_DIR: captureDir,
+        PIMWELL_TOKEN_FILE: join(dir, 'token'), PIMWELL_INTERVAL_MS: '0', PIMWELL_COUNT: drop ? '1' : '100',
+        PIMWELL_ACK_TIMEOUT_MS: '100', PIMWELL_DROP_ACK: drop ? '1' : '0' }, stdio: 'pipe' });
+      let stderr = ''; child.stderr.on('data', d => stderr += d); child.stdout.resume();
+      const [code] = await once(child, 'exit'); assert.equal(code, 0, stderr);
+      const capture = JSON.parse(await readFile(join(captureDir, 'capture.json'), 'utf8'));
+      assert.equal(capture.automatic_resubmissions, 0);
+      assert.equal(capture.summary.compressed_frames, drop ? 1 : 100);
+      assert.equal(capture.summary.joins, drop ? 0 : 100);
+      if (drop) {
+        assert.equal(capture.commands[0].ack, null);
+        assert.equal(capture.commands[0].reconciliation.intent_check.matches, true);
+        assert.ok(capture.commands[0].command.params.text);
+        assert.ok(capture.commands[0].command.params.client_id);
+      }
+    }
+    assert.equal(sends, 101); assert.equal(reads, 101);
+  } finally {
+    for (const ws of wss.clients) ws.terminate();
+    await new Promise(resolve => wss.close(resolve));
+    await new Promise(resolve => server.close(resolve));
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("patched development Undici request/response API works without external network", async () => {

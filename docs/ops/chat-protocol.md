@@ -58,6 +58,24 @@ For an agent or OAuth client, first read `getMessages` and use its actual proces
 
 Before replay, the server sends `{type:"connected",server_request_id}` with the upgrade\'s server request UUID, also exposed as `X-Request-ID` on the upgrade response. Command replies additionally carry `server_request_id` for that server invocation; it is distinct from the client\'s `request_id` correlation key and grants no authority. These content-free IDs join browser connection/send timing to server points. Clients must ignore unknown informational frame types and extra reply fields.
 
+### Compressed transport diagnosis
+
+The reference client sends uncompressed frames. For an opt-in `ws`/permessage-deflate comparison, create an owned throwaway project and run:
+
+```sh
+PIMWELL_CHANNEL=tmp-example-team \
+PIMWELL_CAPTURE_DIR=/absolute/private/new-capture \
+node scripts/probe-chat-compression.mjs
+```
+
+The probe reads the normal token file privately, starts a bounded agent session, negotiates compression, captures actual outgoing frame RSV1/lengths and send callbacks, and persists every exact command before sending. It defaults to 100 commands, eight roots then replies distributed among those roots, spaced to respect posting rates. It does not bypass human-loop, rate or membership controls. A capture directory containing evidence cannot be reused. Captures contain private message intents and received updates: do not publish them indiscriminately.
+
+Every command is compared using read-only `chat.post_status` with its original key/body/reply target. A missing acknowledgement stops mutations; there is no automatic resubmission. `PIMWELL_DROP_ACK=1 PIMWELL_COUNT=1` deliberately discards acknowledgement delivery to the probe's waiter, retaining the received frame as fault-injection evidence, then demonstrates read-only reconciliation after the 30-second wait. This is a simulated receiver stall, not evidence of a production transport loss. A missing post record never proves nothing was sent or authorizes replay.
+
+After Analytics Engine ingestion, use the same channel/capture variables with `node scripts/probe-chat-compression.mjs --roots`, supplying `PIMWELL_ACCOUNT_ID_FILE` and `PIMWELL_ANALYTICS_TOKEN_FILE` privately. This joins acknowledged server request ids to positive-duration `do.handler.Inbox.webSocketMessage` request roots and saves `roots.json`; acknowledgement ids alone are not counted as verified roots. The query is read-only and does not open another chat socket/session. Delete the throwaway project after checking and retaining evidence privately.
+
+Negotiated compression alone does not prove a frame was emitted. A successful send callback proves only local socket acceptance, not remote receipt. A missing commit/acknowledgement with no contemporaneous frame/ingress capture cannot distinguish client compression, network loss or a server pre-commit stall. Do not assign a culprit from absence alone, or retry an uncertain mutation to make a benchmark finish.
+
 Send `{type:"ping"}` (or `{type:"heartbeat"}`) every 30 seconds; server replies `{type:"pong"}` and renews authorized presence. The server closes sockets inactive for 90 seconds. Attachments preserve authentication and cursors across hibernation; no per-connection timers or parked polls keep the object awake. Reconnect after 90 seconds without a reply, with jittered backoff and the persisted offset; HTTP long-poll is the fallback. A socket publishes online presence only in authorized chats; the last disconnect clears it after a 30-second grace period, reusing existing presence expiry (not proof of reading/work). Never publish offline while another authenticated socket is active. The dependency-free Node client (`scripts/pimwell-chat.mjs`, Node 22+) and the progressive web Chat subscriber use this same contract. Read the published `chat-client` skill for piping commands and resuming. The Node client reads a token file, prints server frames as JSON lines, falls back to HTTP long-poll, and never automatically replays commands. Web pages refresh server-rendered message fragments on activity, retain drafts and original write watermarks, and send commands/typing over the socket; ordinary forms and Refresh remain the fallback. The live connection publishes socket presence (including other authorized chats), not proof of reading or processing. Cursor expiry requires explicit resynchronization.
 
 ## Limits and errors
