@@ -394,6 +394,30 @@ describe("project deletion from the web", () => {
     return { tenant, blue, admin, member, bot, host, headers, post, form, get, count, project };
   }
 
+  it("tombstones a first-touch conversation without creating messaging tables", async () => {
+    const tenant = ulid(), channel = ulid();
+    const stub = conversationStub(env, tenant, channel);
+    const tables = () => runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql.exec<{name: string}>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").toArray().map(r => r.name));
+    expect(await tables()).toEqual([]);
+    expect(await stub.purge(tenant, channel)).toBe(0);
+    expect(await tables()).toEqual(["meta"]);
+    expect(await stub.purge(tenant, channel)).toBe(0);
+    expect(await runInDurableObject(stub, async (object) => {
+      const instance = object as Conversation;
+      const errors: string[] = [];
+      for (const [tid, cid] of [[ulid(), channel], [tenant, ulid()]]) {
+        try { await instance.purge(tid!, cid!); errors.push("accepted"); }
+        catch (e) { errors.push((e as Error).message); }
+      }
+      try { await instance.notice(tenant, channel, "late post", Date.now()); errors.push("posted"); }
+      catch (e) { errors.push((e as Error).message); }
+      return errors;
+    })).toEqual(["chat object is bound to another tenant or owner", "chat object is bound to another tenant or owner", "conversation deleted"]);
+    expect(await stub.purge(tenant, channel)).toBe(0);
+    expect(await runInDurableObject(stub, (_instance, state) => state.storage.sql.exec("SELECT * FROM artifact").toArray())).toEqual([]);
+  });
+
   it("batches counts and bounds inbox purges, draining failures before a retry", async () => {
     const w = await world();
     for (let i = 0; i < 18; i++) await seedAgent(w.tenant, w.admin.identity, `purge-${i}`);

@@ -77,10 +77,16 @@ export class Conversation extends DurableObject<Env> {
   /** Tail of the drain chain: drains run one at a time, so index flushes cannot interleave. */
   #draining: Promise<void> = Promise.resolve();
 
+  #initialized = false;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, timedEnv(env));
     this.#storage = timedStorage(ctx.storage, "Conversation");
-    // One durable commit on a cold object, not one for each schema statement.
+  }
+
+  #initialize(): void {
+    if (this.#initialized) return;
+    // Purge-only objects need a tombstone, not the messaging schema.
     this.#storage.transactionSync(() => {
       for (const s of SCHEMA) this.#storage.sql.exec(s);
       for (const u of UPGRADES) {
@@ -88,6 +94,7 @@ export class Conversation extends DurableObject<Env> {
         if (!has) this.#storage.sql.exec(u.ddl);
       }
     });
+    this.#initialized = true;
   }
 
   #q<T extends Record<string, SqlStorageValue>>(query: string, ...binds: SqlStorageValue[]): T[] {
@@ -99,6 +106,7 @@ export class Conversation extends DurableObject<Env> {
   }
 
   #bind(tenant_id: string, conversation_id: string): void {
+    this.#initialize();
     bindOnce(this.#storage.sql, tenant_id, conversation_id);
     if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) throw new Error("conversation deleted");
     this.#tenant = tenant_id;
@@ -829,14 +837,26 @@ export class Conversation extends DurableObject<Env> {
 
   /** Internal RPC only. A tombstone rejects already-authorized, in-flight posts after deletion. */
   async purge(tenant_id: string, conversation_id: string): Promise<number> {
-    bindOnce(this.#storage.sql, tenant_id, conversation_id);
+    // Reject mismatched RPC bindings outside the input gate: expected validation
+    // errors must not break/reset the object or poison subsequent valid retries.
+    if (this.#q("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").length) {
+      const binding = storedBinding(this.#storage.sql);
+      if (binding && (binding.tenant_id !== tenant_id || binding.owner_id !== conversation_id)) throw new Error("chat object is bound to another tenant or owner");
+    }
     return this.ctx.blockConcurrencyWhile(async () => {
       await this.#draining;
-      const prior = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = 'deleted'")[0];
-      if (prior) return Number(prior.value);
-      const n = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM artifact")[0]!.n;
+      let n = 0;
       this.#storage.transactionSync(() => {
-        for (const table of ["artifact", "msg", "ref", "thread_sub", "scope_state", "pair_block", "idem", "inbox_outbox", "update_outbox", "index_outbox"]) this.#run(`DELETE FROM ${table}`);
+        this.#run(SCHEMA[0]!);
+        bindOnce(this.#storage.sql, tenant_id, conversation_id);
+        const prior = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = 'deleted'")[0];
+        if (prior) { n = Number(prior.value); return; }
+        // Inspect authoritative local storage, never D1 indexes: unindexed messages still get removed.
+        const tables = new Set(this.#q<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").map(r => r.name));
+        if (tables.has("artifact")) n = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM artifact")[0]!.n;
+        for (const table of ["artifact", "msg", "ref", "thread_sub", "scope_state", "pair_block", "idem", "inbox_outbox", "update_outbox", "index_outbox"]) {
+          if (tables.has(table)) this.#run(`DELETE FROM ${table}`);
+        }
         this.#run("DELETE FROM meta WHERE key NOT IN ('tenant_id', 'owner_id')");
         this.#run("INSERT INTO meta (key, value) VALUES ('deleted', ?)", String(n));
       });
@@ -846,6 +866,7 @@ export class Conversation extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
+    this.#initialize();
     if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) return;
     const b = storedBinding(this.#storage.sql);
     if (!b) return;
