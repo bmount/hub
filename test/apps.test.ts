@@ -257,7 +257,7 @@ describe("sites", () => {
       const summary=await appsPage(new Request(base+"&selected=%2F%3Aproject",{headers:cookieHeaders(w.pat.token,HOST)}),measured);
       const summaryHtml=await summary.text();
       expect(summary.status).toBe(200);
-      expect(summaryHtml).toContain('data-performance-load=');expect(summaryHtml).toContain('aria-busy="true"');
+      expect(summaryHtml).toContain('data-performance-load=');expect(summaryHtml).toContain('aria-busy="true"');expect(summaryHtml).toContain('Versions loading…');
       expect(summaryHtml.replaceAll('\u00a0',' ')).toContain('100 ms');
       expect(summaryHtml).not.toContain('Histogram: none');expect(summaryHtml).not.toContain('Waterfall: no retained points');
       expect(sqls).toHaveLength(1);expect(sqls[0]).toContain('GROUP BY label ORDER BY total DESC LIMIT 200');expect(sqls[0]).not.toContain('AS hist0');
