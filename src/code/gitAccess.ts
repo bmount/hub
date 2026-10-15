@@ -8,12 +8,13 @@ import type { Identity, Membership, Role, Session, Tenant } from "../db/types";
 
 export type GitGrant = {
   identity: Identity; session: Session; tenant: Tenant;
+  artifacts?: boolean;
   project: { id: string; slug: string }; repository?: { name: string; storage_name: string; is_default: number }; write: boolean; refPrefixes?: string[];
 };
 
 export type GitCaller = { identity: Identity; session: Session; tenant: Tenant; role: Role };
 
-type RepositoryRow = { id: string; slug: string; tenant_id: string } & { [K in keyof Repository]: Repository[K] | null };
+type RepositoryRow = { id: string; slug: string; tenant_id: string; artifacts: number } & { [K in keyof Repository]: Repository[K] | null };
 
 /** Who is calling, from a git session or agent run token, with an agent capped at its operator's role. Live checks every time. */
 export async function gitCaller(env: Env, authorization: string | null, tenantSlug: string, now = Date.now()): Promise<GitCaller | null> {
@@ -80,7 +81,8 @@ function repositoryQuery(db: D1Database, tenantSlug: string, repo: string): D1Pr
   const [projectSlug, repoName, extra] = repo.split("/");
   if (extra !== undefined) return null;
   try { if (repoName) repositoryName(repoName); } catch { return null; }
-  return db.prepare(`/*perf-site:src%2Fcode%2FgitAccess.ts:83:10:repositoryQuery:33ba07de*/ SELECT p.id, p.slug, p.tenant_id, r.name, r.storage_name, r.is_default FROM project p
+  return db.prepare(`/*perf-site:src%2Fcode%2FgitAccess.ts:83:10:repositoryQuery:33ba07de*/ SELECT p.id, p.slug, p.tenant_id, r.name, r.storage_name, r.is_default,
+      (r.name IS NOT NULL OR EXISTS (SELECT 1 FROM git_repository g WHERE g.tenant_id = p.tenant_id AND g.project_id = p.id)) AS artifacts FROM project p
     LEFT JOIN repository r ON r.tenant_id = p.tenant_id AND r.project_id = p.id AND ${repoName ? "r.name = ?" : "r.is_default = 1"}
     WHERE p.tenant_id = (SELECT id FROM tenant WHERE slug = ?) AND p.slug = ? AND p.kind NOT IN ('channel','agent-src') AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo') AND p.state = 'active'`)
     .bind(...(repoName ? [repoName] : []), tenantSlug, projectSlug);
@@ -92,5 +94,5 @@ async function repositoryGrant(env: Env, caller: GitCaller, repo: string, row: R
   const repository = row.name && row.storage_name !== null && row.is_default !== null
     ? { name: row.name, storage_name: row.storage_name, is_default: row.is_default } : undefined;
   if (session.kind === "git") await touchSession(env.HUB_DB, session, now);
-  return { identity, session, tenant, project, repository, write: rank(role) >= rank("member") };
+  return { identity, session, tenant, project, repository, artifacts: !!row.artifacts, write: rank(role) >= rank("member") };
 }

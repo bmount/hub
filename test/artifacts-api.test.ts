@@ -2,6 +2,7 @@ import { env, createExecutionContext } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { authorizeGit } from "../src/code/gitAccess";
 import { artifactRead } from "../src/code/artifactRead";
+import { codeRead } from "../src/code/ardi";
 import { artifactGit } from "../src/http/artifactGit";
 import gitProxy from "../git-proxy/index";
 import * as gitAccess from "../src/code/gitAccess";
@@ -106,6 +107,21 @@ describe("Artifacts compatibility adapter", () => {
       .bind(s.tenant.id, s.human.identity.id).run();
     await expect(s.read("log", { ref: "main", limit: 1 })).rejects.toMatchObject({ status: 403 });
   });
+  it("resolves log routing and authorization in one live repository lookup", async () => {
+    const s = await setup();
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, 0)")
+      .bind(s.tenant.id, s.project.id).run();
+    const ctx = await buildContext(new Request("https://acme.pimwell.test/", {
+      headers: cookieHeaders(s.human.token, "acme.pimwell.test"),
+    }), s.configured);
+    const prepare = vi.spyOn(ctx.db, "prepare");
+    const result = await codeRead<{ commits: Array<{ oid: string }> }>(ctx, "log", { repo: "site", ref: "main", limit: 1 });
+    expect(result.result.commits.map(c => c.oid)).toEqual([hash(4)]);
+    const queries = prepare.mock.calls.map(([sql]) => sql);
+    expect(queries.filter(sql => sql.includes("repositoryQuery"))).toHaveLength(1);
+    expect(queries.some(sql => sql.includes("usesArtifacts") || sql.includes("ardi_cred"))).toBe(false);
+  });
+
   it("starts live authorization beside routing and consumes it only once", async () => {
     const s = await setup(), grant = await authorizeGit(s.configured, s.auth, "acme", "site");
     await env.HUB_DB.prepare("INSERT OR IGNORE INTO git_repository (tenant_id,project_id,imported_at) VALUES (?,?,0)").bind(s.tenant.id, s.project.id).run();
