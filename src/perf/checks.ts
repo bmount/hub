@@ -15,6 +15,20 @@ export async function checkPerformance(env: Env, target: CheckTarget, current: R
   const since = Math.max(current.seen_at, now - 3_600_000);
   const range = `timestamp >= toDateTime(${Math.floor(since/1000)}) AND timestamp < toDateTime(${Math.floor(now/1000)})`;
   const metrics = "quantileWeighted(0.95)(double1, _sample_interval) AS p95, COUNT() AS samples";
+  // Missing current windows are unknown; only a full day without retained evidence ends an episode.
+  const cutoff = now - 86_400_000;
+  const stale = (await db.prepare("SELECT a.situation_id, a.budget, a.route FROM perf_alert a JOIN situation s ON s.id = a.situation_id WHERE a.site_id = ? AND a.script_name = ? AND s.tenant_id = ? AND s.outcome IS NULL AND s.created_at <= ?").bind(target.site_id,target.script_name,target.tenant_id,cutoff).all<{situation_id:string;budget:string;route:string}>()).results;
+  for (const alert of stale) {
+    const budget = BUDGETS.find(b => b.id === alert.budget);
+    const split = alert.budget === "git" ? alert.route.lastIndexOf(" @") : -1;
+    const route = split < 0 ? alert.route : alert.route.slice(0,split);
+    const colo = split < 0 ? "" : ` AND blob4 = ${quote(alert.route.slice(split+2))}`;
+    // Across releases: a deploy is not evidence that a route has stopped receiving traffic.
+    const evidence = await query(`SELECT COUNT() AS samples FROM pimwell_perf WHERE ${scope} AND timestamp >= toDateTime(${Math.floor(cutoff/1000)}) AND timestamp < toDateTime(${Math.floor(now/1000)}) AND blob8 = ${quote(route)}${colo} AND (${budget?.where ?? "blob7 = 'request' AND blob9 IN ('GET','POST','PUT','PATCH','DELETE','HEAD','OPTIONS')"})`);
+    if (evidence.length === 1 && Number(evidence[0]!.samples) === 0) {
+      await db.prepare("UPDATE situation SET outcome = 'No recent data: no retained observations for this route or vantage in the last 24 hours; performance recovery is unknown.', outcome_at = ? WHERE id = ? AND tenant_id = ? AND outcome IS NULL").bind(now,alert.situation_id,target.tenant_id).run();
+    }
+  }
   let met = 0, measured = 0;
   const populations = [...BUDGETS, {id: "route", ms: Infinity, where: "blob7 = 'request' AND blob9 IN ('GET','POST','PUT','PATCH','DELETE','HEAD','OPTIONS')"}];
   for (const budget of populations) {

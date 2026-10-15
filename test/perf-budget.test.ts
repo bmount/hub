@@ -118,6 +118,36 @@ describe("latency budget situations", () => {
     await checkPerformance(env,f.target,f.current,null,f.now+4,query);
     expect(await count()).toBe(0);
   });
+  it("resolves a departed colo and quiet route only after 24 hours without retained data", async () => {
+    const f = await fixture(), day = 86_400_000;
+    let moved = false, retained = 1;
+    const queries: string[] = [];
+    const query = async (sql: string) => {
+      queries.push(sql);
+      if (sql.startsWith("SELECT COUNT()")) return [{samples:retained}];
+      if (sql.includes("AS duration")) return [{duration:1200,at:2},{duration:1200,at:1}];
+      if (sql.includes("blob4 AS colo")) return [{route:"git-ls-remote",colo:moved ? "AMS" : "SIN",p95:1200,samples:2}];
+      if (!moved && sql.includes("blob11 = 'cookie'")) return [{route:"/docket",p95:500,samples:30}];
+      return [];
+    };
+    await checkPerformance(env,f.target,f.current,null,f.now,query);
+    const original = (await env.HUB_DB.prepare("SELECT situation_id FROM perf_alert").all<{situation_id:string}>()).results;
+    expect(original).toHaveLength(2);
+    moved = true;
+    await checkPerformance(env,f.target,f.current,null,f.now+day-1,query);
+    expect(queries.some(q=>q.startsWith("SELECT COUNT()"))).toBe(false);
+    await checkPerformance(env,f.target,f.current,null,f.now+day,query);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation WHERE outcome IS NOT NULL").first("n")).toBe(0);
+    retained = 0;
+    await checkPerformance(env,f.target,f.current,null,f.now+day+1000,query);
+    for (const {situation_id} of original) {
+      expect(await env.HUB_DB.prepare("SELECT outcome, outcome_at FROM situation WHERE id = ?").bind(situation_id).first()).toEqual({outcome:"No recent data: no retained observations for this route or vantage in the last 24 hours; performance recovery is unknown.",outcome_at:f.now+day+1000});
+    }
+    const evidence = queries.filter(q=>q.startsWith("SELECT COUNT()"));
+    expect(evidence.some(q=>q.includes("blob8 = 'git-ls-remote' AND blob4 = 'SIN'"))).toBe(true);
+    expect(evidence.every(q=>!q.includes("blob3 =") && q.includes("blob1 = 'pimwell.com' AND blob2 = 'pimwell-hub' AND double14 = 1"))).toBe(true);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM situation WHERE outcome IS NULL").first("n")).toBe(1);
+  });
   it("never compares synthetic regression samples across vantage colos", async () => {
     const f = await fixture();
     const query = async (sql: string) => {
