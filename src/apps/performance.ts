@@ -33,7 +33,7 @@ export async function analyticsQuery(ctx:Pick<Ctx,"env">, sql:string):Promise<Pe
   if(!account || !/^[0-9a-f]{32}$/.test(account) || !token) throw new PerformanceUnavailable("Performance reporting is not connected.");
   for(const [key,value] of cache) if(value.until<=Date.now()) {cache.delete(key);cacheBytes-=value.bytes;}
   const key=account+":"+sql, hit=cache.get(key);
-  if(hit) return hit.rows;
+  if(hit) return structuredClone(hit.rows);
   let response:Response;
   try {
     response=await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/analytics_engine/sql`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"text/plain"},body:sql,signal:AbortSignal.timeout(10_000)});
@@ -47,7 +47,7 @@ export async function analyticsQuery(ctx:Pick<Ctx,"env">, sql:string):Promise<Pe
   if(bytes<=4_000_000) {
     const replaced=cache.get(key);if(replaced){cacheBytes-=replaced.bytes;cache.delete(key);}
     while(cache.size && (cache.size>=128 || cacheBytes+bytes>8_000_000)) {const oldest=cache.keys().next().value!;cacheBytes-=cache.get(oldest)!.bytes;cache.delete(oldest);}
-    cacheBytes+=bytes;cache.set(key,{until:Date.now()+60_000,rows,bytes});
+    cacheBytes+=bytes;cache.set(key,{until:Date.now()+60_000,rows:structuredClone(rows),bytes});
   }
   return rows;
 }
@@ -56,21 +56,24 @@ export type PerfScope = {where:string;scripts:string[]};
 export async function performanceScope(ctx:Ctx, site:SiteRow, hours:number, onlyMyOrg=false):Promise<PerfScope> {
   if(!ctx.tenant || !ctx.identity || !ctx.role || site.tenant_id!==ctx.tenant.id || (ctx.mcpProject && ctx.mcpProject.id!==site.project_id)) throw notFound("no such site");
   // Recheck membership before cached reads; account-wide root powers do not substitute for it.
-  if(!await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:59:13:performanceScope:2d1e104e*/ SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(ctx.identity.id,ctx.tenant.id).first()) throw notFound("no such site");
-  const project=await ctx.db.prepare("/*perf-site:src%2Fapps%2Fperformance.ts:60:23:performanceScope:e8c7cd55*/ SELECT id FROM project WHERE id = ? AND tenant_id = ? AND kind = 'repo' AND state = 'active'").bind(site.project_id,ctx.tenant.id).first();
-  if(!project) throw notFound("no such site");
-  const scripts=(await ctx.db.prepare(`/*perf-site:src%2Fapps%2Fperformance.ts:62:24:performanceScope:7a84f38e*/ SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
-    WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? AND a.state = 'active' ORDER BY a.script_name`).bind(site.id,ctx.tenant.id,site.project_id).all<{script_name:string}>()).results.map(r=>r.script_name);
+  const [membership,project,attachments]=await ctx.db.batch<Record<string,unknown>>([
+    ctx.db.prepare("SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(ctx.identity.id,ctx.tenant.id),
+    ctx.db.prepare("SELECT id FROM project WHERE id = ? AND tenant_id = ? AND kind = 'repo' AND state = 'active'").bind(site.project_id,ctx.tenant.id),
+    ctx.db.prepare(`SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
+      WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? AND a.state = 'active' ORDER BY a.script_name`).bind(site.id,ctx.tenant.id,site.project_id),
+  ]);
+  if(!membership!.results.length || !project!.results.length) throw notFound("no such site");
+  const scripts=attachments!.results.map(r=>String(r.script_name));
   const hash=onlyMyOrg?await tenantHash(ctx.tenant.id,ctx.env.PERF_TENANT_KEY??ctx.env.HUB_INTERNAL_SECRET??ctx.env.HUB_SECRETS_KEY??""):"";
   if(onlyMyOrg&&!hash) throw new PerformanceUnavailable("Performance tenant identity is not configured.");
   if(![1,24,168].includes(hours)) throw badRequest("invalid performance range");
   return {scripts,where:`blob7 != 'synthetic' AND blob1 = ${quote(site.name)} ${onlyMyOrg?`AND blob5 = ${quote(hash)} `:""}AND blob2 IN (${scripts.length?scripts.map(quote).join(","):"''"}) AND timestamp > NOW() - INTERVAL '${hours}' HOUR`};
 }
+const background="(blob9 IN ('scheduled','tail','alarm','rpc') OR blob8 IN ('scheduled','tail') OR blob8 LIKE 'scheduled.%' OR blob8 LIKE 'tail.%' OR blob8 LIKE 'rpc.%' OR blob8 LIKE 'alarm%' OR blob8 LIKE 'do.alarm.%')";
 export function population(selection:PerfSelection):string {
   const dim=dimensions[selection.kind];
   if(selection.kind==="spinners") return "blob7 = 'client' AND blob9 = 'spinner'";
   if(selection.kind==="interactions") return "blob7 = 'client' AND blob9 = 'ready'";
-  const background="(blob9 IN ('scheduled','tail','alarm','rpc') OR blob8 IN ('scheduled','tail') OR blob8 LIKE 'scheduled.%' OR blob8 LIKE 'tail.%' OR blob8 LIKE 'rpc.%' OR blob8 LIKE 'alarm%' OR blob8 LIKE 'do.alarm.%')";
   if(selection.kind==="background") return `blob7 IN ('request','rpc') AND ${background}`;
   if(selection.kind==="verbs") return "blob7 = 'span' AND blob14 LIKE 'verb.%' AND double14 = 1";
   if(selection.kind==="tools") return "blob7 = 'span' AND blob14 LIKE 'mcp.%' AND substring(blob14,5) NOT LIKE '%.%' AND double14 = 1";
@@ -114,19 +117,33 @@ async function originClientSplits(query:(sql:string)=>Promise<PerfRow[]>,scope:s
     return [name,[...groups].map(([label,rows])=>({label,...sampleMetrics(rows)}))] as const;
   });
 }
-/** One row per complete trip, bounded separately for each route, not by span volume.
- * WAE permits one subquery level: normalize per-span weights there, then sum per trip. */
+/** Each v2 span is emitted once per request/span ID. Its recorded duration is already
+ * normalized (duration * sample weight / sample weight). Aggregate trips first, cap
+ * their recorded detail at root wall, then weight by the root's represented traffic.
+ * No trip-row LIMIT: busy routes cannot consume another route's detail budget. */
 export function routeAttributionSQL(where:string):string {
-  const categories={auth:"name LIKE 'auth.%'",d1:"name LIKE 'd1.%'",do:"name LIKE 'do.%'",external:"(name LIKE 'fetch.%' OR name LIKE 'GIT_PROXY.%' OR name LIKE 'ARDI.%' OR name LIKE 'MAIL.%')",render:"name LIKE 'render.%'"};
-  const category=(condition:string)=>`SUM(IF(kind = 'span' AND ${condition}, attributed, 0.0))`;
-  const other=`NOT (${Object.values(categories).join(' OR ')})`;
-  const fields=[...Object.entries(categories).map(([key,condition])=>`${category(condition)} AS ${key}_wall`),
-    `${category(other)} AS other_wall`,
-    ...Object.entries({...categories,other}).filter(([key])=>key!=='d1').map(([key,condition])=>`SUM(IF(kind = 'span' AND ${condition}, 1.0, 0.0)) AS ${key}_n`),
-    ...['execution','known_wall','execution_n','n'].map(field=>`SUM(IF(kind = 'span' AND name LIKE 'd1.%', ${field==='n'?'1.0':field==='execution_n'?'execution_n * 1.0':field}, 0.0)) AS d1_${field}`)];
-  return `SELECT tenant, request, label, MAX(at) AS at, SUM(IF(kind = 'request', n * 1.0, 0.0)) AS root_n, SUM(IF(kind = 'request', wall, 0.0)) AS root_wall, SUM(IF(kind = 'span', attributed, 0.0)) AS span_wall, ${fields.join(', ')} FROM (
-      SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob14 AS name, blob7 AS kind, double3 AS span, MAX(timestamp) AS at, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS wall, SUM(double17 * _sample_interval) / SUM(_sample_interval) AS attributed, SUM(IF(double19 > 0, double19, 0.0) * _sample_interval) / SUM(_sample_interval) AS execution, SUM(IF(double19 >= 0, double17, 0.0) * _sample_interval) / SUM(_sample_interval) AS known_wall, SUM(IF(double19 >= 0, _sample_interval * 1.0, 0.0)) / SUM(_sample_interval) AS execution_n, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${where} AND double20 = 2 AND double18 = 0 AND blob7 IN ('request','span') AND blob14 != 'd1.statement' GROUP BY tenant, request, label, name, kind, span
-    ) GROUP BY tenant, request, label HAVING root_n > 0 ORDER BY at DESC LIMIT 200`;
+  const categories={auth:"blob14 LIKE 'auth.%'",d1:"blob14 LIKE 'd1.%'",do:"blob14 LIKE 'do.%'",external:"(blob14 LIKE 'fetch.%' OR blob14 LIKE 'GIT_PROXY.%' OR blob14 LIKE 'ARDI.%' OR blob14 LIKE 'MAIL.%')",render:"blob14 LIKE 'render.%'"};
+  const all={...categories,other:`NOT (${Object.values(categories).join(' OR ')})`};
+  const fields:Array<readonly [string,string,boolean]>=Object.entries(all).flatMap(([key,condition])=>[
+    [`${key}_wall`,`SUM(IF(blob7 = 'span' AND ${condition}, double17, 0.0))`,true],
+    [`${key}_n`,`SUM(IF(blob7 = 'span' AND ${condition}, 1.0, 0.0))`,false],
+  ] as const);
+  fields.push(
+    ['d1_execution',"SUM(IF(blob7 = 'span' AND blob14 LIKE 'd1.%' AND double19 > 0, double19, 0.0))",true],
+    ['d1_known_wall',"SUM(IF(blob7 = 'span' AND blob14 LIKE 'd1.%' AND double19 >= 0, double17, 0.0))",true],
+    ['d1_execution_n',"SUM(IF(blob7 = 'span' AND blob14 LIKE 'd1.%' AND double19 >= 0, 1.0, 0.0))",false],
+  );
+  const rootN="SUM(IF(blob7 = 'request', _sample_interval * 1.0, 0.0))";
+  const scale="IF(span_wall > root_wall AND span_wall > 0, root_wall / IF(span_wall > 0, span_wall, 1.0), 1.0)";
+  // Distinct output aliases avoid WAE substituting them into inner aggregate expressions.
+  return `SELECT label, SUM(root_n) AS n, SUM(root_wall * root_n) AS weighted_root_wall, ${fields.map(([name,,wall])=>`SUM(${name} * root_n${wall?` * ${scale}`:''}) AS weighted_${name}`).join(', ')} FROM (
+    SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, ${rootN} AS root_n, SUM(IF(blob7 = 'request', double1 * _sample_interval, 0.0)) / IF(${rootN} > 0, ${rootN}, 1.0) AS root_wall, SUM(IF(blob7 = 'span', double17, 0.0)) AS span_wall, ${fields.map(([name,sql])=>`${sql} AS ${name}`).join(', ')} FROM pimwell_perf WHERE ${where} AND double20 = 2 AND double18 = 0 AND blob7 IN ('request','span') AND blob14 != 'd1.statement' GROUP BY tenant, request, label HAVING root_n > 0
+    ) GROUP BY label ORDER BY weighted_root_wall DESC LIMIT 5000`;
+}
+export function routeAttributionSummary(rows:PerfRow[]):PerfRow[] {
+  return routeAttribution(rows.filter(r=>Number(r.n)>0).map(r=>({label:r.label!,root_n:r.n!,span_wall:0,
+    ...Object.fromEntries(Object.entries(r).filter(([key])=>key.startsWith('weighted_')).map(([key,value])=>[key.slice(9),Number(value)/Number(r.n)])),
+  })));
 }
 export function routeAttribution(rows:PerfRow[]):PerfRow[] {
   const groups=new Map<string,PerfRow>();
@@ -165,53 +182,48 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   if(!scope.scripts.length) return empty;
   const dim=dimensions[s.kind];
   const versionFilter=s.kind==="deploys"&&s.version&&s.previous?` AND blob3 IN (${quote(s.version)},${quote(s.previous)})`:s.version?` AND blob3 = ${quote(s.version)}`:"";
-  const filter=`${scope.where} AND ${population(s)}${versionFilter}${detailOnly&&s.selected?` AND ${dim} = ${quote(s.selected)}`:""}`;
+  const filter=`${scope.where} AND ${population(s)}${versionFilter}`;
+  const overviewFilter=`${filter}${detailOnly&&s.selected?` AND ${dim} = ${quote(s.selected)}`:""}`;
   const query=(sql:string)=>analyticsQuery(ctx,sql);
   const bucket=s.hours===1?300:s.hours===24?7200:50400;
-  const breakdown:PerfRow[]=[];
-  const [overview,spark,browser,comparison]=await Promise.all([
-    query(`SELECT ${dim} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${filter} GROUP BY label ORDER BY total DESC LIMIT 200`),
-    query(`SELECT ${dim} AS label, intDiv(toUInt32(timestamp), ${bucket}) AS bucket, quantileWeighted(0.5)(double1, _sample_interval) AS p50, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${filter} GROUP BY label, bucket ORDER BY label, bucket LIMIT 3000`),
+  const readInspector=async()=>{
+    const selected=`${filter} AND ${dim} = ${quote(s.selected)}`;
+    const histogram=[10,25,50,100,250,500,1000,2500,5000].reduceRight((expr,bound,index)=>`IF(double1 < ${bound}, ${index}, ${expr})`,"9");
+    const splits={colo:"blob4",version:"blob3",auth:"blob11",isolate:"double2"};
+    const [hist,splitRows,exemplars,triggers]=await Promise.all([
+      query(`SELECT ${histogram} AS bucket, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${selected} GROUP BY bucket ORDER BY bucket`),
+      s.kind==="interactions"||s.kind==="spinners" ? originClientSplits(query,scope.where,selected) : Promise.all(Object.entries(splits).map(async ([name,column])=>[name,await query(`SELECT ${column} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label ORDER BY n * p50 DESC LIMIT 100`)] as const)),
+      query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, double20 AS generation, IF(blob19 != '' OR blob20 != '', 1, 0) AS sourced, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY sourced DESC, generation DESC, duration DESC LIMIT 5`),
+      s.kind==="spinners"?query(`SELECT blob8 AS label, blob19 AS previous, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label, previous ORDER BY total DESC LIMIT 20`):Promise.resolve([]),
+    ]);
+    const ids=exemplars.map(r=>String(r.request)).filter(id=>/^[0-9a-f-]{36}$/.test(id));
+    const exemplarScope=exemplars.filter(r=>ids.includes(String(r.request))).map(r=>`(blob6 = ${quote(String(r.request))}${r.tenant!==undefined?` AND blob5 = ${quote(String(r.tenant))}`:""})`).join(" OR ")||"blob6 = ''";
+    const statementScope=s.kind==="interactions"||s.kind==="spinners" ? `(${exemplarScope})` : `${s.kind==="verbs"?"blob12":s.kind==="tools"?"blob13":dim} = ${quote(s.selected)}`;
+    const statements=query(`SELECT blob15 AS fingerprint, blob20 AS code, blob19 AS source, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'span' AND double14 = 1 AND blob15 != '' AND ${statementScope}${s.version&&s.kind!=="interactions"&&s.kind!=="spinners"?` AND blob3 = ${quote(s.version)}`:""} GROUP BY fingerprint, code, source, version ORDER BY IF(code != '' OR source != '', 1, 0) DESC, p95 DESC LIMIT 20`);
+    const result={histogram:hist,splits:Object.fromEntries(splitRows),exemplars:exemplars.map(({tenant: _tenant,...row})=>row),triggers,sql:[] as PerfRow[],waterfall:[] as PerfRow[]};
+    const request=s.request ? ids.includes(s.request)?s.request:"" : ids[0]??"";
+    const exemplarTenant=exemplars.find(r=>r.request===request)?.tenant;
+    // Keep a client-supplied request ID within its exemplar tenant, even in site-wide views.
+    const waterfall=request?query(`SELECT blob6 AS request, blob7 AS kind, blob14 AS name, blob9 AS phase, IF(blob7 = 'client', blob20, blob19) AS source, IF(blob7 = 'client', '', blob20) AS code, blob15 AS fingerprint, blob3 AS version, blob2 AS worker, double1 AS duration, double3 AS span, double4 AS parent, double14 AS complete, double15 AS offset, double16 AS started, double20 AS schema, _sample_interval AS weight FROM pimwell_perf WHERE ${scope.where} AND blob6 = ${quote(request)}${exemplarTenant!==undefined?` AND blob5 = ${quote(String(exemplarTenant))}`:""} AND blob7 IN ('request','rpc','span','client','other') AND NOT (blob7 = 'client' AND blob14 = 'cls') ORDER BY started, span LIMIT 300`):Promise.resolve([]);
+    [result.sql,result.waterfall]=await Promise.all([statements,waterfall]);
+    return result;
+  };
+  // Inspector queries share the authorized population and need not wait for the list.
+  const [[overview,spark,browser,comparison,breakdown],inspector]=await Promise.all([Promise.all([
+    query(`SELECT ${dim} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${overviewFilter} GROUP BY label ORDER BY total DESC LIMIT 200`),
+    query(`SELECT ${dim} AS label, intDiv(toUInt32(timestamp), ${bucket}) AS bucket, quantileWeighted(0.5)(double1, _sample_interval) AS p50, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${overviewFilter} GROUP BY label, bucket ORDER BY label, bucket LIMIT 3000`),
     s.kind==="routes" ? query(`SELECT blob5 AS tenant, blob6 AS request, blob8 AS label, blob7 AS kind, blob3 AS version, blob14 AS name, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${scope.where} AND (blob7 = 'request' OR (blob7 = 'client' AND ((blob9 = 'page' AND blob14 IN ('network','render')) OR blob9 IN ('fetch','paint')))) GROUP BY tenant, request, label, kind, version, name, phase LIMIT 5000`) : Promise.resolve([]),
     s.kind==="deploys" && s.version && s.previous ? query(`SELECT blob8 AS label, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'request' AND blob3 IN (${quote(s.version)},${quote(s.previous)}) GROUP BY label, version ORDER BY label LIMIT 400`) : Promise.resolve([]),
-  ]);
-  if(s.kind==="routes") {
-    // Bound concurrency as well as result size. A busy route cannot evict a quiet route,
-    // and inspector selection never changes the list's attribution population.
-    let next=0;
-    await Promise.all(Array.from({length:Math.min(4,overview.length)},async()=>{
-      while(next<overview.length) {
-        const route=overview[next++]!;
-        breakdown.push(...await query(routeAttributionSQL(`${scope.where}${versionFilter} AND blob8 = ${quote(String(route.label))}`)));
-      }
-    }));
-  }
-  const result={...empty,overview,spark,breakdown:routeAttribution(breakdown),browser:pairedBrowser(browser,s.version),comparison};
+    s.kind==="routes" ? query(routeAttributionSQL(`${scope.where} AND blob8 != '' AND NOT ${background}${versionFilter}${detailOnly&&s.selected?` AND blob8 = ${quote(s.selected)}`:''}`)) : Promise.resolve([]),
+  ]),s.selected?readInspector():Promise.resolve(null)]);
+  const result={...empty,overview,spark,breakdown:routeAttributionSummary(breakdown),browser:pairedBrowser(browser,s.version),comparison};
   if(s.kind==="interactions") {
-    const ready=await query(`SELECT blob5 AS tenant, blob6 AS request, blob14 AS label, _sample_interval AS weight, timestamp AS at FROM pimwell_perf WHERE ${filter} ORDER BY at DESC LIMIT 2000`);
+    const ready=await query(`SELECT blob5 AS tenant, blob6 AS request, blob14 AS label, _sample_interval AS weight, timestamp AS at FROM pimwell_perf WHERE ${overviewFilter} ORDER BY at DESC LIMIT 2000`);
     const readyScope=ready.filter(r=>/^[0-9a-f-]{36}$/.test(String(r.request))).map(r=>`(blob5 = ${quote(String(r.tenant??''))} AND blob6 = ${quote(String(r.request))})`).join(' OR ');
     const phasePoints=readyScope?await query(`SELECT blob5 AS tenant, blob6 AS request, blob14 AS label, blob9 AS phase, SUM(double1 * _sample_interval) / SUM(_sample_interval) AS mean FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'client' AND blob9 IN ('fetch','render','paint') AND (${readyScope})${versionFilter} GROUP BY tenant, request, label, phase LIMIT 5000`):[];
     const phases=interactionPhases(ready,phasePoints);
     for(const row of overview) for(const phase of ['fetch','render','paint']) { const p=phases.find(p=>p.label===row.label&&p.phase===phase); if(p) row[phase]=p.mean!; }
   }
   if(!s.selected || !(s.kind==="deploys"?comparison:overview).some(r=>r.label===s.selected)) return result;
-  const selected=`${filter} AND ${dim} = ${quote(s.selected)}`;
-  const histogram=[10,25,50,100,250,500,1000,2500,5000].reduceRight((expr,bound,index)=>`IF(double1 < ${bound}, ${index}, ${expr})`,"9");
-  const splits={colo:"blob4",version:"blob3",auth:"blob11",isolate:"double2"};
-  const [hist,splitRows,exemplars,triggers]=await Promise.all([
-    query(`SELECT ${histogram} AS bucket, SUM(_sample_interval) AS n FROM pimwell_perf WHERE ${selected} GROUP BY bucket ORDER BY bucket`),
-    s.kind==="interactions"||s.kind==="spinners" ? originClientSplits(query,scope.where,selected) : Promise.all(Object.entries(splits).map(async ([name,column])=>[name,await query(`SELECT ${column} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label ORDER BY n * p50 DESC LIMIT 100`)] as const)),
-    query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, double20 AS generation, IF(blob19 != '' OR blob20 != '', 1, 0) AS sourced, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY sourced DESC, generation DESC, duration DESC LIMIT 5`),
-    s.kind==="spinners"?query(`SELECT blob8 AS label, blob19 AS previous, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label, previous ORDER BY total DESC LIMIT 20`):Promise.resolve([]),
-  ]);
-  const ids=exemplars.map(r=>String(r.request)).filter(id=>/^[0-9a-f-]{36}$/.test(id));
-  const exemplarScope=exemplars.filter(r=>ids.includes(String(r.request))).map(r=>`(blob6 = ${quote(String(r.request))}${r.tenant!==undefined?` AND blob5 = ${quote(String(r.tenant))}`:""})`).join(" OR ")||"blob6 = ''";
-  const statementScope=s.kind==="interactions"||s.kind==="spinners" ? `(${exemplarScope})` : `${s.kind==="verbs"?"blob12":s.kind==="tools"?"blob13":dim} = ${quote(s.selected)}`;
-  result.sql=await query(`SELECT blob15 AS fingerprint, blob20 AS code, blob19 AS source, blob3 AS version, ${weightedMetrics} FROM pimwell_perf WHERE ${scope.where} AND blob7 = 'span' AND double14 = 1 AND blob15 != '' AND ${statementScope}${s.version&&s.kind!=="interactions"&&s.kind!=="spinners"?` AND blob3 = ${quote(s.version)}`:""} GROUP BY fingerprint, code, source, version ORDER BY IF(code != '' OR source != '', 1, 0) DESC, p95 DESC LIMIT 20`);
-  result.histogram=hist;result.splits=Object.fromEntries(splitRows);result.exemplars=exemplars.map(({tenant: _tenant,...row})=>row);result.triggers=triggers;
-  const request=s.request ? ids.includes(s.request)?s.request:"" : ids[0]??"";
-  const exemplarTenant=exemplars.find(r=>r.request===request)?.tenant;
-  // Keep a client-supplied request ID within its exemplar tenant, even in site-wide views.
-  if(request) result.waterfall=await query(`SELECT blob6 AS request, blob7 AS kind, blob14 AS name, blob9 AS phase, IF(blob7 = 'client', blob20, blob19) AS source, IF(blob7 = 'client', '', blob20) AS code, blob15 AS fingerprint, blob3 AS version, blob2 AS worker, double1 AS duration, double3 AS span, double4 AS parent, double14 AS complete, double15 AS offset, double16 AS started, double20 AS schema, _sample_interval AS weight FROM pimwell_perf WHERE ${scope.where} AND blob6 = ${quote(request)}${exemplarTenant!==undefined?` AND blob5 = ${quote(String(exemplarTenant))}`:""} AND blob7 IN ('request','rpc','span','client','other') AND NOT (blob7 = 'client' AND blob14 = 'cls') ORDER BY started, span LIMIT 300`);
-  return result;
+  return {...result,...inspector};
 }

@@ -4,7 +4,7 @@ import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appsPage } from "../src/http/appsPages";
 import { sparkline, routeBreakdown } from "../src/http/performancePage";
-import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser, population, weightedMetrics, routeAttribution, routeAttributionSQL, interactionPhases, type PerformanceData } from "../src/apps/performance";
+import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser, population, weightedMetrics, routeAttribution, routeAttributionSQL, routeAttributionSummary, analyticsQuery, interactionPhases, type PerformanceData } from "../src/apps/performance";
 import { buildContext } from "../src/auth/context";
 import { tenantHash } from "../src/perf";
 import { SQL_CATALOG } from "../src/perfCatalog";
@@ -76,9 +76,10 @@ describe("sites", () => {
   });
   it("keeps root gaps visible and caps each trip before aggregating route weights", () => {
     const sql=routeAttributionSQL("blob1 = 'authorized' AND blob8 = '/mcp'");
-    expect(sql).toContain("GROUP BY tenant, request, label, name, kind, span");
-    expect(sql).toContain("GROUP BY tenant, request, label HAVING root_n > 0 ORDER BY at DESC LIMIT 200");
-    expect(sql).not.toContain("LIMIT 5000");expect(sql).toContain("blob1 = 'authorized'");
+    expect(sql).toContain("GROUP BY tenant, request, label HAVING root_n > 0");
+    expect(sql).toContain("GROUP BY label ORDER BY weighted_root_wall DESC LIMIT 5000");
+    expect(sql.split('LIMIT')).toHaveLength(2); // Only route summaries are bounded, never trips/spans.
+    expect(sql).toContain("blob1 = 'authorized'");
     const breakdown=routeAttribution([
       {label:'busy',root_n:10,root_wall:100,span_wall:200,d1_wall:200,d1_known_wall:200,d1_execution:40,d1_execution_n:2,d1_n:2},
       {label:'busy',root_n:1,root_wall:100,span_wall:0},
@@ -97,6 +98,50 @@ describe("sites", () => {
     data.breakdown=[{label:'root-only',kind:'request',name:'request',n:1,root_wall:75,attributed:75}];
     expect(routeBreakdown(data,'root-only').find(r=>r.name==='Unattributed server')?.value).toBe(75);
   });
+  it("aggregates every retained trip in SQL without letting busy span volume truncate a quiet route", async () => {
+    await env.HUB_DB.exec(`CREATE TABLE pimwell_perf (blob5 TEXT, blob6 TEXT, blob8 TEXT, blob7 TEXT, blob14 TEXT, double1 REAL, double17 REAL, double18 REAL, double19 REAL, double20 REAL, _sample_interval REAL)`);
+    const insert=env.HUB_DB.prepare('INSERT INTO pimwell_perf VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+    const point=(tenant:string,request:string,label:string,kind:string,name:string,wall:number,attributed:number,weight:number,execution=-1)=>insert.bind(tenant,request,label,kind,name,wall,attributed,0,execution,2,weight);
+    await env.HUB_DB.batch([
+      point('own','busy','busy','request','request',100,0,10),
+      point('own','quiet','quiet','request','request',101,0,3),
+      point('own','quiet','quiet','span','d1.batch',23,23,25,5),
+      point('foreign','quiet','quiet','span','d1.batch',1000,1000,50,100), // Same UUID, but no matching tenant root.
+      point('own','gap','busy','request','request',200,0,1),
+      point('own','gap','busy','span','d1.batch',20,20,8,4),
+    ]);
+    // 5,200 distinct recorded spans in a busy trip exceed the former global row limit.
+    for(let start=0;start<5200;start+=100) await env.HUB_DB.batch(Array.from({length:100},()=>point('own','busy','busy','span','auth.check',1,1,8)));
+    const sql=routeAttributionSQL('1 = 1').replaceAll('IF(','IIF(');
+    const rows=(await env.HUB_DB.prepare(sql).all<Record<string,string|number>>()).results;
+    const actual=routeAttributionSummary(rows);
+    const expected=routeAttribution([
+      {label:'busy',root_n:10,root_wall:100,span_wall:5200,auth_wall:5200,auth_n:5200},
+      {label:'busy',root_n:1,root_wall:200,span_wall:20,d1_wall:20,d1_known_wall:20,d1_execution:4,d1_execution_n:1,d1_n:1},
+      {label:'quiet',root_n:3,root_wall:101,span_wall:23,d1_wall:23,d1_known_wall:23,d1_execution:5,d1_execution_n:1,d1_n:1},
+    ]);
+    expect(actual).toHaveLength(expected.length);
+    for(const row of expected) {
+      const match=actual.find(r=>r.label===row.label&&r.name===row.name)!;
+      expect(match).toBeDefined();
+      for(const [key,value] of Object.entries(row)) if(typeof value==='number') expect(Number(match[key])).toBeCloseTo(value); else expect(match[key]).toBe(value);
+    }
+    expect(JSON.stringify(rows)).not.toContain('tenant');expect(JSON.stringify(rows)).not.toContain('request');
+    expect(actual.find(r=>r.label==='quiet'&&r.name==='request')).toMatchObject({n:3,root_wall:303});
+  });
+  it("keeps cached analytics rows isolated from reader mutation and does not cache failures", async () => {
+    clearPerformanceCache();
+    const ctx={env:{...env,ARTIFACTS_ACCOUNT_ID:'a'.repeat(32),PERF_ANALYTICS_TOKEN:'test'}};
+    const mock=vi.spyOn(globalThis,'fetch').mockImplementation(async()=>Response.json({data:[{label:'first',n:2}]}));
+    try {
+      const first=await analyticsQuery(ctx,'isolation');first[0]!.n=99;first.push({label:'added'});
+      const second=await analyticsQuery(ctx,'isolation');expect(second).toEqual([{label:'first',n:2}]);second[0]!.label='changed';
+      expect(await analyticsQuery(ctx,'isolation')).toEqual([{label:'first',n:2}]);expect(mock).toHaveBeenCalledTimes(1);
+      mock.mockResolvedValueOnce(new Response('unavailable',{status:503}));
+      await expect(analyticsQuery(ctx,'failure')).rejects.toThrow('temporarily unavailable');
+      expect(await analyticsQuery(ctx,'failure')).toEqual([{label:'first',n:2}]);expect(mock).toHaveBeenCalledTimes(3);
+    } finally {mock.mockRestore();clearPerformanceCache();}
+  });
   it("retains low-volume route bars while another route is inspected", async () => {
     const w=await world();
     await w.call(w.root.token,'app.register',{project:'pricebench',script:'pricebench'});
@@ -106,9 +151,8 @@ describe("sites", () => {
     const mock=vi.spyOn(globalThis,'fetch').mockImplementation(async(_input,init)=>{
       const sql=String(init?.body);queries.push(sql);
       if(sql.includes('double17')) {
-        expect(sql).toContain('LIMIT 200');expect(sql).not.toContain('LIMIT 5000');
-        const label=sql.includes("blob8 = '/mcp'")?'/mcp':'/:project/docket';
-        return Response.json({data:[{label,root_n:1,root_wall:101,span_wall:23,d1_wall:23,d1_n:1}]});
+        expect(sql).toContain('GROUP BY label');expect(sql).not.toContain('LIMIT 200');
+        return Response.json({data:['/:project/docket','/mcp'].map(label=>({label,n:1,weighted_root_wall:101,weighted_d1_wall:23,weighted_d1_n:1}))});
       }
       if(sql.includes('AS mean')||sql.includes('intDiv')||sql.includes('AS schema')||sql.includes('SELECT blob15')||sql.includes('blob6 AS request')||sql.includes('IF(double1 < 10')||sql.includes('blob2 AS label')||sql.includes('blob3 AS label')||sql.includes('blob4 AS label')||sql.includes('blob11 AS label')) return Response.json({data:[]});
       return Response.json({data:[{label:'/:project/docket',n:100,p50:101},{label:'/mcp',n:13,p50:101}]});
@@ -123,8 +167,9 @@ describe("sites", () => {
       expect(selected).toContain('Unattributed server: 78');
       expect(selected).toContain('title="/:project/docket">/<wbr>:project/<wbr>docket');
       expect(selected).not.toContain('overflow-wrap:anywhere');
-      expect(queries.filter(q=>q.includes('double17'))).toHaveLength(2); // reused on selection
-      expect(queries.some(q=>q.includes("blob8 = '/mcp'"))).toBe(true);
+      expect(queries.filter(q=>q.includes('double17'))).toHaveLength(1); // One route summary query, reused on selection.
+      expect(queries.filter(q=>q.includes('double17'))[0]).not.toContain("blob8 = '/mcp'");
+      expect(queries.filter(q=>q.includes('double17'))[0]).not.toContain("blob8 = '/:project/docket'");
     } finally {mock.mockRestore();clearPerformanceCache();}
   });
   it("carries a named repository through app registration, telemetry, releases and Site apps", async () => {
@@ -174,7 +219,7 @@ describe("sites", () => {
       else if(sql.includes("blob6 AS request")&&!sql.includes("double17")) data=[{request,version,colo:"DFW",duration:100,weight:1}];
       else if(sql.includes("SELECT blob15")) data=[{fingerprint:"01234567",code,source:JSON.stringify(location),version,...metric}];
       else if(sql.includes("IF(double1 < 10")) data=[{bucket:1,n:100}];
-      else if(sql.includes("double17")) data=[{label:"/:project",request,root_n:100,root_wall:30,span_wall:20,d1_wall:20,d1_execution:5,d1_known_wall:20,d1_execution_n:1,d1_n:1}];
+      else if(sql.includes("double17")) data=[{label:"/:project",n:100,weighted_root_wall:3000,weighted_d1_wall:2000,weighted_d1_execution:500,weighted_d1_known_wall:2000,weighted_d1_execution_n:100,weighted_d1_n:100}];
       else if(sql.includes("intDiv")) data=[{label:"/:project",bucket:1,p50:20,n:50},{label:"/:project",bucket:2,p50:25,n:50}];
       else if(sql.includes("GROUP BY label, version")) data=[{label:"/:project",version,...metric},{label:"/:project",version:previous,...metric,p95:80}];
       else if(sql.includes("double2 AS label")) data=[{label:0,...metric},{label:1,...metric}];
@@ -232,6 +277,12 @@ describe("sites", () => {
       const queryCount=sqls.length;
       for(const restricted of [{...ctx,mcpProject:{...w.p,id:"foreign",path:"foreign"}}, {...ctx,tenant:other}, {...ctx,identity:rootOutsider.identity,role:"root" as const}, {...ctx,identity:outsider.identity,role:"member" as const}]) expect((await callTool(restricted,"perf_route",perfArgs)).isError).toBe(true);
       expect(sqls).toHaveLength(queryCount);
+      await ctx.db.prepare("UPDATE membership SET state = 'inactive' WHERE identity_id = ? AND tenant_id = ?").bind(ctx.identity!.id,w.t.id).run();
+      expect((await callTool(ctx,"perf_route",perfArgs)).isError).toBe(true);expect(sqls).toHaveLength(queryCount);
+      await ctx.db.prepare("UPDATE membership SET state = 'active' WHERE identity_id = ? AND tenant_id = ?").bind(ctx.identity!.id,w.t.id).run();
+      await ctx.db.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.p.id).run();
+      expect((await callTool(ctx,"perf_route",perfArgs)).isError).toBe(true);expect(sqls).toHaveLength(queryCount);
+      await ctx.db.prepare("UPDATE project SET state = 'active' WHERE id = ?").bind(w.p.id).run();
       await ctx.db.prepare("UPDATE app_source SET state = 'disabled' WHERE tenant_id = ?").bind(w.t.id).run();
       const noCalls=sqls.length;expect(await (await get()).text()).toContain("No performance data yet");expect(sqls).toHaveLength(noCalls);
       expect(performanceSelection(new URLSearchParams())).toMatchObject({kind:"routes",hours:24});
