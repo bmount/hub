@@ -66,6 +66,11 @@ export class Inbox extends DurableObject<Env> {
   }
 
   async #viewer(state: SocketState) {
+    // Hibernated Inbox activations do not pass through the HTTP entrypoint.
+    if (!getVerb('chat.inbox')) {
+      const { registerAllVerbs } = await import("../verbs/index");
+      registerAllVerbs();
+    }
     const ctx = await authenticateChat(this.#request(state), this.env, p => this.ctx.waitUntil(p));
     const v = viewerOf(ctx);
     if (v.tenant.id !== state.tenant || v.identity.id !== state.identity) throw new Error('socket identity changed');

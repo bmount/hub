@@ -1,5 +1,9 @@
 import { applyD1Migrations, env } from "cloudflare:test";
 import { beforeEach } from "vitest";
+// Preload the router in Vitest's source-module loader, as the old entrypoint did.
+// Production keeps it lazy; otherwise the first request pays source transforms
+// (not present in the deployed bundle) inside tests' request deadlines.
+import "../src/hub";
 
 await applyD1Migrations(env.HUB_DB, env.TEST_MIGRATIONS);
 
