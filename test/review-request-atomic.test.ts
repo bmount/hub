@@ -221,6 +221,32 @@ describe("atomic review request", () => {
     for (const table of ["review", "review_reviewer", "attention", "event"] as const) expect(await w.count(table), table).toBe(0);
   });
 
+  it("completes 100 keyed requests with ten distinct reviewers and durable replay", async () => {
+    const w = await world();
+    const reviewers = ["pat@example.com"];
+    for (let i = 0; i < 9; i++) {
+      const email = `reviewer${i}@example.com`;
+      await seedHuman(email, { memberships: [{ tenant_id: w.t.id, role: "reader" }] });
+      reviewers.push(email);
+    }
+    const times: number[] = [];
+    for (let i = 0; i < 100; i++) {
+      const start = performance.now();
+      const response = await w.request({ reviewers, idempotency_key: `load-${i}` });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { result: { replayed: boolean } }).result.replayed).toBe(false);
+      times.push(performance.now() - start);
+    }
+    expect(await w.count("review")).toBe(100);
+    expect(await w.count("review_reviewer")).toBe(1000);
+    expect(await w.count("attention")).toBe(1000);
+    expect(await w.count("event")).toBe(100);
+    expect((await w.request({ reviewers, idempotency_key: "load-99" })).status).toBe(200);
+    expect(await w.count("review")).toBe(100);
+    // Local Workers/D1 load probe, not a substitute for the production upstream check.
+    expect(times.sort((a, b) => a - b)[94]).toBeLessThanOrEqual(400);
+  }, 60_000);
+
   it("validates ten reviewers together and rejects inactive identities and memberships atomically", async () => {
     const w = await world();
     const reviewers = ["pat@example.com"];

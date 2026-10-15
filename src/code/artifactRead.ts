@@ -43,9 +43,13 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
     await caches.default.put(key, Response.json(value, { headers: { "cache-control": "max-age=604800" } }));
     return value;
   };
-  const metadata = async (commit: ArtifactCommit): Promise<ArdiCommit> => {
-    const by = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactRead.ts:33:22:metadata:f5f778ba*/ SELECT identity_id, session_id FROM code_event WHERE tenant_id = ? AND project_id = ? AND repo = ? AND kind = 'commit' AND target = ? ORDER BY at, ardi_id LIMIT 1")
-      .bind(grant.tenant.id, grant.project.id, repoName, commit.hash).first<{ identity_id: string | null; session_id: string | null }>();
+  const metadata = async (commit: ArtifactCommit, requireIndexed = false): Promise<ArdiCommit> => {
+    const by = await env.HUB_DB.prepare(`/*perf-site:src%2Fcode%2FartifactRead.ts:33:22:metadata:f5f778ba*/
+      SELECT e.identity_id, e.session_id FROM (SELECT 1) seed LEFT JOIN code_event e ON e.rowid = (
+        SELECT rowid FROM code_event WHERE tenant_id = ?1 AND project_id = ?2 AND repo = ?3 AND kind = 'commit' AND target = ?4 ORDER BY at, ardi_id LIMIT 1)
+      WHERE ?5 = 0 OR EXISTS (SELECT 1 FROM repository_commit WHERE tenant_id = ?1 AND project_id = ?2 AND repo = ?3 AND oid = ?4)`)
+      .bind(grant.tenant.id, grant.project.id, repoName, commit.hash, requireIndexed ? 1 : 0).first<{ identity_id: string | null; session_id: string | null }>();
+    if (requireIndexed && !by) throw new HubError(503, "unavailable", "repository history metadata is not ready");
     return { oid: commit.hash, tree: commit.treeHash, parents: commit.parents, author_name: commit.author.name, author_email: commit.author.email,
       author_time: commit.authoredAt, committer_name: commit.committer.name, committer_email: commit.committer.email, commit_time: commit.committedAt,
       summary: commit.message.split("\n")[0] ?? "", message: commit.message, principal: by?.identity_id ?? null, session: by?.session_id ?? null,
@@ -83,10 +87,7 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
     const hit = oid ? await caches.default.match(cacheKey("commit", oid)) : null;
     const commit = hit ? await hit.json() as ArtifactCommit : null;
     if (commit && commit.hash === oid) {
-      const indexed = await env.HUB_DB.prepare("SELECT 1 FROM repository_commit WHERE tenant_id = ? AND project_id = ? AND repo = ? AND oid = ?")
-        .bind(grant.tenant.id, grant.project.id, repoName, oid).first();
-      if (!indexed) throw new HubError(503, "unavailable", "repository history metadata is not ready");
-      return { result: { commits: [await metadata(commit)] } as T, next: null };
+      return { result: { commits: [await metadata(commit, true)] } as T, next: null };
     }
   }
   const [info, indexedRoot] = await Promise.all([

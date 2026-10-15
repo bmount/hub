@@ -67,15 +67,15 @@ export const reviewRequest = defineVerb({
     return { repo: optString(i, "repo", { max: 63 }), project: reqString(i, "project", { max: 127 }), branch, base, title: optString(i, "title", { max: 200 }), summary: optString(i, "summary", { max: 10_000 }) ?? "", reviewers: reviewers as string[], key: i.idempotency_key === undefined ? null : reqString(i, "idempotency_key", { max: 64 }) };
   },
   run: async (ctx, p) => {
-    const pr = await repoProject(ctx, p.project, false, p.repo);
-    const repo = pr.slug === p.project ? "" : p.repo ?? "";
     const key = p.key ? `review_request:v1:${ctx.tenant!.id}:${ctx.identity!.id}:${await sha256Hex(p.key)}` : null;
+    const [pr, prior] = await Promise.all([
+      repoProject(ctx, p.project, false, p.repo),
+      key ? ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:78:27:reviewRequest.run:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key).first<string>("value") : null,
+    ]);
+    const repo = pr.slug === p.project ? "" : p.repo ?? "";
     const fingerprint = key ? await sha256Hex(JSON.stringify({ ...(repo ? {repo} : {}), project_id: pr.id, branch: p.branch, base: p.base,
       title: p.title, summary: p.summary, reviewers: p.reviewers })) : null;
-    if (key) {
-      const prior = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:78:27:reviewRequest.run:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key).first<string>("value");
-      if (prior !== null) return requestReplay(ctx, prior, fingerprint!, pr.id);
-    }
+    if (prior !== null) return requestReplay(ctx, prior, fingerprint!, pr.id);
     const emails = [...new Set(p.reviewers.map(e => e.trim().toLowerCase()))];
     const [page, reviewers] = await Promise.all([
       codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: `refs/heads/${p.branch}`, limit: 1 }),
