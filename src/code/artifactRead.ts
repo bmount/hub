@@ -10,7 +10,7 @@ import type { ArdiChange, ArdiCommit, ArdiEntry, ArdiEvent, ArdiPage, ArdiRef } 
 
 async function refs(api: ArtifactsRest, namespace: string, repo: string): Promise<ArdiRef[]> {
   const request = new Request(`https://git.internal/${repo}.git/info/refs?service=git-upload-pack`);
-  const response = await api.git(namespace, repo, "info/refs", request, null, false);
+  const response = await api.git(namespace, repo, "info/refs", request, null, false, false);
   if (!response.ok) throw new HubError(502, "unavailable", "Git refs unavailable");
   try { return parseAdvertisedRefs(new Uint8Array(await response.arrayBuffer()), true); }
   catch { throw new HubError(502, "unavailable", "invalid Git refs"); }
@@ -43,6 +43,14 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
     await caches.default.put(key, Response.json(value, { headers: { "cache-control": "max-age=604800" } }));
     return value;
   };
+  const metadata = async (commit: ArtifactCommit): Promise<ArdiCommit> => {
+    const by = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactRead.ts:33:22:metadata:f5f778ba*/ SELECT identity_id, session_id FROM code_event WHERE tenant_id = ? AND project_id = ? AND repo = ? AND kind = 'commit' AND target = ? ORDER BY at, ardi_id LIMIT 1")
+      .bind(grant.tenant.id, grant.project.id, repoName, commit.hash).first<{ identity_id: string | null; session_id: string | null }>();
+    return { oid: commit.hash, tree: commit.treeHash, parents: commit.parents, author_name: commit.author.name, author_email: commit.author.email,
+      author_time: commit.authoredAt, committer_name: commit.committer.name, committer_email: commit.committer.email, commit_time: commit.committedAt,
+      summary: commit.message.split("\n")[0] ?? "", message: commit.message, principal: by?.identity_id ?? null, session: by?.session_id ?? null,
+      trailer_principal: null, trailer_session: null };
+  };
   const revision = String(body.rev ?? body.ref ?? "HEAD"), path = String(body.path ?? "");
   if (path.split("/").some(segment => segment === "." || segment === "..")) throw new HubError(400, "bad_request", "invalid repository path");
   // These results were populated only after checking the storage ownership marker.
@@ -68,6 +76,19 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
       if (hit) return { result: { oid, files: await hit.json() } as T, next: null };
     }
   }
+  // Like immutable file/snapshot hits, a cached commit was ownership-checked when
+  // filled. Resolve the branch live and still check scoped index/attribution now.
+  if (verb === "log" && Number(body.limit) === 1 && !body.path && !body.since && revision !== "HEAD") {
+    const oid = liveRefs ? findRef(await liveRefs, revision) : revision;
+    const hit = oid ? await caches.default.match(cacheKey("commit", oid)) : null;
+    const commit = hit ? await hit.json() as ArtifactCommit : null;
+    if (commit && commit.hash === oid) {
+      const indexed = await env.HUB_DB.prepare("SELECT 1 FROM repository_commit WHERE tenant_id = ? AND project_id = ? AND repo = ? AND oid = ?")
+        .bind(grant.tenant.id, grant.project.id, repoName, oid).first();
+      if (!indexed) throw new HubError(503, "unavailable", "repository history metadata is not ready");
+      return { result: { commits: [await metadata(commit)] } as T, next: null };
+    }
+  }
   const [info, indexedRoot] = await Promise.all([
     api.info(namespace, repo),
     verb === "file.read" && /^[0-9a-f]{40}$/.test(revision)
@@ -78,14 +99,6 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
   ]);
   if (info.description !== repoOwnership(grant.tenant.id, grant.project.id)) throw new HubError(503, "unavailable", "repository migration is not ready");
   const page = (result: unknown, next: string | null = null) => ({ result: result as T, next });
-  const metadata = async (commit: ArtifactCommit): Promise<ArdiCommit> => {
-    const by = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactRead.ts:33:22:metadata:f5f778ba*/ SELECT identity_id, session_id FROM code_event WHERE tenant_id = ? AND project_id = ? AND repo = ? AND kind = 'commit' AND target = ? ORDER BY at, ardi_id LIMIT 1")
-      .bind(grant.tenant.id, grant.project.id, repoName, commit.hash).first<{ identity_id: string | null; session_id: string | null }>();
-    return { oid: commit.hash, tree: commit.treeHash, parents: commit.parents, author_name: commit.author.name, author_email: commit.author.email,
-      author_time: commit.authoredAt, committer_name: commit.committer.name, committer_email: commit.committer.email, commit_time: commit.committedAt,
-      summary: commit.message.split("\n")[0] ?? "", message: commit.message, principal: by?.identity_id ?? null, session: by?.session_id ?? null,
-      trailer_principal: null, trailer_session: null };
-  };
   const at = revision;
   let refList: Promise<ArdiRef[]> | null = null;
   const resolve = async (revision: string): Promise<string> => {

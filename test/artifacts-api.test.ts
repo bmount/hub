@@ -95,11 +95,16 @@ describe("Artifacts compatibility adapter", () => {
     await s.read("log", { ref: "main", limit: 1 });
     expect(s.requests.filter(p => p.endsWith("/log") || p.includes("/commit/"))).toHaveLength(0);
     expect(s.requests.filter(p => p.endsWith("/info/refs"))).toHaveLength(1);
+    expect(s.requests.filter(p => p.endsWith("/repos/site"))).toHaveLength(0);
     s.setHead(hash(2));
     const moved = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "main", limit: 1 });
     expect(moved.result.commits.map(c => c.oid)).toEqual([hash(2)]);
-    s.setDescription("foreign ownership");
+    s.setHead(hash(3));s.setDescription("foreign ownership");
     await expect(s.read("log", { ref: "main", limit: 1 })).rejects.toMatchObject({ status: 503 });
+    s.setHead(hash(4));
+    await env.HUB_DB.prepare("UPDATE membership SET state = 'revoked' WHERE tenant_id = ? AND identity_id = ?")
+      .bind(s.tenant.id, s.human.identity.id).run();
+    await expect(s.read("log", { ref: "main", limit: 1 })).rejects.toMatchObject({ status: 403 });
   });
   it("starts live authorization beside routing and consumes it only once", async () => {
     const s = await setup(), grant = await authorizeGit(s.configured, s.auth, "acme", "site");
