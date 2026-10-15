@@ -200,19 +200,23 @@ try {
   const orgCtx = await context(member, { width: 1440, height: 1000 });
   const orgPage = await orgCtx.newPage();
   await orgPage.goto('https://pimwell.test/');
+  await orgPage.getByRole('button', { name: 'New organization', exact: true }).click();
   const createOrg = orgPage.locator('form[action="/api/tenant.create"]');
   await createOrg.locator('[name="slug"]').fill('browser-org');
   await createOrg.locator('[name="display_name"]').fill('Browser organization');
   await createOrg.getByRole('button', { name: 'Create organization' }).click();
-  await expect(orgPage.getByRole('heading', { name: 'Browser organization', exact: true }).first()).toBeVisible();
+  await expect(orgPage.getByRole('link', { name: /Browser organization/ }).first()).toBeVisible();
   await orgPage.goto('https://browser-org.pimwell.test/people?invite=1');
   const inviteForm = orgPage.locator('form[action="/api/invite.create"]');
   await inviteForm.locator('[name="email"]').fill('browser-invitee@example.test');
   await inviteForm.getByRole('button', { name: 'Create invite link' }).click();
   await expect(orgPage.getByRole('heading', { name: 'Invite ready' })).toBeVisible();
   await orgPage.goto('https://pimwell.test/');
+  await orgPage.getByText('Manage your organizations', { exact: true }).click();
   const archiveOrg = orgPage.locator('form[action="/api/tenant.archive"]').filter({ has: orgPage.locator('input[value="browser-org"]') });
   await archiveOrg.getByRole('button').click();
+  await expect(archiveOrg).toHaveCount(0);
+  await orgPage.getByText('Manage your organizations', { exact: true }).click();
   const deleteOrg = orgPage.locator('form[action="/api/tenant.delete"]').filter({ has: orgPage.locator('input[value="browser-org"]') });
   await expect(deleteOrg).toBeVisible();
   await deleteOrg.locator('[name="confirm"]').fill('browser-org');
@@ -821,7 +825,7 @@ try {
       if (width === 390) await page.getByRole('link', { name: 'Menu', exact: true }).click();
       await page.getByRole('link', { name: 'All organizations', exact: true }).click();
       await expect(page).toHaveURL('https://pimwell.test/');
-      await expect(page.getByRole('heading', { name: 'Your organizations', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'All organizations', exact: true })).toBeVisible();
       await expect(page.getByRole('link', { name: 'OTHER', exact: true })).toBeVisible();
     }
     await allOrganizations();
