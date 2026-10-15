@@ -32,6 +32,16 @@ function assertPatched(packages) {
   }
 }
 
+test("synthetic Browser Rendering SDK has no Node downloader dependencies", () => {
+  assert.ok(manifest.dependencies["@cloudflare/playwright"]);
+  assert.equal(manifest.dependencies["@cloudflare/puppeteer"], undefined);
+  for (const path of Object.keys(lock.packages)) {
+    for (const name of ["@puppeteer/browsers", "extract-zip", "basic-ftp"]) {
+      assert.ok(!path.endsWith(`/node_modules/${name}`) && path !== `node_modules/${name}`, path);
+    }
+  }
+});
+
 test("lockfile contains only reviewed patched development Sharp/Undici copies", () => {
   assertPatched(lock.packages);
 });

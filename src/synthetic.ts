@@ -1,4 +1,4 @@
-import puppeteer, { type Browser } from "@cloudflare/puppeteer";
+import { launch, type Browser } from "@cloudflare/playwright";
 import type { Env } from "./env";
 import { randomToken, sha256Hex, ulid } from "./ids";
 import { createGrant, setLibraryGrantId } from "./db/oauthGrants";
@@ -105,25 +105,26 @@ export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<voi
   try {
     if (!env.SYNTHETIC_BROWSER) throw new Error("Synthetic browser binding missing");
     web = await credential(env, "browser", now); git = await credential(env, "git", now);
-    browser = await puppeteer.launch(env.SYNTHETIC_BROWSER);
-    const page = await browser.newPage();
+    browser = await launch(env.SYNTHETIC_BROWSER);
+    const context = await browser.newContext({ serviceWorkers: "block" });
+    const page = await context.newPage();
     // No third-party request can receive our ephemeral marker or cookies.
-    await page.setRequestInterception(true);
-    page.on("request", request => {
+    await context.route("**/*", async route => {
+      const request = route.request();
       const url = new URL(request.url());
-      if (!([env.HUB_DOMAIN, `perf-synthetic.${env.HUB_DOMAIN}`].includes(url.hostname)) || url.protocol !== "https:") { void request.abort(); return; }
+      if (!([env.HUB_DOMAIN, `perf-synthetic.${env.HUB_DOMAIN}`].includes(url.hostname)) || url.protocol !== "https:") { await route.abort(); return; }
       const headers: Record<string,string> = { ...request.headers(), "x-pimwell-synthetic": web!.token };
       // Headless MCP clients have no Origin. Keep the server browser-origin policy unchanged.
       if (url.pathname === "/mcp") delete headers.origin;
-      void request.continue({ headers });
+      await route.continue({ headers });
     });
     // Chromium reaches the public route. Same-Worker fetch() can bypass a zone route to its origin.
     const journeyFetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
       const { signal: _signal, ...options } = init;
-      const result = await page.evaluate(async (url, options) => {
+      const result = await page.evaluate(async ({ url, options }) => {
         const response = await fetch(url, { ...options, signal: AbortSignal.timeout(10_000) });
         return { status: response.status, headers: Array.from(response.headers.entries()), body: await response.text() };
-      }, url, options);
+      }, { url, options });
       return new Response(result.body, { status: result.status, headers: result.headers });
     };
     try {
@@ -144,7 +145,7 @@ export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<voi
     };
     await observe("landing", () => navigate(`https://${env.HUB_DOMAIN}/`, false));
     await observe("sign-in", () => navigate(`https://${env.HUB_DOMAIN}/login`, false));
-    await page.setCookie({ name: "pmw_session", value: web.token, domain: `.${env.HUB_DOMAIN}`, path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
+    await context.addCookies([{ name: "pmw_session", value: web.token, domain: `.${env.HUB_DOMAIN}`, path: "/", secure: true, httpOnly: true, sameSite: "Lax" }]);
     const base = `https://perf-synthetic.${env.HUB_DOMAIN}`;
     for (const [journey, path] of [["home","/"],["docket","/docket"],["item","/perf-synthetic/w/1"],["chat-page","/c/synthetic"],["mail","/mail"]] as const) await observe(journey, () => navigate(base+path, true));
     mcp = await mcpCredential(env, web.id, now, ctx);

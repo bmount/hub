@@ -15,7 +15,7 @@ import type { Env } from "../src/env";
 import { SQL_CATALOG } from "../src/perfCatalog";
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
-import puppeteer from "@cloudflare/puppeteer";
+import * as browserSdk from "@cloudflare/playwright";
 import * as ardi from "../src/code/ardi";
 import { runSynthetic, gitLsRemote, recordSynthetic, syntheticMarker, SYNTHETIC_TENANT, SYNTHETIC_MEMBER, SYNTHETIC_JOURNEYS } from "../src/synthetic";
 import { listMembers } from "../src/db/memberships";
@@ -508,22 +508,32 @@ describe("isolated synthetic journeys", () => {
     const browserRequests: string[] = [];
     const measured={...c.measured,SYNTHETIC_BROWSER:{} as Fetcher};
     const page={
-      setRequestInterception:async()=>{},on:()=>{},setCookie:async(p:{value:string})=>{cookies="pmw_session="+p.value;},
       goto:async(url:string)=>{
         current=url;
         const response=await app.fetch(new Request(url,{headers:{cookie:cookies}}),measured,c.ctx);
         html=await response.text();
         return {status:()=>response.status,headers:()=>Object.fromEntries(response.headers)};
       },
-      url:()=>current,$:async()=>html.includes("/assets/timing.")?{}:null,evaluate:async(_fn:unknown,url?:string,options?:RequestInit)=>{
-        if(!url)return;
+      url:()=>current,$:async()=>html.includes("/assets/timing.")?{}:null,evaluate:async(_fn:unknown,args?:{url:string;options:RequestInit})=>{
+        if(!args)return;
+        const {url,options}=args;
         browserRequests.push(url);
         const response=await fetch(url,{...options,headers:{...options?.headers,cookie:cookies,...(new URL(url).pathname==="/mcp"?{}:{origin:new URL(url).origin})}});
         return {status:response.status,headers:Array.from(response.headers.entries()),body:await response.text()};
       }
     };
     const close=vi.fn(async()=>{});
-    vi.spyOn(puppeteer,"launch").mockResolvedValue({newPage:async()=>page,close} as never);
+    vi.spyOn(browserSdk,"launch").mockResolvedValue({newContext:async()=>({
+      route:async(_pattern:string,guard:(route:unknown)=>Promise<void>)=>{
+        const abort=vi.fn(),proceed=vi.fn();
+        const request=(url:string)=>({url:()=>url,headers:()=>({origin:"https://pimwell.test"})});
+        await guard({request:()=>request("https://third-party.test/"),abort,continue:proceed});
+        expect(abort).toHaveBeenCalledOnce();expect(proceed).not.toHaveBeenCalled();
+        await guard({request:()=>request("https://perf-synthetic.pimwell.test/mcp"),abort,continue:proceed});
+        expect(proceed).toHaveBeenCalledWith({headers:{"x-pimwell-synthetic":expect.any(String)}});
+      },newPage:async()=>page,
+      addCookies:async([p]:{value:string}[])=>{cookies="pmw_session="+p!.value;}
+    }),close} as never);
     vi.spyOn(ardi,"createRepo").mockResolvedValue();
     const originalFetch=globalThis.fetch;
     vi.spyOn(globalThis,"fetch").mockImplementation(async(input,init)=>{
