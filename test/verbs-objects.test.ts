@@ -6,8 +6,8 @@ import { getTenantBySlug } from "../src/db/tenants";
 import { buildContext } from "../src/auth/context";
 import { callTool } from "../src/mcp/tools";
 import { wikiMarkdown } from "../src/http/wikiPages";
-import type { Conversation } from "../src/chat/conversationDO";
-import type { Inbox } from "../src/chat/inboxDO";
+import { Conversation } from "../src/chat/conversationDO";
+import { Inbox } from "../src/chat/inboxDO";
 import type { ChatUpdate } from "../src/chat/updates";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
 import { projectDelete, projectCreate } from "../src/verbs/project";
@@ -421,6 +421,22 @@ describe("project deletion from the web", () => {
     expect(await runInDurableObject(stub, (_instance, state) => state.storage.sql.exec("SELECT * FROM artifact").toArray())).toEqual([]);
   });
 
+  it('does not resurrect a signal outbox when purge interleaves with readCursor', async () => {
+    const tenant = ulid(), channel = ulid(), identity = ulid();
+    const stub = conversationStub(env, tenant, channel);
+    await runInDurableObject(stub, async (_object, state) => {
+      let instance: Conversation;
+      const wrapped = {...env, INBOX: {
+        idFromName: env.INBOX.idFromName.bind(env.INBOX),
+        get: () => ({readCursor: async () => { await instance.purge(tenant, channel); return 0; }}),
+      } as unknown as typeof env.INBOX};
+      instance = new Conversation(state, wrapped);
+      await expect(instance.signal(tenant, channel, identity, 'read', 'race', {seq: 1}, [identity])).rejects.toThrow('conversation deleted');
+      expect(state.storage.sql.exec('SELECT * FROM update_outbox').toArray()).toEqual([]);
+      expect(state.storage.sql.exec("SELECT key FROM meta WHERE key LIKE 'signal:%'").toArray()).toEqual([]);
+    });
+  });
+
   it("prepares and purges a first-touch Inbox without creating delivery tables", async () => {
     const tenant = ulid(), identity = ulid();
     const stub = inboxStub(env, tenant, identity);
@@ -436,6 +452,57 @@ describe("project deletion from the web", () => {
     })).toBe("chat object is bound to another tenant or owner");
     expect(await stub.head(tenant, identity)).toBe(0);
     expect(await tables()).toContain("item");
+  });
+
+  async function legacyInbox(stub: ReturnType<typeof inboxStub>, channel: string) {
+    await runInDurableObject(stub, (_object, state) => {
+      for (const sql of [
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        `CREATE TABLE item (item_seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, kind TEXT NOT NULL,
+          conversation_id TEXT NOT NULL, seq INTEGER NOT NULL, msg_id TEXT NOT NULL, thread_root TEXT, hop INTEGER NOT NULL,
+          author_id TEXT NOT NULL, wake INTEGER NOT NULL, created_at INTEGER NOT NULL, acked_at INTEGER)`,
+        "CREATE TABLE mail_delivered (key TEXT PRIMARY KEY)",
+        "CREATE TABLE cursor (conversation_id TEXT PRIMARY KEY, read_seq INTEGER NOT NULL)",
+        "CREATE TABLE stamp (scope TEXT NOT NULL, at INTEGER NOT NULL)",
+        "CREATE TABLE refusal (at INTEGER NOT NULL)",
+      ]) state.storage.sql.exec(sql);
+      state.storage.sql.exec("INSERT INTO item (key, kind, conversation_id, seq, msg_id, hop, author_id, wake, created_at) VALUES ('old', 'chat', ?, 1, 'msg', 0, 'author', 1, 1)", channel);
+    });
+  }
+
+  it.each([false, true])("deletes a project with a dormant legacy Inbox (partial failure: %s)", async retry => {
+    const w = await world();
+    const stub = inboxStub(env, w.tenant.id, w.member.identity.id);
+    const channel = await env.HUB_DB.prepare("SELECT id FROM project WHERE tenant_id = ? AND slug = 'gone-team'").bind(w.tenant.id).first<{id: string}>();
+    await legacyInbox(stub, channel!.id);
+    await w.post('project.archive', {slug: 'gone'});
+    const ctx = await buildContext(new Request(`https://${w.host}/`, {headers: w.headers}), env);
+    if (retry) {
+      // Reproduce the old purge failure after the conversation was tombstoned.
+      const wrapped = {...env, INBOX: {
+        idFromName: env.INBOX.idFromName.bind(env.INBOX),
+        get: () => ({preparePurge: async () => {}, purgeProject: async () => { throw new Error('no such table: chat_update'); }}),
+      } as unknown as typeof env.INBOX};
+      await expect(deleteProject({...ctx, env: wrapped}, {...w.project, state: 'archived'})).rejects.toThrow('no such table: chat_update');
+    }
+    expect(await deleteProject(ctx, {...w.project, state: 'archived'})).toMatchObject({ok: true, counts: {inbox_items: 1}});
+    expect(await runInDurableObject(stub, (_object, state) => state.storage.sql.exec('SELECT * FROM item').toArray())).toEqual([]);
+    expect(await env.HUB_DB.prepare('SELECT id FROM project WHERE id = ?').bind(w.project.id).first()).toBeNull();
+  });
+
+  it.each(['alarm', 'close', 'error'] as const)('upgrades a legacy Inbox on %s without binding RPC', async entry => {
+    const stub = inboxStub(env, ulid(), ulid());
+    await legacyInbox(stub, ulid());
+    await runInDurableObject(stub, async (object, state) => {
+      const instance = object as Inbox;
+      const ws = {close() {}, deserializeAttachment: () => ({})} as unknown as WebSocket;
+      if (entry === 'alarm') await instance.alarm();
+      else if (entry === 'close') await instance.webSocketClose(ws, 1000);
+      else await instance.webSocketError(ws);
+      expect(state.storage.sql.exec('SELECT * FROM chat_update').toArray()).toEqual([]);
+      expect(state.storage.sql.exec('SELECT * FROM update_delivered').toArray()).toEqual([]);
+      await state.storage.deleteAlarm();
+    });
   });
 
   it("batches counts and bounds inbox purges, draining failures before a retry", async () => {

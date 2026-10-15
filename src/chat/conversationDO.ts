@@ -396,6 +396,8 @@ export class Conversation extends DurableObject<Env> {
     const fingerprint = JSON.stringify(data);
     const readCursor = method === 'read' ? await inboxStub(this.env, tenant, identity).readCursor(tenant, identity, conversation) as number | null : null;
     const result = this.#storage.transactionSync(() => {
+      // readCursor yields to purge; do not resurrect its outbox afterwards.
+      this.#bind(tenant, conversation);
       const prior = this.#q<{ value: string }>("SELECT value FROM meta WHERE key = ?", key)[0];
       if (prior) {
         const saved = JSON.parse(prior.value);

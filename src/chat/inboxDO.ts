@@ -209,6 +209,7 @@ export class Inbox extends DurableObject<Env> {
   }
 
   async webSocketClose(ws: WebSocket, code: number): Promise<void> {
+    this.#initialize();
     try { ws.close(code); } catch { /* already closed */ }
     this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:185:webSocketClose*/ INSERT OR REPLACE INTO meta (key, value) VALUES ('socket_disconnect', ?)", JSON.stringify({ state: ws.deserializeAttachment(), due: Date.now() + SOCKET_GRACE_MS }));
     await this.#socketAlarm();
@@ -231,6 +232,7 @@ export class Inbox extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
+    this.#initialize();
     traceFields({ tenant: storedBinding(this.#storage.sql)?.tenant_id ?? "" });
     this.#pruneUpdates();
     for (const ws of this.ctx.getWebSockets()) {
@@ -300,13 +302,17 @@ export class Inbox extends DurableObject<Env> {
     this.#storage = timedStorage(ctx.storage, "Inbox");
   }
 
-  #bind(tenant: string, identity: string): void {
+  #initialize(): void {
     if (!this.#initialized) {
       this.#storage.transactionSync(() => {
         for (const s of SCHEMA) this.#storage.sql.exec(s);
       });
       this.#initialized = true;
     }
+  }
+
+  #bind(tenant: string, identity: string): void {
+    this.#initialize();
     bindOnce(this.#storage.sql, tenant, identity);
   }
 
@@ -356,6 +362,8 @@ export class Inbox extends DurableObject<Env> {
       // All Inbox writers initialize item first. An absent local table proves
       // emptiness without trusting a D1 membership or message index.
       if (!this.#q("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'item'").length) return 0;
+      // Dormant owners may still have a schema from before chat updates existed.
+      this.#initialize();
       const channels = JSON.stringify(conversations), messages = JSON.stringify(mail);
       const rows = this.#q<{ item_seq: number }>("DELETE FROM item WHERE conversation_id IN (SELECT value FROM json_each(?)) OR (kind = 'mail' AND msg_id IN (SELECT value FROM json_each(?))) RETURNING item_seq", channels, messages);
       this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:313:purgeProject*/ DELETE FROM cursor WHERE conversation_id IN (SELECT value FROM json_each(?))", channels);
