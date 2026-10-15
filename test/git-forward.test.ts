@@ -1,10 +1,15 @@
 import { env, SELF, createExecutionContext } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import gitProxy from "../git-proxy/index";
 import { forwardGit, isGitPath } from "../src/http/git";
 import { isValidTenantSlug } from "../src/tenant";
 import { createProject } from "../src/db/projects";
-import { seedTenant } from "./helpers";
+import { seedHuman, seedTenant } from "./helpers";
+import { createGitSession } from "../src/db/sessions";
+import { ArtifactsRest } from "../src/code/artifactsRest";
+import { repoOwnership } from "../src/code/artifactPush";
+
+afterEach(() => vi.restoreAllMocks());
 
 const forwarded = (res: Response) => res.headers.get("x-ardi-stub") === "1";
 
@@ -109,6 +114,31 @@ describe("git forwarding to Ardi", () => {
     });
     expect(forwarded(res)).toBe(true);
     expect(((await res.json()) as any).xArdi).toEqual([]);
+  });
+
+  it.each([false, true])("routes authenticated Artifacts from one live authorization batch (named=%s)", async named => {
+    const tenant = await seedTenant("acme");
+    const human = await seedHuman("git@example.invalid", { memberships: [{ tenant_id: tenant.id, role: "member" }] });
+    const project = await createProject(env.HUB_DB, { tenant_id: tenant.id, namespace_id: null, slug: "site", kind: "repo", display_name: "Site" }, Date.now());
+    await env.HUB_DB.prepare("INSERT INTO repository (tenant_id, project_id, name, storage_name, is_default, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(tenant.id, project.id, named ? "secondary" : "default", "site-storage", named ? 0 : 1, Date.now()).run();
+    const git = await createGitSession(env.HUB_DB, { identity_id: human.identity.id, tenant_id: tenant.id, label: "test" }, Date.now());
+    const info = vi.spyOn(ArtifactsRest.prototype, "info").mockResolvedValue({ name: "site-storage", remote: "", description: repoOwnership(tenant.id, project.id), default_branch: "main", read_only: false });
+    vi.spyOn(ArtifactsRest.prototype, "repoToken").mockResolvedValue("test");
+    const storage = vi.spyOn(ArtifactsRest.prototype, "git").mockImplementation(async () => new Response("advertisement"));
+    let statements = 0, batches = 0;
+    const db = { prepare: (sql: string) => { statements++;return env.HUB_DB.prepare(sql); }, batch: (queries: D1PreparedStatement[]) => { batches++;return env.HUB_DB.batch(queries); } };
+    const configured = { ...env, HUB_DB: db, GIT_BACKEND: "artifacts", ARTIFACTS_ACCOUNT_ID: "0".repeat(32), ARTIFACTS_API_TOKEN: "test", HUB: { fetch: () => new Response("hub") } } as any;
+    const request = () => new Request(`https://acme.pimwell.test/site${named ? "/secondary" : ""}.git/info/refs?service=git-upload-pack`, { headers: { authorization: `Basic ${btoa(`ignored:${git.token}`)}` } });
+    expect(await (await gitProxy.fetch(request(), configured, createExecutionContext())).text()).toBe("advertisement");
+    expect(batches).toBe(1);expect(statements).toBe(8);expect(info).toHaveBeenCalledTimes(1);
+    // The fast path must not turn a previous grant into cached authorization.
+    await env.HUB_DB.prepare("UPDATE membership SET state='archived' WHERE identity_id=? AND tenant_id=?").bind(human.identity.id, tenant.id).run();
+    expect((await gitProxy.fetch(request(), configured, createExecutionContext())).status).toBe(401);
+    expect(storage).toHaveBeenCalledTimes(1);
+    await env.HUB_DB.prepare("UPDATE tenant SET state='archived' WHERE id=?").bind(tenant.id).run();
+    expect((await gitProxy.fetch(request(), configured, createExecutionContext())).status).toBe(404);
+    expect(storage).toHaveBeenCalledTimes(1);
   });
 
   it("checks tenant state in the standalone git proxy before dispatch", async () => {

@@ -18,18 +18,20 @@ async function dispatch(request: Request, env: ProxyEnv, ctx: ExecutionContext):
     const url = new URL(request.url), host = classifyHost(request.headers.get("host") ?? url.host, env.HUB_DOMAIN);
     if (host.kind === "tenant" && GIT_PATH.test(url.pathname)) {
       const agentSrc = url.pathname.startsWith("/agent-src/"), repo = url.pathname.slice(1, url.pathname.indexOf(".git/"));
-      // All promises are request-local. Fresh caller/project authorization can run
-      // beside routing, without letting a routing result grant repository access.
-      const tenantLookup = getTenantBySlug(env.HUB_DB, host.slug);
-      const authorization = !agentSrc && env.GIT_BACKEND === "artifacts"
-        ? authorizeGit(env, request.headers.get("authorization"), host.slug, repo).then(async grant => {
-          const tenant = await tenantLookup;
-          return grant && grant.tenant.id === tenant?.id ? grant : null;
-        }) : undefined;
-      // Legacy routing may not consume it; still handle a failed speculative read.
-      void authorization?.catch(() => {});
+      // The live authorization batch already includes the active tenant and exact
+      // repository selector. Reuse that snapshot instead of racing redundant D1
+      // routing reads (each adds another opportunity for a remote queueing tail).
+      const grant = !agentSrc && env.GIT_BACKEND === "artifacts"
+        ? await authorizeGit(env, request.headers.get("authorization"), host.slug, repo) : null;
+      const authorization = grant ? Promise.resolve(grant) : undefined;
+      if (grant?.artifacts) {
+        traceFields({ tenant: grant.tenant.id, auth: "git", route: "/:repo.git/*" });
+        return artifactGit(request, env, host.slug, authorization, promise => ctx.waitUntil(promise));
+      }
+      // Missing credentials and legacy repositories still need independent routing
+      // to preserve challenges, missing/inactive tenant 404s and migration fences.
       const [tenant, artifacts] = await Promise.all([
-        tenantLookup, agentSrc ? false : usesArtifacts(env, host.slug, repo),
+        getTenantBySlug(env.HUB_DB, host.slug), agentSrc ? false : usesArtifacts(env, host.slug, repo),
       ]);
       if (!tenant || tenant.state !== "active") return notFoundPage();
       traceFields({ tenant: tenant.id, auth: "git", route: "/:repo.git/*" });
