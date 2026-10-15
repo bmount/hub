@@ -429,7 +429,7 @@ describe("project deletion from the web", () => {
     const countBatches: number[] = [];
     let countQueries = 0, active = 0, peak = 0, completed = 0, fail = true;
     let conversationActive = 0, conversationCompleted = 0, conversationFail = true;
-    let objectActive = 0, objectPeak = 0, objectFail = false;
+    let objectActive = 0, objectPeak = 0, objectFail = false, fileStarted = false;
     const db = {
       prepare(sql: string) {
         if (sql.includes("SELECT COUNT(*)")) countQueries++;
@@ -459,6 +459,7 @@ describe("project deletion from the web", () => {
       CONVERSATION: {
         idFromName: (name: string) => name,
         get: () => ({preparePurge: async () => {}, purge: async () => {
+          expect(fileStarted).toBe(true);
           conversationActive++;
           await new Promise(resolve => setTimeout(resolve, 5));
           conversationActive--;
@@ -472,6 +473,7 @@ describe("project deletion from the web", () => {
         get: () => ({purgeProject}),
       } as unknown as typeof env.INBOX,
       GIT_PUSH_STAGING: {list: async ({prefix}: {prefix: string}) => {
+        fileStarted = true;
         expect(prefix).toMatch(new RegExp(`^project-files/${w.tenant.id}/[^/]+/$`));
         objectActive++;
         objectPeak = Math.max(objectPeak, objectActive);

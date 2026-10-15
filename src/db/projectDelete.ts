@@ -30,29 +30,30 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
     .bind(tid, project.id, project.namespace_id, project.created_at, project.created_at,
       `${project.slug}-team`, `${project.display_name} team`, `${project.slug}-ops`, `${project.display_name} ops`)
     .all<{ id: string }>()).results.map(r => r.id);
-  const ids = JSON.stringify([project.id, ...channels]);
-  if (throwaway) {
-    // Projects have no separate membership: explicit members live on their owned channels.
-    // The original creation event is authoritative, not a later provisioning retry.
-    const eligible = `substr(slug, 1, 4) = 'tmp-' AND kind NOT IN ('channel', 'agent-src')
-      AND (SELECT identity_id FROM event WHERE tenant_id = ?3 AND target_id = ?2 AND target_kind = 'project' AND kind = 'project.create' ORDER BY created_at, id LIMIT 1) = ?4
-      AND NOT EXISTS (SELECT 1 FROM conversation_member cm JOIN identity i ON i.id = cm.identity_id
-        WHERE cm.tenant_id = ?3 AND cm.conversation_id IN (SELECT value FROM json_each(?5))
-        AND cm.removed_at IS NULL AND cm.identity_id <> ?4 AND i.kind <> 'agent')`;
-    // Reauthorize retries too; a deletion marker is not an authorization grant.
-    const r = await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:43:21:deleteProject:270933fb*/ INSERT INTO meta (key, value)
-      SELECT ?1, 'deleting' FROM project WHERE id = ?2 AND tenant_id = ?3 AND ${eligible}
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
-      .bind(key, project.id, tid, ctx.identity!.id, ids).run();
-    if (!r.meta.changes) throw new HubError(403, "forbidden", "agents may only delete their own tmp- projects with no other human members; otherwise sign in on the web as an admin");
-  } else {
-    const marker = await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:49:11:deleteProject:62b7165b*/ INSERT INTO meta (key, value) SELECT ?, 'deleting' FROM project WHERE id = ? AND tenant_id = ? AND state = 'archived' ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key, project.id, tid).run();
-    if (!marker.meta.changes) throw conflict("archive the project before deleting it");
-  }
   // First-touch allocation is read-only and can overlap D1 work. Destructive
   // RPCs still start only after the full rollback preflight has passed.
   const prepared = Promise.allSettled(channels.map(id => conversationStub(ctx.env, tid, id).preparePurge()));
+  let files: Promise<PromiseSettledResult<void>[]> | undefined;
   try {
+    const ids = JSON.stringify([project.id, ...channels]);
+    if (throwaway) {
+      // Projects have no separate membership: explicit members live on their owned channels.
+      // The original creation event is authoritative, not a later provisioning retry.
+      const eligible = `substr(slug, 1, 4) = 'tmp-' AND kind NOT IN ('channel', 'agent-src')
+        AND (SELECT identity_id FROM event WHERE tenant_id = ?3 AND target_id = ?2 AND target_kind = 'project' AND kind = 'project.create' ORDER BY created_at, id LIMIT 1) = ?4
+        AND NOT EXISTS (SELECT 1 FROM conversation_member cm JOIN identity i ON i.id = cm.identity_id
+          WHERE cm.tenant_id = ?3 AND cm.conversation_id IN (SELECT value FROM json_each(?5))
+          AND cm.removed_at IS NULL AND cm.identity_id <> ?4 AND i.kind <> 'agent')`;
+      // Reauthorize retries too; a deletion marker is not an authorization grant.
+      const r = await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:43:21:deleteProject:270933fb*/ INSERT INTO meta (key, value)
+        SELECT ?1, 'deleting' FROM project WHERE id = ?2 AND tenant_id = ?3 AND ${eligible}
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+        .bind(key, project.id, tid, ctx.identity!.id, ids).run();
+      if (!r.meta.changes) throw new HubError(403, "forbidden", "agents may only delete their own tmp- projects with no other human members; otherwise sign in on the web as an admin");
+    } else {
+      const marker = await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:49:11:deleteProject:62b7165b*/ INSERT INTO meta (key, value) SELECT ?, 'deleting' FROM project WHERE id = ? AND tenant_id = ? AND state = 'archived' ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(key, project.id, tid).run();
+      if (!marker.meta.changes) throw conflict("archive the project before deleting it");
+    }
     const eventKind = throwaway ? "project.deleted" : "project.delete";
     const projects = "SELECT value FROM json_each(?2)";
     const items = `SELECT id FROM work_item WHERE tenant_id = ?1 AND project_id IN (${projects})`;
@@ -133,39 +134,8 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
       if (!String(e).includes("UNIQUE constraint failed: meta.key")) throw e;
     }
 
-    // Owned channels are independent; settle both before purging inboxes so no
-    // conversation drain can recreate an inbox entry after its purge.
-    await prepared;
-    const conversations = await Promise.allSettled(channels.map(id => conversationStub(ctx.env, tid, id).purge(tid, id)));
-    for (const result of conversations) {
-      if (result.status === "rejected") throw result.reason;
-      counts.message_versions = (counts.message_versions ?? 0) + result.value;
-    }
-    const [mailResult, identityResult] = await db.batch([
-      scoped(`SELECT id FROM inbound_mail WHERE tenant_id = ?1 AND project_id IN (${projects})`),
-      db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:130:29:deleteProject:5600b7bc*/ SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?`).bind(tid, tid),
-    ]);
-    const mailIds = (mailResult!.results as { id: string }[]).map(r => r.id);
-    const identities = identityResult!.results as { identity_id: string }[];
     const bucket = ctx.env.GIT_PUSH_STAGING;
     if (!bucket && counts.file_revision) throw new HubError(503, "unavailable", "file storage unavailable; sign in on the web and retry deletion");
-    // Independent stores can be cleaned together, but both must drain on failure.
-    const purgeInboxes = async () => {
-      let nextIdentity = 0;
-      const purges = await Promise.allSettled(Array.from({ length: Math.min(10, identities.length) }, async () => {
-        let total = 0;
-        while (nextIdentity < identities.length) {
-          const { identity_id } = identities[nextIdentity++]!;
-          total += await inboxStub(ctx.env, tid, identity_id).purgeProject(tid, identity_id, channels, mailIds);
-        }
-        return total;
-      }));
-      for (const result of purges) {
-        if (result.status === "rejected") throw result.reason;
-        if (result.value) counts.inbox_items = (counts.inbox_items ?? 0) + result.value;
-      }
-
-    };
     const purgeFiles = async () => {
       if (bucket) {
         // Only internal tenant/project ids select storage; trailing slash keeps sibling prefixes disjoint.
@@ -191,13 +161,46 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
         }
       }
     };
-    const stores = await Promise.allSettled([purgeInboxes(), purgeFiles()]);
+    // R2 cannot be recreated by a Conversation drain, so it need not wait for
+    // cold object activation. Every started cleanup still settles on failure.
+    files = Promise.allSettled([purgeFiles()]);
+
+    // Owned channels are independent; settle both before purging inboxes so no
+    // conversation drain can recreate an inbox entry after its purge.
+    await prepared;
+    const conversations = await Promise.allSettled(channels.map(id => conversationStub(ctx.env, tid, id).purge(tid, id)));
+    for (const result of conversations) {
+      if (result.status === "rejected") throw result.reason;
+      counts.message_versions = (counts.message_versions ?? 0) + result.value;
+    }
+    const [mailResult, identityResult, mapping, repositoryResult] = await db.batch([
+      scoped(`SELECT id FROM inbound_mail WHERE tenant_id = ?1 AND project_id IN (${projects})`),
+      db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:130:29:deleteProject:5600b7bc*/ SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?`).bind(tid, tid),
+      db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:deleteProject:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
+      db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:155:33:deleteProject:cf63d832*/ SELECT name, storage_name FROM repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
+    ]);
+    const mailIds = (mailResult!.results as { id: string }[]).map(r => r.id);
+    const identities = identityResult!.results as { identity_id: string }[];
+    // Independent stores can be cleaned together, but both must drain on failure.
+    const purgeInboxes = async () => {
+      let nextIdentity = 0;
+      const purges = await Promise.allSettled(Array.from({ length: Math.min(10, identities.length) }, async () => {
+        let total = 0;
+        while (nextIdentity < identities.length) {
+          const { identity_id } = identities[nextIdentity++]!;
+          total += await inboxStub(ctx.env, tid, identity_id).purgeProject(tid, identity_id, channels, mailIds);
+        }
+        return total;
+      }));
+      for (const result of purges) {
+        if (result.status === "rejected") throw result.reason;
+        if (result.value) counts.inbox_items = (counts.inbox_items ?? 0) + result.value;
+      }
+
+    };
+    const stores = (await Promise.all([Promise.allSettled([purgeInboxes()]), files])).flat();
     for (const result of stores) if (result.status === "rejected") throw result.reason;
     { // Repository cleanup is independent of the creation template or enabled parts.
-      const [mapping, repositoryResult] = await db.batch([
-        db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:deleteProject:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
-        db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:155:33:deleteProject:cf63d832*/ SELECT name, storage_name FROM repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
-      ]);
       const mapped = mapping!.results.length > 0;
       const repositories = repositoryResult!.results as { name: string; storage_name: string }[];
       if (project.kind === "repo" && !mapped && !repositories.length && ctx.env.ARDI_REPO_CREATE === "on") throw conflict("repository is not mapped to Artifacts; migrate it before deleting the project");
@@ -226,6 +229,7 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
     await db.batch(stmts);
     return { ok: true, slug: project.slug, counts };
   } finally {
+    await files;
     await prepared;
   }
 }
