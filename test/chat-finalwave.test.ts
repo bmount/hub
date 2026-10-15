@@ -178,6 +178,7 @@ describe("outbox (C-9) and alarms", () => {
   });
 
   it("keeps an index on acked_at for the inbox prune", async () => {
+    await inboxStub(env, T, "I9").head(T, "I9");
     const names = await inDO(inboxStub(env, T, "I9"), (_o, state) =>
       state.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'item'").toArray().map((r) => r.name));
     expect(names).toContain("item_acked");

@@ -7,6 +7,7 @@ import { buildContext } from "../src/auth/context";
 import { callTool } from "../src/mcp/tools";
 import { wikiMarkdown } from "../src/http/wikiPages";
 import type { Conversation } from "../src/chat/conversationDO";
+import type { Inbox } from "../src/chat/inboxDO";
 import type { ChatUpdate } from "../src/chat/updates";
 import { conversationStub, inboxStub } from "../src/chat/stubs";
 import { projectDelete, projectCreate } from "../src/verbs/project";
@@ -420,6 +421,23 @@ describe("project deletion from the web", () => {
     expect(await runInDurableObject(stub, (_instance, state) => state.storage.sql.exec("SELECT * FROM artifact").toArray())).toEqual([]);
   });
 
+  it("prepares and purges a first-touch Inbox without creating delivery tables", async () => {
+    const tenant = ulid(), identity = ulid();
+    const stub = inboxStub(env, tenant, identity);
+    const tables = () => runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql.exec<{name: string}>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").toArray().map(r => r.name));
+    await stub.preparePurge();
+    expect(await tables()).toEqual([]);
+    expect(await stub.purgeProject(tenant, identity, [ulid()], [])).toBe(0);
+    expect(await tables()).toEqual(["meta"]);
+    expect(await runInDurableObject(stub, async object => {
+      try { await (object as Inbox).purgeProject(ulid(), identity, [], []); return "accepted"; }
+      catch (e) { return (e as Error).message; }
+    })).toBe("chat object is bound to another tenant or owner");
+    expect(await stub.head(tenant, identity)).toBe(0);
+    expect(await tables()).toContain("item");
+  });
+
   it("batches counts and bounds inbox purges, draining failures before a retry", async () => {
     const w = await world();
     for (let i = 0; i < 18; i++) await seedAgent(w.tenant, w.admin.identity, `purge-${i}`);
@@ -430,6 +448,7 @@ describe("project deletion from the web", () => {
     let countQueries = 0, active = 0, peak = 0, completed = 0, fail = true;
     let conversationActive = 0, conversationCompleted = 0, conversationFail = true;
     let objectActive = 0, objectPeak = 0, objectFail = false, fileStarted = false;
+    let preparing = 0, preparePeak = 0;
     const db = {
       prepare(sql: string) {
         if (sql.includes("SELECT COUNT(*)")) countQueries++;
@@ -460,6 +479,7 @@ describe("project deletion from the web", () => {
         idFromName: (name: string) => name,
         get: () => ({preparePurge: async () => {}, purge: async () => {
           expect(fileStarted).toBe(true);
+          expect(preparing).toBe(0);
           conversationActive++;
           await new Promise(resolve => setTimeout(resolve, 5));
           conversationActive--;
@@ -470,7 +490,12 @@ describe("project deletion from the web", () => {
       } as unknown as typeof env.CONVERSATION,
       INBOX: {
         idFromName: (name: string) => name,
-        get: () => ({purgeProject}),
+        get: () => ({preparePurge: async () => {
+          preparing++;
+          preparePeak = Math.max(preparePeak, preparing);
+          await new Promise(resolve => setTimeout(resolve, 5));
+          preparing--;
+        }, purgeProject}),
       } as unknown as typeof env.INBOX,
       GIT_PUSH_STAGING: {list: async ({prefix}: {prefix: string}) => {
         fileStarted = true;
@@ -486,6 +511,8 @@ describe("project deletion from the web", () => {
     await expect(deleteProject(wrapped, w.project)).rejects.toThrow("conversation outage");
     expect(conversationActive).toBe(0);
     expect(conversationCompleted).toBe(2);
+    expect(preparePeak).toBe(10);
+    expect(preparing).toBe(0);
     expect(completed).toBe(0);
     await expect(deleteProject(wrapped, w.project)).rejects.toThrow("inbox outage");
     expect(active).toBe(0);

@@ -21,18 +21,32 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   if (!throwaway && project.state !== "archived") throw conflict("archive the project before deleting it");
   const key = projectDeleteKey(tid, project.id);
 
-  const channels = (await db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:24:27:deleteProject:663c5180*/ SELECT p.id FROM project p JOIN channel c ON c.project_id = p.id AND c.tenant_id = p.tenant_id
+  const identityQuery = () => db.prepare("SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?").bind(tid, tid);
+  const [channelResult, initialIdentities] = await db.batch([
+    db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:24:27:deleteProject:663c5180*/ SELECT p.id FROM project p JOIN channel c ON c.project_id = p.id AND c.tenant_id = p.tenant_id
     WHERE p.tenant_id = ? AND p.namespace_id IS NULL AND p.kind = 'channel' AND (
       EXISTS (SELECT 1 FROM meta m WHERE m.key = 'project_channel:v1:' || p.tenant_id || ':' || p.id AND m.value = ?)
       OR (NOT EXISTS (SELECT 1 FROM meta m WHERE m.key = 'project_channel:v1:' || p.tenant_id || ':' || p.id) AND ? IS NULL AND p.created_at = ? AND c.created_at = ? AND (
         (p.slug = ? AND p.display_name = ?) OR (p.slug = ? AND p.display_name = ?))
         AND NOT EXISTS (SELECT 1 FROM event e WHERE e.tenant_id = p.tenant_id AND e.target_id = p.id AND e.kind = 'channel.create')))`)
     .bind(tid, project.id, project.namespace_id, project.created_at, project.created_at,
-      `${project.slug}-team`, `${project.display_name} team`, `${project.slug}-ops`, `${project.display_name} ops`)
-    .all<{ id: string }>()).results.map(r => r.id);
+      `${project.slug}-team`, `${project.display_name} team`, `${project.slug}-ops`, `${project.display_name} ops`),
+    identityQuery(),
+  ]);
+  const channels = (channelResult!.results as { id: string }[]).map(r => r.id);
+  const startupIdentities = initialIdentities!.results as { identity_id: string }[];
+  let nextStartup = 0;
   // First-touch allocation is read-only and can overlap D1 work. Destructive
   // RPCs still start only after the full rollback preflight has passed.
-  const prepared = Promise.allSettled(channels.map(id => conversationStub(ctx.env, tid, id).preparePurge()));
+  const prepared = Promise.allSettled([
+    ...channels.map(id => conversationStub(ctx.env, tid, id).preparePurge()),
+    ...Array.from({ length: Math.min(10, startupIdentities.length) }, async () => {
+      while (nextStartup < startupIdentities.length) {
+        const { identity_id } = startupIdentities[nextStartup++]!;
+        await inboxStub(ctx.env, tid, identity_id).preparePurge();
+      }
+    }),
+  ]);
   let files: Promise<PromiseSettledResult<void>[]> | undefined;
   try {
     const ids = JSON.stringify([project.id, ...channels]);
@@ -175,7 +189,8 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
     }
     const [mailResult, identityResult, mapping, repositoryResult] = await db.batch([
       scoped(`SELECT id FROM inbound_mail WHERE tenant_id = ?1 AND project_id IN (${projects})`),
-      db.prepare(`/*perf-site:src%2Fdb%2FprojectDelete.ts:130:29:deleteProject:5600b7bc*/ SELECT identity_id FROM membership WHERE tenant_id = ? UNION SELECT identity_id FROM conversation_member WHERE tenant_id = ?`).bind(tid, tid),
+      // Re-read after Conversation drains: a newly added recipient must not be missed.
+      identityQuery(),
       db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:deleteProject:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
       db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:155:33:deleteProject:cf63d832*/ SELECT name, storage_name FROM repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
     ]);

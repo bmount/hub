@@ -147,7 +147,7 @@ export class Inbox extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const tenant = request.headers.get('x-chat-tenant')!;
     const identity = request.headers.get('x-chat-identity')!;
-    bindOnce(this.#storage.sql, tenant, identity);
+    this.#bind(tenant, identity);
     const headers: Record<string, string> = {};
     for (const name of ['authorization', 'cookie', 'origin']) {
       const value = request.headers.get(name); if (value) headers[name] = value;
@@ -253,7 +253,7 @@ export class Inbox extends DurableObject<Env> {
   }
 
   async deliverUpdates(tenant: string, identity: string, updates: UpdateDelivery[]): Promise<void> {
-    bindOnce(this.#storage.sql, tenant, identity);
+    this.#bind(tenant, identity);
     if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) return;
     this.#storage.transactionSync(() => {
       for (const update of updates) {
@@ -269,7 +269,7 @@ export class Inbox extends DurableObject<Env> {
   }
 
   async getUpdates(tenant: string, identity: string, offset: number, limit: number, timeout: number): Promise<{ updates: ChatUpdate[]; next_offset: number; has_more: boolean; error?: string; min_offset?: number }> {
-    bindOnce(this.#storage.sql, tenant, identity);
+    this.#bind(tenant, identity);
     const deadline = Date.now() + Math.min(50, Math.max(0, timeout)) * 1000;
     for (;;) {
       this.#pruneUpdates();
@@ -289,16 +289,30 @@ export class Inbox extends DurableObject<Env> {
   }
   /** The waiters currently parked in `wait`, for tests and tooling. */
   async waiting(tenant_id: string, identity_id: string): Promise<number> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     return this.#waiters.size;
   }
+
+  #initialized = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, timedEnv(env));
     this.#storage = timedStorage(ctx.storage, "Inbox");
-    this.#storage.transactionSync(() => {
-      for (const s of SCHEMA) this.#storage.sql.exec(s);
-    });
+  }
+
+  #bind(tenant: string, identity: string): void {
+    if (!this.#initialized) {
+      this.#storage.transactionSync(() => {
+        for (const s of SCHEMA) this.#storage.sql.exec(s);
+      });
+      this.#initialized = true;
+    }
+    bindOnce(this.#storage.sql, tenant, identity);
+  }
+
+  /** Read-only activation, safe while the project's D1 preflight is running. */
+  async preparePurge(): Promise<void> {
+    this.#storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'").toArray();
   }
 
   #q<T extends Record<string, SqlStorageValue>>(query: string, ...binds: SqlStorageValue[]): T[] {
@@ -325,7 +339,7 @@ export class Inbox extends DurableObject<Env> {
 
   /** Internal organization deletion: retain only the binding and a delivery tombstone. */
   async purgeTenant(tenant_id: string, identity_id: string): Promise<void> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     for (const ws of this.ctx.getWebSockets()) ws.close(1008, 'organization deleted');
     this.#storage.transactionSync(() => {
       this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:301:purgeTenant*/ DELETE FROM meta WHERE key = 'socket_disconnect'");
@@ -336,8 +350,12 @@ export class Inbox extends DurableObject<Env> {
 
   /** Internal cleanup of only the deleted project's conversations and mail. */
   async purgeProject(tenant_id: string, identity_id: string, conversations: string[], mail: string[]): Promise<number> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
     return this.#storage.transactionSync(() => {
+      this.#storage.sql.exec(SCHEMA[0]!);
+      bindOnce(this.#storage.sql, tenant_id, identity_id);
+      // All Inbox writers initialize item first. An absent local table proves
+      // emptiness without trusting a D1 membership or message index.
+      if (!this.#q("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'item'").length) return 0;
       const channels = JSON.stringify(conversations), messages = JSON.stringify(mail);
       const rows = this.#q<{ item_seq: number }>("DELETE FROM item WHERE conversation_id IN (SELECT value FROM json_each(?)) OR (kind = 'mail' AND msg_id IN (SELECT value FROM json_each(?))) RETURNING item_seq", channels, messages);
       this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:313:purgeProject*/ DELETE FROM cursor WHERE conversation_id IN (SELECT value FROM json_each(?))", channels);
@@ -348,18 +366,18 @@ export class Inbox extends DurableObject<Env> {
   }
 
   async head(tenant_id: string, identity_id: string): Promise<number> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     return this.#head();
   }
 
   /** Allocated item sequence, retained by SQLite even when acknowledged rows are pruned. */
   async highWater(tenant_id: string, identity_id: string): Promise<number> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     return this.#q<{ seq: number }>("SELECT seq FROM sqlite_sequence WHERE name = 'item'")[0]?.seq ?? 0;
   }
 
   async deliver(tenant_id: string, identity_id: string, items: WakeItem[]): Promise<number> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     if (this.#q("SELECT key FROM meta WHERE key = 'deleted'").length) return 0;
     // Acked items are kept 30 days (they show with include_acked), then pruned.
     this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:335:deliver*/ DELETE FROM item WHERE acked_at IS NOT NULL AND acked_at < ?", Date.now() - LIMITS.INBOX_ACKED_KEEP_MS);
@@ -385,7 +403,7 @@ export class Inbox extends DurableObject<Env> {
   }
 
   async list(tenant_id: string, identity_id: string, q: { after: number; limit: number; include_acked: boolean }): Promise<InboxPage> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     return this.#page(q.after, clampLimit(q.limit), q.include_acked);
   }
 
@@ -395,7 +413,7 @@ export class Inbox extends DurableObject<Env> {
    * INBOX_WAITERS_MAX polls park at once; beyond that a call answers at once, as if `wait_ms` were 0.
    */
   async wait(tenant_id: string, identity_id: string, q: { after: number; limit: number; wait_ms: number }): Promise<InboxPage> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     const limit = clampLimit(q.limit);
     const deadline = Date.now() + Math.min(Math.max(0, q.wait_ms), LIMITS.INBOX_WAIT_MAX_S * 1000);
     for (;;) {
@@ -415,7 +433,7 @@ export class Inbox extends DurableObject<Env> {
   }
 
   async ack(tenant_id: string, identity_id: string, through: number, now: number): Promise<number> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     const n = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM item WHERE item_seq <= ? AND acked_at IS NULL", through)[0]!.n;
     this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:390:ack*/ UPDATE item SET acked_at = ? WHERE item_seq <= ? AND acked_at IS NULL", now, through);
     return n;
@@ -423,7 +441,7 @@ export class Inbox extends DurableObject<Env> {
 
   /** One synchronous update of exact existing items; no prefix or future acknowledgement watermark. */
   async ackItems(tenant_id: string, identity_id: string, items: number[], now: number): Promise<number> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     if (!Array.isArray(items) || items.length < 1 || items.length > LIMITS.INBOX_LIMIT_MAX ||
         !items.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 1)) {
       throw new Error("invalid inbox item numbers");
@@ -438,7 +456,7 @@ export class Inbox extends DurableObject<Env> {
 
   /** Exact retained attention states only. Absence/pruning is unknown, never inferred acknowledgement. */
   async ackStatus(tenant_id: string, identity_id: string, items: number[]): Promise<{ item: number; state: "open" | "acked" | "unknown"; acked_at: number | null }[]> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     if (!Array.isArray(items) || items.length < 1 || items.length > LIMITS.INBOX_LIMIT_MAX ||
         !items.every((n) => typeof n === "number" && Number.isSafeInteger(n) && n >= 1)) {
       throw new Error("invalid inbox item numbers");
@@ -456,17 +474,17 @@ export class Inbox extends DurableObject<Env> {
 
   /** Exact saved cursor only; absence differs from an explicitly saved zero. Never repairs or advances. */
   async readCursor(tenant_id: string, identity_id: string, conversation_id: string): Promise<number | null> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     return this.#q<{ read_seq: number }>("SELECT read_seq FROM cursor WHERE conversation_id = ?", conversation_id)[0]?.read_seq ?? null;
   }
 
   async cursors(tenant_id: string, identity_id: string): Promise<Record<string, number>> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     return Object.fromEntries(this.#q<{ conversation_id: string; read_seq: number }>("SELECT conversation_id, read_seq FROM cursor").map((r) => [r.conversation_id, r.read_seq]));
   }
 
   async markRead(tenant_id: string, identity_id: string, conversation_id: string, seq: number): Promise<number> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     this.#storage.sql.exec(
       "/*perf-site:src%2Fchat%2FinboxDO.ts:440:markRead*/ INSERT INTO cursor (conversation_id, read_seq) VALUES (?, ?) ON CONFLICT (conversation_id) DO UPDATE SET read_seq = MAX(read_seq, excluded.read_seq)",
       conversation_id, seq,
@@ -480,7 +498,7 @@ export class Inbox extends DurableObject<Env> {
    * comes back as a cause for the post (ruling C-7).
    */
   async reserve(tenant_id: string, identity_id: string, q: { session_id: string; is_agent: boolean; conversation_id: string; now: number }): Promise<ReserveResult> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:454:reserve*/ DELETE FROM stamp WHERE at < ?", q.now - 86_400_000);
     const stamps = (scope: string) => this.#q<{ at: number }>("SELECT at FROM stamp WHERE scope = ?", scope).map((r) => r.at);
     const session = `session:${q.session_id}`;
@@ -500,7 +518,7 @@ export class Inbox extends DurableObject<Env> {
 
   /** Counts a refusal; the one that makes more than 20 in an hour trips the wire and clears the window, so it can trip again after an unmute. */
   async noteRefusal(tenant_id: string, identity_id: string, now: number): Promise<{ count: number; tripped: boolean }> {
-    bindOnce(this.#storage.sql, tenant_id, identity_id);
+    this.#bind(tenant_id, identity_id);
     this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:474:noteRefusal*/ DELETE FROM refusal WHERE at <= ?", now - 3_600_000);
     this.#storage.sql.exec("/*perf-site:src%2Fchat%2FinboxDO.ts:475:noteRefusal*/ INSERT INTO refusal (at) VALUES (?)", now);
     const count = this.#q<{ n: number }>("SELECT COUNT(*) AS n FROM refusal")[0]!.n;
