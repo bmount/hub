@@ -9,7 +9,7 @@ import { tenantHash } from "./perf";
 
 export const SYNTHETIC_TENANT = "perf-synthetic-tenant";
 export const SYNTHETIC_MEMBER = "perf-synthetic-member";
-export const SYNTHETIC_JOURNEYS = ["landing", "sign-in", "home", "docket", "item", "chat-page", "mail", "tools/list", "work_read", "search_query", "chat-post", "chat-read", "git-ls-remote"] as const;
+export const SYNTHETIC_JOURNEYS = ["landing", "sign-in", "home", "docket", "item", "chat-page", "mail", "tools/list", "work_read", "search_query", "chat-post", "chat-read", "git-fixture-setup", "git-ls-remote"] as const;
 type Journey = typeof SYNTHETIC_JOURNEYS[number];
 type Observation = { duration: number; version: string; colo: string; failed: boolean };
 
@@ -75,18 +75,9 @@ function metadata(response: Response | null, env: Env): Pick<Observation,"versio
   return { version: response?.headers.get("x-pimwell-version") ?? env.WORKER_VERSION?.id ?? "unknown", colo: response?.headers.get("x-pimwell-colo") ?? response?.headers.get("cf-ray")?.split("-").at(-1) ?? "unknown" };
 }
 
-/** Fixed fixture setup and the public exchange are both inside the Git journey timer. */
-export async function gitLsRemote(env: Env, journeyFetch: (url: string, init?: RequestInit) => Promise<Response>, authorization: string, now: number): Promise<Pick<Observation, "version" | "colo">> {
-  const provision = () => createRepo(env, env.HUB_DB, { identity_id: SYNTHETIC_MEMBER, tenant_id: SYNTHETIC_TENANT, org: "perf-synthetic", name: "fixture" }, now);
-  const exchange = () => journeyFetch(`https://perf-synthetic.${env.HUB_DOMAIN}/fixture.git/info/refs?service=git-upload-pack`, { headers: { authorization }, signal: AbortSignal.timeout(25_000) });
-  let response = await exchange();
-  // A successful public exchange already checked routing, caller and ownership.
-  // Only inspect provisioning state after an error: an unmapped new fixture may
-  // be fenced off from the retired backend with 503 rather than storage 404.
-  const missingMapping = response.status === 503 && !await env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:86:60:gitLsRemote:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = 'perf-synthetic-repo'").bind(SYNTHETIC_TENANT).first();
-  if (response.status === 404 || missingMapping) {
-    await response.body?.cancel();await provision();response = await exchange();
-  }
+/** Provisioning is observed separately; this read never repairs or retries storage. */
+export async function gitLsRemote(env: Env, journeyFetch: (url: string, init?: RequestInit) => Promise<Response>, authorization: string): Promise<Pick<Observation, "version" | "colo">> {
+  const response = await journeyFetch(`https://perf-synthetic.${env.HUB_DOMAIN}/fixture.git/info/refs?service=git-upload-pack`, { headers: { authorization }, signal: AbortSignal.timeout(25_000) });
   if (!response.ok || !response.headers.get("content-type")?.includes("application/x-git-upload-pack-advertisement")) throw new Error("Synthetic Git failed");
   parseAdvertisedRefs(new Uint8Array(await response.arrayBuffer()));
   return metadata(response, env);
@@ -174,16 +165,23 @@ export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<voi
     let posted = false;
     await observe("chat-post", async () => { const result = await api("chat.post", { c: "synthetic", body: `Synthetic check ${Math.floor(now/300_000)}`, idempotency_key: `synthetic-${Math.floor(now/300_000)}` }); posted = true; return result.info; });
     await observe("chat-read", async () => { const result = await api("chat.read", { c: "synthetic", limit: 1 }); if (!posted || !JSON.stringify(result.data).includes(`Synthetic check ${Math.floor(now/300_000)}`)) throw new Error("Synthetic read did not see post"); return result.info; });
-    await observe("git-ls-remote", () => gitLsRemote(env, (url, options) => fetch(url, { ...options, redirect: "manual" }), `Basic ${btoa("synthetic:"+git!.token)}`, now));
+    await observe("git-fixture-setup", async () => {
+      await createRepo(env, env.HUB_DB, { identity_id: SYNTHETIC_MEMBER, tenant_id: SYNTHETIC_TENANT, org: "perf-synthetic", name: "fixture" }, now);
+      return origin;
+    });
+    // Attempt the read even after setup fails: neither failure hides the other.
+    await observe("git-ls-remote", () => gitLsRemote(env, (url, options) => fetch(url, { ...options, redirect: "manual" }), `Basic ${btoa("synthetic:"+git!.token)}`));
   } catch { /* Setup failures are observations, never swallowed as a successful tick. */ }
   finally {
     try { await browser?.close(); } catch { /* credentials still expire */ }
     try { await mcp?.close(); } catch { /* D1 grant expiry is the authorization boundary */ }
+    const grantSessions = await env.HUB_DB.prepare("SELECT session_id FROM oauth_grant WHERE identity_id = ? AND (expires_at <= ? OR approved_by_session_id = ?)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? "").all<{session_id: string}>();
     await env.HUB_DB.batch([
       env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:176:7:runSynthetic:3e8499a3*/ UPDATE event SET session_id = NULL WHERE identity_id = ?").bind(SYNTHETIC_MEMBER),
       env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:177:7:runSynthetic:ab06c962*/ DELETE FROM oauth_grant WHERE identity_id = ? AND (expires_at <= ? OR approved_by_session_id = ?)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? ""),
       env.HUB_DB.prepare("/*perf-site:src%2Fsynthetic.ts:178:7:runSynthetic:7986d436*/ DELETE FROM session WHERE identity_id = ? AND (expires_at <= ? OR id IN (?, ?)) AND id NOT IN (SELECT session_id FROM oauth_grant)").bind(SYNTHETIC_MEMBER, Date.now(), web?.id ?? "", git?.id ?? ""),
     ]);
+    for (const { session_id } of grantSessions.results) await env.HUB_DB.prepare("DELETE FROM session WHERE id = ? AND identity_id = ? AND id NOT IN (SELECT session_id FROM oauth_grant)").bind(session_id, SYNTHETIC_MEMBER).run();
     for (const journey of SYNTHETIC_JOURNEYS) if (!completed.has(journey)) await recordSynthetic(env, journey, { ...origin, duration: Math.max(0,Date.now()-now), failed: true });
   }
 }

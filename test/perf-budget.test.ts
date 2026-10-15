@@ -471,39 +471,18 @@ describe("isolated synthetic journeys", () => {
     expect(c.points.every(p=>p.blobs?.[6]==="synthetic")).toBe(true);
     expect(c.points[0]?.blobs?.slice(2,4)).toEqual(["synthetic-version","DFW"]);
   });
-  it.each(["new", "mapped", "missing-storage", "unmapped-backend", "healthy-unmapped"])("avoids repeated fixture provisioning for %s while retaining storage repair", async mode => {
-    if (["mapped", "missing-storage"].includes(mode)) await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id,project_id,imported_at) VALUES (?,'perf-synthetic-repo',0)").bind(SYNTHETIC_TENANT).run();
+  it.each([200, 403, 404, 503])("performs one read without provisioning or repair (%s)", async status => {
     const provision = vi.spyOn(ardi, "createRepo").mockResolvedValue();
-    const reads = vi.spyOn(env.HUB_DB, "prepare");
-    let requests = 0;
-    const exchange = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toBe("https://perf-synthetic.pimwell.test/fixture.git/info/refs?service=git-upload-pack");
-      expect(new Headers(init?.headers).get("authorization")).toBe("Basic synthetic-fixture-only");
-      requests++;
-      if (["new", "missing-storage", "unmapped-backend"].includes(mode) && requests === 1) return new Response("missing", { status: mode === "unmapped-backend" ? 503 : 404 });
-      return new Response("001e# service=git-upload-pack\n00000000", { headers: { "content-type": "application/x-git-upload-pack-advertisement", "x-pimwell-colo": "DFW", "x-pimwell-version": "fixture-test" } });
-    });
+    const exchange = vi.fn(async () => new Response("001e# service=git-upload-pack\n00000000", { status, headers: { "content-type": "application/x-git-upload-pack-advertisement" } }));
     try {
-      expect(await gitLsRemote(env, exchange, "Basic synthetic-fixture-only", Date.now())).toEqual({ colo: "DFW", version: "fixture-test" });
-      const healthy = ["mapped", "healthy-unmapped"].includes(mode);
-      expect(provision).toHaveBeenCalledTimes(healthy ? 0 : 1);
-      expect(exchange).toHaveBeenCalledTimes(healthy ? 1 : 2);
-      if (healthy) expect(reads).not.toHaveBeenCalled();
-      if (!healthy) {
-        expect(provision.mock.calls[0]![2]).toEqual({ identity_id: SYNTHETIC_MEMBER, tenant_id: SYNTHETIC_TENANT, org: "perf-synthetic", name: "fixture" });
-        expect(typeof provision.mock.calls[0]![3]).toBe("number");
-      }
-    } finally { vi.restoreAllMocks(); }
-  });
-  it.each([403, 503])("does not use fixture provisioning to retry authorization/storage ownership failures (%s)", async status => {
-    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id,project_id,imported_at) VALUES (?,'perf-synthetic-repo',0)").bind(SYNTHETIC_TENANT).run();
-    const provision = vi.spyOn(ardi, "createRepo").mockResolvedValue();
-    try {
-      await expect(gitLsRemote(env, async () => new Response("denied", { status }), "Basic synthetic-fixture-only", Date.now())).rejects.toThrow("Synthetic Git failed");
+      const result = gitLsRemote(env, exchange, "Basic synthetic-fixture-only");
+      if (status === 200) await expect(result).resolves.toBeDefined();
+      else await expect(result).rejects.toThrow("Synthetic Git failed");
+      expect(exchange).toHaveBeenCalledOnce();
       expect(provision).not.toHaveBeenCalled();
     } finally { vi.restoreAllMocks(); }
   });
-  it("runs the fixed browser/MCP/chat/Git journeys through live handlers and deletes ephemeral credentials", async () => {
+  it.each(["success", "setup-failure", "journey-failure", "both-fail"])("runs independent Git observations and cleans ephemeral credentials: %s", async mode => {
     const c=collector(); let cookies="",current="",html="";
     const browserRequests: string[] = [];
     const measured={...c.measured,SYNTHETIC_BROWSER:{} as Fetcher};
@@ -537,11 +516,12 @@ describe("isolated synthetic journeys", () => {
       },newPage:async()=>page,
       addCookies:async([p]:{value:string}[])=>{cookies="pmw_session="+p!.value;}
     }),close} as never);
-    vi.spyOn(ardi,"createRepo").mockResolvedValue();
+    const provision = vi.spyOn(ardi,"createRepo").mockImplementation(async () => { if (["setup-failure", "both-fail"].includes(mode)) throw new Error("setup failed"); });
     const originalFetch=globalThis.fetch;
     vi.spyOn(globalThis,"fetch").mockImplementation(async(input,init)=>{
       const request=input instanceof Request?input:new Request(input,init),url=new URL(request.url);
       if(url.pathname.includes(".git/")) { expect(init?.redirect).toBe("manual"); }
+      if(url.pathname.includes(".git/") && ["journey-failure", "both-fail"].includes(mode)) return new Response("failed", {status:503});
       if(url.pathname.includes(".git/"))return new Response("001e# service=git-upload-pack\n00000000",{headers:{"content-type":"application/x-git-upload-pack-advertisement","x-pimwell-colo":"DFW","x-pimwell-version":"test-version"}});
       if(url.hostname.endsWith(".pimwell.test")||url.hostname==="pimwell.test")return app.fetch(request,measured,c.ctx);
       return originalFetch(input,init);
@@ -550,7 +530,9 @@ describe("isolated synthetic journeys", () => {
       await runSynthetic(measured,c.ctx);
       await c.flush();
       const rows=(await env.HUB_DB.prepare("SELECT journey,failed FROM synthetic_run ORDER BY journey").all<{journey:string;failed:number}>()).results;
-      expect(rows).toEqual([...SYNTHETIC_JOURNEYS].sort().map(journey=>({journey,failed:0})));
+      expect(rows).toEqual([...SYNTHETIC_JOURNEYS].sort().map(journey=>({journey,failed: +(journey === "git-fixture-setup" ? ["setup-failure", "both-fail"].includes(mode) : journey === "git-ls-remote" && ["journey-failure", "both-fail"].includes(mode))})));
+      expect(provision).toHaveBeenCalledOnce();
+      expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM session WHERE identity_id = ?").bind(SYNTHETIC_MEMBER).first("n")).toBe(0);
       expect(close).toHaveBeenCalledOnce();
       expect(browserRequests.some(url => url.includes(".git/info/refs"))).toBe(false);
       expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM oauth_grant WHERE identity_id = ?").bind(SYNTHETIC_MEMBER).first("n")).toBe(0);
