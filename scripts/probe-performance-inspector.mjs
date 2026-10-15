@@ -32,17 +32,27 @@ try {
     const res=await fetch(url,{headers:{authorization:'Bearer '+token},redirect:'error',cache:'no-store'});
     const html=await res.text(), timing=res.headers.get('server-timing')||'';
     const summaryElapsed=performance.now()-started;
-    if(res.status!==200 || !html.includes('data-performance-load=') || !html.includes('Represented events') || html.includes('Performance unavailable')) throw Error('Invalid summary at '+i);
-    const details=await fetch(url+'&details=1',{headers:{authorization:'Bearer '+token,'x-performance-details':'1'},redirect:'error',cache:'no-store'});
-    const panes=await details.json();
+    const summaryValid=res.status===200 && html.includes('data-performance-load=') && html.includes('Represented events') && !html.includes('Performance unavailable');
+    const detailAttempts=[];
+    // Match the UI's retry action, retaining its time and every failed attempt.
+    // Detail outages must not discard otherwise valid first-response measurements.
+    for(let attempt=0;summaryValid&&attempt<3;attempt++) {
+      try {
+        const details=await fetch(url+'&details=1',{headers:{authorization:'Bearer '+token,'x-performance-details':'1'},redirect:'error',cache:'no-store'});
+        const panes=await details.json();
+        const valid=details.status===200 && typeof panes.inspector==='string' && !panes.inspector.includes('data-performance-load') && panes.inspector.includes('Latency histogram') && panes.inspector.includes('Slowest D1 statements');
+        detailAttempts.push({status:details.status,valid,timing:details.headers.get('server-timing')});
+        if(valid) break;
+      } catch {detailAttempts.push({valid:false,networkError:true});}
+      if(attempt<2) await sleep(1000);
+    }
     const fullElapsed=performance.now()-started;
-    if(details.status!==200 || typeof panes.inspector!=='string' || panes.inspector.includes('data-performance-load') || !panes.inspector.includes('Latency histogram') || !panes.inspector.includes('Slowest D1 statements')) throw Error('Invalid detail at '+i);
-    const row={i,at:new Date().toISOString(),hours,own,status:res.status,summaryMs:Number(timing.match(/app;dur=([\d.]+)/)?.[1]),summaryElapsed,fullElapsed,timing,detailTiming:details.headers.get('server-timing')};
+    const row={i,at:new Date().toISOString(),hours,own,status:res.status,summaryValid,summaryMs:Number(timing.match(/app;dur=([\d.]+)/)?.[1]),summaryElapsed,fullElapsed,timing,detailAttempts};
     rows.push(row);
-    await writeFile(path.join(dir,'reads.json'),JSON.stringify({method:'100 signed-in agent-run opens, six hours/org scopes round-robin, >=12 seconds between opens, >=72 seconds between repeats; 62-second initial expiry. Summary document then authorized progressive JSON. All outliers included. App dispatch and end-to-end completion both recorded.',rows},null,2));
+    await writeFile(path.join(dir,'reads.json'),JSON.stringify({method:'100 signed-in agent-run opens, six hours/org scopes round-robin, >=12 seconds between opens, >=72 seconds between repeats; 62-second initial expiry. Summary document then authorized progressive JSON. All outliers and failed attempts included. Up to two progressive detail retries (one-second delay) model the UI retry action; full elapsed includes retries. App dispatch and end-to-end completion both recorded.',rows},null,2));
     console.log(JSON.stringify(row));
   }
-  const result={n:rows.length,summaryDispatchP50:percentile(rows.map(r=>r.summaryMs),.5),summaryDispatchP95:percentile(rows.map(r=>r.summaryMs),.95),summaryElapsedP95:percentile(rows.map(r=>r.summaryElapsed),.95),fullElapsedP95:percentile(rows.map(r=>r.fullElapsed),.95)};
+  const result={n:rows.length,summarySuccesses:rows.filter(r=>r.summaryValid).length,detailSuccesses:rows.filter(r=>r.detailAttempts.at(-1)?.valid).length,detailRetries:rows.reduce((n,r)=>n+Math.max(0,r.detailAttempts.length-1),0),summaryDispatchP50:percentile(rows.map(r=>r.summaryMs),.5),summaryDispatchP95:percentile(rows.map(r=>r.summaryMs),.95),summaryElapsedP95:percentile(rows.map(r=>r.summaryElapsed),.95),fullElapsedP95:percentile(rows.map(r=>r.fullElapsed),.95)};
   await writeFile(path.join(dir,'summary.json'),JSON.stringify(result,null,2));
   console.log(JSON.stringify(result));
 } finally {

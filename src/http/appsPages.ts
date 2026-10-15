@@ -14,6 +14,7 @@ import { deployStatement, deploysStatement, deployView, deployListResults, deplo
 import { sha256Hex } from "../ids";
 import { recordedWorkTable } from "./codeMarkup";
 import { performancePage } from "./performancePage";
+import { findPerformanceSite } from "../apps/performance";
 
 const ago = (ms: number | null, _now: number) => localTime(ms);
 const repositoryLabel = (r: {repo?: string; repository_count?: number; default_repository?: string}) => (r.repository_count ?? 0) > 1 ? ` · ${esc(r.repo || r.default_repository || "default")}` : "";
@@ -29,7 +30,7 @@ export async function appsPage(request: Request, env: Env): Promise<Response> {
   const project = params.get("project");
   let site = null;
   if (params.has("site")) {
-    try { site = await findSite(ctx, params.get("site")!); } catch { return notFoundPage(extra); }
+    try { site = await ((params.get("view")??"performance")==="performance"?findPerformanceSite:findSite)(ctx, params.get("site")!); } catch { return notFoundPage(extra); }
     if (project && project !== site.project) return notFoundPage(extra);
   }
   if (site && (params.get("view") ?? "performance") === "performance") return performancePage(request,env,ctx,site,extra);

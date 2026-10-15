@@ -52,18 +52,41 @@ export async function analyticsQuery(ctx:Pick<Ctx,"env">, sql:string):Promise<Pe
   return rows;
 }
 export type PerfScope = {where:string;scripts:string[]};
+// One-use authorization from the page's site lookup. Object identity binds it to
+// this exact site and request context; subsequent reads must recheck D1 normally.
+const authorizedSites=new WeakMap<SiteRow,{ctx:Ctx;scripts:string[]}>();
+export async function findPerformanceSite(ctx:Ctx,name:string):Promise<SiteRow> {
+  if(!ctx.tenant||!ctx.identity||!ctx.role) throw notFound("no such site");
+  const row=await ctx.db.prepare(`SELECT s.*, p.slug AS project,
+    (SELECT json_group_array(a.script_name) FROM site_app sa JOIN app_source a ON a.id = sa.app_id
+      WHERE sa.site_id = s.id AND a.tenant_id = s.tenant_id AND a.project_id = s.project_id AND a.state = 'active') AS authorized_scripts
+    FROM site s JOIN project p ON p.id = s.project_id AND p.tenant_id = s.tenant_id
+    WHERE s.tenant_id = ? AND s.name = ? AND p.kind NOT IN ('channel','agent-src') AND p.state = 'active'
+      AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo')
+      AND EXISTS (SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = s.tenant_id AND state = 'active')
+      AND (? IS NULL OR p.id = ?)`).bind(ctx.tenant.id,name,ctx.identity.id,ctx.mcpProject?.id??null,ctx.mcpProject?.id??null).first<SiteRow&{authorized_scripts:string}>();
+  if(!row) throw notFound("no such site");
+  const {authorized_scripts,...site}=row;
+  authorizedSites.set(site,{ctx,scripts:(JSON.parse(authorized_scripts) as string[]).sort()});
+  return site;
+}
 /** SQL credentials are account-wide; product authorization is checked before every cache lookup. */
 export async function performanceScope(ctx:Ctx, site:SiteRow, hours:number, onlyMyOrg=false):Promise<PerfScope> {
   if(!ctx.tenant || !ctx.identity || !ctx.role || site.tenant_id!==ctx.tenant.id || (ctx.mcpProject && ctx.mcpProject.id!==site.project_id)) throw notFound("no such site");
-  // Recheck membership before cached reads; account-wide root powers do not substitute for it.
-  const [membership,project,attachments]=await ctx.db.batch<Record<string,unknown>>([
-    ctx.db.prepare("SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(ctx.identity.id,ctx.tenant.id),
-    ctx.db.prepare("SELECT id FROM project WHERE id = ? AND tenant_id = ? AND EXISTS (SELECT 1 FROM json_each(project.parts) WHERE value = 'repo') AND state = 'active'").bind(site.project_id,ctx.tenant.id),
-    ctx.db.prepare(`SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
-      WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? AND a.state = 'active' ORDER BY a.script_name`).bind(site.id,ctx.tenant.id,site.project_id),
-  ]);
-  if(!membership!.results.length || !project!.results.length) throw notFound("no such site");
-  const scripts=attachments!.results.map(r=>String(r.script_name));
+  const authorized=authorizedSites.get(site);authorizedSites.delete(site);
+  let scripts:string[];
+  if(authorized?.ctx===ctx) scripts=authorized.scripts;
+  else {
+    // Recheck membership before cached reads; account-wide root powers do not substitute for it.
+    const [membership,project,attachments]=await ctx.db.batch<Record<string,unknown>>([
+      ctx.db.prepare("SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(ctx.identity.id,ctx.tenant.id),
+      ctx.db.prepare("SELECT id FROM project WHERE id = ? AND tenant_id = ? AND EXISTS (SELECT 1 FROM json_each(project.parts) WHERE value = 'repo') AND state = 'active'").bind(site.project_id,ctx.tenant.id),
+      ctx.db.prepare(`SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
+        WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? AND a.state = 'active' ORDER BY a.script_name`).bind(site.id,ctx.tenant.id,site.project_id),
+    ]);
+    if(!membership!.results.length || !project!.results.length) throw notFound("no such site");
+    scripts=attachments!.results.map(r=>String(r.script_name));
+  }
   const hash=onlyMyOrg?await tenantHash(ctx.tenant.id,ctx.env.PERF_TENANT_KEY??ctx.env.HUB_INTERNAL_SECRET??ctx.env.HUB_SECRETS_KEY??""):"";
   if(onlyMyOrg&&!hash) throw new PerformanceUnavailable("Performance tenant identity is not configured.");
   if(![1,24,168].includes(hours)) throw badRequest("invalid performance range");

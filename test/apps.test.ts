@@ -4,7 +4,7 @@ import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appsPage } from "../src/http/appsPages";
 import { sparkline, routeBreakdown } from "../src/http/performancePage";
-import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser, population, weightedMetrics, routeAttribution, routeAttributionSQL, routeAttributionSummary, analyticsQuery, interactionPhases, sampleSplits, type PerformanceData } from "../src/apps/performance";
+import { clearPerformanceCache, performanceSelection, performanceScope, findPerformanceSite, pairedBrowser, population, weightedMetrics, routeAttribution, routeAttributionSQL, routeAttributionSummary, analyticsQuery, interactionPhases, sampleSplits, type PerformanceData } from "../src/apps/performance";
 import { buildContext } from "../src/auth/context";
 import { tenantHash } from "../src/perf";
 import { SQL_CATALOG } from "../src/perfCatalog";
@@ -327,12 +327,18 @@ describe("sites", () => {
       expect((await callTool(ctx,"perf_exemplar",{...perfArgs,request:previous})).structuredContent).toMatchObject({waterfall:[]});
       for(const args of [{...perfArgs,only_my_org:"true"},{...perfArgs,hours:2},{...perfArgs,kind:"deploys"},{...perfArgs,version:"bad'"},{...perfArgs,request:"invalid"},{site:perfArgs.site}]) expect((await callTool(ctx,"perf_route",args)).isError).toBe(true);
       const queryCount=sqls.length;
-      for(const restricted of [{...ctx,mcpProject:{...w.p,id:"foreign",path:"foreign"}}, {...ctx,tenant:other}, {...ctx,identity:rootOutsider.identity,role:"root" as const}, {...ctx,identity:outsider.identity,role:"member" as const}]) expect((await callTool(restricted,"perf_route",perfArgs)).isError).toBe(true);
+      for(const restricted of [{...ctx,mcpProject:{...w.p,id:"foreign",path:"foreign"}}, {...ctx,tenant:other}, {...ctx,identity:rootOutsider.identity,role:"root" as const}, {...ctx,identity:outsider.identity,role:"member" as const}]) {
+        const grant=await findPerformanceSite(ctx,'prices.example.com');
+        await expect(performanceScope(restricted,grant,24)).rejects.toMatchObject({status:404});
+        await expect(findPerformanceSite(restricted,'prices.example.com')).rejects.toMatchObject({status:404});
+        expect((await callTool(restricted,"perf_route",perfArgs)).isError).toBe(true);
+      }
       expect(sqls).toHaveLength(queryCount);
       await ctx.db.prepare("UPDATE membership SET state = 'inactive' WHERE identity_id = ? AND tenant_id = ?").bind(ctx.identity!.id,w.t.id).run();
       expect((await callTool(ctx,"perf_route",perfArgs)).isError).toBe(true);expect(sqls).toHaveLength(queryCount);
       await ctx.db.prepare("UPDATE membership SET state = 'active' WHERE identity_id = ? AND tenant_id = ?").bind(ctx.identity!.id,w.t.id).run();
       await ctx.db.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.p.id).run();
+      await expect(findPerformanceSite(ctx,'prices.example.com')).rejects.toMatchObject({status:404});
       expect((await callTool(ctx,"perf_route",perfArgs)).isError).toBe(true);expect(sqls).toHaveLength(queryCount);
       await ctx.db.prepare("UPDATE project SET state = 'active' WHERE id = ?").bind(w.p.id).run();
       await ctx.db.prepare("UPDATE app_source SET state = 'disabled' WHERE tenant_id = ?").bind(w.t.id).run();
@@ -386,8 +392,14 @@ describe("sites", () => {
       const html=await page.text();expect(html).toContain("110");expect(html).toContain("All organizations");
       for(const secret of [foreign,own,"foreign-secret-name"]) expect(html).not.toContain(secret);
       const calls=sqls.length;await callTool(ctx,"perf_summary",{site:"prices.example.com"});expect(sqls).toHaveLength(calls);
+      // The page's combined site/scope authorization is one-use, not a cache
+      // that can survive into another read after membership is revoked.
+      const authorizedSite=await findPerformanceSite(ctx,'prices.example.com');
+      expect((await performanceScope(ctx,authorizedSite,24)).scripts).toEqual(['pricebench']);
       // Cached site-wide results do not bypass revoked membership.
       await ctx.db.prepare("UPDATE membership SET state = 'removed' WHERE identity_id = ?").bind(w.pat.identity.id).run();
+      await expect(performanceScope(ctx,authorizedSite,24)).rejects.toMatchObject({status:404});
+      await expect(findPerformanceSite(ctx,'prices.example.com')).rejects.toMatchObject({status:404});
       expect((await appsPage(new Request(base,{headers:cookieHeaders(w.pat.token,HOST)}),measured)).status).toBe(404);
       expect((await callTool(ctx,"perf_summary",{site:"prices.example.com"})).isError).toBe(true);
       expect(sqls).toHaveLength(calls);
