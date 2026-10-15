@@ -3,8 +3,10 @@
 A code project can have multiple repositories. Repository names are 1–63 lowercase
 letters, digits or hyphens, beginning with a letter or digit, and unique within the
 project. Exactly one is the default. Existing repositories retain the name
-`default` and their existing Artifacts storage location. Workspace projects can
-also host code: their first `repo_create` becomes their default repository.
+`default` and their existing Artifacts storage location. Every ordinary project can
+host code: `project_update {project, add: ["repo"]}` creates its default repository,
+or its first `repo_create` becomes the default. Both enable the stored `repo` part.
+Keep source in the existing project, never a separate `<name>-source` project.
 
 ## Addresses and creation
 

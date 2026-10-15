@@ -1,4 +1,6 @@
-import { PROJECT_KINDS } from "../projectFeatures";
+import { PROJECT_KINDS, FEATURE_LABELS, projectFeatures, type ProjectFeature } from "../projectFeatures";
+import { featureProject } from "./featureProject";
+import { createRepository } from "../code/repositories";
 import { ensureProjectChannels } from "../chat/defaults";
 import { defineVerb } from "./table";
 import { optString, reqString, stateParam } from "./params";
@@ -74,6 +76,73 @@ export const projectCreate = defineVerb({
     await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "project.create", target_kind: "project", target_id: project.id, summary: `Created project ${path}` }, ctx.now);
     const channels = project.namespace_id === null ? await ensureProjectChannels(ctx.db, project, ctx.identity!.id, ctx.now, project.kind === "workspace" && ctx.identity!.kind === "agent") : [];
     return { project: { ...project, path }, channels };
+  },
+});
+
+const PARTS = Object.keys(FEATURE_LABELS) as ProjectFeature[];
+function partList(i: Record<string, unknown>, key: string): ProjectFeature[] {
+  const value = i[key];
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > PARTS.length || value.some(p => typeof p !== "string" || !PARTS.includes(p as ProjectFeature))) throw badRequest(`${key} must be an array of project parts: ${PARTS.join(", ")}`);
+  return [...new Set(value)] as ProjectFeature[];
+}
+
+// History and pending uploads count too: disabling a part must never hide retained content.
+const PART_CONTENT: Record<ProjectFeature, Array<[string, string]>> = {
+  docket: [["work_item", "work items"]],
+  repo: [["repository", "repositories"], ["git_repository", "repository mappings"]],
+  wiki: [["wiki_revision", "wiki revisions"]],
+  knowledge: [["wiki_revision", "research revisions"]],
+  files: [["file_revision", "file revisions"], ["file_upload", "uploads"]],
+  people: [["contact_entity", "contacts"], ["contact_connection", "connections"]],
+};
+export const projectUpdate = defineVerb({
+  name: "project.update", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
+  summary: "Add parts to an existing project, or remove empty parts without deleting content. Kind remains its creation template.",
+  mcp: { scope: "write", destructive: false, title: "Update project parts", input: { type: "object", properties: {
+    project: { type: "string" },
+    add: { type: "array", items: { type: "string", enum: PARTS }, maxItems: PARTS.length },
+    remove: { type: "array", items: { type: "string", enum: PARTS }, maxItems: PARTS.length },
+  }, required: ["project"], additionalProperties: false } },
+  formBack: (r: {project: Project & {path: string}; parts: readonly ProjectFeature[]}) => `/${r.project.path}`,
+  parse: i => {
+    const add = partList(i, "add"), remove = partList(i, "remove");
+    // Knowledge/research use the wiki revision store and page/history tools.
+    if (add.includes("knowledge") && !add.includes("wiki")) add.push("wiki");
+    if (add.some(p => remove.includes(p))) throw badRequest("a part cannot be added and removed together");
+    return { project: reqString(i, "project", { max: 127 }), add, remove };
+  },
+  run: async (ctx, v) => {
+    const p = await featureProject(ctx, v.project);
+    if (!PROJECT_KINDS.includes(p.kind)) throw notFound("no such project");
+    if (p.state !== "active" || await ctx.db.prepare("SELECT 1 FROM meta WHERE key = ?").bind(projectDeleteKey(ctx.tenant!.id, p.id)).first()) throw conflict("project is archived or being deleted");
+    const current = projectFeatures(p);
+    if (v.remove.includes("wiki") && current.includes("knowledge") && !v.remove.includes("knowledge")) throw conflict("Cannot remove wiki: knowledge uses its pages. Remove empty knowledge in the same call.");
+    const emptyChecks: string[] = [];
+    for (const part of v.remove.filter(part => current.includes(part))) {
+      for (const [table, label] of PART_CONTENT[part]) {
+        const condition = table === "wiki_revision" && part === "knowledge" ? " AND research IS NOT NULL" : "";
+        const count = await ctx.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ? AND project_id = ?${condition}`).bind(ctx.tenant!.id, p.id).first<number>("n");
+        if (count) throw conflict(`Cannot remove ${part}: it holds ${count} ${label}. Removing a part never deletes content.`);
+        emptyChecks.push(`NOT EXISTS (SELECT 1 FROM ${table} content WHERE content.tenant_id = project.tenant_id AND content.project_id = project.id${condition})`);
+      }
+    }
+    if (v.add.includes("repo")) {
+      const exists = await ctx.db.prepare("SELECT 1 FROM repository WHERE tenant_id = ? AND project_id = ?").bind(ctx.tenant!.id, p.id).first();
+      if (!exists) await createRepository(ctx.env, ctx.tenant!, p, "default", ctx.now);
+    }
+    // Apply deltas against the live set, not the earlier read (repository creation also enables repo).
+    const result = await ctx.db.prepare(`UPDATE project SET parts = (
+      SELECT json_group_array(value) FROM (
+        SELECT DISTINCT value FROM json_each(project.parts) WHERE value NOT IN (SELECT value FROM json_each(?))
+        UNION SELECT value FROM json_each(?)
+      )) WHERE tenant_id = ? AND id = ? AND state = 'active'
+      AND NOT EXISTS (SELECT 1 FROM meta WHERE key = 'project_delete:v1:' || project.tenant_id || ':' || project.id)
+      ${emptyChecks.length ? `AND ${emptyChecks.join(" AND ")}` : ""}
+      RETURNING *`).bind(JSON.stringify(v.remove), JSON.stringify(v.add), ctx.tenant!.id, p.id).first<Project>();
+    if (!result) throw conflict("project changed; reload and try again");
+    await recordEvent(ctx.db, { tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session!.id, kind: "project.update", target_kind: "project", target_id: p.id, summary: `Updated parts for ${v.project}: +${v.add.join(",")} -${v.remove.join(",")}` }, ctx.now);
+    return { project: { ...result, path: v.project }, parts: projectFeatures(result) };
   },
 });
 

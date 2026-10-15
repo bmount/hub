@@ -3,7 +3,7 @@ import { badRequest, conflict } from "../errors";
 import { isValidSlug } from "../tenant";
 import type { Project, State } from "./types";
 
-import { PROJECT_KINDS } from "../projectFeatures";
+import { PROJECT_KINDS, PROJECT_FEATURES } from "../projectFeatures";
 const KINDS = new Set(PROJECT_KINDS);
 
 /** Canonical tenant-local path for a project SQL alias. */
@@ -37,7 +37,7 @@ export async function createProject(
   }
   const row: Project = {
     id: ulid(now), tenant_id: input.tenant_id, namespace_id: input.namespace_id, slug: input.slug, kind: input.kind,
-    display_name: input.display_name.trim(), state: "active", created_at: now,
+    display_name: input.display_name.trim(), state: "active", created_at: now, parts: JSON.stringify(PROJECT_FEATURES[input.kind as keyof typeof PROJECT_FEATURES]),
   };
   try {
     // Projects and agents share one name space per organization, first come, first served (mailboxes spec,
@@ -46,7 +46,7 @@ export async function createProject(
       `/*perf-site:src%2Fdb%2Fprojects.ts:45:21:createProject:6db0b64d*/ INSERT INTO project (id, tenant_id, namespace_id, slug, kind, display_name, state, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?
         WHERE NOT EXISTS (${HELPER_NAMED})`,
     ).bind(row.id, row.tenant_id, row.namespace_id, row.slug, row.kind, row.display_name, row.state, row.created_at, row.tenant_id, row.slug).run();
-    if (r.meta.changes !== 1) throw conflict(`"${row.slug}" is the name of an agent in this organization; choose another project name`);
+    if (r.meta.changes === 0) throw conflict(`"${row.slug}" is the name of an agent in this organization; choose another project name`);
   } catch (e) {
     if (String(e).includes("UNIQUE")) throw conflict("project slug exists");
     throw e;

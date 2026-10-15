@@ -45,7 +45,7 @@ export async function itemRef(ctx: Ctx, i: Record<string, unknown>): Promise<Wor
     const w = await getWork(ctx.db, ctx.tenant!.id, id);
     if (w) {
       if (ctx.mcpProject && w.project_id !== ctx.mcpProject.id) throw notFound("no such item");
-      const project = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fwork.ts:48:29:itemRef:45c78cc3*/ SELECT ${projectPathSql()} AS slug, p.kind FROM project p WHERE p.id = ? AND p.tenant_id = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(w.project_id, ctx.tenant!.id).first<{ slug: string; kind: string }>();
+      const project = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fwork.ts:48:29:itemRef:45c78cc3*/ SELECT ${projectPathSql()} AS slug, p.kind, p.parts FROM project p WHERE p.id = ? AND p.tenant_id = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(w.project_id, ctx.tenant!.id).first<{ slug: string; kind: string; parts: string }>();
       if (!project) throw notFound("no such project");
       requireProjectFeature(project, "docket");
       return w;
@@ -223,7 +223,7 @@ function itemReadTarget(ctx: Ctx, i: Record<string, unknown>) {
   }
   return {
     cte: `WITH clock AS (SELECT ?3 AS now, ?6 AS scoped_project), target AS (
-      SELECT w.*, p.kind AS project_kind, ${projectPathSql()} AS project_slug
+      SELECT w.*, p.kind AS project_kind, p.parts AS project_parts, ${projectPathSql()} AS project_slug
       FROM work_item w JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id
       WHERE w.tenant_id = ?1 AND p.kind NOT IN ('channel', 'agent-src') AND ${where}
     )`,
@@ -266,11 +266,11 @@ export const workRead = defineVerb({
       statement("SELECT * FROM work_link WHERE item_id = (SELECT id FROM target) ORDER BY created_at"),
       ...itemGraphStatements(ctx.db, ctx.tenant!.id, "", ctx.now, target),
     ]);
-    const row = itemRows!.results[0] as (WorkItem & { project_kind: string; project_slug: string }) | undefined;
+    const row = itemRows!.results[0] as (WorkItem & { project_kind: string; project_slug: string; project_parts: string }) | undefined;
     if (!row) { await itemRef(ctx, i); throw notFound("no such item"); }
     if (ctx.mcpProject && row.project_id !== ctx.mcpProject.id) throw notFound("no such item");
-    requireProjectFeature({ kind: row.project_kind, slug: row.project_slug }, "docket");
-    const { project_kind: _kind, project_slug: project, ...item } = row;
+    requireProjectFeature({ kind: row.project_kind, slug: row.project_slug, parts: row.project_parts }, "docket");
+    const { project_kind: _kind, project_parts: _parts, project_slug: project, ...item } = row;
     const parent = parentRows!.results[0] as WorkItem | undefined;
     const children = childRows!.results as WorkItem[];
     const comments = commentRows!.results as Array<{ id: string; body: string; created_at: number; reply_to: string | null; author: string }>;

@@ -84,7 +84,7 @@ function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
     links.push({label: p.display_name, href: base});
     const depth = p.path.split("/").length;
     view = segments[depth];
-    if (view) links.push({label: view === "wiki" ? url.searchParams.get("view") === "research" ? "Research" : projectFeatures(p.kind).includes("knowledge") ? "Knowledge base" : "Wiki" : view === "contacts" && url.searchParams.get("view") === "graph" ? "Contact graph" : VIEW_LABELS[view] ?? view, href: `${base}/${view === "w" ? "docket" : view}${url.searchParams.has("view") ? `?view=${encodeURIComponent(url.searchParams.get("view")!)}` : ""}`});
+    if (view) links.push({label: view === "wiki" ? url.searchParams.get("view") === "research" ? "Research" : projectFeatures(p).includes("knowledge") ? "Knowledge base" : "Wiki" : view === "contacts" && url.searchParams.get("view") === "graph" ? "Contact graph" : VIEW_LABELS[view] ?? view, href: `${base}/${view === "w" ? "docket" : view}${url.searchParams.has("view") ? `?view=${encodeURIComponent(url.searchParams.get("view")!)}` : ""}`});
     if (segments.length > depth + 1) links.push({label: "Selection", selection:true, href: url.pathname + url.search});
   } else if (segments[0] === "apps" && url.searchParams.has("project")) {
     const project = url.searchParams.get("project")!;
@@ -110,11 +110,11 @@ function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
 function projectExplorer(ctx: Ctx, env: Env): string {
   const p = ctx.explorer;
   if (!p) return `<h2>Projects</h2><p>No active projects.</p><a href="/projects/new">New project</a>`;
-  const base = `/${encodeURIComponent(p.path)}`, features = projectFeatures(p.kind), nodes: TreeNode[] = [];
+  const base = `/${encodeURIComponent(p.path)}`, features = projectFeatures(p), nodes: TreeNode[] = [];
   const url = new URL(ctx.pageUrl ?? "https://pimwell.com/"), pathname = url.pathname;
   const node = (label: string, href: string, count?: number): TreeNode => ({label, href, count, current: pathname === href.split("#")[0] && (!href.includes("#") || url.hash === href.slice(href.indexOf("#")))});
   if (features.includes("docket")) nodes.push({...node("Docket", `${base}/docket`, p.open), expanded: true, children: [node("Graph", `${base}/graph`), node("Frontier", `${base}/frontier`), node("Board", `${base}/board`, p.open), node("Status", `${base}/status`, p.open), node("Velocity", `${base}/velocity`)]});
-  if (features.includes("repo") || p.repositories?.length) nodes.push({...node("Code", `${base}/code`), expanded: true, children: (p.repositories ?? []).slice().sort((a,b) => b.is_default-a.is_default || a.name.localeCompare(b.name)).map((r,i) => {
+  if (features.includes("repo")) nodes.push({...node("Code", `${base}/code`), expanded: true, children: (p.repositories ?? []).slice().sort((a,b) => b.is_default-a.is_default || a.name.localeCompare(b.name)).map((r,i) => {
     const q = `?repo=${encodeURIComponent(r.name)}`;
     const clone = `https://${ctx.tenant!.slug}.${env.HUB_DOMAIN}/${p.path}${r.is_default ? "" : `/${r.name}`}.git`;
     const repoNode = (label: string, view: string): TreeNode => ({label, href:`${base}/${view}${q}`, current: pathname === `${base}/${view}` && (url.searchParams.get("repo") === r.name || (!url.searchParams.has("repo") && !!r.is_default))});
@@ -128,7 +128,7 @@ function projectExplorer(ctx: Ctx, env: Env): string {
   }
   if (features.includes("wiki")) nodes.push(node("Wiki", `${base}/wiki`, p.wiki));
   if (features.includes("knowledge")) nodes.push({...node("Knowledge base and research", `${base}/wiki`, p.wiki), expanded: true, children: [node("Knowledge base", `${base}/wiki`, p.wiki - p.research), node("Research", `${base}/wiki?view=research`, p.research)]});
-  if (features.includes("files")) nodes.push(node(features.includes("repo") || p.repositories?.length ? "Attachments" : "Files", `${base}/documents`, p.files));
+  if (features.includes("files")) nodes.push(node(features.includes("repo") ? "Attachments" : "Files", `${base}/documents`, p.files));
   if (features.includes("people")) nodes.push(node("Contacts and graph", `${base}/contacts`, p.contacts));
   nodes.push({...node("Channels", "/c", p.channels.length), expanded: true, children: p.channels.sort((a,b)=>a.display_name.localeCompare(b.display_name,undefined,{numeric:true})).map(c => node(c.display_name, `/c/${encodeURIComponent(c.slug)}`, c.count))});
   const address = `${ctx.tenant!.slug}.${p.path.replace("/", ".")}@${env.HUB_DOMAIN}`;

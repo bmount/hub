@@ -72,6 +72,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `project_history` | read | reader | no | Implemented | `before`, `limit`, **`project`** |
 | `project_list` | read | reader | no | Implemented | `state` |
 | `project_status` | read | reader | no | Implemented | **`project`**, `since` |
+| `project_update` | write | member | no | Implemented | `add`, **`project`**, `remove` |
 | `ref_backlinks` | read | reader | no | Implemented | **`key`**, **`kind`**, `limit` |
 | `repo_branches` | read | reader | no | Implemented | **`project`**, `repo` |
 | `repo_commit` | read | reader | no | Implemented | **`oid`**, **`project`**, `repo` |

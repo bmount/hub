@@ -82,7 +82,7 @@ function repositoryQuery(db: D1Database, tenantSlug: string, repo: string): D1Pr
   try { if (repoName) repositoryName(repoName); } catch { return null; }
   return db.prepare(`/*perf-site:src%2Fcode%2FgitAccess.ts:83:10:repositoryQuery:33ba07de*/ SELECT p.id, p.slug, p.tenant_id, r.name, r.storage_name, r.is_default FROM project p
     LEFT JOIN repository r ON r.tenant_id = p.tenant_id AND r.project_id = p.id AND ${repoName ? "r.name = ?" : "r.is_default = 1"}
-    WHERE p.tenant_id = (SELECT id FROM tenant WHERE slug = ?) AND p.slug = ? AND p.kind IN ('repo', 'workspace') AND p.state = 'active'`)
+    WHERE p.tenant_id = (SELECT id FROM tenant WHERE slug = ?) AND p.slug = ? AND p.kind NOT IN ('channel','agent-src') AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo') AND p.state = 'active'`)
     .bind(...(repoName ? [repoName] : []), tenantSlug, projectSlug);
 }
 async function repositoryGrant(env: Env, caller: GitCaller, repo: string, row: RepositoryRow | undefined, now: number): Promise<GitGrant | null> {

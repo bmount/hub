@@ -24,6 +24,26 @@ async function projectRpc(project: string, token: string | null, method: string,
 }
 
 describe("project MCP", () => {
+  it("lets a pinned member add and remove parts and refreshes discovery without changing kind", async () => {
+    const acme = await seedTenant("acme");
+    const op = await seedHuman("op@example.com",{memberships:[{tenant_id:acme.id,role:"member"}]});
+    const agent = await seedAgent(acme,op.identity);
+    await createNamespace(env.HUB_DB,{tenant_id:acme.id,slug:"team",display_name:"Team"},Date.now());
+    for (const namespace of [undefined,"team"]) await apiPost("acme.pimwell.test","project.create",{slug:"desk",namespace,kind:"tracker",display_name:"Desk"},bearer(op.token));
+    const names = async () => (await rpcBody(await projectRpc("team/desk",agent.longLived,"tools/list"))).result.tools.map((t:any)=>t.name);
+    expect(await names()).toEqual(expect.arrayContaining(["project_update","repo_create"]));
+    expect(await names()).not.toContain("wiki_write");
+    const added = await rpcBody(await projectRpc("team/desk",agent.longLived,"tools/call",{name:"project_update",arguments:{add:["wiki"]}}));
+    expect(added.result.isError).toBeUndefined();
+    expect(added.result.structuredContent.project).toMatchObject({path:"team/desk",kind:"tracker"});
+    expect(await names()).toContain("wiki_write");
+    const denied = await rpcBody(await projectRpc("team/desk",agent.longLived,"tools/call",{name:"project_update",arguments:{project:"elsewhere",add:["wiki"]}}));
+    expect(denied.result.isError).toBe(true);
+    expect((await env.HUB_DB.prepare("SELECT parts FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = 'desk'").bind(acme.id).first<string>("parts"))).toBe('["docket"]');
+    const removed = await rpcBody(await projectRpc("team/desk",agent.longLived,"tools/call",{name:"project_update",arguments:{remove:["wiki"]}}));
+    expect(removed.result.isError).toBeUndefined();
+    expect(await names()).not.toContain("wiki_write");
+  });
   it("scopes OAuth discovery, implicit calls, ID references, mail and kind changes", async () => {
     const { acme, h, access } = await connected();
     for (const [slug, kind] of [["desk", "workspace"], ["other", "workspace"], ["pages", "wiki"], ["code", "repo"]]) {

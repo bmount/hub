@@ -4,7 +4,7 @@ import { createProject } from "../src/db/projects";
 import { repoCreate, repoList } from "../src/verbs/code";
 import { ArtifactsRest } from "../src/code/artifactsRest";
 import { HubError } from "../src/errors";
-import { projectCreate } from "../src/verbs/project";
+import { projectCreate, projectUpdate, projectDelete } from "../src/verbs/project";
 import type { Ctx } from "../src/auth/context";
 import { setArdiForTest } from "../src/code/ardi";
 import { apiPost, bearer, seedAgent, seedHuman, seedTenant } from "./helpers";
@@ -78,6 +78,32 @@ describe("Artifacts repository provisioning", () => {
     expect(first).toMatchObject({is_default:true, clone_url:"https://acme.pimwell.test/desk.git"});
     expect(await env.HUB_DB.prepare("SELECT storage_name FROM repository WHERE project_id = (SELECT id FROM project WHERE slug = 'site') AND is_default = 1").first<string>("storage_name")).toBe("site");
     info.mockRestore();create.mockRestore();
+  });
+  it("adds code to a tracker, provisions only once, enables named repositories in any kind and deletes added parts", async () => {
+    const s = await setup();
+    const p = await createProject(env.HUB_DB,{tenant_id:s.ctx.tenant!.id,namespace_id:null,slug:"tasks",kind:"tracker",display_name:"Tasks"},Date.now());
+    vi.spyOn(ArtifactsRest.prototype,"info").mockRejectedValue(new HubError(404,"not_found"));
+    const create = vi.spyOn(ArtifactsRest.prototype,"create").mockResolvedValue(undefined);
+    const args = projectUpdate.parse({project:"tasks",add:["repo","wiki"]});
+    const first = await projectUpdate.run(s.ctx,args);
+    expect(first.project.kind).toBe("tracker");
+    expect(first.parts).toEqual(["docket","repo","wiki"]);
+    const again = await projectUpdate.run(s.ctx,args);
+    expect(again.parts).toEqual(first.parts);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect((await repoList.run(s.ctx,repoList.parse({project:"tasks"}))).repos[0]).toMatchObject({is_default:true,clone_url:"https://acme.pimwell.test/tasks.git"});
+    await expect(projectUpdate.run(s.ctx,projectUpdate.parse({project:"tasks",remove:["repo"]}))).rejects.toThrow("repositories");
+    const wiki = await createProject(env.HUB_DB,{tenant_id:s.ctx.tenant!.id,namespace_id:null,slug:"pages",kind:"wiki",display_name:"Pages"},Date.now());
+    await repoCreate.run(s.ctx,repoCreate.parse({project:"pages",name:"code"}));
+    expect(JSON.parse((await env.HUB_DB.prepare("SELECT parts FROM project WHERE id = ?").bind(wiki.id).first<string>("parts"))!)).toContain("repo");
+    // A tracker with added code must purge remote stores, not just its original template's tables.
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(p.id).run();
+    s.ctx.role = "admin"; s.ctx.authKind = "cookie";
+    const purge = vi.spyOn(ArtifactsRest.prototype,"deleteProject").mockResolvedValue(undefined);
+    await projectDelete.run(s.ctx,projectDelete.parse({project:"tasks",confirm:"tasks"}));
+    expect(purge).toHaveBeenCalledTimes(1);
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM project WHERE id = ?").bind(p.id).first()).toBeNull();
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM repository WHERE project_id = ?").bind(p.id).first()).toBeNull();
   });
   it("creates an owned repo and records its mapping", async () => {
     const s = await setup();

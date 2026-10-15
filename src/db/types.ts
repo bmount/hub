@@ -6,7 +6,7 @@ export type Tenant = { id: string; slug: string; display_name: string; state: St
 export type Namespace = { id: string; tenant_id: string; slug: string; display_name: string; state: State; created_at: number };
 export type Project = {
   id: string; tenant_id: string; namespace_id: string | null; slug: string; kind: string;
-  display_name: string; state: State; created_at: number;
+  display_name: string; state: State; created_at: number; parts?: string;
 };
 export type Identity = {
   id: string; kind: IdentityKind; display_name: string; is_root: number; email: string;

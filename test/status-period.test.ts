@@ -163,10 +163,10 @@ describe("project status evidence navigation", () => {
     const page = await (await SELF.fetch(`https://${HOST}/site/status`, { headers: w.headers })).text();
     expect(page).toContain(`href="/site/code?c=${"b".repeat(40)}"`);
     expect(page).not.toContain(`href="/site/code?c=${"a".repeat(7)}"`);
-    await env.HUB_DB.prepare("UPDATE project SET kind = 'tracker' WHERE id = ?").bind(w.p.id).run();
+    await env.HUB_DB.prepare("UPDATE project SET parts = '[\"docket\"]' WHERE id = ?").bind(w.p.id).run();
     expect((await read()).commits.recent.every(c => c.href === null)).toBe(true);
     expect(statusText(await read())).toContain("no supported code link");
-    await env.HUB_DB.prepare("UPDATE project SET kind = 'repo', state = 'archived' WHERE id = ?").bind(w.p.id).run();
+    await env.HUB_DB.prepare("UPDATE project SET parts = '[\"docket\",\"repo\",\"files\"]', state = 'archived' WHERE id = ?").bind(w.p.id).run();
     expect((await read()).commits.recent[0]!.href).not.toBeNull();
     const ns = await createNamespace(env.HUB_DB, { tenant_id: w.t.id, slug: "team", display_name: "Team" }, w.now);
     const other = await createProject(env.HUB_DB, { tenant_id: w.t.id, namespace_id: ns.id, slug: "site", kind: "repo", display_name: "Other" }, w.now);

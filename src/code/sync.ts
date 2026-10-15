@@ -53,7 +53,7 @@ export async function syncCredential(env: Env, t: Tenant, now: number): Promise<
 
 /** Sync every repository of every active organization. Errors are recorded per repository and never stop the rest. */
 export async function syncAll(env: Env, now: number): Promise<{ repos: number; events: number }> {
-  const tenants = (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Fsync.ts:56:26:syncAll:5b8b99d4*/ SELECT DISTINCT t.id, t.slug FROM tenant t JOIN project p ON p.tenant_id = t.id WHERE t.state = 'active' AND p.kind IN ('repo', 'workspace') AND p.state = 'active'").all<Tenant>()).results;
+  const tenants = (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Fsync.ts:56:26:syncAll:5b8b99d4*/ SELECT DISTINCT t.id, t.slug FROM tenant t JOIN project p ON p.tenant_id = t.id WHERE t.state = 'active' AND p.kind NOT IN ('channel','agent-src') AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo') AND p.state = 'active'").all<Tenant>()).results;
   let repos = 0, events = 0;
   for (const t of tenants) {
     const cred = await syncCredential(env, t, now);
@@ -62,7 +62,7 @@ export async function syncAll(env: Env, now: number): Promise<{ repos: number; e
     const { session, token } = await createAgentSession(env.HUB_DB, { identity_id: cred.identity_id, tenant_id: t.id, label: "push sync", parent_token_id: tok!.ref_id, ttl_s: 900 }, now);
     try {
       const auth = `Basic ${btoa(`${SYNC_SLUG}:${token}`)}`;
-      for (const r of (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Fsync.ts:65:30:syncAll:b282ad85*/ SELECT id, slug, '' AS repo FROM project WHERE tenant_id = ?1 AND kind = 'repo' AND state = 'active' UNION ALL SELECT p.id, p.slug || CASE WHEN r.is_default = 1 THEN '' ELSE '/' || r.name END, CASE WHEN r.is_default = 1 THEN '' ELSE r.name END AS repo FROM repository r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE p.tenant_id = ?1 AND p.state = 'active' AND (r.is_default = 0 OR p.kind = 'workspace')").bind(t.id).all<Repo>()).results) {
+      for (const r of (await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2Fsync.ts:65:30:syncAll:b282ad85*/ SELECT id, slug, '' AS repo FROM project WHERE tenant_id = ?1 AND kind NOT IN ('channel','agent-src') AND EXISTS (SELECT 1 FROM json_each(project.parts) WHERE value = 'repo') AND NOT EXISTS (SELECT 1 FROM repository r WHERE r.project_id = project.id AND r.tenant_id = project.tenant_id) AND state = 'active' UNION ALL SELECT p.id, p.slug || CASE WHEN r.is_default = 1 THEN '' ELSE '/' || r.name END, CASE WHEN r.is_default = 1 THEN '' ELSE r.name END AS repo FROM repository r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE p.tenant_id = ?1 AND p.state = 'active' AND p.kind NOT IN ('channel','agent-src') AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo')").bind(t.id).all<Repo>()).results) {
         repos++;
         events += await syncRepo(env, t, r, auth, now);
       }

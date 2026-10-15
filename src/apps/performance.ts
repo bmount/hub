@@ -58,7 +58,7 @@ export async function performanceScope(ctx:Ctx, site:SiteRow, hours:number, only
   // Recheck membership before cached reads; account-wide root powers do not substitute for it.
   const [membership,project,attachments]=await ctx.db.batch<Record<string,unknown>>([
     ctx.db.prepare("SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(ctx.identity.id,ctx.tenant.id),
-    ctx.db.prepare("SELECT id FROM project WHERE id = ? AND tenant_id = ? AND kind = 'repo' AND state = 'active'").bind(site.project_id,ctx.tenant.id),
+    ctx.db.prepare("SELECT id FROM project WHERE id = ? AND tenant_id = ? AND EXISTS (SELECT 1 FROM json_each(project.parts) WHERE value = 'repo') AND state = 'active'").bind(site.project_id,ctx.tenant.id),
     ctx.db.prepare(`SELECT a.script_name FROM site_app sa JOIN app_source a ON a.id = sa.app_id
       WHERE sa.site_id = ? AND a.tenant_id = ? AND a.project_id = ? AND a.state = 'active' ORDER BY a.script_name`).bind(site.id,ctx.tenant.id,site.project_id),
   ]);

@@ -32,7 +32,7 @@ import { workClaim, workCreate, workLink, workList, workRead, workUpdate } from 
 import { capabilities, projectHistory, skillList, skillRead } from "./discover";
 import { modelRouteSet, modelTest, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, providerStatus } from "./models";
 import { namespaceArchive, namespaceCreate, namespaceUnarchive } from "./namespace";
-import { projectArchive, projectCreate, projectDelete, projectList, projectUnarchive } from "./project";
+import { projectArchive, projectCreate, projectUpdate, projectDelete, projectList, projectUnarchive } from "./project";
 import { sessionEnd, sessionGit, sessionList, sessionRevoke, sessionStart } from "./session";
 import { loginRequest, loginVerify } from "./login";
 import { inviteCreate, inviteList, inviteRevoke } from "./invite";
@@ -76,7 +76,7 @@ export function registerAllVerbs(): void {
     skillList, skillRead, capabilities, projectHistory,
     providerStatus, providerKeyAdd, providerKeyPromote, providerKeyRetire, providerKeyVerify, modelRouteSet, modelTest,
     namespaceCreate, namespaceArchive, namespaceUnarchive,
-    projectCreate, projectArchive, projectUnarchive, projectDelete, projectList,
+    projectCreate, projectUpdate, projectArchive, projectUnarchive, projectDelete, projectList,
     inviteCreate, inviteRevoke, inviteList,
     sessionList, sessionRevoke, sessionEnd, sessionStart, sessionGit,
     loginRequest, loginVerify,

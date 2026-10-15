@@ -82,7 +82,7 @@ export async function putFile(ctx: Ctx, v: FileParams, bytes: Uint8Array, source
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE COALESCE((SELECT MAX(revision) FROM file_revision WHERE tenant_id = ? AND project_id = ? AND path = ?), 0) = ?
       AND COALESCE((SELECT SUM(size) FROM file_revision WHERE tenant_id = ? AND project_id = ?), 0) + ? <= ?
-      AND EXISTS (SELECT 1 FROM project WHERE id = ? AND tenant_id = ? AND state = 'active' AND kind IN ('repo', 'wiki', 'workspace'))`)
+      AND EXISTS (SELECT 1 FROM project WHERE id = ? AND tenant_id = ? AND state = 'active' AND EXISTS (SELECT 1 FROM json_each(project.parts) WHERE value = 'files'))`)
       .bind(tid, p.id, v.path, v.expected_revision + 1, name, folder, validated.type, bytes.length, sha256, key, ctx.identity!.id, ctx.now, v.item_id, v.person_id, validated.text, source,
         tid, p.id, v.path, v.expected_revision, tid, p.id, bytes.length, PROJECT_FILE_BYTES, p.id, tid).run();
     if (!r.meta.changes) throw conflict("stale revision, archived project, or project file quota (250 MiB including history) exceeded");

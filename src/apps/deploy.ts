@@ -5,8 +5,8 @@ export type DeployRow = { repo?: string; repository_count?: number; default_repo
 const SELECT = `SELECT d.id, p.slug AS project, d.script_name, d.version_id, d.tag, d.message, d.seen_at, d.repo,
   (SELECT COUNT(*) FROM repository r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id) AS repository_count,
   (SELECT name FROM repository r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id AND r.is_default = 1) AS default_repository,
-  CASE WHEN p.kind IN ('repo', 'workspace') AND NOT EXISTS
-    (SELECT 1 FROM project other WHERE other.tenant_id = p.tenant_id AND other.slug = p.slug AND other.kind = 'repo' AND other.id <> p.id)
+  CASE WHEN EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo') AND NOT EXISTS
+    (SELECT 1 FROM project other WHERE other.tenant_id = p.tenant_id AND other.slug = p.slug AND EXISTS (SELECT 1 FROM json_each(other.parts) WHERE value = 'repo') AND other.id <> p.id)
     THEN p.slug || CASE WHEN d.repo = '' THEN '' ELSE '/' || d.repo END ELSE NULL END AS commit_project
   FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind NOT IN ('channel', 'agent-src')`;
 

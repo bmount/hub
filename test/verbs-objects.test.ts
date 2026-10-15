@@ -181,7 +181,7 @@ describe("wiki pages", () => {
         }
       }
       const p = await env.HUB_DB.prepare("SELECT p.id FROM project p JOIN namespace n ON n.id = p.namespace_id WHERE p.tenant_id = ? AND n.slug = ?").bind(tenant.id, namespace).first<{id: string}>();
-      ctx.mcpProject = {id: p!.id, slug: "guide", path: project, kind: "workspace", display_name: project};
+      ctx.mcpProject = {id: p!.id, slug: "guide", path: project, kind: "workspace", parts: JSON.stringify(["docket","wiki","knowledge","files","people"]), display_name: project};
       expect((await callTool(ctx, "wiki_read", {project, slug: "start"})).isError).toBeUndefined();
       expect((await callTool(ctx, "wiki_read", {project: (namespace === "east" ? "west" : "east") + "/guide", slug: "start"})).isError).toBe(true);
       const board = await callTool(ctx, "work_board", {});

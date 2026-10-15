@@ -9,6 +9,6 @@ export async function featureProject(ctx: Ctx, path: string) {
   const parts = (scoped?.path ?? path).split("/");
   if (parts.length > 2 || parts.some(p => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(p) || p.length > 63)) throw notFound("no such project");
   const p = await getProjectByPath(ctx.db, ctx.tenant!.id, parts.length === 2 ? parts[0]! : null, parts.at(-1)!);
-  if (!p || (scoped && p.id !== scoped.id)) throw notFound("no such project");
-  return p;
+  if (!p || p.kind === "channel" || p.kind === "agent-src" || (scoped && p.id !== scoped.id)) throw notFound("no such project");
+  return { ...p, path: scoped?.path ?? path };
 }

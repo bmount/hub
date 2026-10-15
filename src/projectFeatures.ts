@@ -12,9 +12,9 @@ export const PROJECT_KINDS = Object.keys(PROJECT_FEATURES);
 export const FEATURE_LABELS: Record<ProjectFeature, string> = {
   docket: "Docket", repo: "Repository", wiki: "Wiki pages", knowledge: "Knowledge base", files: "Files", people: "People",
 };
-export function projectFeatures(kind: string): readonly ProjectFeature[] {
-  return PROJECT_FEATURES[kind as keyof typeof PROJECT_FEATURES] ?? [];
+export function projectFeatures(project: { parts?: string }): readonly ProjectFeature[] {
+  return JSON.parse(project.parts ?? "[]") as ProjectFeature[];
 }
-export function requireProjectFeature(project: { kind: string; slug: string }, feature: ProjectFeature): void {
-  if (!projectFeatures(project.kind).includes(feature)) throw badRequest(`Project "${project.slug}" (${project.kind}) does not support ${FEATURE_LABELS[feature]}.`);
+export function requireProjectFeature(project: { kind: string; slug: string; parts?: string; path?: string }, feature: ProjectFeature): void {
+  if (!projectFeatures(project).includes(feature)) throw badRequest(`Project "${project.slug}" does not support ${FEATURE_LABELS[feature]}. Add it with project_update {project: "${project.path ?? project.slug}", add: ["${feature}"]}.`);
 }

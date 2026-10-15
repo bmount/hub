@@ -45,6 +45,7 @@ const TABLE: Record<string, Decl> = {
   whoami: T("public", "public", null, { longLived: true, mcp: "read" }),
   "tenant.create": T("hub", "public", null, { humanOnly: true }), "tenant.archive": T("hub", "public", 10, { humanOnly: true }), "tenant.unarchive": T("hub", "public", 10, { humanOnly: true }), "tenant.list": T("hub", "root", null),
   "tenant.delete": T("hub", "public", 10, { humanOnly: true }),
+  "project.update": T("tenant", "member", null, { mcp: "write" }),
   "project.delete": T("tenant", "member", null, { mcp: "write" }),
   "mail.list": T("tenant", "reader", null, { mcp: "read" }), "mail.read": T("tenant", "reader", null, { mcp: "read" }),
   "mail.release": T("tenant", "admin", 60, { humanOnly: true }),

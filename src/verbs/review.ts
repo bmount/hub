@@ -22,7 +22,7 @@ type Review = { id: string; project_id: string; slug: string; repo: string; numb
 
 export async function reviewRef(ctx: Ctx, ref: string): Promise<Review> {
   const m = /^([a-z0-9-]+(?:\/[a-z0-9-]+)?)!(\d{1,8})$/.exec(ref.trim()) ?? null;
-  const row = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:25:21:reviewRef:1fba56f8*/ SELECT r.*, ${projectPathSql()} AS slug, i.display_name AS author FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id AND p.kind IN ('repo', 'workspace') JOIN identity i ON i.id = r.author_id
+  const row = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Freview.ts:25:21:reviewRef:1fba56f8*/ SELECT r.*, ${projectPathSql()} AS slug, i.display_name AS author FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo') JOIN identity i ON i.id = r.author_id
     WHERE r.tenant_id = ? AND ${m ? `(${projectPathSql()}) = ? AND r.number = ?` : "r.id = ?"}`).bind(ctx.tenant!.id, ...(m ? [m[1], Number(m[2])] : [ref])).first<Review>();
   if (!row) throw notFound("no such review");
   return row;
@@ -137,7 +137,7 @@ export function reviewListStatement(ctx: Ctx, project: string | null, open: bool
       (SELECT COUNT(*) FROM repository rp WHERE rp.project_id = p.id AND rp.tenant_id = p.tenant_id) AS repository_count,
       (SELECT name FROM repository rp WHERE rp.project_id = p.id AND rp.tenant_id = p.tenant_id AND rp.is_default = 1) AS default_repository, r.number, r.title, r.branch, r.base, r.status, i.display_name AS author, r.updated_at,
       EXISTS (SELECT 1 FROM review_reviewer x WHERE x.review_id = r.id AND x.identity_id = ? AND x.verdict IS NULL) AS mine
-    FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id AND p.kind IN ('repo', 'workspace') JOIN identity i ON i.id = r.author_id
+    FROM review r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo') JOIN identity i ON i.id = r.author_id
     WHERE r.tenant_id = ? AND (? IS NULL OR (${projectPathSql()}) = ?) AND (? = 0 OR r.status <> 'closed') AND (? IS NULL OR r.repo = ?) ORDER BY mine DESC, r.updated_at DESC LIMIT 100`)
     .bind(ctx.identity!.id, ctx.tenant!.id, project, project, open ? 1 : 0, repo, repo);
 }

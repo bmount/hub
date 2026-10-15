@@ -31,11 +31,12 @@ export async function repoProject(ctx: Ctx, slug: string, allowAgentSrc = false,
     return { ...source, slug };
   }
   const p = await featureProject(ctx, slug.trim().toLowerCase());
+  requireProjectFeature(p, "repo");
   if (repo) {
     const selected = await resolveRepository(ctx.db, ctx.tenant!.id, p.id, repo);
     return { ...p, slug: (ctx.mcpProject?.path ?? slug) + (selected.is_default ? "" : `/${selected.name}`) };
   }
-  if (p.kind !== "workspace" || !await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:38:40:repoProject:21aa2f20*/ SELECT 1 FROM repository WHERE tenant_id = ? AND project_id = ? AND is_default = 1").bind(ctx.tenant!.id, p.id).first()) requireProjectFeature(p, "repo");
+
   return { ...p, slug: ctx.mcpProject?.path ?? slug };
 }
 
@@ -77,7 +78,7 @@ export async function afterCommit(ctx: Ctx, project_id: string, oid: string, com
   const fullVersion = `(${legacyFull} OR ${workerFull})`;
   const fullCommit = `(CASE WHEN ${legacyFull} THEN lower(d.version_id) ELSE lower(d.tag) END)`;
   const matchingDeploy = `FROM app_deploy d
-    JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo'
+    JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo')
     WHERE d.project_id = ? AND d.tenant_id = ? AND d.repo = '${repoFilter}' AND
       ((${fullVersion} AND ${fullCommit} = ?) OR (NOT ${fullVersion}
         AND length(d.tag) BETWEEN 7 AND 40 AND lower(d.tag) NOT GLOB '*[^0-9a-f]*'
@@ -87,9 +88,9 @@ export async function afterCommit(ctx: Ctx, project_id: string, oid: string, com
     ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:87:5:afterCommit:71a4dc57*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at,
       CASE WHEN ${fullVersion} THEN 'full-commit' ELSE 'tag-prefix' END AS match ${matchingDeploy}`)
       .bind(project_id, ctx.tenant!.id, normalized, normalized),
-    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:90:5:afterCommit:6a00ef3a*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND p.kind = 'repo' WHERE d.project_id = ? AND d.tenant_id = ? AND d.repo = '${repoFilter}' AND d.seen_at >= ? ORDER BY d.seen_at, d.id LIMIT 11`).bind(project_id, ctx.tenant!.id, commitMs),
+    ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:90:5:afterCommit:6a00ef3a*/ SELECT d.id, d.tag, d.script_name AS script, d.seen_at AS at FROM app_deploy d JOIN project p ON p.id = d.project_id AND p.tenant_id = d.tenant_id AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo') WHERE d.project_id = ? AND d.tenant_id = ? AND d.repo = '${repoFilter}' AND d.seen_at >= ? ORDER BY d.seen_at, d.id LIMIT 11`).bind(project_id, ctx.tenant!.id, commitMs),
     ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fcode.ts:91:5:afterCommit:180a0685*/ SELECT g.id, g.title, g.count, g.first_seen FROM app_error_group g
-      JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND p.kind = 'repo'
+      JOIN project p ON p.id = g.project_id AND p.tenant_id = g.tenant_id AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo')
       WHERE g.project_id = ? AND g.tenant_id = ? AND COALESCE((SELECT s.repo FROM app_source s WHERE s.tenant_id = g.tenant_id AND s.project_id = g.project_id AND s.script_name = g.script_name), '') = '${repoFilter}' AND g.first_seen >= COALESCE(
         (SELECT d.seen_at ${matchingDeploy}), ?) ORDER BY g.first_seen, g.id LIMIT 11`)
       .bind(project_id, ctx.tenant!.id, project_id, ctx.tenant!.id, normalized, normalized, commitMs),
@@ -330,7 +331,7 @@ export const repoCreate = defineVerb({
   parse: (i) => ({ project: reqString(i, "project", { max: 127 }), name: reqString(i, "name", { max: 63 }) }),
   run: async (ctx, p) => {
     const project = await featureProject(ctx, p.project);
-    if (!["repo", "workspace"].includes(project.kind)) throw badRequest("repositories belong to repo or workspace projects");
+
     const repository = await createRepository(ctx.env, ctx.tenant!, project, p.name, ctx.now);
     return { project: p.project, name: repository.name, is_default: !!repository.is_default, clone_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${p.project}${repository.is_default ? "" : `/${repository.name}`}.git` };
   },
@@ -352,7 +353,7 @@ export const repoList = defineVerb({
   run: async (ctx, p) => {
     if (p.project) await featureProject(ctx, p.project);
     const host = `${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN.toLowerCase()}`;
-    const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:360:25:repoList.run:f8df3d52*/ SELECT p.slug, COALESCE(r.name, p.display_name) AS name, COALESCE(r.is_default, 1) AS is_default FROM project p LEFT JOIN repository r ON r.project_id = p.id AND r.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND (p.kind = 'repo' OR (p.kind = 'workspace' AND r.project_id IS NOT NULL)) AND p.state = 'active' AND (? IS NULL OR p.id = ?) AND (? IS NULL OR p.slug = ?) AND (? IS NULL OR r.name = ?) ORDER BY p.slug, r.is_default DESC, r.name").bind(ctx.tenant!.id, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null, p.project, p.project, p.repo, p.repo).all<{ slug: string; name: string; is_default: number }>()).results;
+    const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fcode.ts:360:25:repoList.run:f8df3d52*/ SELECT p.slug, COALESCE(r.name, p.display_name) AS name, COALESCE(r.is_default, 1) AS is_default FROM project p LEFT JOIN repository r ON r.project_id = p.id AND r.tenant_id = p.tenant_id WHERE p.tenant_id = ? AND p.kind NOT IN ('channel','agent-src') AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo') AND p.state = 'active' AND (? IS NULL OR p.id = ?) AND (? IS NULL OR p.slug = ?) AND (? IS NULL OR r.name = ?) ORDER BY p.slug, r.is_default DESC, r.name").bind(ctx.tenant!.id, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null, p.project, p.project, p.repo, p.repo).all<{ slug: string; name: string; is_default: number }>()).results;
     const push = rank(ctx.role) >= rank("member");
     return {
       access: push ? "read and push (never force: history is kept)" : "read",

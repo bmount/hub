@@ -16,8 +16,8 @@ const END = { type: "string", description: "An item as project#number, or new:<k
 const EDGE = { type: "object", properties: { prerequisite: END, dependent: END }, required: ["prerequisite", "dependent"], additionalProperties: false };
 
 async function slugs(ctx: Ctx): Promise<Map<string, string>> {
-  const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproposals.ts:19:23:slugs:9e2dd17f*/ SELECT id, slug, kind FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id).all<{ id: string; slug: string; kind: string }>()).results;
-  return new Map(rows.filter((r) => projectFeatures(r.kind).includes("docket") && (!ctx.mcpProject || r.id === ctx.mcpProject.id)).map((r) => [r.id, r.slug]));
+  const rows = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fproposals.ts:19:23:slugs:9e2dd17f*/ SELECT id, slug, kind, parts FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src')").bind(ctx.tenant!.id).all<{ id: string; slug: string; kind: string; parts: string }>()).results;
+  return new Map(rows.filter((r) => projectFeatures(r).includes("docket") && (!ctx.mcpProject || r.id === ctx.mcpProject.id)).map((r) => [r.id, r.slug]));
 }
 
 async function endpoint(ctx: Ctx, raw: unknown, keys: Set<string>): Promise<Endpoint> {

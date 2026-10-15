@@ -3,7 +3,9 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Buffer } from "node:buffer";
 import { ASSETS } from "../src/assets";
-import { createProject } from "../src/db/projects";
+import { createProject, getProjectByPath } from "../src/db/projects";
+import { projectUpdate } from "../src/verbs/project";
+import { toolsFor } from "../src/mcp/tools";
 import { buildContext } from "../src/auth/context";
 import { filePath, validateFile, putFile, PROJECT_FILE_BYTES, FILE_BYTES, FILE_TEXT_BYTES, BASE64_FILE_BYTES } from "../src/verbs/files";
 import { redactUrl } from "../src/log";
@@ -21,7 +23,7 @@ const HOST = "acme.pimwell.test";
 describe("project kinds", () => {
   it("defines all capabilities in one table", () => {
     expect(PROJECT_FEATURES).toEqual({ repo: ["docket", "repo", "files"], tracker: ["docket"], wiki: ["wiki", "files"], workspace: ["docket", "wiki", "knowledge", "files", "people"] });
-    expect(projectFeatures("channel")).toEqual([]);
+    expect(projectFeatures({parts: "[]"})).toEqual([]);
     expect(() => requireProjectFeature({ slug: "docs", kind: "wiki" }, "repo")).toThrow("does not support Repository");
   });
   it("creates wiki and workspace over MCP and forms, with kind-specific tabs and feature errors", async () => {
@@ -56,6 +58,95 @@ describe("project kinds", () => {
     }
     const form = await (await SELF.fetch(`https://${HOST}/projects/new`, { headers: cookieHeaders(h.token, HOST) })).text();
     for (const kind of Object.keys(PROJECT_FEATURES)) expect(form).toContain(`<option value="${kind}">`);
+  });
+});
+
+describe("stored project parts", () => {
+  async function world() {
+    registerAllVerbs();
+    const t = await seedTenant("acme");
+    const h = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    const { grant } = await seedGrant(t, h);
+    const ctx = oauthContext(env, (await liveGrant(env.HUB_DB, grant.id, Date.now()))!, ["read", "write"], { now: Date.now(), ip: "203.0.113.1" });
+    const p = await createProject(env.HUB_DB, {tenant_id:t.id, namespace_id:null, slug:"desk", kind:"tracker", display_name:"Desk"}, Date.now());
+    const update = (args: Record<string, unknown>) => callTool(ctx, "project_update", {project:"desk", ...args});
+    return {t,h,ctx,p,update};
+  }
+  it("seeds every template and uses stored parts for verbs, pages, search and discovery", async () => {
+    const w = await world();
+    for (const [kind, parts] of Object.entries(PROJECT_FEATURES)) {
+      const p = await createProject(env.HUB_DB, {tenant_id:w.t.id, namespace_id:null, slug:kind, kind, display_name:kind}, Date.now());
+      expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,kind))!)).toEqual(parts);
+      expect(projectFeatures(p)).toEqual(parts);
+    }
+    expect((await callTool(w.ctx,"wiki_list",{project:"desk"})).isError).toBe(true);
+    expect((await w.update({add:["wiki","people","files","knowledge","wiki"]})).isError).toBeUndefined();
+    expect((await callTool(w.ctx,"wiki_write",{project:"desk",slug:"page",title:"Needle",body:"needle stored parts",expected_revision:0,note:"test"})).isError).toBeUndefined();
+    const stored = (await getProjectByPath(env.HUB_DB,w.t.id,null,"desk"))!;
+    expect(stored.kind).toBe("tracker");
+    w.ctx.mcpProject = {...stored,path:"desk"};
+    const names = toolsFor(w.ctx).map(v=>v.name);
+    expect(names).toContain("wiki.write");
+    expect(names).toContain("project.update");
+    expect(names).toContain("repo.create");
+    expect(names).not.toContain("repo.log");
+    const html = await (await SELF.fetch("https://" + HOST + "/desk",{headers:cookieHeaders(w.h.token,HOST)})).text();
+    expect(html).toContain("Wiki pages");
+    expect(html).toContain("Contacts");
+    w.ctx.mcpProject = undefined;
+    expect(JSON.stringify(await callTool(w.ctx,"search_query",{q:"needle"}))).toContain("desk/page");
+    const remove = await w.update({remove:["wiki","knowledge"]});
+    expect(remove.isError).toBe(true);
+    expect(JSON.stringify(remove)).toContain("wiki revisions");
+    expect((await w.update({remove:["people","knowledge","files"]})).isError).toBeUndefined();
+    expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"desk"))!)).toEqual(["docket","wiki"]);
+  });
+  it("backfills templates plus existing repositories, including workspace code, from the migration", async () => {
+    const w = await world();
+    const p = await createProject(env.HUB_DB,{tenant_id:w.t.id,namespace_id:null,slug:"barefoot",kind:"workspace",display_name:"Barefoot"},Date.now());
+    await env.HUB_DB.prepare("INSERT INTO repository (tenant_id,project_id,name,storage_name,is_default,created_at) VALUES (?,?,'default','owned-storage',1,?)").bind(w.t.id,p.id,Date.now()).run();
+    await env.HUB_DB.prepare("UPDATE project SET parts = '[]' WHERE tenant_id = ?").bind(w.t.id).run();
+    const migration = env.TEST_MIGRATIONS.find(m=>m.name.includes("0039"))!;
+    for (const sql of migration.queries.filter(sql=>sql.trim().startsWith("UPDATE project"))) await env.HUB_DB.prepare(sql).run();
+    expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"desk"))!)).toEqual(["docket"]);
+    expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"barefoot"))!)).toEqual([...PROJECT_FEATURES.workspace,"repo"]);
+  });
+  it("refuses content-bearing parts and preserves content, including retained history", async () => {
+    const w = await world();
+    await w.update({add:["knowledge","files","people"]});
+    const work = await callTool(w.ctx,"work_create",{project:"desk",kind:"errand",title:"Kept"});
+    expect(work.isError).toBeUndefined();
+    const contact = await callTool(w.ctx,"person_upsert",{project:"desk",name:"Kept person"});
+    expect(contact.isError).toBeUndefined();
+    const file = await callTool(w.ctx,"file_put",{project:"desk",path:"keep.txt",content_type:"text/plain",expected_revision:0,base64:Buffer.from("Kept").toString("base64")});
+    expect(file.isError).toBeUndefined();
+    const research = await callTool(w.ctx,"research_save",{project:"desk",slug:"study",expected_revision:0,topic:"Study",summary:"Kept research",status:"draft",sources:[],note:"test"});
+    expect(research.isError).toBeUndefined();
+    for (const [part,label] of [["docket","work items"],["people","contacts"],["files","file revisions"],["knowledge","research revisions"]]) {
+      const removed = await w.update({remove:[part]});
+      expect(removed.isError).toBe(true);
+      expect(JSON.stringify(removed)).toContain(label);
+    }
+    expect((await apiPost(HOST,"project.update",{project:"desk",add:["wiki"]},bearer(w.h.token))).status).toBe(200);
+    expect((await callTool(w.ctx,"file_get",{project:"desk",path:"keep.txt"})).isError).toBeUndefined();
+    expect((await callTool(w.ctx,"research_list",{project:"desk"})).isError).toBeUndefined();
+  });
+  it("rejects invalid parts, readers, foreign tenants, pinned-project escapes and archived projects", async () => {
+    const w = await world();
+    for (const args of [{add:["unknown"]},{add:"wiki"},{add:["wiki"],remove:["wiki"]}]) expect((await w.update(args)).isError).toBe(true);
+    w.ctx.role = "reader";
+    expect((await w.update({add:["wiki"]})).isError).toBe(true);
+    w.ctx.role = "member";
+    const foreign = await seedTenant("elsewhere");
+    const p = await createProject(env.HUB_DB,{tenant_id:foreign.id,namespace_id:null,slug:"foreign",kind:"tracker",display_name:"Foreign"},Date.now());
+    expect((await w.update({project:p.slug,add:["wiki"]})).isError).toBe(true);
+    w.ctx.mcpProject = {...w.p,path:"desk"};
+    expect((await w.update({project:"foreign",add:["wiki"]})).isError).toBe(true);
+    w.ctx.mcpProject = undefined;
+    await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.p.id).run();
+    expect((await w.update({add:["wiki"]})).isError).toBe(true);
+    expect(projectFeatures((await getProjectByPath(env.HUB_DB,foreign.id,null,"foreign"))!)).toEqual(["docket"]);
+    expect(() => projectUpdate.parse({project:"desk",remove:[null]})).toThrow();
   });
 });
 

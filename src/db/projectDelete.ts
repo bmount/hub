@@ -188,14 +188,14 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
   };
   const stores = await Promise.allSettled([purgeInboxes(), purgeFiles()]);
   for (const result of stores) if (result.status === "rejected") throw result.reason;
-  if (project.kind === "repo" || project.kind === "workspace") {
+  { // Repository cleanup is independent of the creation template or enabled parts.
     const [mapping, repositoryResult] = await db.batch([
       db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:153:26:deleteProject:a8fde622*/ SELECT 1 FROM git_repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
       db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:155:33:deleteProject:cf63d832*/ SELECT name, storage_name FROM repository WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id),
     ]);
     const mapped = mapping!.results.length > 0;
-    if (project.kind === "repo" && !mapped && ctx.env.ARDI_REPO_CREATE === "on") throw conflict("repository is not mapped to Artifacts; migrate it before deleting the project");
     const repositories = repositoryResult!.results as { name: string; storage_name: string }[];
+    if (project.kind === "repo" && !mapped && !repositories.length && ctx.env.ARDI_REPO_CREATE === "on") throw conflict("repository is not mapped to Artifacts; migrate it before deleting the project");
     if (mapped || repositories.length) {
       const api = new ArtifactsRest(ctx.env), ns = artifactNamespace(ctx.tenant!.slug);
       const pushes = (await db.prepare("/*perf-site:src%2Fdb%2FprojectDelete.ts:158:29:deleteProject:66af9d38*/ SELECT id, namespace, repo, shadow, replay_key FROM git_push WHERE tenant_id = ? AND project_id = ?").bind(tid, project.id)

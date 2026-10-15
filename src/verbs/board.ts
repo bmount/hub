@@ -34,7 +34,7 @@ export type Board = {
 
 export async function board(ctx: Ctx, project: string | null, actorId: string | null = null): Promise<Board> {
   if (project) {
-    const pr = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fboard.ts:37:22:board:9613f12a*/ SELECT ${projectPathSql()} AS slug, p.kind FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, project).first<{ slug: string; kind: string }>();
+    const pr = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fboard.ts:37:22:board:9613f12a*/ SELECT ${projectPathSql()} AS slug, p.kind, p.parts FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, project).first<{ slug: string; kind: string; parts: string }>();
     if (pr) requireProjectFeature(pr, "docket");
   }
   // Counts and bounded examples share predicates and one D1 batch. Never infer totals

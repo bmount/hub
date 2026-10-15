@@ -21,7 +21,7 @@ async function orgCtx(request: Request, env: Env): Promise<{ ctx: Ctx; extra: Re
   return { ctx, extra };
 }
 
-type Project = { id: string; slug: string; namespace: string | null; display_name: string; kind: string; state: string; path: string };
+type Project = { parts?: string; id: string; slug: string; namespace: string | null; display_name: string; kind: string; state: string; path: string };
 type Resource = { key: string; label: string; href: string; n: number; at: number | null };
 type Entry = { id: string; summary: string; created_at: number; slug: string | null; number: number | null; href: string | null };
 
@@ -83,7 +83,7 @@ export async function newProjectPage(request: Request, env: Env): Promise<Respon
 }
 
 async function projectOverview(ctx: Ctx, env: Env, p: Project, selected: string | null) {
-  const features = projectFeatures(p.kind), base = `/${p.path}`, t = ctx.tenant!;
+  const features = projectFeatures(p), base = `/${p.path}`, t = ctx.tenant!;
   // Current revisions, not history, count as resources. Channel ownership is the existing metadata link.
   const [work, wiki, files, contacts, reviews, channels, errors, deploy] = await ctx.db.batch([
     ctx.db.prepare("/*perf-site:src%2Fhttp%2ForgPages.ts:89:5:projectOverview:feaabfb7*/ SELECT kind, COUNT(*) AS n, MAX(updated_at) AS at FROM work_item WHERE project_id = ? AND state IN ('open','doing') GROUP BY kind").bind(p.id),

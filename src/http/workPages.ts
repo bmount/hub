@@ -29,7 +29,7 @@ const ago = (ms: number | null, _now: number) => localTime(ms);
 
 type Member = { id: string; display_name: string; email: string; kind: string };
 type Quest = { id: string; number: number; title: string };
-type Project = { id: string; slug: string; kind: string; display_name: string; state: string };
+type Project = { parts: string; id: string; slug: string; kind: string; display_name: string; state: string };
 type Activity = { kind: string; summary: string; created_at: number; who: string | null };
 type Comment = { id: string; body: string; created_at: number; reply_to: string | null; author: string; handle: string | null };
 
@@ -52,9 +52,9 @@ async function tenantCtx(request: Request, env: Env) {
 async function projectCtx(request: Request, env: Env, slug: string) {
   const { ctx, extra, ok } = await tenantCtx(request, env);
   if (!ok) return { ctx, extra, project: null };
-  const project = await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:55:25:projectCtx:d1055dba*/ SELECT p.id, ${projectPathSql()} AS slug, p.kind, p.display_name, p.state FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, slug)
+  const project = await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:55:25:projectCtx:d1055dba*/ SELECT p.id, ${projectPathSql()} AS slug, p.kind, p.parts, p.display_name, p.state FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, slug)
     .first<Project>();
-  return { ctx, extra, project: project && projectFeatures(project.kind).includes("docket") ? project : null };
+  return { ctx, extra, project: project && projectFeatures(project).includes("docket") ? project : null };
 }
 
 function readinessHtml(r: ReadinessView, compact = false): string {
@@ -306,8 +306,8 @@ export async function selectedWorkInspector(ctx: Ctx, env: Env, url: URL, scope:
   if (!ref) return { html: null, key: "" };
   const match = /^([a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)?)#([1-9][0-9]{0,7})$/.exec(ref);
   if (!match || scope && match[1] !== scope) throw new HubError(404, "not_found");
-  const project = await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:309:25:selectedWorkInspector:d1055dba*/ SELECT p.id, ${projectPathSql()} AS slug, p.kind, p.display_name, p.state FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, match[1]).first<Project>();
-  if (!project || !projectFeatures(project.kind).includes("docket")) throw new HubError(404, "not_found");
+  const project = await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:309:25:selectedWorkInspector:d1055dba*/ SELECT p.id, ${projectPathSql()} AS slug, p.kind, p.parts, p.display_name, p.state FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind NOT IN ('channel', 'agent-src')`).bind(ctx.tenant!.id, match[1]).first<Project>();
+  if (!project || !projectFeatures(project).includes("docket")) throw new HubError(404, "not_found");
   const w = await getWorkByNumber(ctx.db, project.id, Number(match[2]));
   if (!w) throw new HubError(404, "not_found");
   const [members, quests, links, children, owner, parent, activity, comments, following] = await ctx.db.batch([

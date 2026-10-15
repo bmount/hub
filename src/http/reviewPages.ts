@@ -21,7 +21,7 @@ export async function reviewsPage(request: Request, env: Env, slug: string | nul
   const ctx = await buildContext(request, env);
   const extra: Record<string, string> = ctx.staleCookie ? { "set-cookie": clearSessionCookie(env.HUB_DOMAIN) } : {};
   if (ctx.host.kind !== "tenant" || !ctx.tenant || !ctx.role || !ctx.identity) return notFoundPage(extra);
-  const project = slug ? await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FreviewPages.ts:24:32:reviewsPage:c7ebbd36*/ SELECT p.id FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND p.kind IN ('repo', 'workspace')`).bind(ctx.tenant.id, slug).first<{id:string}>() : null;
+  const project = slug ? await ctx.db.prepare(`/*perf-site:src%2Fhttp%2FreviewPages.ts:24:32:reviewsPage:c7ebbd36*/ SELECT p.id FROM project p WHERE p.tenant_id = ? AND (${projectPathSql()}) = ? AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'repo')`).bind(ctx.tenant.id, slug).first<{id:string}>() : null;
   if (slug && !project) return notFoundPage(extra);
   const url = new URL(request.url);
   let selectedRepo = url.searchParams.get("repo");

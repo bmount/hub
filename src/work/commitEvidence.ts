@@ -15,7 +15,7 @@ export function commitWorkStatement(ctx: Ctx, projectId: string, oid: string, re
           AND l.target_ref = ? || (cp.slug || '${repoSuffix}') || '/code?c=' || ?) THEN 'linked' ELSE 'commit' END AS relationship
     FROM project cp JOIN work_item w ON w.tenant_id = cp.tenant_id
     JOIN project p ON p.id = w.project_id AND p.tenant_id = w.tenant_id AND p.kind NOT IN ('channel', 'agent-src')
-    WHERE cp.id = ? AND cp.tenant_id = ? AND cp.kind IN ('repo', 'workspace') AND ? IS NOT NULL
+    WHERE cp.id = ? AND cp.tenant_id = ? AND EXISTS (SELECT 1 FROM json_each(cp.parts) WHERE value = 'repo') AND ? IS NOT NULL
       AND (? IS NULL OR w.project_id = ?) AND typeof(w.number) = 'integer' AND w.number BETWEEN 1 AND 99999999 AND
       ((w.source_kind = 'url' AND w.source_ref = ? || (cp.slug || '${repoSuffix}') || '/code?c=' || ?) OR EXISTS
         (SELECT 1 FROM work_link l WHERE l.item_id = w.id AND

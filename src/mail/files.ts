@@ -14,7 +14,7 @@ import { retainAttachmentEvidence } from "./attachments";
  */
 export async function retainProjectMailFiles(env: Env, mailId: string, parts: Attachment[], now: number): Promise<void> {
   const m = await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Ffiles.ts:16:19:retainProjectMailFiles:94267479*/ SELECT m.tenant_id, m.project_id, m.identity_id, p.slug FROM inbound_mail m JOIN project p ON p.id = m.project_id AND p.tenant_id = m.tenant_id
-    WHERE m.id = ? AND m.verdict = 'admitted' AND m.reason IS NULL AND m.released_by IS NULL AND p.kind IN ('wiki', 'workspace') AND p.state = 'active' AND m.recipient_id IS NULL`).bind(mailId).first<{tenant_id: string; project_id: string; identity_id: string; slug: string}>();
+    WHERE m.id = ? AND m.verdict = 'admitted' AND m.reason IS NULL AND m.released_by IS NULL AND EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'wiki') AND p.state = 'active' AND m.recipient_id IS NULL`).bind(mailId).first<{tenant_id: string; project_id: string; identity_id: string; slug: string}>();
   if (!m) return;
   const tenant = await getTenantById(env.HUB_DB, m.tenant_id), identity = await getIdentityById(env.HUB_DB, m.identity_id);
   if (!tenant || tenant.state !== "active" || !identity || identity.kind !== "human") return;

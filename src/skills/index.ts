@@ -14,7 +14,8 @@ export const SKILLS: Skill[] = [
     body: `Pimwell is a shared workplace for a small team and the AI agents that work alongside it. Everything you can do on a page, you can do over MCP.
 
 **Shape**
-- An organization (its address is <org>.pimwell.com) holds projects. A project is a repository, a tracker, or both.
+- An organization (its address is <org>.pimwell.com) holds projects. Kind (repo, tracker, wiki, workspace) is only a starting template; each project stores its own parts.
+- Add parts to the existing project with \`project_update {project, add: ["repo", "wiki", "knowledge", "files", "people"]}\` (choose only what it needs; Docket is \`docket\`). Never create a separate \`<name>-source\` project. Adding repo creates the default \`<project>.git\`; \`repo_create\` also enables repo in any project. Use \`remove\` only for empty parts; retained history and repositories count as content and are never deleted by this tool.
 - Work lives in each project's Docket (the backlog) as items:
   - wish: feature request
   - snag: bug

@@ -30,7 +30,7 @@ export type Ctx = {
   /** Set only on /mcp requests: the assistant connection this request runs under. */
   oauth?: OAuthCtx;
   /** Resolved by the project MCP route, never supplied by a client. */
-  mcpProject?: { id: string; slug: string; kind: string; display_name: string; path: string };
+  mcpProject?: { parts?: string; id: string; slug: string; kind: string; display_name: string; path: string };
   /**
    * Set only by the in-context Playground: the scopes the person chose. The request then obeys the same MCP exposure
    * rules as an assistant connection holding exactly these scopes; it can only narrow the person's own authority.
@@ -52,7 +52,7 @@ export type Ctx = {
 };
 
 export type ExplorerData = {
-  path: string; display_name: string; kind: string; inProject: boolean;
+  path: string; display_name: string; kind: string; parts?: string; inProject: boolean;
   choices: Array<{ path: string; display_name: string }>;
   sites?: Array<{ name: string }>;
   repositories?: Array<{ name: string; is_default: number }>;
@@ -258,7 +258,7 @@ function explorerStatement(db: D1Database, slug: string | null, live: string, to
         AND ((SELECT kind FROM identity WHERE id = (SELECT identity_id FROM actor)) = 'human'
           OR EXISTS (SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = c.tenant_id AND cm.conversation_id = c.id AND cm.identity_id = (SELECT identity_id FROM actor) AND cm.removed_at IS NULL))
       ORDER BY c.slug
-    ) SELECT p.path, p.display_name, p.kind, p.inProject,
+    ) SELECT p.path, p.display_name, p.kind, p.parts, p.inProject,
       (SELECT json_group_array(json_object('name', s.name)) FROM site s WHERE s.tenant_id = p.tenant_id AND s.project_id = p.id) AS sites,
       (SELECT json_group_array(json_object('name', r.name, 'is_default', r.is_default)) FROM repository r WHERE r.tenant_id = p.tenant_id AND r.project_id = p.id) AS repositories,
       (SELECT json_group_array(json_object('path', path, 'display_name', display_name)) FROM (SELECT path, display_name FROM choices WHERE state = 'active' OR path = p.path ORDER BY display_name, path)) AS choices,

@@ -1,3 +1,4 @@
+import { requireProjectFeature } from "../projectFeatures";
 import type { Ctx } from "../auth/context";
 import { defineVerb } from "./table";
 import { reqString, optString } from "./params";
@@ -71,7 +72,7 @@ export const siteRegister = defineVerb({
   },
   run: async (ctx, p) => {
     const pr = await featureProject(ctx, p.project);
-    if (pr.kind !== "repo") throw badRequest("sites require a code project");
+    requireProjectFeature(pr, "repo");
     const prior = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsites.ts:75:25:siteRegister.run:6fd6ff4b*/ SELECT id, project_id FROM site WHERE tenant_id = ? AND name = ?").bind(ctx.tenant!.id, p.name).first<{ id: string; project_id: string }>();
     if (prior && prior.project_id !== pr.id) throw conflict("site belongs to another project");
     const apps = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2Fsites.ts:77:25:siteRegister.run:eab64ca1*/ SELECT id, script_name FROM app_source WHERE tenant_id = ? AND project_id = ?").bind(ctx.tenant!.id, pr.id).all<{ id: string; script_name: string }>()).results;

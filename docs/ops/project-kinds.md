@@ -1,6 +1,6 @@
 # Project kinds
 
-`src/projectFeatures.ts` is the capability table for project creation, project-page tabs and feature checks in verbs. Project-scoped MCP discovery uses this table to select tool families; it never changes role or grant scopes.
+`src/projectFeatures.ts` defines creation templates. The stored `project.parts` JSON set is the source of truth for feature checks, navigation, the overview, search and project-scoped MCP tool families. Kind stays unchanged. Migration 0039 seeds existing projects from their kind and adds `repo` wherever a repository already exists. New projects are seeded at insertion; repository creation enables `repo`. Discovery never changes roles or grant scopes.
 
 | Kind | Features |
 | --- | --- |
@@ -9,7 +9,11 @@
 | wiki | Wiki pages, files |
 | workspace | Docket, wiki pages, knowledge base, files, people |
 
-Wiki tabs open the page list, editor and revision history; see [wiki pages](wiki.md). Knowledge, project files and project people remain upcoming features, with clearly marked coming-soon sections rather than repository files or organization membership. The repository's source-file browser is part of the repository feature.
+Wiki tabs open the page list, editor and revision history; see [wiki pages](wiki.md). Knowledge/research, uploaded files and contact people are project content, not repository files or organization membership. The source-file browser belongs to `repo`.
+
+Members add parts with `project_update {project, add: ["repo", "wiki"]}` or `POST /api/project.update`. Use the existing project; never create a separate `<name>-source` project. Adding `repo` provisions its default `<project>.git` if no repository exists. `repo_create` works in every ordinary project and enables `repo`. Both tools remain discoverable on project MCP endpoints even when repo is absent.
+
+`remove` accepts the same part names (`docket`, `repo`, `wiki`, `knowledge`, `files`, `people`). Only empty parts may be removed. Work items, retained revisions (including deleted pages/files), research, pending uploads, contacts/connections and repository records block removal with counts; removal never deletes content. Wiki owns the shared wiki/KB/research revision store, so research also prevents removing wiki. Adding knowledge also enables wiki, its page/history store; removing wiki requires removing empty knowledge in the same call. Archived/deleting projects reject updates. Tenant and pinned-project boundaries still apply.
 
 Members can create projects over `project_create`, `/api/project.create`, or the kind picker at `/projects/new`. Project navigation opens the project overview so non-Docket kinds remain reachable. Explicit Docket and repository operations reject projects without the required capability; hidden channel and agent-source projects remain excluded from ordinary project resolution. Archiving remains admin-only.
 
@@ -29,4 +33,4 @@ Before any external purge, the entire D1 cascade is trialled in a batch: deferre
 
 Deletion counts share one D1 batch with archiving the owned projects. Owned Conversation purges settle before Inbox cleanup, so a conversation drain cannot recreate a deleted Inbox entry. Inbox purges run with at most ten concurrent calls; independent R2 project-prefix purges run with at most three. All started purges settle before a failed deletion returns, and the final D1 cascade still waits for every external store to succeed.
 
-The project kind column is not CHECK-constrained; these kinds require no database migration.
+Project kind remains the creation template; adding a part changes only the stored set, not kind or access permissions.
