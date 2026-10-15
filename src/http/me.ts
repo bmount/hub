@@ -46,7 +46,7 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
     ? (await listTenants(ctx.db, "active")).map((t) => t.slug)
     : memberships.filter((m) => rank(m.membership.role) >= rank("member")).map((m) => m.tenant.slug);
 
-  let body = `<h1>Your account</h1><p>${esc(me.display_name)} ${address(me.email)}</p>${toolbar("Account actions",`<a href="/me/sessions">Sessions</a><a href="/">Your organizations</a>`)}`;
+  let body = `<h1>Your account</h1><p>${esc(me.display_name)} ${address(me.email)}</p>${toolbar("Account actions",`<a href="/me/sessions">Sessions</a><a href="/">All organizations</a>`)}`;
 
   body += `<h2>Sessions</h2>` + table(["Session", "Kind", "Started", "Last seen", "Action"], sessions.map((s) => [
     `${esc(s.label ?? s.kind)}${s.id === ctx.session!.id ? " (this one)" : ""}`, esc(s.kind) + (s.kind === "git" && s.label ? ` (${esc(s.label)})` : ""), when(s.created_at), when(s.last_seen_at),

@@ -64,7 +64,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
     };
   }
   const nav = [
-    { href: "/", label: "Your organizations", section: "home" },
+    { href: "/", label: "All organizations", section: "home" },
     { href: "/me", label: "Account", section: "account" },
     { href: "/me/sessions", label: "Sessions", section: "hub" },
     ...(ctx.identity.is_root === 1 ? [{ href: "/admin/orgs", label: "Organizations", section: "admin" }, { href: "/admin/models", label: "Models and keys", section: "admin" }, { href: "/admin/apps", label: "Apps to approve", section: "apps" }] : []),

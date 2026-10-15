@@ -24,7 +24,7 @@ export const THEME_CSS = `
 --accent:#78dfbe;--focus:#8cc8ff;--blue:#91c9ff;--indigo:#bcb1ff;
 --primary-top:#117963;--primary-bottom:#075a4b;--primary-hover:#075647;--on-primary:#ffffff;
 --elevation-1:0 1px 2px #00000055;--elevation-2:0 2px 5px #00000066;--bevel:inset 0 1px 0 #ffffff26;--inset:inset 0 1px 3px #00000066;--shadow:0 8px 24px #00000080;
---attention:#ffbd86;--success:#88dfa0;--warning:#f1cf7b;--error:#ffa69d;
+--attention:#ffbd86;--success:#88dfa0;--warning:#f1cf7b;--error:#ffb6ae;
 --quest:#f1cf7b;--call:#c0d2d9;--spark:#f5a4cf;
 --add-bg:#1b3d2c;--del-bg:#4a2d31}}
 @media (max-width:760px){:root{--tap:44px;--row-h:44px;--bar-h:56px}}

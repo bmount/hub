@@ -121,7 +121,7 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
     let body = `<div class="landing"><header class="landing-hero"><h1>Hello, ${esc(ctx.identity.display_name)}</h1>
 <p class="lede">What would you like to move forward? Ask here or open your team's organization.</p>
 ${intentBox({ placeholder: "What do you want to do? Say it or type it" })}</header>`;
-    body += `<section aria-labelledby="your-orgs"><div class="landing-heading"><h2 id="your-orgs">Your organizations</h2></div>` + (memberships.length ? `<div class="wb-org-grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, m.membership.role)).join("")}</div>` : `<p class="lede">None yet. Create an organization or accept an invitation.</p>`);
+    body += `<section aria-labelledby="your-orgs"><div class="landing-heading"><h2 id="your-orgs">All organizations</h2></div>` + (memberships.length ? `<div class="wb-org-grid">${memberships.map((m) => card(m.tenant.slug, m.tenant.display_name, m.membership.role)).join("")}</div>` : `<p class="lede">None yet. Create an organization or accept an invitation.</p>`);
     if (ctx.identity.kind === "human") body += `<details class="landing-create"><summary role="button">New organization</summary>${createForm}</details>`;
     body += `</section>`;
     if (memberships.length) body += `<section aria-label="Organization chat"><h2>Chat with your team</h2><p class="chips">${memberships.map((m) => `<a class="chip" href="https://${esc(m.tenant.slug)}.${esc(env.HUB_DOMAIN)}/c" data-reload>${esc(m.tenant.display_name)} chat</a>`).join(" ")}</p></section>`;

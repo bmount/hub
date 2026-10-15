@@ -403,6 +403,16 @@ it("audits every workbench page at desktop, wide desktop and phone sizes", () =>
   expect(output).toContain("Screenshots:");
 }, 240000);
 
+it("audits root and organization control contrast, focus and unchanged density in both themes", () => {
+  for (const phase of ["before", "after"]) {
+    const output = execFileSync(process.execPath, ["scripts/workbench-screenshots.mjs"], {
+      encoding: "utf8", timeout: 120000, maxBuffer: 20 * 1024 * 1024,
+      env: { ...process.env, WORKBENCH_AUDIT: "1", WORKBENCH_PHASE: phase, WORKBENCH_PAGES: "organizations,home,docket,board,item,code,chat,mail,attention,apps,admin,account", WORKBENCH_ARTIFACTS: path.join(temp, "design-audit") },
+    });
+    expect(output).toContain("Screenshots:");
+  }
+}, 240000);
+
 it("audits Velocity selection and evidence at desktop, wide desktop and phone sizes", () => {
   const output = execFileSync(process.execPath, ["scripts/workbench-screenshots.mjs"], {
     encoding: "utf8", timeout: 120000, maxBuffer: 20 * 1024 * 1024,

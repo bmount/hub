@@ -88,7 +88,7 @@ describe("the signed-in shell", () => {
     expect(login).toContain('class="plain"');
     expect(login).not.toContain('aria-label="Primary"');
     const apex = await (await w.get("/", w.pat.token, "pimwell.test")).text();
-    expect(apex).toContain("Your organizations");
+    expect(apex).toContain("All organizations");
     expect(apex).toContain("https://acme.pimwell.test/");
   });
 });
