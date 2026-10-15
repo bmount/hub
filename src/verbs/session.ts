@@ -4,9 +4,8 @@ import { badRequest, forbidden, notFound, unauthorized } from "../errors";
 import {
   AGENT_SESSION_DEFAULT_TTL_S, AGENT_SESSION_MAX_TTL_S, createAgentSession, createGitSession, getSessionById, listSessions, revokeSession,
 } from "../db/sessions";
-import { markApiTokenUsed } from "../db/apiTokens";
 import { getIdentityById } from "../db/identities";
-import { recordEvent } from "../db/events";
+import { eventStatement, recordEvent } from "../db/events";
 import { getGrantBySessionId } from "../db/oauthGrants";
 import { revokeOAuthGrant } from "../oauth/revoke";
 import { rank, type Ctx } from "../auth/context";
@@ -87,12 +86,13 @@ export const sessionStart = defineVerb({
     const { session, token } = await createAgentSession(ctx.db, {
       identity_id: ctx.identity.id, tenant_id: ctx.apiToken.tenant_id, label: p.label, parent_token_id: ctx.apiToken.id,
       ttl_s: p.ttl ?? AGENT_SESSION_DEFAULT_TTL_S,
-    }, ctx.now);
-    await markApiTokenUsed(ctx.db, ctx.apiToken.id, ctx.now);
-    await recordEvent(ctx.db, {
-      tenant_id: ctx.apiToken.tenant_id, identity_id: ctx.identity.id, session_id: session.id, kind: "session.start", target_kind: "session", target_id: session.id,
-      summary: `Started run "${p.label}" with token "${ctx.apiToken.name}"`,
-    }, ctx.now);
+    }, ctx.now, (session) => [
+      ctx.db.prepare("UPDATE api_token SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at < ?)").bind(ctx.now, ctx.apiToken!.id, ctx.now),
+      eventStatement(ctx.db, {
+        tenant_id: ctx.apiToken!.tenant_id, identity_id: ctx.identity!.id, session_id: session.id, kind: "session.start", target_kind: "session", target_id: session.id,
+        summary: `Started run "${p.label}" with token "${ctx.apiToken!.name}"`,
+      }, ctx.now),
+    ]);
     return { session_id: session.id, session_token: token, expires_at: session.expires_at, tenant: ctx.tenant!.slug };
   },
 });

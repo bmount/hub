@@ -55,6 +55,7 @@ export async function createAgentSession(
   db: D1Database,
   input: { identity_id: string; tenant_id: string; label: string; parent_token_id: string; ttl_s: number },
   now: number,
+  accompanying?: (session: Session) => D1PreparedStatement[],
 ): Promise<{ session: Session; token: string }> {
   const token = randomToken("pms_");
   const session: Session = {
@@ -62,11 +63,14 @@ export async function createAgentSession(
     token_hash: await sha256Hex(token), created_at: now, last_seen_at: now, expires_at: now + input.ttl_s * 1000,
     last_proof_at: now, revoked_at: null, parent_token_id: input.parent_token_id,
   };
-  await db.prepare(
+  const insert = db.prepare(
     `/*perf-site:src%2Fdb%2Fsessions.ts:65:9:createAgentSession:bdc49122*/ INSERT INTO session (id, identity_id, tenant_id, kind, label, token_hash, created_at, last_seen_at, expires_at, last_proof_at, revoked_at, parent_token_id)
      VALUES (?, ?, ?, 'agent_run', ?, ?, ?, ?, ?, ?, NULL, ?)`,
   ).bind(session.id, session.identity_id, session.tenant_id, session.label, session.token_hash,
-    now, now, session.expires_at, now, session.parent_token_id).run();
+    now, now, session.expires_at, now, session.parent_token_id);
+  // The run and its audit evidence must commit together before exposing the token.
+  if (accompanying) await db.batch([insert, ...accompanying(session)]);
+  else await insert.run();
   return { session, token };
 }
 

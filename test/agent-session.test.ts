@@ -41,6 +41,30 @@ describe("session.start", () => {
     expect(who.result.identity).toBeNull();
   });
 
+  it("rolls back the run and token use if auditing fails", async () => {
+    const { s } = await setup();
+    const before = await getApiTokenById(env.HUB_DB, s.apiToken.id);
+    const count = () => env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM session WHERE parent_token_id = ?").bind(s.apiToken.id).first<{ n: number }>();
+    const runs = await count();
+    await env.HUB_DB.exec("CREATE TRIGGER fail_run_audit BEFORE INSERT ON event WHEN NEW.kind = 'session.start' BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END");
+    try {
+      expect((await start("acme.pimwell.test", s.longLived)).status).toBe(500);
+      expect(await count()).toEqual(runs);
+      expect((await getApiTokenById(env.HUB_DB, s.apiToken.id))!.last_used_at).toBe(before!.last_used_at);
+    } finally {
+      await env.HUB_DB.exec("DROP TRIGGER fail_run_audit");
+    }
+  });
+
+  it("records every run without moving token use backwards", async () => {
+    const { s } = await setup();
+    const future = Date.now() + DAY;
+    await env.HUB_DB.prepare("UPDATE api_token SET last_used_at = ? WHERE id = ?").bind(future, s.apiToken.id).run();
+    for (let n = 0; n < 2; n++) expect((await start("acme.pimwell.test", s.longLived)).status).toBe(200);
+    expect((await getApiTokenById(env.HUB_DB, s.apiToken.id))!.last_used_at).toBe(future);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM event WHERE kind = 'session.start'").first()).toEqual({ n: 2 });
+  });
+
   it("honours ttl bounds in seconds", async () => {
     const { s } = await setup();
     const before = Date.now();
