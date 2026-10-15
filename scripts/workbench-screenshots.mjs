@@ -76,7 +76,7 @@ try {
       else if(sql.includes('GROUP BY label, previous')) data=[{label:'/:project/docket',previous:'/:project',...metric}];
       else if(sql.includes('AS mean')) data=[{request:rid,label:'/:project/docket',kind:'request',version,name:'request',phase:'GET',mean:180,n:120},{request:rid,label:'/:project/docket',kind:'client',version,name:'pane.swap',phase:'fetch',mean:220,n:120},{request:rid,label:'/:project/docket',kind:'client',version,name:'pane.swap',phase:'paint',mean:250,n:120}];
       else if(sql.includes('AS cold')) data=[{request:rid,version,colo:'LHR',auth:'cookie',cold:0,weight:1}];
-      else if(sql.includes('blob6 AS request')&&!sql.includes('double17')) data=[{request:rid,version,colo:'LHR',duration:180,weight:1}];
+      else if(sql.includes('blob6 AS request')&&!sql.includes('double17')) data=[{request:rid,version,colo:'LHR',auth:'cookie',isolate:0,status:'2xx',failed:0,complete:1,duration:180,weight:1}];
       else if(sql.includes('SELECT blob15')) data=[{fingerprint:'abcdef01',code,source,version,...metric}];
       else if(sql.includes('double17')) data=[{label:'/:project/docket',n:120,weighted_root_wall:21600,weighted_auth_wall:2400,weighted_auth_n:120,weighted_d1_wall:12000,weighted_d1_execution:2400,weighted_d1_known_wall:12000,weighted_d1_execution_n:120,weighted_d1_n:120,weighted_do_wall:4800,weighted_do_n:120}];
       else if(sql.includes('intDiv')) data=Array.from({length:12},(_,i)=>({label,bucket:i,p50:30+i*4,n:10}));

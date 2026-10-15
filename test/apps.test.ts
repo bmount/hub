@@ -4,7 +4,7 @@ import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appsPage } from "../src/http/appsPages";
 import { sparkline, routeBreakdown } from "../src/http/performancePage";
-import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser, population, weightedMetrics, routeAttribution, routeAttributionSQL, routeAttributionSummary, analyticsQuery, interactionPhases, type PerformanceData } from "../src/apps/performance";
+import { clearPerformanceCache, performanceSelection, performanceScope, pairedBrowser, population, weightedMetrics, routeAttribution, routeAttributionSQL, routeAttributionSummary, analyticsQuery, interactionPhases, sampleSplits, type PerformanceData } from "../src/apps/performance";
 import { buildContext } from "../src/auth/context";
 import { tenantHash } from "../src/perf";
 import { SQL_CATALOG } from "../src/perfCatalog";
@@ -186,6 +186,20 @@ describe("sites", () => {
     const reader = await seedHuman("reader@example.com",{memberships:[{tenant_id:w.t.id,role:"reader"}]});
     expect((await w.call(reader.token,"repo.create",{project:"pricebench",name:"forbidden"})).status).toBe(403);
   });
+  it("computes complete-population splits with sample weights, not point counts", () => {
+    const points=[
+      {colo:"DFW",duration:10,weight:96,status:"2xx",failed:0,complete:1},
+      {colo:"DFW",duration:1000,weight:2,status:"5xx",failed:0,complete:1},
+      {colo:"DFW",duration:2000,weight:1,status:"4xx",failed:0,complete:1},
+      {colo:"DFW",duration:3000,weight:1,status:"2xx",failed:1,complete:0},
+      {colo:"",duration:7,weight:3,status:"2xx",failed:0,complete:1},
+    ];
+    expect(sampleSplits(points,{colo:"blob4"})).toEqual([["colo",[
+      {label:"DFW",n:100,p50:10,p95:10,p99:2000,errors:3,client_errors:1,total:7960},
+      {label:"",n:3,p50:7,p95:7,p99:7,errors:0,client_errors:0,total:21},
+    ]]]);
+    expect(sampleSplits([],{colo:"blob4"})).toEqual([["colo",[]]]);
+  });
   it("shows sparse live trends without inventing another time bucket", () => {
     expect(sparkline([])).toContain("—");
     const sparse=sparkline([{bucket:35554,p50:118,n:546}]);
@@ -222,7 +236,10 @@ describe("sites", () => {
       else if(sql.includes("GROUP BY label, previous")) data=[{label:"/:project",previous:"/",...metric}];
       else if(sql.includes("AS mean")) data=[{request,label:"/:project",kind:"request",version,name:"request",phase:"GET",mean:30,n:100},{request,label:"/:project",kind:"client",version,name:"pane.swap",phase:"fetch",mean:120,n:100},{request,label:"/:project",kind:"client",version,name:"pane.swap",phase:"paint",mean:140,n:100}];
       else if(sql.includes("AS cold")) data=[{request,version,colo:"DFW",auth:"cookie",cold:0,weight:1}];
-      else if(sql.includes("blob6 AS request")&&!sql.includes("double17")) data=[{request,version,colo:"DFW",duration:100,weight:1}];
+      else if(sql.includes("blob6 AS request")&&!sql.includes("double17")) {
+        const point={request,version,colo:"DFW",auth:"cookie",isolate:0,status:"2xx",failed:0,complete:1,duration:100,weight:1};
+        data=gateSplit&&sql.includes("LIMIT 5000")?Array.from({length:5000},()=>({...point})):[point];
+      }
       else if(sql.includes("SELECT blob15")) data=[{fingerprint:"01234567",code,source:JSON.stringify(location),version,...metric}];
       else if(sql.includes("double17")) data=[{label:"/:project",n:100,weighted_root_wall:3000,weighted_d1_wall:2000,weighted_d1_execution:500,weighted_d1_known_wall:2000,weighted_d1_execution_n:100,weighted_d1_n:100}];
       else if(sql.includes("intDiv")) data=[{label:"/:project",bucket:1,p50:20,n:50},{label:"/:project",bucket:2,p50:25,n:50}];
@@ -245,6 +262,7 @@ describe("sites", () => {
       const html=(await selected.text()).replaceAll('\u00a0',' ');
       for(const label of ["Performance","Where the time goes","Latency histogram","Cold / warm isolates","Slowest D1 statements","Request waterfall","Version comparison","Browser network residual","D1 transport / queue"]) expect(html).toContain(label);
       expect(html).toContain("100 ms");expect(html).toContain("pricebench/files?ref="+"a".repeat(40));expect(html).toContain('id="inspector"');
+      expect(sqls.filter(sql=>sql.includes("ORDER BY n * p50"))).toHaveLength(4); // Sentinel falls back to exact aggregates.
       expect(sqls.some(sql=>sql.includes("GROUP BY bucket"))).toBe(false);
       const listSQL=sqls.find(sql=>sql.includes("AS hist0"))!;
       expect(listSQL).toContain("SUM(IF(double1 < 10, _sample_interval, 0)) AS hist0");
@@ -257,6 +275,7 @@ describe("sites", () => {
       const ownStart=sqls.length;const ownHtml=await (await get("&only_my_org=true&selected=%2F%3Aproject")).text();
       expect(ownHtml).toContain('name="only_my_org" value="true"');
       for(const sql of sqls.slice(ownStart)) expect(sql).toContain(`blob5 = '${hash}'`);
+      expect(sqls.slice(ownStart).some(sql=>sql.includes("ORDER BY n * p50"))).toBe(false); // Complete weighted points need no split fan-out.
       const calls=sqls.length;await get("&selected=%2F%3Aproject");expect(sqls).toHaveLength(calls);
       const date=vi.spyOn(Date,"now").mockReturnValue(Date.now()+61_000);await get("&selected=%2F%3Aproject");date.mockRestore();expect(sqls.length).toBeGreaterThan(calls);
       expect((await (await get(`&kind=deploys&version=${version}&previous=${previous}`)).text()).replaceAll("\u00a0"," ")).toContain("+20 ms");
@@ -281,7 +300,7 @@ describe("sites", () => {
       await expect(performanceScope(ctx,{...site,tenant_id:other.id},24)).rejects.toMatchObject({status:404});
       const perfArgs={site:"prices.example.com",selected:"/:project"};
       expect((await callTool(ctx,"perf_summary",{site:perfArgs.site,hours:1})).structuredContent).toMatchObject({hours:1,routes:[{label:"/:project",total:4000}],interactions:[{label:"pane.swap",total:4000}]});
-      expect((await callTool(ctx,"perf_route",perfArgs)).structuredContent).toMatchObject({metrics:[{p50:25,p95:100,p99:250}],splits:{colo:[{label:"DFW"}],isolate:[{label:0},{label:1}]},browser:[{phase:"network"},{phase:"render"}]});
+      expect((await callTool(ctx,"perf_route",perfArgs)).structuredContent).toMatchObject({metrics:[{p50:25,p95:100,p99:250}],splits:{colo:[{label:"DFW"}],isolate:[{label:0}]},browser:[{phase:"network"},{phase:"render"}]});
       expect((await callTool(ctx,"perf_route",{...perfArgs,kind:"interactions",selected:"pane.swap"})).structuredContent).toMatchObject({metrics:[{label:"pane.swap"}],splits:{colo:[{label:"DFW"}]}});
       expect((await callTool(ctx,"perf_compare",{site:perfArgs.site,version,previous})).structuredContent).toMatchObject({comparison:[{version,p95:100},{version:previous,p95:80}]});
       expect((await callTool(ctx,"perf_statements",perfArgs)).structuredContent).toMatchObject({statements:[{fingerprint:"01234567",code,source:JSON.stringify(location)}]});

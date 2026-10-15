@@ -103,6 +103,21 @@ export function sampleMetrics(rows:PerfRow[]):PerfRow {
   const quantile=(p:number)=>{let at=0;for(const r of ordered) {at+=Number(r.weight);if(at>=n*p)return Number(r.duration);}return 0;};
   return {n,p50:quantile(0.5),p95:quantile(0.95),p99:quantile(0.99),errors:0,total:ordered.reduce((n,r)=>n+Number(r.duration)*Number(r.weight),0)};
 }
+export function sampleSplits(points:PerfRow[],splits:Record<string,string>):Array<readonly [string,PerfRow[]]> {
+  return Object.keys(splits).map(name=>{
+    const groups=new Map<string,PerfRow[]>();
+    for(const point of points) {
+      const label=String(point[name]);
+      const group=groups.get(label)??[];group.push(point);groups.set(label,group);
+    }
+    return [name,[...groups].map(([,rows]):PerfRow=>{
+      const metrics=sampleMetrics(rows),n=Number(metrics.n);
+      const errors=rows.reduce((n,r)=>n+((r.status==="5xx"||Number(r.failed)===1||Number(r.complete)===0)?Number(r.weight):0),0);
+      const client_errors=rows.reduce((n,r)=>n+(r.status==="4xx"?Number(r.weight):0),0);
+      return {label:rows[0]![name]!,...metrics,errors:n?errors/n*100:0,client_errors};
+    }).sort((a,b)=>Number(b.n)*Number(b.p50)-Number(a.n)*Number(a.p50)).slice(0,100)] as const;
+  });
+}
 async function originClientSplits(query:(sql:string)=>Promise<PerfRow[]>,scope:string,selected:string):Promise<Array<readonly [string,PerfRow[]]>> {
   const points=await query(`SELECT blob5 AS tenant, blob6 AS request, double1 AS duration, timestamp AS at, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY at DESC LIMIT 2000`);
   const ids=[...new Set(points.map(r=>String(r.request)).filter(id=>/^[0-9a-f-]{36}$/.test(id)))];
@@ -191,9 +206,13 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   const readInspector=async()=>{
     const selected=`${filter} AND ${dim} = ${quote(s.selected)}`;
     const splits={colo:"blob4",version:"blob3",auth:"blob11",isolate:"double2"};
-    const exemplarRows=query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, double20 AS generation, IF(blob19 != '' OR blob20 != '', 1, 0) AS sourced, _sample_interval AS weight FROM pimwell_perf WHERE ${selected} ORDER BY sourced DESC, generation DESC, duration DESC LIMIT 5`);
+    const client=s.kind==="interactions"||s.kind==="spinners";
+    // A strict under-limit result is the entire weighted population, not a recent sample.
+    // At the sentinel, retain the four exact remote aggregates rather than truncate splits.
+    const points=query(`SELECT blob5 AS tenant, blob6 AS request, blob3 AS version, blob4 AS colo, double1 AS duration, double20 AS generation, IF(blob19 != '' OR blob20 != '', 1, 0) AS sourced, _sample_interval AS weight${client?"":", blob11 AS auth, double2 AS isolate, blob10 AS status, double5 AS failed, double14 AS complete"} FROM pimwell_perf WHERE ${selected} ORDER BY sourced DESC, generation DESC, duration DESC LIMIT ${client?5:5000}`);
+    const exemplarRows=points.then(rows=>rows.slice(0,5).map(({auth:_auth,isolate:_isolate,status:_status,failed:_failed,complete:_complete,...row})=>row));
     const distribution=Promise.all([
-      s.kind==="interactions"||s.kind==="spinners" ? originClientSplits(query,scope.where,selected) : Promise.all(Object.entries(splits).map(async ([name,column])=>[name,await query(`SELECT ${column} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label ORDER BY n * p50 DESC LIMIT 100`)] as const)),
+      client ? originClientSplits(query,scope.where,selected) : points.then(rows=>rows.length<5000?sampleSplits(rows,splits):Promise.all(Object.entries(splits).map(async ([name,column])=>[name,await query(`SELECT ${column} AS label, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label ORDER BY n * p50 DESC LIMIT 100`)] as const))),
       s.kind==="spinners"?query(`SELECT blob8 AS label, blob19 AS previous, ${weightedMetrics} FROM pimwell_perf WHERE ${selected} GROUP BY label, previous ORDER BY total DESC LIMIT 20`):Promise.resolve([]),
     ]);
     const detail=(async()=>{
