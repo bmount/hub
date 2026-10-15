@@ -1,9 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { SELF } from "cloudflare:test";
 import { ASSETS } from "../src/assets";
+import { THEME_CSS } from "../src/theme";
+import { COMPONENTS_CSS } from "../src/styles";
 import { breadcrumb, emptyState, esc, formRow, HTML_CSP, htmlResponse, inspectorSection, kitList, kitTable, kitTabs, kitTree, page, statusChip, toolbar, utcTime, workbench } from "../src/html";
 
 describe("workbench kit", () => {
+  it("keeps AA text contrast across both palettes and primary control states", () => {
+    const sets = [...THEME_CSS.matchAll(/:root\{([^}]+)\}/g)].map(m => Object.fromEntries([...m[1]!.matchAll(/(--[\w-]+):([^;]+)(?:;|$)/g)].map(v => [v[1],v[2]])));
+    const light = sets[0], dark = {...light, ...sets[1]};
+    for (const tokens of [light, dark]) {
+      const resolve = (key: string): string => tokens[key].startsWith('var(') ? resolve(tokens[key].slice(4,-1)) : tokens[key];
+      const luminance = (hex: string) => [1,3,5].map(i => parseInt(hex.slice(i,i+2),16)/255).map(v => v <= .04045 ? v/12.92 : ((v+.055)/1.055)**2.4).reduce((n,v,i) => n+v*[.2126,.7152,.0722][i]!,0);
+      const ratio = (a: string, b: string) => { const x=luminance(resolve(a)),y=luminance(resolve(b));return (Math.max(x,y)+.05)/(Math.min(x,y)+.05); };
+      for (const surface of ['--bg','--rail','--panel','--group','--raised','--field','--hover','--selected']) {
+        for (const text of ['--ink','--muted','--faint','--accent','--blue','--indigo','--attention','--progress','--success','--warning','--error']) {
+          expect(ratio(text,surface), `${text} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+        }
+        expect(ratio('--focus',surface),`focus on ${surface}`).toBeGreaterThanOrEqual(3);
+      }
+      for (const state of ['--primary-top','--primary-bottom','--primary-hover']) expect(ratio('--on-primary',state),state).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(THEME_CSS).toContain('--row-h:28px');
+    expect(THEME_CSS).toContain('--row-h:44px');
+    expect(COMPONENTS_CSS).toContain('button:active');
+    expect(COMPONENTS_CSS).toContain('button:disabled');
+    expect(COMPONENTS_CSS).toContain('outline:var(--focus-width) solid var(--focus)!important');
+    for (const tone of ['attention','progress','success','warning','error'] as const) expect(statusChip(tone,tone)).toContain(`wb-tone-${tone}`);
+  });
   it('keeps reporting cutoffs explicitly UTC without local-time conversion',()=>{
     expect(utcTime(Date.parse('2026-10-10T05:26:00Z'))).toBe('<time datetime="2026-10-10T05:26:00.000Z">2026-10-10 05:26 UTC</time>');
   });

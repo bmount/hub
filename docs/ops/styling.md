@@ -36,11 +36,12 @@ The workbench sends slow (>3 seconds) navigations/requests, failures/timeouts, a
   - `--muted` and `--faint` keep at least 4.5:1 contrast on `--bg`.
   - `--fs-chat` sets the Assistant's reading size.
   - The bar and the tabs pad for the phone's safe areas (`env(safe-area-inset-*)`).
-- **Shape:** `--r`, `--r-sm` and `--r-xs` (radii), and `--shadow`.
+- **Shape:** `--r`, `--r-sm` and `--r-xs` (radii); `--elevation-1/2` for micro-elevation, `--bevel` for a top highlight, `--inset` for fields, and `--shadow` for overlays. `--focus-width/offset` size the visible keyboard ring; its outline overrides legacy inline outline resets.
 - **Layout:** `--rail-w`, `--bar-h` and `--status-h`; `--space-1/2/3/4/6/8`, `--row-h` and `--separator` define shared kit density.
-- **Surfaces:** `--bg` (page), `--panel` (panes and cards), `--sunk` (rail, chips, table heads) and `--line`.
+- **Surfaces:** `--bg` (page), `--rail`, `--panel`, `--group` (cards and grouped metadata), `--raised` (secondary controls), `--field` (inset inputs), `--hover` and `--selected`. `--sunk` aliases group. `--line` and `--line-strong` distinguish separators from control edges; `--highlight` is the surface highlight.
 - **Text:** `--ink`, `--muted` and `--faint`.
-- **Action:** `--accent` (links, selection edge, primary hover), `--accent-soft` (selected row) and `--focus`.
+- **Action:** `--accent` (teal links and selection edge), `--blue/indigo` (supporting accents), `--accent-soft` (selected row) and `--focus`. Primary controls use `--primary-gradient`, `--primary-hover` and `--on-primary`; selected navigation uses `--selected-gradient`. Existing default buttons are primary, `.quiet` and toolbar actions secondary, `.link` tertiary. Treatments change no padding, height or row geometry.
+- **Semantics:** `--attention`, `--progress`, `--success`, `--warning`, `--error`; state colors alias these. `statusChip` accepts those tones as well as work kinds/states, always with text and a dot rather than color alone.
 - **Work kinds:** `--wish`, `--snag`, `--errand`, `--quest`, `--call` and `--spark`.
 
 Rules:

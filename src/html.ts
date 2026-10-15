@@ -73,7 +73,7 @@ export function kitTree(label: string, nodes: TreeNode[]): string {
   return `<nav class="wb-tree" aria-label="${esc(label)}">${branch(nodes)}</nav>`;
 }
 
-export type ChipTone = "open" | "doing" | "done" | "dropped" | "blocked" | "wish" | "snag" | "errand" | "quest" | "call" | "spark";
+export type ChipTone = "open" | "doing" | "done" | "dropped" | "blocked" | "wish" | "snag" | "errand" | "quest" | "call" | "spark" | "attention" | "progress" | "success" | "warning" | "error";
 export function statusChip(label: string, tone: ChipTone): string {
   return `<span class="wb-chip${["open","doing","done","dropped","blocked"].includes(tone) ? " wb-state" : ""} wb-tone-${esc(tone)}">${esc(label)}</span>`;
 }

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { chromium, expect } from '@playwright/test';
 import { SQL_CATALOG } from '../src/perfCatalog.ts';
+import { auditControls, rowGeometry } from './workbench-audit.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const temp = await mkdtemp(path.join(tmpdir(), 'pimwell-chat-browser-'));
@@ -308,6 +309,19 @@ try {
           return failures;
         }));
         expect(broken, name+' mid-word table wrapping at '+label).toEqual([]);
+      }
+      const geometryFile = path.join(artifacts,`before-${name}-${label}-rows.json`);
+      if (phase === 'before') await writeFile(geometryFile, JSON.stringify(await rowGeometry(page)));
+      if (process.env.WORKBENCH_AUDIT === '1' && phase === 'after') {
+        expect(await rowGeometry(page), name+' unchanged row heights').toEqual(JSON.parse(await readFile(geometryFile,'utf8')));
+        for (const scheme of ['light','dark']) {
+          await page.emulateMedia({colorScheme:scheme});
+          await auditControls(page,`${name} ${label} ${scheme}`);
+          const file = `${phase}-${name}-${scheme}-${label}.png`;
+          await page.screenshot({path:path.join(artifacts,file),fullPage:false});
+          manifest.push({phase,name,route,viewport,scheme,file,audit:{textContrast:'WCAG AA',keyboardFocus:'visible, >=3:1',rowHeights:'unchanged'}});
+        }
+        await page.emulateMedia({colorScheme:'light'});
       }
       await page.screenshot({path:path.join(artifacts,`${phase}-${name}-${label}.png`),fullPage:false});
       await flushTiming();
