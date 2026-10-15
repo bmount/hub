@@ -1,3 +1,5 @@
+import { PART_CONTENT } from "../verbs/project";
+import type { ProjectFeature } from "../projectFeatures";
 import { projectControls } from "./projectControls";
 import { PROJECT_KINDS, projectFeatures } from "../projectFeatures";
 import type { Env } from "../env";
@@ -113,11 +115,13 @@ async function projectOverview(ctx: Ctx, env: Env, p: Project, selected: string 
   const last = deploy!.results[0] as {id: string; version: string; at: number} | undefined;
   resources.push({key:"deploy",label:"Last deploy",href:last ? `/apps?project=${encodeURIComponent(p.path)}&d=${encodeURIComponent(last.id)}` : `/apps?project=${encodeURIComponent(p.path)}`,n:last ? 1 : 0,at:last?.at ?? null});
   const writable = p.state === "active" && rank(ctx.role) >= rank("member");
+  const partsPanel = writable ? await projectParts(ctx, env, p) : "";
   const select = (key: string) => `${base}?resource=${encodeURIComponent(key)}`;
   const actions = `${features.includes("repo") ? `<a href="${esc(base)}/code">Code</a>` : ""}${writable && features.includes("docket") ? `<a class="primary" href="/new?project=${esc(encodeURIComponent(p.path))}">File</a>` : ""}${writable && features.includes("wiki") ? `<a href="${esc(select("new-page"))}">New page</a>` : ""}${writable && features.includes("files") ? `<a href="${esc(select("upload"))}">Upload</a>` : ""}${writable && features.includes("people") ? `<a href="${esc(select("add-contact"))}">Add contact</a>` : ""}${writable && features.includes("wiki") ? `<a href="${esc(select("share"))}">Share</a>` : ""}<a href="/usage?project=${esc(encodeURIComponent(p.path))}">AI usage</a>${writable && rank(ctx.role) >= rank("admin") && ctx.identity!.kind === "human" ? projectControls(p,false) : ""}`;
   const list = `<div class="overview"><div class="head"><h1>${esc(p.display_name)}</h1>${p.state === "archived" ? '<span>Archived</span>' : ""}</div>
 ${toolbar("Project actions",actions)}
 ${kitTable("Project contents",[{label:"Resource"},{label:"Count"},{label:"Latest activity"}],resources.map(r=>({href:select(r.key),selected:selected === r.key,cells:[{html:`<a href="${esc(select(r.key))}">${esc(r.label)}</a>`},{html:r.key === "deploy" && last ? `<code title="${esc(last.version)}">${esc(last.version.slice(0,12))}</code>` : String(r.n)},{html:ago(ctx.now,r.at)}]})))}
+${partsPanel}
 ${inspectorSection("Identity",[{label:"Kind",html:esc(p.kind)},{label:"Mail",html:`<code>${esc(t.slug)}.${esc(p.path.replace("/", "."))}@${esc(env.HUB_DOMAIN)}</code>`},{label:"MCP",html:`<code id="project-mcp-url">https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/p/${esc(p.path)}/mcp</code> <button type="button" class="quiet" aria-label="Copy MCP URL" title="Copy MCP URL" data-copy="#project-mcp-url">⧉</button>`}, ...(features.includes("repo") ? [{label:"Clone",html:`<code>git clone https://${esc(t.slug)}.${esc(env.HUB_DOMAIN)}/${esc(p.path)}.git</code>`}] : [])])}
 </div>`;
   const resource = resources.find(r=>r.key === selected);
@@ -134,6 +138,26 @@ ${inspectorSection("Identity",[{label:"Kind",html:esc(p.kind)},{label:"Mail",htm
     else inspector += await resourceInspector(ctx,p,selected,resource,channelRows,last);
   }
   return {list,inspector};
+}
+
+async function projectParts(ctx: Ctx, env: Env, p: Project) {
+  const features = projectFeatures(p);
+  const parts: Array<[ProjectFeature, string]> = [["repo", "Code"], ["wiki", "Wiki"], ["knowledge", "Knowledge base"], ["files", "Files"], ["people", "People"]];
+  const checks = parts.filter(([part]) => features.includes(part)).flatMap(([part]) => PART_CONTENT[part].map(([table, label]) => ({part, label, statement: ctx.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ? AND project_id = ?${part === "knowledge" ? " AND research IS NOT NULL" : ""}`).bind(ctx.tenant!.id, p.id)})));
+  const counts = checks.length ? await ctx.db.batch<{n: number}>(checks.map(c => c.statement)) : [];
+  const form = (part: ProjectFeature, label: string, action: "add" | "remove") => `<form method="post" data-reload action="/api/project.update"><input type="hidden" name="project" value="${esc(p.path)}"><input type="hidden" name="_back" value="@result"><input type="hidden" name="${action}" value="${part}"><button${action === "remove" ? ' class="quiet"' : ""}>${action === "add" ? "Add" : "Remove"} ${esc(label)}</button></form>`;
+  const missing = parts.filter(([part]) => !features.includes(part));
+  const installed = parts.filter(([part]) => features.includes(part));
+  const clone = `https://${ctx.tenant!.slug}.${env.HUB_DOMAIN}/${p.path}.git`;
+  return `<section aria-label="Project parts"><h2>Add to this project</h2>${missing.length ? toolbar("Add project parts", missing.map(([part,label]) => form(part,label,"add")).join("")) : '<p class="empty">All parts are available.</p>'}
+${features.includes("repo") ? `<h3>Code setup</h3><p>Clone URL: <code>${esc(clone)}</code></p><p><code>git clone ${esc(clone)}</code></p><p>With your connected agent token already stored, set up Git:</p><pre><code>curl -fsS https://${esc(ctx.tenant!.slug)}.${esc(env.HUB_DOMAIN)}/git-credential-helper -o git-credential-pimwell
+chmod +x git-credential-pimwell
+git config --global credential.https://${esc(ctx.tenant!.slug)}.${esc(env.HUB_DOMAIN)}.helper &quot;$PWD/git-credential-pimwell&quot;</code></pre>` : ""}
+<h3>Existing parts</h3>${kitTable("Existing project parts", [{label:"Part"},{label:"Remove empty part"}], installed.map(([part,label]) => {
+    const reasons = checks.flatMap((c,i) => c.part === part && Number(counts[i]!.results[0]?.n) ? [`${counts[i]!.results[0]!.n} ${c.label}`] : []);
+    if (part === "wiki" && features.includes("knowledge")) reasons.push("Knowledge base uses its pages; remove Knowledge base first");
+    return {cells:[{html:esc(label)},{html:reasons.length ? `<span>Cannot remove: ${esc(reasons.join("; "))}. Content and history are kept.</span>` : form(part,label,"remove")}]};
+  }))}</section>`;
 }
 
 async function resourceInspector(ctx: Ctx, p: Project, key: string, resource: Resource | undefined, channels: Array<{slug: string; display_name: string; at: number}>, last: {id: string; version: string; at: number} | undefined) {

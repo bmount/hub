@@ -21,6 +21,9 @@ async function readBody(request: Request, name: string): Promise<{ input: Record
     const fd = await requestWithBytes(request, bytes).formData();
     const input: Record<string, unknown> = {};
     for (const [k, v] of fd.entries()) input[k] = typeof v === "string" ? v : "";
+    if (name === "project.update") {
+      for (const key of ["add", "remove"]) input[key] = fd.getAll(key);
+    }
     if (name === "mail.set_response_recipients") {
       // Repeated checkbox values are an array only for this verb. Require an explicit
       // complete-form marker, including for [] clear; absent controls never imply clear.

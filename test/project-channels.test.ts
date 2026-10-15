@@ -101,6 +101,28 @@ describe("stored project parts", () => {
     expect((await w.update({remove:["people","knowledge","files"]})).isError).toBeUndefined();
     expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"desk"))!)).toEqual(["docket","wiki"]);
   });
+  it("offers member-only web controls and accepts add/remove form arrays", async () => {
+    const w = await world();
+    const headers = cookieHeaders(w.h.token, HOST);
+    const overview = () => SELF.fetch(`https://${HOST}/desk`, {headers}).then(r => r.text());
+    expect(await overview()).toContain('Add Code</button>');
+    const submit = (action: string, part: string) => SELF.fetch(`https://${HOST}/api/project.update`, {method:"POST", redirect:"manual", headers:{...headers,"content-type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({project:"desk",[action]:part,_back:"@result"}).toString()});
+    const added = await submit("add","wiki");
+    expect(added.status).toBe(303);
+    expect(added.headers.get("location")).toBe("/desk");
+    expect(await overview()).toContain('Remove Wiki</button>');
+    expect((await submit("remove","wiki")).status).toBe(303);
+    expect(await overview()).toContain('Add Wiki</button>');
+    await w.update({add:["wiki"]});
+    await callTool(w.ctx,"wiki_write",{project:"desk",slug:"kept",title:"Kept",body:"data",note:"test",expected_revision:0});
+    const filled = await overview();
+    expect(filled).toContain("1 wiki revisions");
+    expect(filled).not.toContain('Remove Wiki</button>');
+    const reader = await seedHuman("reader@example.com", {memberships:[{tenant_id:w.t.id,role:"reader"}]});
+    const readonly = await (await SELF.fetch(`https://${HOST}/desk`,{headers:cookieHeaders(reader.token,HOST)})).text();
+    expect(readonly).not.toContain('Add to this project');
+    expect(readonly).not.toContain('/api/project.update');
+  });
   it("backfills templates plus existing repositories, including workspace code, from the migration", async () => {
     const w = await world();
     const p = await createProject(env.HUB_DB,{tenant_id:w.t.id,namespace_id:null,slug:"barefoot",kind:"workspace",display_name:"Barefoot"},Date.now());

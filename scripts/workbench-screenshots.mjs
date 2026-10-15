@@ -38,6 +38,7 @@ try {
       headers.delete('x-local-browser-host');
       const url = new URL(request.url); url.host = headers.get('host'); url.protocol = 'https:';
       env = {...env, PERF: {writeDataPoint(point) { ctx.waitUntil(env.PERF_SINK.fetch('https://perf.invalid', {method:'POST',body:JSON.stringify(point)})); }}};
+      if (url.pathname === '/api/project.update') env = {...env, GIT_BACKEND:'artifacts', ARTIFACTS_API_TOKEN:'synthetic-artifacts-token'};
       return worker.fetch(new Request(url, new Request(request, { headers })), env, ctx);
     }};
   `);
@@ -66,6 +67,7 @@ try {
     } },
     outboundService: async request => {
       if(new URL(request.url).hostname !== 'api.cloudflare.com') return new Response('Local acceptance denies network access', {status:503});
+      if (new URL(request.url).pathname.includes('/artifacts/')) return request.method === 'GET' ? new Response('',{status:404}) : Response.json({success:true,result:{}});
       const sql=await request.text(), version='11111111-1111-4111-8111-111111111111',previous='22222222-2222-4222-8222-222222222222',rid='33333333-3333-4333-8333-333333333333';
       const metric={n:120,p50:40,p95:180,p99:500,errors:1.2,total:15000}, label=sql.includes('substring(blob14,6) AS label')?'work.read':sql.includes('substring(blob14,5) AS label')?'work_read':sql.includes('blob14 AS label')?'pane.swap':'/:project/docket';
       const code=Object.keys(SQL_CATALOG)[0],source=JSON.stringify(SQL_CATALOG[code].sites[0]);
@@ -189,7 +191,7 @@ try {
   await db.prepare("INSERT INTO app_error_group (id,tenant_id,project_id,script_name,fingerprint,kind,title,last_message,count,first_seen,last_seen) VALUES (?,?,?,'sample-worker','synthetic-error','exception','Workbench request failed','Synthetic exception for design evidence',3,?,?)").bind('synthetic-error',tenant,sampleId,now,now).run();
   await db.prepare("INSERT INTO situation (id,tenant_id,identity_id,thread_id,title,question,report,created_at) VALUES (?,?,?,?,'Investigate the workbench','Why did the workbench request fail?','Synthetic report: inspect the recorded error group.',?)").bind('synthetic-situation',tenant,viewerId,assistantId,now).run();
   browser = await chromium.launch({headless: true});
-  const pages = {multiSidebar:'/sample/code?repo=api', multiCode:'/sample/code?repo=api', multiCommit:'/sample/code?repo=api&c='+'b'.repeat(40), multiFiles:'/sample/files?repo=web&f=app.ts', multiItem:'/sample/w/2', multiReviews:'/sample/reviews?repo=api', home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', person:'/people/dev%40example.test', agent:'/people/acme.build%40pimwell.test', connect:'/people?connect=1', invite:'/people?invite=1', appGroup:'/apps?g=synthetic-error', situations:'/situations', situation:'/situations?s=synthetic-situation', usagePerson:'/usage?days=30&who=dev%40example.test', mailSettings:'/mail?addresses=1', mailRecipients:'/mail/recipients', account:'https://pimwell.test/me', sessions:'https://pimwell.test/me/sessions', models:'https://pimwell.test/admin/models', orgs:'https://pimwell.test/admin/orgs', adminApps:'https://pimwell.test/admin/apps', newProject:'/projects/new', intent:'/do', chatDirectory:'/c', chatInbox:'/inbox', assistantNew:'/assistant', contactNew:'/knowledge/contacts?new=1', upload:'/knowledge/documents?upload=1', wikiNew:'/knowledge/wiki?new=1', skill:'/skills/start-here', skills:'/skills', tools:'/assistant/tools', archive:'/archive', organizations:'https://pimwell.test/', newWork:'/new?project=sample', search:'/search?q=workbench', performance:'/apps?project=sample&site=workbench.example.com&view=performance', performanceRoute:'/apps?project=sample&site=workbench.example.com&view=performance&selected=%2F%3Aproject%2Fdocket', performanceVerb:'/apps?project=sample&site=workbench.example.com&view=performance&kind=verbs', performanceTool:'/apps?project=sample&site=workbench.example.com&view=performance&kind=tools', performanceInteraction:'/apps?project=sample&site=workbench.example.com&view=performance&kind=interactions&selected=pane.swap', performanceSpinner:'/apps?project=sample&site=workbench.example.com&view=performance&kind=spinners&selected=pane.swap', performanceDeploy:'/apps?project=sample&site=workbench.example.com&view=performance&kind=deploys'};
+  const pages = {parts:'/parts',multiSidebar:'/sample/code?repo=api', multiCode:'/sample/code?repo=api', multiCommit:'/sample/code?repo=api&c='+'b'.repeat(40), multiFiles:'/sample/files?repo=web&f=app.ts', multiItem:'/sample/w/2', multiReviews:'/sample/reviews?repo=api', home:'/', overview:'/sample', workspace:'/knowledge', docket:'/sample/docket', item:'/sample/w/2', workGraph:'/sample/graph', frontier:'/sample/frontier', board:'/sample/board', status:'/sample/status', code:'/sample/code', commit:'/sample/code?c='+ 'b'.repeat(40), codeFiles:'/sample/files', codeFile:'/sample/files?f=app.ts', reviews:'/sample/reviews', review:'/sample/reviews/1', deploys:'/apps?project=sample#deploys', deploy:'/apps?project=sample&d=synthetic-deploy', wiki:'/knowledge/wiki', wikiPage:'/knowledge/wiki/welcome', research:'/knowledge/wiki?view=research', researchRecord:'/knowledge/wiki/findings?view=research', files:'/knowledge/documents', fileRecord:'/knowledge/documents?path=notes.txt', contacts:'/knowledge/contacts', contact:`/knowledge/contacts/${contact.entity.id}`, graph:`/knowledge/contacts/${contact.entity.id}?view=graph`, attention:'/attention', attentionItem:'/attention?done=1&work=sample%232', mail:'/mail', mailMessage:`/mail/${mailId}?project=sample`, chat:'/c/general', chatThread:`/c/general/t/${chatRoot.seq}`, assistant:`/assistant?t=${assistantId}`,  people:'/people', apps:'/apps', usage:'/usage', admin:'/admin/agents', person:'/people/dev%40example.test', agent:'/people/acme.build%40pimwell.test', connect:'/people?connect=1', invite:'/people?invite=1', appGroup:'/apps?g=synthetic-error', situations:'/situations', situation:'/situations?s=synthetic-situation', usagePerson:'/usage?days=30&who=dev%40example.test', mailSettings:'/mail?addresses=1', mailRecipients:'/mail/recipients', account:'https://pimwell.test/me', sessions:'https://pimwell.test/me/sessions', models:'https://pimwell.test/admin/models', orgs:'https://pimwell.test/admin/orgs', adminApps:'https://pimwell.test/admin/apps', newProject:'/projects/new', intent:'/do', chatDirectory:'/c', chatInbox:'/inbox', assistantNew:'/assistant', contactNew:'/knowledge/contacts?new=1', upload:'/knowledge/documents?upload=1', wikiNew:'/knowledge/wiki?new=1', skill:'/skills/start-here', skills:'/skills', tools:'/assistant/tools', archive:'/archive', organizations:'https://pimwell.test/', newWork:'/new?project=sample', search:'/search?q=workbench', performance:'/apps?project=sample&site=workbench.example.com&view=performance', performanceRoute:'/apps?project=sample&site=workbench.example.com&view=performance&selected=%2F%3Aproject%2Fdocket', performanceVerb:'/apps?project=sample&site=workbench.example.com&view=performance&kind=verbs', performanceTool:'/apps?project=sample&site=workbench.example.com&view=performance&kind=tools', performanceInteraction:'/apps?project=sample&site=workbench.example.com&view=performance&kind=interactions&selected=pane.swap', performanceSpinner:'/apps?project=sample&site=workbench.example.com&view=performance&kind=spinners&selected=pane.swap', performanceDeploy:'/apps?project=sample&site=workbench.example.com&view=performance&kind=deploys'};
   if(process.env.WORKBENCH_PAGES?.split(',').some(n=>n.startsWith('velocity'))){
     pages.velocity='/sample/velocity'; pages.velocityItem='/sample/velocity?work=sample%232';
     await db.prepare('UPDATE project SET velocity_since = ? WHERE id = ?').bind(now-7*86400000,sampleId).run();
@@ -248,6 +250,30 @@ try {
     let searchPosition;
     for (const [name, route] of Object.entries(pages).filter(([name]) => !process.env.WORKBENCH_PAGES || process.env.WORKBENCH_PAGES.split(',').includes(name))) {
       if (name === 'attention') await db.prepare('UPDATE attention SET done_at = NULL WHERE tenant_id = ?').bind(tenant).run();
+      if (name === 'parts') {
+        // Use a fresh synthetic workspace for each viewport.
+        const slug = `parts-${viewport.width}`;
+        await verb(member, 'project.create', {slug,kind:'tracker',display_name:'Growing workspace'});
+        await page.goto(base+'/'+slug);
+        await expect(page.getByRole('button',{name:'Add Code',exact:true})).toBeVisible();
+        await page.screenshot({path:path.join(artifacts,`parts-before-${viewport.width}.png`)});
+        await page.getByRole('button',{name:'Add Code',exact:true}).click();
+        await expect(page.getByRole('heading',{name:'Code setup'})).toBeVisible();
+        await expect(page.locator('#explorer').getByRole('link',{name:'Code',exact:true})).toHaveCount(1);
+        await expect(page.locator('#list')).toContainText(`git clone https://${host}/${slug}.git`);
+        await expect(page.locator('#list')).toContainText('Cannot remove: 1 repositories');
+        await page.screenshot({path:path.join(artifacts,`parts-after-${viewport.width}.png`)});
+        await page.getByRole('button',{name:'Add Wiki',exact:true}).click();
+        await expect(page.locator('#explorer').getByRole('link',{name:'Wiki',exact:true})).toHaveCount(1);
+        await page.getByRole('button',{name:'Remove Wiki',exact:true}).click();
+        await expect(page.getByRole('button',{name:'Add Wiki',exact:true})).toBeVisible();
+        await page.getByRole('button',{name:'Add Wiki',exact:true}).click();
+        await verb(member,'wiki.write',{project:slug,slug:'kept',title:'Kept page',body:'Retained content',note:'test',expected_revision:0});
+        await page.reload();
+        await expect(page.locator('#list')).toContainText('1 wiki revisions');
+        await expect(page.getByRole('button',{name:'Remove Wiki',exact:true})).toHaveCount(0);
+        continue;
+      }
       const response = await page.goto(route.startsWith('https:') ? route : base+route);
       expect(response.status(), name).toBe(200);
       await page.locator('main').waitFor();
@@ -608,8 +634,8 @@ try {
       }
       if (phase === 'after' && ['home','overview','workspace'].includes(name)) {
         await expect(page.locator('#list .card, #list .grid, #list .onramp')).toHaveCount(0);
-        await expect(page.locator('#list .wb-toolbar')).toHaveCount(1);
-        if (viewport.width === 1440) {
+        await expect(page.locator(`#list .wb-toolbar[aria-label="${name === 'home' ? 'Home actions' : 'Project actions'}"]`)).toHaveCount(1);
+        if (viewport.width === 1440 && name === 'home') {
           expect(await page.locator('#list').evaluate(el => el.scrollHeight <= el.clientHeight), name+' fits without scrolling').toBe(true);
         }
         await page.evaluate(() => { window.overviewList = document.getElementById('list'); });

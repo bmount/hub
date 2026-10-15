@@ -88,7 +88,7 @@ function partList(i: Record<string, unknown>, key: string): ProjectFeature[] {
 }
 
 // History and pending uploads count too: disabling a part must never hide retained content.
-const PART_CONTENT: Record<ProjectFeature, Array<[string, string]>> = {
+export const PART_CONTENT: Record<ProjectFeature, Array<[string, string]>> = {
   docket: [["work_item", "work items"]],
   repo: [["repository", "repositories"], ["git_repository", "repository mappings"]],
   wiki: [["wiki_revision", "wiki revisions"]],
