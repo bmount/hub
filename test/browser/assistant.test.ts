@@ -125,7 +125,7 @@ it("captures the signed-in landing page in both themes and widths", async () => 
         await page.keyboard.press('Enter');
         await browserExpect(page.getByLabel('Organization slug')).toBeHidden();
         await page.locator('h1').click();
-        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        expect(await page.evaluate(() => { const w = globalThis as any; return w.document.documentElement.scrollWidth <= w.innerWidth; })).toBe(true);
         if (process.env.LANDING_ARTIFACTS) await page.screenshot({ path: `${process.env.LANDING_ARTIFACTS}/${process.env.LANDING_PHASE || "after"}-${width}-${colorScheme}.png`, fullPage: true });
       }
     }
