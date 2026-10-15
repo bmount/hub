@@ -298,11 +298,22 @@ export class ArtifactsRest {
       exists = false;
     }
     const cache = await validationRepository(repo);
-    await this.deleteOwnedFork(namespace, cache, `${ownership} validation cache for ${repo}`, false, repo);
     const stored = await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:302:26:ArtifactsRest.deleteProject:34acd6fe*/ SELECT target FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
       .bind(this.account, namespace, repo, `${ownership} validation cache for ${repo}`).first<{ target: string }>();
+    if (stored && !isValidationCache(stored.target)) throw new HubError(409, "conflict", "validation repository mapping mismatch");
+    let unrelatedLegacy = false;
     if (stored && stored.target !== cache) {
-      if (!isValidationCache(stored.target)) throw new HubError(409, "conflict", "validation repository mapping mismatch");
+      // Name reuse alone is not authority: require durable proof of the old incarnation
+      // and verify that the still-readable legacy cache matches that exact proof.
+      const previous = await this.env.HUB_DB.prepare("SELECT description FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND target = ? AND source = ? AND description <> ? AND proof IN ('accepted', 'ready', 'deleting')")
+        .bind(this.account, namespace, cache, repo, `${ownership} validation cache for ${repo}`).first<{ description: string }>();
+      if (previous) {
+        try { unrelatedLegacy = (await this.info(namespace, cache)).description === previous.description; }
+        catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
+      }
+    }
+    if (!unrelatedLegacy) await this.deleteOwnedFork(namespace, cache, `${ownership} validation cache for ${repo}`, false, repo);
+    if (stored && stored.target !== cache) {
       await this.deleteOwnedFork(namespace, stored.target, `${ownership} validation cache for ${repo}`, true, repo);
     }
     if (exists) {

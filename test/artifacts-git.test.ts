@@ -768,6 +768,35 @@ describe("Artifacts push recovery boundaries", () => {
     expect(row!.shadow).not.toBe(legacy);
     expect(repos.get(row!.shadow)).toBe(`${newOwner} validation cache for site`);
     expect(repos.get(legacy)).toBe(`${oldOwner} validation cache for site`);
+    const oldProof = await env.HUB_DB.prepare("SELECT * FROM artifact_fork_ownership WHERE target = ?").bind(legacy).first();
+    const deleted: string[] = [];
+    const original = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (init?.method === "DELETE") deleted.push(decodeURIComponent(new URL(String(input)).pathname.split("/repos/")[1]!));
+      return original(input, init);
+    });
+    const fresh = () => new ArtifactsRest({ ...env, ARTIFACTS_ACCOUNT_ID: account, ARTIFACTS_API_TOKEN: apiToken });
+    for (const mutation of ["canonical", "cache", "mapping", "legacy", "source", "reserved", "missing"]) {
+      const before = await env.HUB_DB.prepare("SELECT * FROM artifact_fork_ownership WHERE target = ?").bind(legacy).first<Record<string, string | number>>();
+      if (mutation === "canonical") repos.set("site", "foreign");
+      if (mutation === "cache") repos.set(row!.shadow, "foreign");
+      if (mutation === "mapping") await env.HUB_DB.prepare("UPDATE artifact_fork_ownership SET target = 'site' WHERE target = ?").bind(row!.shadow).run();
+      if (mutation === "legacy") repos.set(legacy, "foreign");
+      if (mutation === "source") await env.HUB_DB.prepare("UPDATE artifact_fork_ownership SET source = 'other' WHERE target = ?").bind(legacy).run();
+      if (mutation === "reserved") await env.HUB_DB.prepare("UPDATE artifact_fork_ownership SET proof = 'reserved' WHERE target = ?").bind(legacy).run();
+      if (mutation === "missing") await env.HUB_DB.prepare("DELETE FROM artifact_fork_ownership WHERE target = ?").bind(legacy).run();
+      await expect(fresh().deleteProject("acme", "site", newOwner)).rejects.toThrow(/mismatch/);
+      expect(deleted).toEqual([]);
+      repos.set("site", newOwner);repos.set(row!.shadow, `${newOwner} validation cache for site`);repos.set(legacy, `${oldOwner} validation cache for site`);
+      if (mutation === "mapping") await env.HUB_DB.prepare("UPDATE artifact_fork_ownership SET target = ? WHERE target = 'site'").bind(row!.shadow).run();
+      await env.HUB_DB.prepare("DELETE FROM artifact_fork_ownership WHERE target = ?").bind(legacy).run();
+      await env.HUB_DB.prepare("INSERT INTO artifact_fork_ownership VALUES (?, ?, ?, ?, ?, ?, ?)").bind(before!.account, before!.namespace, before!.target, before!.source, before!.description, before!.proof, before!.created_at).run();
+    }
+    await fresh().deleteProject("acme", "site", newOwner);
+    expect(deleted).toEqual([row!.shadow, "site"]);
+    expect(repos.has("site")).toBe(false);
+    expect(repos.get(legacy)).toBe(`${oldOwner} validation cache for site`);
+    expect(await env.HUB_DB.prepare("SELECT * FROM artifact_fork_ownership WHERE target = ?").bind(legacy).first()).toEqual(oldProof);
   });
   it("keeps the cache bounded across 200 full pushes using server-filtered refs", async () => {
     const { grant: g } = await grant(), r2 = bucket();
