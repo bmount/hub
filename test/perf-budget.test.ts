@@ -529,8 +529,11 @@ describe("isolated synthetic journeys", () => {
         const request=(url:string)=>({url:()=>url,allHeaders:async()=>({origin:"https://pimwell.test",authorization:"Bearer fixture"})});
         await guard({request:()=>request("https://third-party.test/"),abort,continue:proceed});
         expect(abort).toHaveBeenCalledOnce();expect(proceed).not.toHaveBeenCalled();
-        await guard({request:()=>request("https://perf-synthetic.pimwell.test/mcp"),abort,continue:proceed});
-        expect(proceed).toHaveBeenCalledWith({headers:{origin:undefined,authorization:"Bearer fixture","x-pimwell-synthetic":expect.any(String)}});
+        const response={},remoteFetch=vi.fn(async()=>response),fulfill=vi.fn();
+        await guard({request:()=>request("https://perf-synthetic.pimwell.test/mcp"),abort,continue:proceed,fetch:remoteFetch,fulfill});
+        expect(remoteFetch).toHaveBeenCalledWith({headers:{authorization:"Bearer fixture","x-pimwell-synthetic":expect.any(String)},maxRedirects:0,timeout:10_000});
+        expect(fulfill).toHaveBeenCalledWith({response});
+        expect(proceed).not.toHaveBeenCalled();
       },newPage:async()=>page,
       addCookies:async([p]:{value:string}[])=>{cookies="pmw_session="+p!.value;}
     }),close} as never);

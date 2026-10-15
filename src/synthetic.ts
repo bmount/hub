@@ -113,11 +113,16 @@ export async function runSynthetic(env: Env, ctx: ExecutionContext): Promise<voi
       const request = route.request();
       const url = new URL(request.url());
       if (!([env.HUB_DOMAIN, `perf-synthetic.${env.HUB_DOMAIN}`].includes(url.hostname)) || url.protocol !== "https:") { await route.abort(); return; }
-      const headers: Record<string,string | undefined> = { ...await request.allHeaders(), "x-pimwell-synthetic": web!.token };
-      // Headless MCP clients have no Origin. Keep the server browser-origin policy unchanged.
-      if (url.pathname === "/mcp") headers.origin = undefined;
-      // Playwright removes headers with undefined values; the SDK's types omit that case.
-      await route.continue({ headers: headers as Record<string, string> });
+      const headers: Record<string,string> = { ...await request.allHeaders(), "x-pimwell-synthetic": web!.token };
+      // Chromium re-adds Origin on continued POSTs. Use the SDK's remote HTTP transport
+      // for headless MCP, without changing the server's browser-origin policy.
+      if (url.pathname === "/mcp") {
+        delete headers.origin;
+        const response = await route.fetch({ headers, maxRedirects: 0, timeout: 10_000 });
+        await route.fulfill({ response });
+        return;
+      }
+      await route.continue({ headers });
     });
     // Chromium reaches the public route. Same-Worker fetch() can bypass a zone route to its origin.
     const journeyFetch = async (url: string, init: RequestInit = {}): Promise<Response> => {
