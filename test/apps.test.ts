@@ -150,19 +150,19 @@ describe("sites", () => {
       init!.signal!.addEventListener("abort",()=>{aborted++;reject(new Error("aborted"));});
     })).mockResolvedValueOnce(Response.json({data:[{n:7}]}));
     try {
-      expect(await analyticsQuery(ctx,"hedge",true)).toEqual([{n:7}]);
+      expect(await analyticsQuery(ctx,"hedge",100)).toEqual([{n:7}]);
       expect(mock).toHaveBeenCalledTimes(2);expect(aborted).toBe(1);
-      expect(await analyticsQuery(ctx,"hedge",true)).toEqual([{n:7}]);expect(mock).toHaveBeenCalledTimes(2);
+      expect(await analyticsQuery(ctx,"hedge",100)).toEqual([{n:7}]);expect(mock).toHaveBeenCalledTimes(2);
       mock.mockResolvedValueOnce(Response.json({data:[{bad:null}]})).mockResolvedValueOnce(Response.json({data:[{n:9}]}));
-      expect(await analyticsQuery(ctx,"invalid-primary",true)).toEqual([{n:9}]);expect(mock).toHaveBeenCalledTimes(4);
+      expect(await analyticsQuery(ctx,"invalid-primary",100)).toEqual([{n:9}]);expect(mock).toHaveBeenCalledTimes(4);
       mock.mockResolvedValue(Response.json({data:[{n:11}]}));
-      expect(await analyticsQuery(ctx,"fast",true)).toEqual([{n:11}]);
+      expect(await analyticsQuery(ctx,"fast",100)).toEqual([{n:11}]);
       await new Promise(resolve=>setTimeout(resolve,175));expect(mock).toHaveBeenCalledTimes(5);
       mock.mockResolvedValue(new Response("upstream secret",{status:503}));
-      await expect(analyticsQuery(ctx,"both-fail",true)).rejects.toThrow("temporarily unavailable");
+      await expect(analyticsQuery(ctx,"both-fail",100)).rejects.toThrow("temporarily unavailable");
       expect(mock).toHaveBeenCalledTimes(7);
       mock.mockResolvedValueOnce(Response.json({data:[{n:13}]}));
-      expect(await analyticsQuery(ctx,"both-fail",true)).toEqual([{n:13}]);expect(mock).toHaveBeenCalledTimes(8);
+      expect(await analyticsQuery(ctx,"both-fail",100)).toEqual([{n:13}]);expect(mock).toHaveBeenCalledTimes(8);
     } finally {mock.mockRestore();clearPerformanceCache();}
   });
   it("retains low-volume route bars while another route is inspected", async () => {

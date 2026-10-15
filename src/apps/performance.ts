@@ -28,7 +28,7 @@ const cache=new Map<string,{until:number;rows:PerfRow[];bytes:number}>();
 let cacheBytes=0;
 export function clearPerformanceCache():void {cache.clear();cacheBytes=0;}
 export class PerformanceUnavailable extends Error {}
-export async function analyticsQuery(ctx:Pick<Ctx,"env">, sql:string, critical=false):Promise<PerfRow[]> {
+export async function analyticsQuery(ctx:Pick<Ctx,"env">, sql:string, hedgeAfterMs=0):Promise<PerfRow[]> {
   const account=ctx.env.ARTIFACTS_ACCOUNT_ID, token=ctx.env.PERF_ANALYTICS_TOKEN;
   if(!account || !/^[0-9a-f]{32}$/.test(account) || !token) throw new PerformanceUnavailable("Performance reporting is not connected.");
   for(const [key,value] of cache) if(value.until<=Date.now()) {cache.delete(key);cacheBytes-=value.bytes;}
@@ -46,13 +46,13 @@ export async function analyticsQuery(ctx:Pick<Ctx,"env">, sql:string, critical=f
     return payload.data as PerfRow[];
   };
   let rows:PerfRow[];
-  if(!critical) rows=await read(AbortSignal.timeout(10_000));
+  if(!hedgeAfterMs) rows=await read(AbortSignal.timeout(10_000));
   else {
-    // Only the two serialized inspector reads may hedge; at most nine cold requests
-    // on the complete-population path, versus twelve before batching.
+    // One delayed backup bounds remote tails without caching failures or changing SQL.
+    // Serialized inspector reads use an earlier hedge than independent work.
     const primary=new AbortController(),backup=new AbortController();
     let timer:ReturnType<typeof setTimeout>;
-    const second=new Promise<PerfRow[]>((resolve,reject)=>{timer=setTimeout(()=>{void read(AbortSignal.any([backup.signal,AbortSignal.timeout(10_000)])).then(resolve,reject);},100);});
+    const second=new Promise<PerfRow[]>((resolve,reject)=>{timer=setTimeout(()=>{void read(AbortSignal.any([backup.signal,AbortSignal.timeout(10_000)])).then(resolve,reject);},hedgeAfterMs);});
     try {rows=await Promise.any([read(AbortSignal.any([primary.signal,AbortSignal.timeout(10_000)])),second]);}
     catch(e) {throw e instanceof AggregateError?e.errors[0]:e;}
     finally {clearTimeout(timer!);primary.abort();backup.abort();}
@@ -213,7 +213,7 @@ export async function readPerformance(ctx:Ctx,site:SiteRow,s:PerfSelection, deta
   const versionFilter=s.kind==="deploys"&&s.version&&s.previous?` AND blob3 IN (${quote(s.version)},${quote(s.previous)})`:s.version?` AND blob3 = ${quote(s.version)}`:"";
   const filter=`${scope.where} AND ${population(s)}${versionFilter}`;
   const overviewFilter=`${filter}${detailOnly&&s.selected?` AND ${dim} = ${quote(s.selected)}`:""}`;
-  const query=(sql:string,critical=false)=>analyticsQuery(ctx,sql,critical);
+  const query=(sql:string,critical=false)=>analyticsQuery(ctx,sql,s.selected?(critical?100:200):0);
   const bucket=s.hours===1?300:s.hours===24?7200:50400;
   const bounds=[10,25,50,100,250,500,1000,2500,5000];
   const histogramMetrics=bounds.concat(Infinity).map((bound,index)=>`SUM(IF(${index?`double1 >= ${bounds[index-1]} AND `:""}${Number.isFinite(bound)?`double1 < ${bound}`:"1 = 1"}, _sample_interval, 0)) AS hist${index}`).join(", ");
