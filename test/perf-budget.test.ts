@@ -1,5 +1,6 @@
 // Performance budget (overnight plan 2, N4): every signed-in page stays within a fixed number of D1 round trips.
 // A batch is one round trip. If a page needs more, read in one batch, or record a ruling and raise its budget here.
+import { validClientPoint, timingPath } from "../src/clientTiming";
 import { situationReport } from "../src/http/situationPage";
 import { checkPerformance, runPerformanceChecks, type CheckTarget } from "../src/perf/checks";
 import { BUDGETS } from "../src/perf/budgets";
@@ -173,6 +174,16 @@ function collector() {
   return { points, measured, ctx, flush };
 }
 describe("request tracing guardrails", () => {
+  it('accepts only content-free attribution labels and rejects resource URLs and metadata', () => {
+    const base = {path:'/people',previous:'/other',request:crypto.randomUUID(),duration:1};
+    for (const [name,phase] of [['resource','resource'],['resource.dns','resource'],['resource.cache-hit','cache'],['pane.retained','cache'],['pane.replaced','cache'],['hover.eligible','hover']]) {
+      const point = {...base,name,phase};
+      expect(validClientPoint(point)).toBe(true);
+      expect(validClientPoint({...point,url:'https://example.test/private'})).toBe(false);
+      expect(validClientPoint({...point,name:'https://example.test/private'})).toBe(false);
+    }
+    expect(timingPath('https://acme.test/secret/wiki/private?q=content')).toBe('/:project/wiki/:slug');
+  });
   it('emits socket command request roots rather than internal RPC roots', async () => {
     const c = collector();
     class SocketProbe {
@@ -185,12 +196,17 @@ describe("request tracing guardrails", () => {
     const probe = new SocketProbe();
     const command = await probe.webSocketMessage();
     const rpc = await probe.ordinaryRpc();
+    const second = await new SocketProbe().ordinaryRpc();
     await c.flush();
     const root = c.points.find(p => p.blobs?.[5] === command && p.blobs?.[6] === 'request');
     expect(root?.blobs?.[7]).toBe('do.handler.SocketProbe.webSocketMessage');
     expect(root?.blobs?.[8]).toBe('websocket');
     expect(root?.doubles?.[17]).toBe(0);
     expect(c.points.some(p => p.blobs?.[5] === rpc && p.blobs?.[6] === 'rpc')).toBe(true);
+    for (const id of [command,second]) expect(c.points.some(p=>p.blobs?.[5]===id && p.blobs?.[13]==='do.receiver.first-entry')).toBe(true);
+    expect(c.points.some(p=>p.blobs?.[5]===rpc && p.blobs?.[13]==='do.receiver.reused')).toBe(true);
+    // Module cold can already be false when another receiver first becomes active.
+    expect(c.points.find(p=>p.blobs?.[5]===second && p.blobs?.[13]==='do.receiver.first-entry')?.doubles?.[1]).toBe(0);
   });
   it("skips perf instrumentation when resolving the first application frame", async () => {
     const stack='Error\n    at meteredD1 (src/perf.ts:210:5)\n    at get (src/perf.ts:203:5)\n    at buildContext (index.js:800:9)\n    at appsPage (index.js:900:9)';

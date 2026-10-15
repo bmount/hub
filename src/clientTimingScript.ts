@@ -44,12 +44,27 @@ export const CLIENT_TIMING_JS = `var timingPath = ${timingPath.toString()};\nvar
   }
   mark(document);
   new MutationObserver(function (records) { records.forEach(function (r) { r.addedNodes.forEach(function (node) { if (node.nodeType === 1) mark(node); }); }); }).observe(document.body, {childList:true,subtree:true});
-  var latest = null;
+  var latest = null, hovered = new WeakMap();
+  function eligibleHover(el) {
+    if (!el || el.target || el.hasAttribute('download') || el.hasAttribute('data-reload')) return false;
+    try { var u = new URL(el.href); return u.origin === location.origin && !u.hash && /^https?:$/.test(u.protocol); } catch (_) { return false; }
+  }
+  document.addEventListener('pointerover', function (e) {
+    var a = e.target.closest('a[href]');
+    if (e.pointerType !== 'touch' && eligibleHover(a) && !a.contains(e.relatedTarget)) hovered.set(a, performance.now());
+  }, true);
+  document.addEventListener('pointerout', function (e) {
+    var a = e.target.closest('a[href]'); if (a && !a.contains(e.relatedTarget)) hovered.delete(a);
+  }, true);
   function input(event) {
     var el = event.target.closest('[data-perf]');
     if (!el || (event.type === 'input' && el.getAttribute('data-perf') !== 'search')) return;
     var name = el.getAttribute('data-perf'); if (timingNames.indexOf(name) < 0) return;
     var action = {name:name, started:performance.now(), stamp:event.timeStamp, id:currentId, path:current, previous:previous, paint:null};
+    var hoveredLink = event.type === 'click' && event.target.closest('a[href]');
+    if (eligibleHover(hoveredLink)) { action.hoverEligible = true;
+      if (hovered.has(hoveredLink)) { action.hover = performance.now() - hovered.get(hoveredLink); hovered.delete(hoveredLink); }
+    }
     latest = action; interactions.push(action); if (interactions.length > 40) interactions.shift();
     // Ordinary same-origin links/uploads still navigate without enhancement.
     // Carry only the allowlisted action and a clock, never its destination/data.
@@ -77,7 +92,9 @@ export const CLIENT_TIMING_JS = `var timingPath = ${timingPath.toString()};\nvar
   function response(op, res) {
     var id = res.headers.get('x-request-id'); if (!validId(id)) return;
     op.id = id;
-    if (op.action) { op.action.id = id; if (op.action.paint) op.action.paint.request = id; }
+    if (op.action) { op.action.id = id; if (op.action.paint) op.action.paint.request = id;
+      if (op.action.hoverEligible) { point(op.action.hover === undefined ? 'hover.none' : 'hover.eligible', 'hover', op.action.hover || 0, id, op.path, op.previous); delete op.action.hover; delete op.action.hoverEligible; }
+    }
   }
   function end(op, spinner) {
     op.fetched = op.fetched || performance.now();
@@ -105,6 +122,16 @@ export const CLIENT_TIMING_JS = `var timingPath = ${timingPath.toString()};\nvar
   function observe(type, cb, extra) {
     try { var observer = new PerformanceObserver(function (list) { cb(list.getEntries()); }); observer.observe(Object.assign({type:type,buffered:true},extra || {})); } catch (_) {}
   }
+  var resources = 0;
+  observe('resource', function (entries) { entries.forEach(function (e) {
+    // Only same-origin static subresources. Never export names/URLs or pretend
+    // redacted cross-origin timing/zero-byte bodies are cache hits.
+    if (resources >= 40 || !['script','link','img','css','font'].includes(e.initiatorType)) return;
+    try { if (new URL(e.name).origin !== location.origin) return; } catch (_) { return; }
+    resources++;
+    [['resource',e.duration,e.startTime],['resource.dns',e.domainLookupEnd-e.domainLookupStart,e.domainLookupStart],['resource.connect',e.connectEnd-e.connectStart,e.connectStart],['resource.ttfb',Math.max(0,e.responseStart-e.requestStart),e.requestStart],['resource.response',e.responseEnd-e.responseStart,e.responseStart]].forEach(function (p) { point(p[0],'resource',p[1],pageId,pagePath,pagePrevious,performance.timeOrigin+p[2]); });
+    if (e.decodedBodySize > 0) point(e.transferSize === 0 ? 'resource.cache-hit' : 'resource.network','cache',e.duration,pageId,pagePath,pagePrevious,performance.timeOrigin+e.startTime);
+  }); });
   observe('largest-contentful-paint', function (entries) { lcp = entries[entries.length-1].startTime; });
   observe('layout-shift', function (entries) { entries.forEach(function (e) {
     if (e.hadRecentInput) return;

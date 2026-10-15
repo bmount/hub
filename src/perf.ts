@@ -429,6 +429,8 @@ export function instrumentMethods(klass: { prototype: object }, prefix: string):
   }
 }
 export function instrumentDurableObject(klass: { prototype: object }, name: string): void {
+  // Per-instance first entry, not module/isolate cold and not constructor duration.
+  const entered = new WeakSet<object>();
   for (const method of Object.getOwnPropertyNames(klass.prototype)) {
     if (method === "constructor") continue;
     const descriptor = Object.getOwnPropertyDescriptor(klass.prototype, method)!;
@@ -448,7 +450,9 @@ export function instrumentDurableObject(klass: { prototype: object }, name: stri
         if (method === "webSocketMessage") trace.method = "websocket";
         trace.route = `do.handler.${name}.${method}`;
       }
+      const firstEntry = !entered.has(this); entered.add(this);
       return withTrace(trace, async () => {
+        span(firstEntry ? "do.receiver.first-entry" : "do.receiver.reused", () => {});
         try { return await span(`do.handler.${name}.${method}`, () => {
         const request = args[0] instanceof Request ? args[0] : null;
         const socket = args[0] instanceof WebSocket ? args[0].deserializeAttachment() as { tenant?: string; perfColo?: string } | null : null;

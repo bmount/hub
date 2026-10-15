@@ -127,7 +127,7 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
     try { var state = JSON.parse(sessionStorage.getItem(listStateKey(el)) || "null"); if (state) { el.scrollTop = state.top; $$("input[form=bulk]", el).forEach(function (i) { i.checked = state.checked.indexOf(i.value) >= 0; }); } } catch (e) {}
   }
   addEventListener("pagehide", saveList);
-  function swap(doc, url, push, refreshList) {
+  function swap(doc, url, push, refreshList, perfOp) {
     var cur = $("main.panes"), next = doc.querySelector("main.panes");
     if (!cur || !next) { location.href = url; return; }
     var me = $(".bar .me"), nme = doc.querySelector(".bar .me");
@@ -142,7 +142,9 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
       var key = b && b.getAttribute("data-key") || "";
       // Switching the Assistant phone pane is presentation only: keep its unsent draft and transcript.
       var assistantFocusOnly = id === "inspector" && key.indexOf("assistant:") === 0 && a && a.getAttribute("data-key") === key && !refreshList && doc.body.getAttribute("data-focus") !== document.body.getAttribute("data-focus");
-      if (a && b && !assistantFocusOnly && (key.indexOf("page:") === 0 || a.getAttribute("data-key") !== key || id === "inspector" || refreshList)) {
+      var replaced = a && b && !assistantFocusOnly && (key.indexOf("page:") === 0 || a.getAttribute("data-key") !== key || id === "inspector" || refreshList);
+      if (perfOp && a && b) window.pimwellTiming.point(replaced ? 'pane.replaced' : 'pane.retained', 'cache', performance.now() - perfOp.started, perfOp.id);
+      if (replaced) {
         // Enhanced pane clients must stop timers/listeners before their DOM is detached.
         document.dispatchEvent(new CustomEvent("wb:before-replace", { detail: a }));
         a.replaceWith(b); revive(b); voiceUp(b); localTimes(b);
@@ -272,7 +274,7 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
           ins.innerHTML = main ? main.innerHTML : html; document.body.setAttribute("data-focus", "inspector"); return;
         }
         var destination = new URL(res.url || url, location.href); destination.hash = new URL(url, location.href).hash;
-        swap(doc, destination.href, opts.push !== false, init.method !== "GET");
+        swap(doc, destination.href, opts.push !== false, init.method !== "GET", perfOp);
         window.pimwellTiming.navigate(destination.href, perfOp);
       });
     }).then(function () { if (mine === busy) { var note = $("#wb-navigation"); if (note) note.remove(); } })

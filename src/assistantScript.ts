@@ -64,11 +64,12 @@ export const ASSISTANT_JS = String.raw`
     var stopped = new Promise(function (_, reject) { controller.signal.addEventListener("abort", function () { reject(new Error("Assistant request stopped")); }, { once: true }); });
     Promise.race([stopped, fetch("/assistant/chat", { method: "POST", credentials: "same-origin", signal: controller.signal, headers: { "content-type": "application/json", "x-pimwell-playground": "1" },
       body: JSON.stringify({ thread: f.thread.value || null, text: t, scopes: f.scopes.value }) })
-      .then(function (r) { if (perfOp) window.pimwellTiming.response(perfOp, r); return r.json().then(function (j) { if (perfOp && r.ok) window.pimwellTiming.point("assistant.first-token", "first-token", performance.now() - started, perfOp.id); return { ok: r.ok, j: j }; }); })])
+      .then(function (r) { if (perfOp) window.pimwellTiming.response(perfOp, r); return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })])
       .then(function (x) {
         if (controller.signal.aborted || performance.now() - started >= 60000) { controller.abort(); throw new Error("Assistant response overdue"); }
         bindThread(x.j.thread, t);
         if (!x.ok) { fail(x.j.reason || x.j.error || "something went wrong"); return; }
+        if (perfOp && typeof x.j.reply === 'string' && x.j.reply.length) window.pimwellTiming.point("assistant.first-token", "first-token", performance.now() - started, perfOp.id);
         w.innerHTML = fmt(x.j.reply) + steps(x.j.steps); w.scrollIntoView({ block: "end", behavior: "smooth" });
       })
       .catch(function () { fail("the response did not arrive. Actions may have completed; check before trying again"); })
