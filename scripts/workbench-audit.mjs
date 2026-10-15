@@ -1,6 +1,24 @@
 // Rendered contrast and keyboard focus audit, reused by the screenshot harness.
 import { expect } from '@playwright/test';
 export async function auditControls(page, name) {
+  await page.evaluate(() => {
+    const probe=document.createElement('div');probe.id='design-control-audit';
+    probe.style.cssText='position:fixed;top:100px;left:8px;z-index:9999;background:var(--panel);padding:8px';
+    probe.innerHTML='<button>Primary</button> <button class="quiet">Secondary</button> <button class="link">Tertiary</button>';
+    document.body.append(probe);
+  });
+  try {
+    for (const control of await page.locator('#design-control-audit button').all()) {
+      await control.hover();
+      await page.mouse.down();
+      expect(await control.evaluate(el=>getComputedStyle(el).boxShadow),name+' pressed control').toContain('inset');
+      await page.mouse.up();
+      await control.evaluate(el=>{el.disabled=true;});
+      expect(await control.evaluate(el=>getComputedStyle(el).boxShadow),name+' disabled control while hovered').toBe('none');
+    }
+  } finally {
+    await page.evaluate(()=>document.getElementById('design-control-audit').remove());
+  }
   await page.keyboard.press('Tab'); // establish keyboard focus modality
   const failures = await page.evaluate(() => {
     const failures = [];

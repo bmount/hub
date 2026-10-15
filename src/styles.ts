@@ -240,8 +240,8 @@ button.quiet,.button.quiet,.wb-toolbar a:not(.wb-tabs a):not(.primary),.wb-toolb
 button.quiet:hover,.button.quiet:hover,.wb-toolbar a:not(.wb-tabs a):not(.primary):hover,.wb-toolbar button:hover,.wb-close:hover{background:var(--hover);border-color:var(--accent)}
 button.link{color:var(--accent);text-decoration:underline;background:none;box-shadow:none}
 button.link:hover{background:var(--hover);color:var(--accent)}
-button:active,.button:active,.wb-toolbar button:active,.wb-toolbar a:active{background:var(--selected);color:var(--ink);box-shadow:var(--inset)}
-button:disabled,.button[aria-disabled=true]{opacity:1;background:var(--group);color:var(--muted);border-color:var(--line);box-shadow:none;cursor:not-allowed}
+button:active,.button:active,button.quiet:active,.button.quiet:active,button.link:active,.wb-toolbar button:active,.wb-toolbar a:active,.wb-toolbar .wb-actions a.primary:active{background:var(--selected);color:var(--ink);box-shadow:var(--inset)}
+button:disabled,button:disabled:hover,button:disabled:active,.wb-toolbar button:disabled,.button[aria-disabled=true],.button[aria-disabled=true]:hover,.button[aria-disabled=true]:active{opacity:1;background:var(--group);color:var(--muted);border-color:var(--line);box-shadow:none;cursor:not-allowed}
 button.destructive,.button.destructive{color:var(--error)}
 input,select,textarea,.jump input{background:var(--field);border-color:var(--line-strong);box-shadow:var(--inset)}
 input:focus,select:focus,textarea:focus{border-color:var(--focus)}
