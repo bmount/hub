@@ -221,6 +221,25 @@ describe("atomic review request", () => {
     for (const table of ["review", "review_reviewer", "attention", "event"] as const) expect(await w.count(table), table).toBe(0);
   });
 
+  it("validates ten reviewers together and rejects inactive identities and memberships atomically", async () => {
+    const w = await world();
+    const reviewers = ["pat@example.com"];
+    for (let i = 0; i < 9; i++) {
+      const email = `reviewer${i}@example.com`;
+      await seedHuman(email, { memberships: [{ tenant_id: w.t.id, role: "reader" }] });
+      reviewers.push(email);
+    }
+    expect((await w.request({ reviewers })).status).toBe(200);
+    expect(await w.count("review_reviewer")).toBe(10);
+    await env.HUB_DB.prepare("UPDATE identity SET state = 'disabled' WHERE email = ?").bind(reviewers[9]).run();
+    expect((await w.request({ reviewers })).status).toBe(400);
+    await env.HUB_DB.prepare("UPDATE identity SET state = 'active' WHERE email = ?").bind(reviewers[9]).run();
+    await env.HUB_DB.prepare("UPDATE membership SET state = 'revoked' WHERE tenant_id = ? AND identity_id = ?").bind(w.t.id, w.pat.identity.id).run();
+    expect((await w.request({ reviewers })).status).toBe(400);
+    expect(await w.count("review")).toBe(1);
+    expect(await w.count("review_reviewer")).toBe(10);
+  });
+
   it("rejects a different-tenant reviewer before creating any effects", async () => {
     const w = await world();
     const other = await seedTenant("other");

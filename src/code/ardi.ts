@@ -74,7 +74,7 @@ export async function codeAuth(ctx: Ctx): Promise<string> {
 /** Read code as this caller: the repository is the project's slug. */
 export async function codeRead<T>(ctx: Ctx, verb: string, body: Record<string, unknown>): Promise<ArdiPage<T>> {
   const repo = String(body.repo ?? "");
-  if (verb === "snapshot" && !repo.startsWith("agent-src/") && await usesArtifacts(ctx.env, ctx.tenant!.slug, repo)) {
+  if ((verb === "snapshot" || verb === "log") && !repo.startsWith("agent-src/") && await usesArtifacts(ctx.env, ctx.tenant!.slug, repo)) {
     const grant = await contextGitGrant(ctx, repo);
     return artifactReadAuthorized<T>(ctx.env, ctx.tenant!.slug, grant, verb, body);
   }

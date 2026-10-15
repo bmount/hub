@@ -55,7 +55,8 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
     const hit = await caches.default.match(cacheKey("snapshot", revision));
     if (hit) return { result: { oid: revision, files: await hit.json() } as T, next: null };
   }
-  const snapshotRefs = verb === "snapshot" && !/^[0-9a-f]{40}$/.test(revision) ? await refs(api, namespace, repo) : null;
+  const liveRefs = (verb === "snapshot" || verb === "log") && !/^[0-9a-f]{40}$/.test(revision) ? refs(api, namespace, repo) : null;
+  const snapshotRefs = verb === "snapshot" ? await liveRefs : null;
   const findRef = (all: ArdiRef[], name: string) => {
     const found = all.find(ref => ref.name === name) ?? (!name.startsWith("refs/") ? all.find(ref => ref.name === `refs/heads/${name}`) ?? all.find(ref => ref.name === `refs/tags/${name}`) : undefined);
     return found ? all.find(ref => ref.name === `${found.name}^{}`)?.target ?? found.target : null;
@@ -73,7 +74,7 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
       ? env.HUB_DB.prepare("SELECT tree_hash FROM repository_commit WHERE tenant_id = ? AND project_id = ? AND repo = ? AND oid = ?")
         .bind(grant.tenant.id, grant.project.id, repoName, revision).first<{ tree_hash: string }>()
       : null,
-    snapshotRefs,
+    liveRefs,
   ]);
   if (info.description !== repoOwnership(grant.tenant.id, grant.project.id)) throw new HubError(503, "unavailable", "repository migration is not ready");
   const page = (result: unknown, next: string | null = null) => ({ result: result as T, next });
@@ -90,7 +91,7 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
   const resolve = async (revision: string): Promise<string> => {
     let target = revision;
     if (!/^[0-9a-f]{40}$/.test(revision)) {
-      refList ??= snapshotRefs ? Promise.resolve(snapshotRefs) : refs(api, namespace, repo);
+      refList ??= liveRefs ?? refs(api, namespace, repo);
       const all = await refList;
       const name = revision === "HEAD" ? `refs/heads/${info.default_branch}` : revision;
       const found = findRef(all, name);
@@ -192,12 +193,15 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
   }
   if (verb === "log") {
     const limit = Math.max(1, Math.min(Number(body.limit) || 20, 100)), path = typeof body.path === "string" ? body.path : null;
-    const head = (await api.log(namespace, repo, await resolve(at), 1))[0];
+    const oid = await resolve(at);
+    const head = await immutable("commit", oid, async () => (await api.log(namespace, repo, oid, 1))[0]);
     if (!head) throw new HubError(404, "not_found", "revision not found");
     const cursor = body.since ? String(body.since) : null;
     if (cursor && !/^[0-9a-f]{40}$/.test(cursor)) throw new HubError(400, "bad_request", "invalid history cursor");
     const indexed = await env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactRead.ts:130:27:artifactRead:9d06043d*/ SELECT 1 FROM repository_commit WHERE tenant_id = ? AND project_id = ? AND repo = ? AND oid = ?").bind(grant.tenant.id, grant.project.id, repoName, head.hash).first();
     if (!indexed) throw new HubError(503, "unavailable", "repository history metadata is not ready");
+    // Opening a review needs only the live branch tip, not its entire ancestry.
+    if (limit === 1 && !path && !cursor) return page({ commits: [await metadata(head)] });
     const nodes = (await env.HUB_DB.prepare(`/*perf-site:src%2Fcode%2FartifactRead.ts:132:26:artifactRead:a9639cf3*/ WITH RECURSIVE reachable(oid) AS (
       SELECT ? UNION SELECT parent.value FROM reachable r JOIN repository_commit c ON c.oid = r.oid AND c.project_id = ? AND c.repo = ? JOIN json_each(c.parents_json) parent
     ) SELECT c.oid, c.tree_hash, c.parents_json FROM reachable r JOIN repository_commit c ON c.oid = r.oid AND c.project_id = ? AND c.tenant_id = ? AND c.repo = ? ORDER BY c.generation DESC, c.commit_time DESC, c.oid DESC`)
@@ -215,7 +219,7 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
       selected.push(node.oid);if (selected.length > limit) break;
     }
     const shown = selected.slice(0, limit);
-    return page({ commits: await Promise.all(shown.map(async hash => metadata(await api.readCommit<ArtifactCommit>(namespace, repo, hash)))) }, selected.length > limit ? shown.at(-1)! : null);
+    return page({ commits: await Promise.all(shown.map(async hash => metadata(await immutable("commit", hash, () => api.readCommit<ArtifactCommit>(namespace, repo, hash))))) }, selected.length > limit ? shown.at(-1)! : null);
   }
   if (verb === "timeline") {
     const since = body.since ? Number(body.since) : null, limit = Math.max(1, Math.min(Number(body.limit) || 100, 1000));

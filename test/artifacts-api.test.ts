@@ -85,6 +85,22 @@ async function setup(role: "member" | "reader" = "member") {
 }
 
 describe("Artifacts compatibility adapter", () => {
+  it("reads a live review tip without repeated immutable fetches or ancestry traversal", async () => {
+    const s = await setup();
+    const first = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "main", limit: 1 });
+    expect(first.result.commits.map(c => c.oid)).toEqual([hash(4)]);
+    expect(s.requests.filter(p => p.endsWith("/log"))).toHaveLength(1);
+    expect(s.requests.filter(p => p.includes("/commit/"))).toHaveLength(0);
+    s.requests.length = 0;
+    await s.read("log", { ref: "main", limit: 1 });
+    expect(s.requests.filter(p => p.endsWith("/log") || p.includes("/commit/"))).toHaveLength(0);
+    expect(s.requests.filter(p => p.endsWith("/info/refs"))).toHaveLength(1);
+    s.setHead(hash(2));
+    const moved = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "main", limit: 1 });
+    expect(moved.result.commits.map(c => c.oid)).toEqual([hash(2)]);
+    s.setDescription("foreign ownership");
+    await expect(s.read("log", { ref: "main", limit: 1 })).rejects.toMatchObject({ status: 503 });
+  });
   it("starts live authorization beside routing and consumes it only once", async () => {
     const s = await setup(), grant = await authorizeGit(s.configured, s.auth, "acme", "site");
     await env.HUB_DB.prepare("INSERT OR IGNORE INTO git_repository (tenant_id,project_id,imported_at) VALUES (?,?,0)").bind(s.tenant.id, s.project.id).run();

@@ -7,8 +7,6 @@ import { badRequest, conflict, forbidden, notFound } from "../errors";
 import type { Ctx } from "../auth/context";
 import { sha256Hex, ulid } from "../ids";
 import { recordEvent } from "../db/events";
-import { getIdentityByEmail } from "../db/identities";
-import { getMembership } from "../db/memberships";
 import { DATA_NOTE, cleanText } from "../mcp/render";
 import { repoProject } from "./code";
 import { codeRead, type ArdiCommit } from "../code/ardi";
@@ -78,15 +76,23 @@ export const reviewRequest = defineVerb({
       const prior = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Freview.ts:78:27:reviewRequest.run:8bdf4327*/ SELECT value FROM meta WHERE key = ?").bind(key).first<string>("value");
       if (prior !== null) return requestReplay(ctx, prior, fingerprint!, pr.id);
     }
-    const head = (await codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: `refs/heads/${p.branch}`, limit: 1 })).result.commits[0];
+    const emails = [...new Set(p.reviewers.map(e => e.trim().toLowerCase()))];
+    const [page, reviewers] = await Promise.all([
+      codeRead<{ commits: ArdiCommit[] }>(ctx, "log", { repo: pr.slug, ref: `refs/heads/${p.branch}`, limit: 1 }),
+      emails.length ? ctx.db.prepare(`SELECT i.id, i.email FROM identity i
+        LEFT JOIN membership m ON m.identity_id = i.id AND m.tenant_id = ?
+        WHERE i.email IN (${emails.map(() => "?").join(",")}) AND i.state = 'active'
+          AND (i.is_root = 1 OR m.state = 'active')`)
+        .bind(ctx.tenant!.id, ...emails).all<{ id: string; email: string }>() : Promise.resolve({ results: [] }),
+    ]);
+    const head = page.result.commits[0];
     if (!head) throw notFound("no such branch");
-    const ids: string[] = [];
-    for (const e of p.reviewers) {
-      const who = await getIdentityByEmail(ctx.db, e.trim().toLowerCase());
-      const m = who ? await getMembership(ctx.db, who.id, ctx.tenant!.id) : null;
-      if (!who || who.state !== "active" || (!m || m.state !== "active") && who.is_root !== 1) throw badRequest(`${e} is not a member here`);
-      ids.push(who.id);
-    }
+    const byEmail = new Map(reviewers.results.map(who => [who.email, who.id]));
+    const ids = p.reviewers.map(e => {
+      const id = byEmail.get(e.trim().toLowerCase());
+      if (!id) throw badRequest(`${e} is not a member here`);
+      return id;
+    });
     const id = ulid(ctx.now);
     const title = p.title ?? head.summary;
     // One D1 transaction includes every request effect and the response snapshot.
