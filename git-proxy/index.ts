@@ -33,8 +33,8 @@ async function dispatch(request: Request, env: ProxyEnv, ctx: ExecutionContext):
       ]);
       if (!tenant || tenant.state !== "active") return notFoundPage();
       traceFields({ tenant: tenant.id, auth: "git", route: "/:repo.git/*" });
-      if (agentSrc) return env.GIT_BACKEND === "artifacts" ? artifactGit(request, env, tenant.slug) : notFoundPage();
-      if (artifacts) return artifactGit(request, env, tenant.slug, authorization);
+      if (agentSrc) return env.GIT_BACKEND === "artifacts" ? artifactGit(request, env, tenant.slug, undefined, promise => ctx.waitUntil(promise)) : notFoundPage();
+      if (artifacts) return artifactGit(request, env, tenant.slug, authorization, promise => ctx.waitUntil(promise));
       if (repo.includes("/")) return notFoundPage();
       return fencedLegacyGit(request, env, tenant.slug, repo);
     }

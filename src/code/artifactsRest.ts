@@ -202,11 +202,11 @@ export class ArtifactsRest {
     await this.invalidateRepoTokens(namespace, repo);
   }
   private async rememberFork(namespace: string, source: string, target: string, description: string, proof: "reserved" | "accepted" | "ready"): Promise<void> {
-    await this.env.HUB_DB.prepare("INSERT INTO artifact_fork_ownership (account, namespace, target, source, description, proof, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account, namespace, target) DO UPDATE SET proof = CASE WHEN artifact_fork_ownership.proof IN ('ready', 'deleting') THEN artifact_fork_ownership.proof ELSE excluded.proof END WHERE source = excluded.source AND description = excluded.description")
+    await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:205:11:ArtifactsRest.rememberFork:6b4ce179*/ INSERT INTO artifact_fork_ownership (account, namespace, target, source, description, proof, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account, namespace, target) DO UPDATE SET proof = CASE WHEN artifact_fork_ownership.proof IN ('ready', 'deleting') THEN artifact_fork_ownership.proof ELSE excluded.proof END WHERE source = excluded.source AND description = excluded.description")
       .bind(this.account, namespace, target, source, description, proof, Date.now()).run();
   }
   private async ownsFork(namespace: string, target: string, description: string, reserved = false): Promise<boolean> {
-    const row = await this.env.HUB_DB.prepare("SELECT description, proof FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND target = ?")
+    const row = await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:209:23:ArtifactsRest.ownsFork:5977ce42*/ SELECT description, proof FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND target = ?")
       .bind(this.account, namespace, target).first<{ description: string; proof: string }>();
     return row?.description === description && (row.proof === "accepted" || row.proof === "ready" || row.proof === "deleting" || (reserved && row.proof === "reserved"));
   }
@@ -234,7 +234,7 @@ export class ArtifactsRest {
         if (!(error instanceof IncompleteArtifactRepository) || !await this.ownsFork(namespace, target, description, reserved)) throw error;
       }
       // Tombstone before the request: a lost delete response remains retryable and cannot be reused.
-      await this.env.HUB_DB.prepare("UPDATE artifact_fork_ownership SET proof = 'deleting' WHERE account = ? AND namespace = ? AND target = ? AND description = ?")
+      await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:237:13:ArtifactsRest.deleteOwnedFork:25d5b58c*/ UPDATE artifact_fork_ownership SET proof = 'deleting' WHERE account = ? AND namespace = ? AND target = ? AND description = ?")
         .bind(this.account, namespace, target, description).run();
       // Asynchronous deletion can acknowledge without a JSON body. Keep proof until absence is confirmed.
       const response = await this.request(namespace, this.repoPath(target), undefined, "DELETE");
@@ -244,35 +244,36 @@ export class ArtifactsRest {
       }
     } catch (error) {
       if (!(error instanceof HubError) || error.status !== 404) throw error;
-      await this.env.HUB_DB.prepare("DELETE FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND target = ?").bind(this.account, namespace, target).run();
+      await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:247:13:ArtifactsRest.deleteOwnedFork:5609d5b7*/ DELETE FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND target = ?").bind(this.account, namespace, target).run();
     }
   }
   /** Reuse objects, never refs: each incoming attempt writes its own private validation refs. */
   async prepareValidation(namespace: string, repo: string, target: string, ownership: string, pushId?: string): Promise<string> {
     if (target !== await validationRepository(repo)) throw new HubError(400, "bad_request", "invalid validation repository");
     const description = `${ownership} validation cache for ${repo}`;
-    let stored = await this.env.HUB_DB.prepare("SELECT target FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
+    let stored = await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:254:24:ArtifactsRest.prepareValidation:34acd6fe*/ SELECT target FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
       .bind(this.account, namespace, repo, description).first<{ target: string }>();
     if (!stored) {
       try {
         const info = await this.info(namespace, target);
-        if (info.description !== description) throw new HubError(409, "conflict", "validation repository ownership mismatch");
-        return target; // Preserve existing deterministic caches; never guess a legacy ownership backfill.
+        if (info.description === description) return target; // Reuse only this incarnation's legacy cache.
+        // A deleted/recreated repository can have an older project's deterministic cache.
+        // Leave it untouched and reserve a new, ownership-scoped physical cache.
       } catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
       const unique = `pimwell-cache-${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().slice(0, 8)}`;
       try { await this.info(namespace, unique);throw new HubError(409, "conflict", "validation target already exists"); }
       catch (error) { if (!(error instanceof HubError) || error.status !== 404) throw error; }
       // Atomic reservation makes concurrent first pushes select the same unguessable physical target.
-      await this.env.HUB_DB.prepare("INSERT OR IGNORE INTO artifact_fork_ownership VALUES (?, ?, ?, ?, ?, 'reserved', ?)")
+      await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:267:13:ArtifactsRest.prepareValidation:cb97b5f0*/ INSERT OR IGNORE INTO artifact_fork_ownership VALUES (?, ?, ?, ?, ?, 'reserved', ?)")
         .bind(this.account, namespace, unique, repo, description, Date.now()).run();
-      stored = await this.env.HUB_DB.prepare("SELECT target FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
+      stored = await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:269:22:ArtifactsRest.prepareValidation:34acd6fe*/ SELECT target FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
         .bind(this.account, namespace, repo, description).first<{ target: string }>();
     }
     target = stored!.target;
-    if (await this.env.HUB_DB.prepare("SELECT 1 FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND target = ? AND proof = 'deleting'")
+    if (await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:273:15:ArtifactsRest.prepareValidation:218eb234*/ SELECT 1 FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND target = ? AND proof = 'deleting'")
       .bind(this.account, namespace, target).first()) throw new HubError(409, "conflict", "validation repository cleanup pending");
     if (!isValidationCache(target)) throw new HubError(409, "conflict", "validation repository mapping mismatch");
-    if (pushId) await this.env.HUB_DB.prepare("UPDATE git_push SET shadow = ? WHERE id = ? AND namespace = ? AND repo = ?")
+    if (pushId) await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:276:23:ArtifactsRest.prepareValidation:03d99e96*/ UPDATE git_push SET shadow = ? WHERE id = ? AND namespace = ? AND repo = ?")
       .bind(target, pushId, namespace, repo).run();
     try {
       const info = await this.info(namespace, target);
@@ -298,7 +299,7 @@ export class ArtifactsRest {
     }
     const cache = await validationRepository(repo);
     await this.deleteOwnedFork(namespace, cache, `${ownership} validation cache for ${repo}`, false, repo);
-    const stored = await this.env.HUB_DB.prepare("SELECT target FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
+    const stored = await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:302:26:ArtifactsRest.deleteProject:34acd6fe*/ SELECT target FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
       .bind(this.account, namespace, repo, `${ownership} validation cache for ${repo}`).first<{ target: string }>();
     if (stored && stored.target !== cache) {
       if (!isValidationCache(stored.target)) throw new HubError(409, "conflict", "validation repository mapping mismatch");
@@ -318,7 +319,7 @@ export class ArtifactsRest {
   /** Routine cleanup may remove a failed cache, but never a readable shared object store. */
   async cleanupIncompleteValidation(namespace: string, repo: string, ownership: string): Promise<boolean> {
     const description = `${ownership} validation cache for ${repo}`;
-    const stored = await this.env.HUB_DB.prepare("SELECT target, proof FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
+    const stored = await this.env.HUB_DB.prepare("/*perf-site:src%2Fcode%2FartifactsRest.ts:322:26:ArtifactsRest.cleanupIncompleteValidation:722ececc*/ SELECT target, proof FROM artifact_fork_ownership WHERE account = ? AND namespace = ? AND source = ? AND description = ?")
       .bind(this.account, namespace, repo, description).first<{ target: string; proof: string }>();
     if (!stored || stored.proof === "ready" || !isValidationCache(stored.target)) return false;
     const cache = stored.target;

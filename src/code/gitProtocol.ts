@@ -97,8 +97,12 @@ export function parseAdvertisedRefs(bytes: Uint8Array, includeHead = false): Adv
     if (!length) continue;
     if (position + length - 4 > bytes.length) throw new Error("truncated refs");
     const line = decode.decode(bytes.subarray(position, position + length - 4)).split("\0")[0]!.trim();position += length - 4;
-    const match = /^([0-9a-f]{40}) (refs\/[^\s]+|HEAD)$/.exec(line);
-    if (match && (includeHead || match[2] !== "HEAD")) result.push({ name: match[2]!, target: match[1]! });
+    const match = /^([0-9a-f]{40}) (refs\/[^\s]+|HEAD)(?: (.*))?$/.exec(line);
+    if (match && (includeHead || match[2] !== "HEAD")) {
+      result.push({ name: match[2]!, target: match[1]! });
+      const peeled = /(?:^| )peeled:([0-9a-f]{40})(?: |$)/.exec(match[3] ?? "");
+      if (peeled) result.push({ name: `${match[2]}^{}`, target: peeled[1]! });
+    }
   }
   return result;
 }

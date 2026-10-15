@@ -10,7 +10,7 @@ export const GIT_PATH = /^\/(?:([A-Za-z0-9][A-Za-z0-9._-]*)\/)?([A-Za-z0-9][A-Za
 
 // The optional promise is a live authorizeGit lookup for this exact request,
 // started by the Git service alongside its routing reads; never client input.
-export async function artifactGit(request: Request, env: Env, tenant: string, authorization?: Promise<GitGrant | null>): Promise<Response> {
+export async function artifactGit(request: Request, env: Env, tenant: string, authorization?: Promise<GitGrant | null>, defer?: (promise: Promise<unknown>) => void): Promise<Response> {
   const url = new URL(request.url), match = GIT_PATH.exec(url.pathname);
   if (!match) return new Response("not found\n", { status: 404 });
   const agentSrc = match[1] === "agent-src", repo = match[1] && !agentSrc ? `${match[1]}/${match[2]}` : match[2]!, tail = match[3]!;
@@ -39,7 +39,7 @@ export async function artifactGit(request: Request, env: Env, tenant: string, au
     if (write && info.read_only) return new Response("repository is read-only\n", { status: 403 });
     if (tail === "git-receive-pack") return await artifactPush(request, env, grant, api, agentSrc
       ? async () => { const again = await agentSrcGrant(env, request.headers.get("authorization"), tenant, repo); return typeof again === "string" ? null : again; }
-      : undefined);
+      : undefined, defer);
     const upstream = await api.git(namespace, storage, tail, request, request.body, write, true, info);
     if (!upstream.ok) throw new HubError(502, "unavailable", "Git storage is temporarily unavailable");
     const headers = new Headers({ "cache-control": "no-store" });
