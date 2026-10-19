@@ -490,7 +490,7 @@ describe("wiki pages", () => {
     const form = await SELF.fetch(`https://${w.host}/api/wiki.write`, {method: "POST", headers: {...headers, "content-type": "application/x-www-form-urlencoded"}, body: new URLSearchParams({project: "guide", slug: "invalid", title: "Invalid", body: badBody, expected_revision: "0", note: "Browser", _back: "@result"}).toString(), redirect: "manual"});
     expect(form.status).toBe(303);
     expect(await (await get("/guide/wiki/invalid")).text()).not.toContain("<img");
-    expect((await w.post("file.put", {project: "guide", path: "bad.svg", content_type: "image/svg+xml", base64: btoa("<svg onload=bad()/>"), expected_revision: 0})).status).toBe(400);
+    expect((await w.post("file.put", {project: "guide", path: "bad.exe", content_type: "image/svg+xml", base64: btoa("<svg onload=bad()/>"), expected_revision: 0})).status).toBe(400);
     const created = await (await w.post("work.create", {project: "guide", kind: "snag", title: "Visual evidence", body})).json() as any;
     const id = created.result.item.id;
     expect((await w.post("work.comment", {id, body})).status).toBe(200);

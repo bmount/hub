@@ -10,6 +10,8 @@ import { chromium, expect as browserExpect, type Browser, type BrowserContext, t
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { seal } from "../../src/models/secretbox";
+import { sanitizePage, pageHeaders, pageCSS, pageURL } from "../../src/security/pages";
+import { pageVectors } from "../page-vectors";
 
 // Real browser + bundled Worker, disposable D1 and a scripted model. All network
 // requests are intercepted; no production identities or credentials are used.
@@ -541,4 +543,61 @@ it("retains the next draft while a turn is pending rather than forking context",
     await expect.poll(() => page.locator('#ask .send').isDisabled()).toBe(false);
     expect(inputs[1]!.map(i => i.content)).toEqual(["Slow first question", "Answer to Slow first question", "Queued follow up"]);
   } finally { releaseModel(); await context.close(); }
+});
+
+it("keeps the HTML/SVG/mutation corpus inert with sanitizer alone, CSP alone, and both", async () => {
+  const location = {origin:"https://pages.test", prefix:"/docs/pages/demo/", path:"index.html"};
+  for (const layer of ["sanitizer", "csp", "both"]) {
+    const context = await browser.newContext();
+    const outside: string[] = [];
+    let source = "";
+    await context.route("**/*", async route => {
+      const request = route.request();
+      if (request.url() === "https://pages.test/docs/pages/demo/index.html") {
+        await route.fulfill({status:200, headers:{"content-type":"text/html; charset=utf-8", ...(layer === "sanitizer" ? {} : pageHeaders(location))}, body:layer === "csp" ? source : sanitizePage(source, location)});
+      } else {
+        if (!request.url().startsWith(location.origin + location.prefix)) outside.push(request.url());
+        await route.abort();
+      }
+    });
+    const page = await context.newPage();
+    let dialogs = 0; page.on("dialog", async d => { dialogs++; await d.dismiss(); });
+    try {
+      for (const vector of pageVectors) {
+        source = vector + '<p id="inert">visible inert content</p>';
+        await page.goto(location.origin + location.prefix + location.path);
+        await page.waitForTimeout(40);
+        for (const link of await page.locator("a").all()) await link.evaluate('el => el.dispatchEvent(new MouseEvent("click", {bubbles:true, cancelable:true}))');
+        await page.waitForTimeout(20);
+        expect(await page.evaluate("window.__pageXSS"), layer + ": " + vector).toBeUndefined();
+        expect(dialogs, layer + ": " + vector).toBe(0);
+      }
+      if (layer !== "csp") expect(outside).toEqual([]);
+    } finally { await context.close(); }
+  }
+  expect(pageCSS('p{background:url(https://outside.test/x)}', location)).toBe("");
+  expect(pageCSS('p{background:u\\\\72l(https://outside.test/x)}', location)).toBe("");
+  expect(pageCSS('p{color:red;background:url(logo.png)}', location)).toContain(location.origin + location.prefix + "logo.png");
+  for (const url of ["//outside.test/a", "../other/x", "%2e%2e/other/x", "javascript:alert(1)", "data:text/html,bad", "data:image/svg+xml,bad"]) expect(pageURL(url, location, true)).toBeNull();
+}, 60000);
+
+it("keeps standalone XML SVG inert and preserves safe drawing", async () => {
+  const location = {origin:"https://pages.test", prefix:"/docs/pages/demo/", path:"image.svg"};
+  const source = '<svg xmlns="http://www.w3.org/2000/svg" onload="window.__pageXSS=1"><script>window.__pageXSS=1</script><foreignObject><body xmlns="http://www.w3.org/1999/xhtml" onload="window.__pageXSS=1"/></foreignObject><circle r="10" cx="20" cy="20"/><use href="https://outside.test/a.svg#x"/><set attributeName="onload" to="window.__pageXSS=1"/></svg>';
+  for (const layer of ["sanitizer", "csp", "both"]) {
+    const context = await browser.newContext();
+    const requests: string[] = [];
+    await context.route("**/*", async route => {
+      if (route.request().url() === location.origin + location.prefix + location.path) await route.fulfill({status:200, headers:{"content-type":"image/svg+xml", ...(layer === "sanitizer" ? {} : pageHeaders(location))},body:layer === "csp" ? source : sanitizePage(source, location, true)});
+      else { requests.push(route.request().url()); await route.abort(); }
+    });
+    try {
+      const page = await context.newPage();
+      await page.goto(location.origin + location.prefix + location.path);
+      await page.waitForTimeout(100);
+      expect(await page.evaluate("window.__pageXSS"),layer).toBeUndefined();
+      expect(await page.locator("circle").count()).toBe(1);
+      if (layer !== "csp") expect(requests).toEqual([]);
+    } finally { await context.close(); }
+  }
 });

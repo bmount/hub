@@ -293,6 +293,33 @@ describe("project files", () => {
     const evil = new FormData(); evil.set("file", new File(["evil"], "a.txt", {type: "text/plain"})); evil.set("expected_revision", "0");
     expect((await SELF.fetch(`https://${HOST}/docs/documents/upload`, {method: "POST", headers: {...w.headers, origin: "https://evil.test"}, body: evil})).status).toBe(403);
   });
+  it("serves page bundles with Files authorization, fresh sanitization and download-only originals", async () => {
+    const w = await world();
+    const source = '<h1>Safe</h1><script>window.bad=1</script><svg onload="bad()"><circle r="10"/></svg><img src="https://outside.test/x"><link rel="stylesheet" href="style.css">';
+    for (const [path, content_type, text] of [["demo/index.html", "text/html", source], ["demo/style.css", "text/css", "h1{color:red}"], ["demo/image.svg", "image/svg+xml", '<svg onload="bad()"><circle r="10"/></svg>']]) {
+      const put = await apiPost(HOST, "file.put", {project:"docs", path, content_type, expected_revision:0, base64:btoa(text!)}, w.headers);
+      expect(put.status, await put.clone().text()).toBe(200);
+    }
+    const url = `https://${HOST}/docs/pages/demo/index.html`;
+    const res = await SELF.fetch(url, {headers:w.headers});
+    expect(res.status).toBe(200);
+    const output = await res.text();
+    expect(output).toContain("<h1>Safe</h1>"); expect(output).not.toMatch(/<script|onload|outside.test/);
+    expect(output).toContain(`https://${HOST}/docs/pages/demo/style.css`);
+    expect(res.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(res.headers.get("content-security-policy")).not.toContain("allow-scripts");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect((await SELF.fetch(url)).status).toBe(404);
+    expect((await SELF.fetch(url.replace("/docs/", "/absent/"), {headers:w.headers})).status).toBe(404);
+    const original = await SELF.fetch(`https://${HOST}/docs/documents/download?path=demo/index.html`, {headers:w.headers});
+    expect(original.headers.get("content-disposition")).toMatch(/^attachment;/); expect(await original.text()).toBe(source);
+    const svg = await SELF.fetch(url.replace("index.html", "image.svg"), {headers:w.headers});
+    expect(svg.headers.get("content-type")).toBe("image/svg+xml"); expect(await svg.text()).not.toContain("onload");
+    const style = await SELF.fetch(url.replace("index.html", "style.css"), {headers:w.headers}); expect(await style.text()).toBe("h1{color:red}");
+    await apiPost(HOST, "file.put", {project:"docs", path:"demo/index.html",content_type:"text/html",expected_revision:1,base64:btoa("<h1>Updated</h1><script>bad()</script>")},w.headers);
+    expect(await (await SELF.fetch(url, {headers:w.headers})).text()).toContain("<h1>Updated</h1>");
+  });
   it("consumes upload capabilities once, pins tenant/project/identity, expires, and checks Content-Type", async () => {
     const w = await world();
     const mint = async () => {
@@ -319,8 +346,8 @@ describe("project files", () => {
   it("checks file/base64/text/type limits, enforces quota atomically, and scopes optional links", async () => {
     const w = await world();
     for (const path of ["../secret.txt", "/a.txt", "a/../b.txt", "a\\b.txt", "a//b.txt"]) expect(() => filePath(path)).toThrow();
-    expect(() => validateFile("a.html", "text/html", new TextEncoder().encode("<script>"))).toThrow();
-    expect(() => validateFile("a.svg", "image/svg+xml", new Uint8Array())).toThrow();
+    expect(validateFile("a.html", "text/html", new TextEncoder().encode("<script>")).type).toBe("text/html");
+    expect(validateFile("a.svg", "image/svg+xml", new Uint8Array()).type).toBe("image/svg+xml");
     expect(() => validateFile("a.pdf", "application/pdf", new TextEncoder().encode("<html>"))).toThrow();
     expect(() => validateFile("a.txt", "text/plain", new Uint8Array([255]))).toThrow();
     expect(() => validateFile("a.txt", "text/plain", new Uint8Array(FILE_BYTES + 1))).toThrow();

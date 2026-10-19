@@ -23,6 +23,8 @@ export function filePath(path: string): string {
   return path;
 }
 const TYPES: Record<string, string[]> = {
+  html: ["text/html"], htm: ["text/html"], svg: ["image/svg+xml"], css: ["text/css"],
+  woff: ["font/woff"], woff2: ["font/woff2"],
   txt: ["text/plain"], md: ["text/markdown", "text/plain"], csv: ["text/csv", "text/plain"],
   json: ["application/json", "text/plain"], jsonl: ["application/x-ndjson", "application/jsonl", "text/plain"], ndjson: ["application/x-ndjson", "text/plain"],
   tsv: ["text/tab-separated-values", "text/plain"],
@@ -38,14 +40,14 @@ export function inferredFileType(path: string): string { return TYPES[path.split
 export function fileType(path: string, type: string): string {
   const ext = path.split(".").pop()!.toLowerCase();
   const clean = type.toLowerCase().split(";")[0]!.trim();
-  if (!TYPES[ext]?.includes(clean)) throw badRequest("unsupported content type or filename/type mismatch (supported documents, data formats, archives and raster images only)");
+  if (!TYPES[ext]?.includes(clean)) throw badRequest("unsupported content type or filename/type mismatch (supported documents, page assets, data formats, archives and raster images only)");
   return TYPES[ext]![0]!;
 }
 export function validateFile(path: string, type: string, bytes: Uint8Array): {type: string; text: string} {
   if (bytes.byteLength > FILE_BYTES) throw new HubError(413, "too_large", "file limit is 5 GiB");
   type = fileType(path, type);
   let text = "";
-  if (type.startsWith("text/") || type === "application/json" || type === "application/x-ndjson") {
+  if (type.startsWith("text/") || type === "image/svg+xml" || type === "application/json" || type === "application/x-ndjson") {
     let decoded: string;
     try { decoded = new TextDecoder("utf-8", {fatal: true, ignoreBOM: false}).decode(bytes); if (decoded.includes("\0")) throw new Error(); }
     catch { throw badRequest("text files must be UTF-8 without NUL bytes"); }
@@ -65,6 +67,7 @@ export function validateFile(path: string, type: string, bytes: Uint8Array): {ty
       : type === "application/gzip" ? starts(31,139,8)
       : type === "application/zstd" ? starts(40,181,47,253)
       : type === "application/zip" ? starts(80,75,3,4) || starts(80,75,5,6)
+      : type === "font/woff" ? ascii("wOFF") : type === "font/woff2" ? ascii("wOF2")
       : type === "application/pdf" ? ascii("%PDF-") : type === "image/png" ? starts(137,80,78,71,13,10,26,10)
       : type === "image/jpeg" ? starts(255,216,255) : type === "image/gif" ? ascii("GIF87a") || ascii("GIF89a")
       : type === "image/webp" ? ascii("RIFF") && ascii("WEBP",8)
