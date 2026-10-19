@@ -102,13 +102,23 @@ export async function artifactReadAuthorized<T>(env: Env, org: string, grant: Gi
   const page = (result: unknown, next: string | null = null) => ({ result: result as T, next });
   const at = revision;
   let refList: Promise<ArdiRef[]> | null = null;
+  if (at === "HEAD") {
+    refList = liveRefs ?? refs(api, namespace, repo);
+    if (!(await refList).length) {
+      if (verb === "log") return page({ commits: [] });
+      if ((verb === "file.read" || verb === "tree.list") && !path) return page({ entries: [] });
+    }
+  }
   const resolve = async (revision: string): Promise<string> => {
     let target = revision;
     if (!/^[0-9a-f]{40}$/.test(revision)) {
       refList ??= liveRefs ?? refs(api, namespace, repo);
       const all = await refList;
       const name = revision === "HEAD" ? `refs/heads/${info.default_branch}` : revision;
-      const found = findRef(all, name);
+      const branches = all.filter(ref => ref.name.startsWith("refs/heads/"));
+      const found = findRef(all, name) ?? (revision === "HEAD"
+        ? findRef(all, "HEAD") ?? (branches.length === 1 ? branches[0]!.target : undefined)
+        : undefined);
       if (!found) throw new HubError(404, "not_found", "revision not found");target = found;
     }
     // Snapshot decoding verifies the requested commit itself; a log round trip adds

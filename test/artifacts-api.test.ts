@@ -4,6 +4,7 @@ import { authorizeGit } from "../src/code/gitAccess";
 import { artifactRead } from "../src/code/artifactRead";
 import { codeRead } from "../src/code/ardi";
 import { artifactGit } from "../src/http/artifactGit";
+import { codePage, filesPage } from "../src/http/codePages";
 import gitProxy from "../git-proxy/index";
 import * as gitAccess from "../src/code/gitAccess";
 import * as tenants from "../src/db/tenants";
@@ -48,6 +49,7 @@ async function setup(role: "member" | "reader" = "member") {
   const requests: string[] = [];
   let uploadPack: Uint8Array | null = null;
   let head = hash(4);
+  let advertised: Uint8Array | null = null;
   const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = new URL(String(input));requests.push(url.pathname);
     if (url.pathname.endsWith("/git-upload-pack") && uploadPack) {
@@ -55,7 +57,7 @@ async function setup(role: "member" | "reader" = "member") {
       expect(await new Response(init?.body).text()).toMatch(/deepen 1\n.*want [0-9a-f]{40}\n/s);
       return new Response(uploadPack);
     }
-    if (url.hostname.endsWith(".artifacts.cloudflare.net")) return new Response(concat(packet("# service=git-upload-pack\n"), new TextEncoder().encode("0000"),
+    if (url.hostname.endsWith(".artifacts.cloudflare.net")) return new Response(advertised ?? concat(packet("# service=git-upload-pack\n"), new TextEncoder().encode("0000"),
       packet(`${head} HEAD\0symref=HEAD:refs/heads/main\n`), packet(`${head} refs/heads/main\n`), packet(`${hash(50)} refs/tags/v1\n`), packet(`${hash(4)} refs/tags/v1^{}\n`), new TextEncoder().encode("0000")));
     if (url.pathname.endsWith("/tokens")) return Response.json({ success: true, result: { plaintext: "opaque-synthetic-token", expires_at: new Date(Date.now() + 300_000).toISOString() } });
     if (/\/repos\/(site|site-secondary)$/.test(url.pathname)) { const name = url.pathname.split("/").at(-1)!; return Response.json({ success: true, result: { name, remote: remote.replace("site.git", `${name}.git`), description, default_branch: "main", read_only: false } }); }
@@ -81,11 +83,47 @@ async function setup(role: "member" | "reader" = "member") {
   });
   return { tenant, human, project, configured, auth, fetch, requests, setDescription(value: string) { description = value; },
     setHead(value: string) { head = value; },
+    setRefs(lines: string[]) { advertised = concat(...lines.map(packet), new TextEncoder().encode("0000")); },
     serve(commit: ArtifactCommit, response: Uint8Array) { commits.set(commit.hash, commit);uploadPack = response; },
     read: <T>(verb: string, body: Record<string, unknown> = {}) => artifactRead<T>(configured, "acme", auth, verb, { repo: "site", ...body }) };
 }
 
 describe("Artifacts compatibility adapter", () => {
+  it.each([true, false])("reads master-only HEAD with advertised HEAD=%s", async withHead => {
+    const s = await setup();
+    s.setRefs([...(withHead ? [`${hash(4)} HEAD\0symref=HEAD:refs/heads/master\n`] : []), `${hash(4)} refs/heads/master\n`]);
+    const log = await s.read<{ commits: Array<{ oid: string }> }>("log");
+    expect(log.result.commits[0]?.oid).toBe(hash(4));
+    const files = await s.read<{ entries: Array<{ name: string }> }>("file.read");
+    expect(files.result.entries.map(e => e.name)).toContain("README.md");
+    await expect(s.read("file.read", { ref: "missing" })).rejects.toMatchObject({ status: 404 });
+  });
+  it("prefers the configured default over the host HEAD, then the host over other branches", async () => {
+    const s = await setup();
+    s.setRefs([`${hash(2)} HEAD\n`, `${hash(4)} refs/heads/main\n`, `${hash(2)} refs/heads/master\n`]);
+    expect((await s.read<{ commits: Array<{ oid: string }> }>("log")).result.commits[0]?.oid).toBe(hash(4));
+    s.setRefs([`${hash(2)} HEAD\n`, `${hash(4)} refs/heads/other\n`, `${hash(2)} refs/heads/master\n`]);
+    expect((await s.read<{ commits: Array<{ oid: string }> }>("log")).result.commits[0]?.oid).toBe(hash(2));
+  });
+  it.each([false, true])("renders Code and Files with empty=%s without an explicit ref", async empty => {
+    const s = await setup();
+    await env.HUB_DB.prepare("INSERT INTO git_repository (tenant_id, project_id, imported_at) VALUES (?, ?, 0)").bind(s.tenant.id, s.project.id).run();
+    s.setRefs(empty ? [] : [`${hash(4)} HEAD\n`, `${hash(4)} refs/heads/master\n`]);
+    const request = (page: string) => new Request(`https://acme.pimwell.test/site/${page}`, { headers: cookieHeaders(s.human.token, "acme.pimwell.test") });
+    const code = await (await codePage(request("code"), s.configured, "site")).text();
+    const files = await (await filesPage(request("files"), s.configured, "site")).text();
+    expect(code).not.toContain("Repository unavailable");
+    expect(files).not.toContain("Repository unavailable");
+    expect(code).toContain(empty ? "No commits" : "Synthetic 4");
+    expect(files).toContain(empty ? "No files" : "README.md");
+  });
+  it("returns normal empty log and root files without inventing a revision", async () => {
+    const s = await setup();s.setRefs([]);
+    expect((await s.read("log")).result).toEqual({ commits: [] });
+    expect((await s.read("file.read")).result).toEqual({ entries: [] });
+    await expect(s.read("file.read", { path: "missing" })).rejects.toMatchObject({ status: 404 });
+    await expect(s.read("log", { ref: "master" })).rejects.toMatchObject({ status: 404 });
+  });
   it("reads a live review tip without repeated immutable fetches or ancestry traversal", async () => {
     const s = await setup();
     const first = await s.read<{ commits: Array<{ oid: string }> }>("log", { ref: "main", limit: 1, tipOnly: true });
