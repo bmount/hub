@@ -42,7 +42,7 @@ export function toolsFor(ctx: Ctx): VerbDef<unknown, unknown>[] {
   const verbs = exposedVerbs(ctx.role, mcpScopes(ctx));
   if (!ctx.mcpProject) return verbs;
   const features = projectFeatures(ctx.mcpProject);
-  const families: Record<string, ProjectFeature> = { velocity: "docket", perf: "repo", work: "docket", repo: "repo", wiki: "wiki", kb: "knowledge", research: "knowledge", file: "files", doc: "files", person: "people", company: "people", connection: "people", graph: "people" };
+  const families: Record<string, ProjectFeature> = { velocity: "docket", perf: "repo", work: "docket", repo: "repo", wiki: "wiki", page: "pages", kb: "knowledge", research: "knowledge", file: "files", doc: "files", person: "people", company: "people", connection: "people", graph: "people" };
   // Opt in only families whose resource references obey the endpoint's boundary.
   return verbs.filter(v => {
     const feature = families[v.name.split(".")[0]!];

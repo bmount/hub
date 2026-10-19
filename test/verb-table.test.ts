@@ -14,6 +14,11 @@ type Decl = { scope: string; minRole: string; fresh: number | null; longLived?: 
 const T = (scope: string, minRole: string, fresh: number | null, flags: Partial<Decl> = {}): Decl => ({ scope, minRole, fresh, ...flags });
 
 const TABLE: Record<string, Decl> = {
+  "page.publish": T("tenant", "member", null, { mcp: "write" }),
+  "page.list": T("tenant", "reader", null, { mcp: "read" }),
+  "page.read": T("tenant", "reader", null, { mcp: "read" }),
+  "page.history": T("tenant", "reader", null, { mcp: "read" }),
+  "page.delete": T("tenant", "admin", null, { mcp: "write" }),
   "doc.share": T("tenant", "member", null, { mcp: "write" }),
   "doc.dispatch": T("tenant", "member", null, { mcp: "write" }),
   "file.list": T("tenant", "reader", null, { mcp: "read" }),

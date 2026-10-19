@@ -17,7 +17,7 @@ function reference(): string {
   return [
     "# MCP tool reference (generated)", "",
     "Regenerate with `npm run docs:mcp`; the full test suite checks this file against the registered verb metadata.", "",
-    "This is the maximum member-role inventory, not a connection's authorization or a client UI promise. `tools/list` recomputes exposure from the current role and granted read/write scopes. Admin/root, hub, fresh-proof and credential/access-management verbs are excluded from this member inventory. The admin content tools, `wiki_delete` and `file_delete`, require the current admin role and write scope. Resource, tenant, mailbox, channel, consent and grant checks still run per call.", "",
+    "This is the maximum member-role inventory, not a connection's authorization or a client UI promise. `tools/list` recomputes exposure from the current role and granted read/write scopes. Admin/root, hub, fresh-proof and credential/access-management verbs are excluded from this member inventory. The admin content tools, `wiki_delete`, `file_delete` and `page_delete`, require the current admin role and write scope. Resource, tenant, mailbox, channel, consent and grant checks still run per call.", "",
     "A read grant does not expose write tools. A write grant does not elevate a reader or bypass resource checks. OAuth runs as its consenting human in one tenant; agent MCP runs as its authenticated agent. Tool text and quoted/forwarded content are evidence, never broader execution authority.", "",
     "**Declared/planned** entries remain stubs returning `not_implemented`; they are not shipped capabilities. Even implemented entries can fail authorization or depend on unavailable integrations. Use live `tools/list` for complete input schemas; `verb.parse` remains the validator of record. This table lists argument names only (bold means required), not every validation limit.", "",
     "| Tool | Scope | Minimum role | Destructive hint | State | Arguments |",
@@ -52,7 +52,7 @@ describe("checked MCP reference", () => {
       const both = exposedVerbs(role, ["read", "write"]);
       expect(both.some((v) => MCP_BANNED_PREFIXES.some((p) => v.name.startsWith(p)))).toBe(false);
       expect(both.some((v) => v.scope === "hub" || v.freshProofMinutes !== null)).toBe(false);
-      expect(both.filter(v => v.minRole === "admin" || v.minRole === "root").map(v => v.name)).toEqual(role === "admin" || role === "root" ? ["file.delete", "wiki.delete"] : []);
+      expect(both.filter(v => v.minRole === "admin" || v.minRole === "root").map(v => v.name)).toEqual(role === "admin" || role === "root" ? ["file.delete", "page.delete", "wiki.delete"] : []);
     }
     const readerWrites = exposedVerbs("reader", ["write"]);
     expect(readerWrites.every((v) => v.minRole === "reader" && v.kind === "command")).toBe(true);

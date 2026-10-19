@@ -2,6 +2,7 @@ import { adminSituations } from "../db/fileDownloads";
 import { projectPathSql } from "../db/projects";
 // Use existing tables so search needs no migration or separately maintained index.
 import { currentFile } from "./files";
+import { currentPage } from "./pages";
 import { currentWiki } from "./wiki";
 import { defineVerb } from "./table";
 import { optString, reqString } from "./params";
@@ -35,7 +36,7 @@ export function snippet(text: string, ts: string[], max = 160): string {
 }
 
 export type Hit = { kind: string; ref: string; title: string; snippet: string; href: string; at: number; project_name?: string | null };
-const SOURCE_LIMITS = { contacts: 20, files: 20, wiki: 20, work: 20, mail: 15, messages: 15, people: 10, projects: 10, errors: 10, reviews: 15, situations: 15, assistant: 15, outgoing: 15 } as const;
+const SOURCE_LIMITS = { pages: 20, contacts: 20, files: 20, wiki: 20, work: 20, mail: 15, messages: 15, people: 10, projects: 10, errors: 10, reviews: 15, situations: 15, assistant: 15, outgoing: 15 } as const;
 const CHANNEL_LIMIT = 40;
 const PER_CHANNEL_LIMIT = 10;
 type SearchSource = keyof typeof SOURCE_LIMITS;
@@ -132,7 +133,7 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
   const access = readableMail(ctx), outgoingAccess = readableOutgoingMail(ctx);
   const tid = ctx.tenant!.id;
   const attachments = "COALESCE((SELECT GROUP_CONCAT(COALESCE(json_extract(CASE WHEN json_valid(a.value) THEN a.value ELSE '{}' END, '$.text'), ''), ' ') FROM json_each(CASE WHEN json_valid(m.attachments) THEN m.attachments ELSE '[]' END) a), '')";
-  const [work, mail, ppl, proj, errs, reviews, situations, assistant, outgoing, wiki, files, contacts] = await ctx.db.batch([
+  const [work, mail, ppl, proj, errs, reviews, situations, assistant, outgoing, wiki, files, contacts, pages] = await ctx.db.batch([
     workHitsStatement(ctx, ts, null, SOURCE_LIMITS.work),
     ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsearch.ts:136:5:searchAll:8b6bd9c1*/ SELECT m.id, (SELECT p.display_name FROM project p WHERE p.id = m.project_id AND p.tenant_id = m.tenant_id) AS project_name, m.subject, m.text || ' ' || ${attachments} AS text, m.from_email, m.received_at FROM inbound_mail m WHERE ${access.sql}
       AND ${all("m.subject || ' ' || m.text || ' ' || m.from_email || ' ' || " + attachments, ts.length)} ORDER BY m.received_at DESC LIMIT ?`).bind(...access.bindings, ...ts.map(like), SOURCE_LIMITS.mail),
@@ -157,9 +158,11 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
     ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsearch.ts:156:5:searchAll:d7a5cbe8*/ SELECT (${projectPathSql()}) AS project, r.slug, r.title, r.body, r.created_at, r.research FROM wiki_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = CASE WHEN r.research IS NULL THEN 'wiki' ELSE 'knowledge' END) AND r.tenant_id = ? AND ${currentWiki} AND r.deleted = 0 AND ${all("r.slug || ' ' || r.title || ' ' || r.body || ' ' || COALESCE((SELECT display_name FROM identity WHERE id = r.author_id), '')", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.wiki),
     ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsearch.ts:157:5:searchAll:e6040812*/ SELECT (${projectPathSql()}) AS project, r.path, r.name, r.text, r.created_at FROM file_revision r JOIN project p ON p.id = r.project_id AND p.tenant_id = r.tenant_id WHERE EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'files') AND r.tenant_id = ? AND ${currentFile} AND r.deleted = 0 AND ${all("r.path || ' ' || r.text", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.files),
     ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsearch.ts:158:5:searchAll:0972d93e*/ SELECT (${projectPathSql()}) AS project, e.id, e.kind, e.name, e.data, e.updated_at FROM contact_entity e JOIN project p ON p.id = e.project_id AND p.tenant_id = e.tenant_id WHERE EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value = 'people') AND e.tenant_id = ? AND ${all("e.name || ' ' || e.data", ts.length)} ORDER BY e.updated_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.contacts),
+    ctx.db.prepare(`SELECT (${projectPathSql()}) AS project, r.slug, r.title, r.text, r.created_at FROM page_revision r JOIN project p ON p.id=r.project_id AND p.tenant_id=r.tenant_id WHERE EXISTS (SELECT 1 FROM json_each(p.parts) WHERE value='pages') AND r.tenant_id=? AND ${currentPage} AND r.deleted=0 AND ${all("r.title || ' ' || r.text", ts.length)} ORDER BY r.created_at DESC LIMIT ?`).bind(tid,...ts.map(like),SOURCE_LIMITS.pages),
   ]);
   const messages = await messageHits(ctx, ts, null, SOURCE_LIMITS.messages);
   const groups: SearchGroups = {
+    pages: (pages!.results as Array<{project:string;slug:string;title:string;text:string;created_at:number}>).map(r=>({kind:"Page",ref:`${r.project}/${r.slug}`,title:r.title,snippet:snippet(r.text,ts),href:`/${r.project}/pages/${r.slug}`,at:r.created_at})),
     contacts: (contacts!.results as Array<{project: string; id: string; kind: string; name: string; data: string; updated_at: number}>).map(r => ({kind: r.kind === "person" ? "Contact person" : "Company", ref: `${r.project}/${r.id}`, title: r.name, snippet: snippet(r.data, ts), href: `/${r.project}/contacts/${r.id}`, at: r.updated_at})),
     reviews: [], situations: [], assistant: [], outgoing: [],
     files: (files!.results as Array<{project: string; path: string; name: string; text: string; created_at: number}>).map(r => ({kind: "File", ref: `${r.project}/${r.path}`, title: r.name, snippet: snippet(r.text, ts), href: `/${r.project}/documents?path=${encodeURIComponent(r.path)}`, at: r.created_at})),

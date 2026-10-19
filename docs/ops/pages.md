@@ -1,6 +1,48 @@
 # Script-free project pages
 
-Pages are private project Files, rendered under the organization's own host.
+Pages are versioned project bundles, rendered under the organization’s own host.
+Enable the `pages` part with `project_update`. Members publish through
+`page_publish` (MCP/API) or the Pages list’s multipart form and drop target.
+`page_list`, `page_read`, `page_history` and admin-only `page_delete` manage
+metadata and retained history. The `making-pages` skill is the agent guide.
+
+`/<project>/pages/<slug>` is a viewport-filling viewer with a thin metadata bar,
+copy link, history and full-screen controls; `?revision=N` pins an old version.
+An immutable R2 JSON bundle (base64 assets) backs each `page_revision` row.
+Content uses `/<project>/pages-content/<slug>/<revision>/<path>`, so relative
+references stay pinned to that revision. On authenticated serve, bundle-local
+CSS is sanitized and inlined; raster images/fonts become data URLs and embedded
+SVGs are recursively sanitized before data encoding (depth 5, 50 MiB reference
+expansion ceiling). Opaque sandbox documents cannot send SameSite=Lax cookies
+for subresources. This embedding avoids weakening session cookies, granting
+same-origin sandbox privileges or minting unauthenticated asset capabilities.
+No browser request for bundle subresources is required; CSP allows data images
+and, for embedded bundles only, data fonts. Download budgets reserve the actual
+rendered byte length and audit the page path/revision. Namespaced projects work identically.
+The viewer has no project sidebars; its sandboxed iframe cannot execute scripts
+or access the application origin. Both the iframe sandbox and response CSP
+apply. Trusted viewer controls use a separate hashed application script.
+
+Uploads accept .html, .svg or .zip with root index.html. ZIP entries are inflated
+with bounded streaming output; limits are 25 MiB compressed/expanded, 200 assets,
+and 5 MiB per asset. Only HTML/SVG/CSS, raster images and WOFF/WOFF2 are allowed.
+JavaScript files are explicitly refused. Text must be UTF-8, paths relative and
+unambiguous. Every upload replaces the whole bundle; expected_revision is
+mandatory, and the SQL compare-and-append prevents concurrent overwrites.
+Inline MCP html/base64 is limited to 512 KiB. Omitting content returns a private
+single-use 15-minute upload URL: PUT raw bytes with normal authentication.
+Capabilities are hashed in `page_upload`, scoped to identity/tenant/project,
+and consumed atomically. Archived projects reject writes. Source visible text
+(up to 128 KiB) and titles are searched; deleted heads disappear from search.
+
+Bundles reuse the private `project-files/<tenant>/<project>/<ULID>` R2 prefix.
+The Files orphan sweep protects all page revision object references too;
+project/tenant deletion removes page metadata and sweeps the same prefix.
+Conflicting uploads remove their unattached object. No thumbnails are generated.
+
+## Legacy Files rendering
+
+The earlier Files rendering endpoint remains supported, separately from Pages.
 Upload source and assets with the existing Files upload mechanisms. Keep a
 bundle in one top-level folder, for example `report/index.html`,
 `report/style.css`, `report/chart.svg`, and `report/images/logo.png`. Open:
@@ -71,5 +113,6 @@ CSP only, and both. It checks script side effects and dialogs, and verifies
 that sanitized content initiates no outside requests. Worker integration tests
 in `test/project-channels.test.ts` cover Files ingress, original downloads,
 asset delivery, fresh sanitization, authentication, headers and revisions.
-Upload/view/version-management UI and agent-facing Pages tools are separate
-from this rendering/security layer.
+Pages uses this same sanitizer and headers on every asset serve, including
+historical revisions. Page metadata authorization is independent of Files;
+a project needs only its Pages part enabled.

@@ -109,6 +109,7 @@ async function projectOverview(ctx: Ctx, env: Env, p: Project, selected: string 
   if (features.includes("repo")) add("reviews","Open reviews",`${base}/reviews`,reviews);
   if (features.includes("wiki")) add("wiki","Wiki pages",`${base}/wiki`,wiki,"wiki");
   if (features.includes("knowledge")) add("research","Research",`${base}/wiki`,wiki,"research");
+  if (features.includes("pages")) add("pages", "Pages", `${base}/pages`, undefined);
   if (features.includes("files")) add("files","Files",`${base}/documents`,files);
   if (features.includes("people")) add("contacts","Contacts",`${base}/contacts`,contacts);
   const channelRows = channels!.results as Array<{slug: string; display_name: string; at: number}>;
@@ -144,7 +145,7 @@ ${inspectorSection("Identity",[{label:"Kind",html:esc(p.kind)},{label:"Mail",htm
 
 async function projectParts(ctx: Ctx, env: Env, p: Project) {
   const features = projectFeatures(p);
-  const parts: Array<[ProjectFeature, string]> = [["repo", "Code"], ["wiki", "Wiki"], ["knowledge", "Knowledge base"], ["files", "Files"], ["people", "People"]];
+  const parts: Array<[ProjectFeature, string]> = [["repo", "Code"], ["pages", "Pages"], ["wiki", "Wiki"], ["knowledge", "Knowledge base"], ["files", "Files"], ["people", "People"]];
   const checks = parts.filter(([part]) => features.includes(part)).flatMap(([part]) => PART_CONTENT[part].map(([table, label]) => ({part, label, statement: ctx.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE tenant_id = ? AND project_id = ?${part === "knowledge" ? " AND research IS NOT NULL" : ""}`).bind(ctx.tenant!.id, p.id)})));
   const counts = checks.length ? await ctx.db.batch<{n: number}>(checks.map(c => c.statement)) : [];
   const form = (part: ProjectFeature, label: string, action: "add" | "remove") => `<form method="post" data-reload action="/api/project.update"><input type="hidden" name="project" value="${esc(p.path)}"><input type="hidden" name="_back" value="@result"><input type="hidden" name="${action}" value="${part}"><button${action === "remove" ? ' class="quiet"' : ""}>${action === "add" ? "Add" : "Remove"} ${esc(label)}</button></form>`;

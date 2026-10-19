@@ -8,6 +8,7 @@ import { CHAT_PRESENCE_JS } from "./chatPresenceScript";
 import { CHAT_LIVE_JS } from "./chatLiveScript";
 import { ASSISTANT_JS } from "./assistantScript";
 import { PLAYGROUND_JS } from "./playgroundScript";
+import { PROJECT_PAGES_JS } from "./projectPagesScript";
 import { COPY_JS } from "./copyScript";
 import { CONTACT_GRAPH_SCRIPT } from "./contactGraphScript";
 import intro from "../site/index.html";
@@ -30,6 +31,7 @@ export const ASSETS = {
   assistant: { path: `/assets/assistant.${hash(ASSISTANT_JS)}.js`, body: ASSISTANT_JS, type: "text/javascript; charset=utf-8" },
   playground: { path: `/assets/playground.${hash(PLAYGROUND_JS)}.js`, body: PLAYGROUND_JS, type: "text/javascript; charset=utf-8" },
   graph: {path: `/assets/contactgraph.${hash(CONTACT_GRAPH_SCRIPT)}.js`, body: CONTACT_GRAPH_SCRIPT, type: "text/javascript; charset=utf-8"},
+  pages: {path:`/assets/pages.${hash(PROJECT_PAGES_JS)}.js`,body:PROJECT_PAGES_JS,type:"text/javascript; charset=utf-8"},
   copy: { path: `/assets/copy.${hash(COPY_JS)}.js`, body: COPY_JS, type: "text/javascript; charset=utf-8" },
   landing: { path: `/assets/landing.${hash(landingJs)}.js`, body: landingJs, type: "text/javascript; charset=utf-8" },
 };

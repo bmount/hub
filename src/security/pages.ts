@@ -8,7 +8,7 @@ const svg = new Set("svg style g path rect circle ellipse line polyline polygon 
 const attrs = new Set("id class title lang dir width height colspan rowspan scope open alt viewBox preserveAspectRatio d x y x1 x2 y1 y2 cx cy r rx ry points fill fill-opacity stroke stroke-width stroke-opacity opacity transform offset stop-color stop-opacity font-size font-family text-anchor clip-path mask patternUnits patternTransform gradientUnits gradientTransform role aria-label".split(" "));
 const voids = new Set(["br", "hr", "img", "link", "col"]);
 const escape = (s: string) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-export type PageLocation = { origin: string; prefix: string; path: string };
+export type PageLocation = { origin: string; prefix: string; path: string; inline?: (path: string) => {type: string; source: string; url: string} | null };
 const rasterData = /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i;
 export function pageURL(value: string, location: PageLocation, image = false): string | null {
   if (image && rasterData.test(value)) return value;
@@ -17,6 +17,7 @@ export function pageURL(value: string, location: PageLocation, image = false): s
     const base = location.origin + location.prefix + location.path.split("/").map(encodeURIComponent).join("/");
     const url = new URL(value, base);
     if (url.origin !== location.origin || !url.pathname.startsWith(location.prefix) || url.search || /%2f|%5c|%25/i.test(url.pathname)) return null;
+    if (location.inline) return location.inline(decodeURIComponent(url.pathname.slice(location.prefix.length)))?.url ?? null;
     return url.href;
   } catch { return null; }
 }
@@ -51,6 +52,16 @@ export function sanitizePage(source: string, location: PageLocation, isSVG = fal
     if (isSVG && !inSVG) return "";
     const attributes: string[] = el.tagName === "svg" ? ['xmlns="http://www.w3.org/2000/svg"'] : [];
     const get = (name: string) => el.attrs.find(a => a.name === name)?.value;
+    if (el.tagName === "link" && location.inline) {
+      if (get("rel")?.toLowerCase() !== "stylesheet") return "";
+      try {
+        const u = new URL(get("href") ?? "", location.origin + location.prefix + location.path);
+        if (u.origin !== location.origin || !u.pathname.startsWith(location.prefix) || u.search) return "";
+        const path = decodeURIComponent(u.pathname.slice(location.prefix.length));
+        const asset = location.inline(path);
+        return asset?.type === "text/css" ? `<style>${pageCSS(asset.source, {...location, path})}</style>` : "";
+      } catch { return ""; }
+    }
     if (el.tagName === "link" && (get("rel")?.toLowerCase() !== "stylesheet" || !pageURL(get("href") ?? "", location))) return "";
     for (const a of el.attrs) {
       if (a.namespace || a.prefix) continue;
@@ -58,6 +69,7 @@ export function sanitizePage(source: string, location: PageLocation, isSVG = fal
       if (a.name === "style") value = pageCSS(value, location, true);
       else if (a.name === "href" || a.name === "src") {
         if (el.tagName === "a" && !inSVG) {
+          if (/^#[\w.-]+$/.test(value)) { attributes.push(`href="${escape(value)}"`); continue; }
           try { const u = new URL(value, location.origin); value = ["https:", "http:"].includes(u.protocol) ? u.href : null; } catch { value = null; }
         } else if (inSVG && el.tagName === "use") value = /^#[\w.-]+$/.test(value) ? value : null;
         else if (["img", "image", "link"].includes(el.tagName)) value = pageURL(value, location, el.tagName !== "link");
@@ -68,7 +80,7 @@ export function sanitizePage(source: string, location: PageLocation, isSVG = fal
       if (value !== null && /url\s*\(|\\/i.test(value) && a.name !== "style") value = null;
       if (value !== null) attributes.push(`${a.name}="${escape(value)}"`);
     }
-    if (el.tagName === "a") attributes.push('target="_blank"', 'rel="noopener noreferrer"');
+    if (el.tagName === "a" && !/^#[\w.-]+$/.test(get("href") ?? "")) attributes.push('target="_blank"', 'rel="noopener noreferrer"');
     const start = `<${el.tagName}${attributes.length ? " " + attributes.join(" ") : ""}>`;
     return start + (voids.has(el.tagName) && !inSVG ? "" : el.childNodes.map(n => render(n, depth + 1)).join("") + `</${el.tagName}>`);
   }
@@ -77,9 +89,9 @@ export function sanitizePage(source: string, location: PageLocation, isSVG = fal
     const root = findSVG(document);
     return root ? render(root) : '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
   }
-  return "<!doctype html>" + render(document);
+  return "<!doctype html>" + render(document).replace("<head>", '<head><meta name="viewport" content="width=device-width, initial-scale=1">');
 }
 export function pageHeaders(location: PageLocation): Record<string, string> {
   const bundle = location.origin + location.prefix;
-  return {"content-security-policy": `sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; style-src 'unsafe-inline' ${bundle}; img-src ${bundle} data:; font-src ${bundle}; frame-ancestors 'self'; base-uri 'none'; form-action 'none'`, "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "cache-control": "private, no-store"};
+  return {"content-security-policy": `sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; style-src 'unsafe-inline' ${bundle}; img-src ${bundle} data:; font-src ${bundle}${location.inline ? " data:" : ""}; frame-ancestors 'self'; base-uri 'none'; form-action 'none'`, "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "cache-control": "private, no-store"};
 }

@@ -29,6 +29,10 @@ describe("orphan file cleanup", () => {
     for (const expected_revision of [0, 1]) expect((await post("file.put", {project: "files", path: "a.txt", content_type: "text/plain", base64: btoa("evidence"), expected_revision})).status).toBe(200);
     await env.HUB_DB.prepare("UPDATE file_revision SET deleted = 1 WHERE tenant_id = ?").bind(tenant.id).run();
     const refs = (await env.HUB_DB.prepare("SELECT object_key FROM file_revision WHERE tenant_id = ?").bind(tenant.id).all<{object_key: string}>()).results.map(r => r.object_key);
+    expect((await post("project.update", {project:"files",add:["pages"]})).status).toBe(200);
+    for (const expected_revision of [0,1]) expect((await post("page.publish", {project:"files",slug:"report",title:"Report",filename:"report.html",html:"<h1>Evidence</h1>",expected_revision})).status).toBe(200);
+    await env.HUB_DB.prepare("UPDATE page_revision SET deleted=1 WHERE tenant_id=?").bind(tenant.id).run();
+    refs.push(...(await env.HUB_DB.prepare("SELECT object_key FROM page_revision WHERE tenant_id=?").bind(tenant.id).all<{object_key:string}>()).results.map(r=>r.object_key));
     const project = refs[0]!.split("/")[2]!;
     const orphan = `project-files/${tenant.id}/${project}/${ulid()}`;
     const deletedProject = `project-files/${tenant.id}/${ulid()}/${ulid()}`;
@@ -758,7 +762,7 @@ describe("project deletion from the web", () => {
     expect(await w.count("project", "id", w.project.id)).toBe(1);
     expect(await env.HUB_DB.prepare("SELECT 1 FROM event WHERE kind = 'project.delete'").first()).toBeNull();
     expect(await deleteProject(wrapped, w.project)).toMatchObject({ok: true, counts: {inbox_items: 21, project: 3}});
-    expect(countBatches.filter(n => n > 0)).toEqual([46, 46, 46, 46]);
+    expect(countBatches.filter(n => n > 0)).toEqual([48, 48, 48, 48]);
     expect(objectPeak).toBe(3);
     expect(objectActive).toBe(0);
     expect(active).toBe(0);

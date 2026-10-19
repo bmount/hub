@@ -94,6 +94,7 @@ export const PART_CONTENT: Record<ProjectFeature, Array<[string, string]>> = {
   wiki: [["wiki_revision", "wiki revisions"]],
   knowledge: [["wiki_revision", "research revisions"]],
   files: [["file_revision", "file revisions"], ["file_upload", "uploads"]],
+  pages: [["page_revision", "page versions"], ["page_upload", "page uploads"]],
   people: [["contact_entity", "contacts"], ["contact_connection", "connections"]],
 };
 export const projectUpdate = defineVerb({

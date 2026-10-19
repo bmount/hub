@@ -1,3 +1,4 @@
+import { zipSync, strToU8 } from "fflate";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -46,7 +47,7 @@ beforeAll(async () => {
     ],
     compatibilityDate: "2026-09-01", compatibilityFlags: ["nodejs_compat"],
     bindings: { HUB_DOMAIN: "pimwell.test", HUB_SECRETS_KEY: KEY },
-    d1Databases: ["HUB_DB"], kvNamespaces: ["RATE", "OAUTH_KV"],
+    d1Databases: ["HUB_DB"], r2Buckets: ["GIT_PUSH_STAGING"], kvNamespaces: ["RATE", "OAUTH_KV"],
     durableObjects: { CONVERSATION: { className: "Conversation", useSQLite: true }, INBOX: { className: "Inbox", useSQLite: true } },
     serviceBindings: { ARDI: () => new Response("Denied in local test", { status: 503 }) },
     outboundService: async request => {
@@ -609,4 +610,43 @@ it("keeps standalone XML SVG inert and preserves safe drawing", async () => {
       if (layer !== "csp") expect(requests).toEqual([]);
     } finally { await context.close(); }
   }
+});
+
+it("uploads versioned Pages in the browser and fills desktop/phone viewports in both schemes", async () => {
+  const db=await mf.getD1Database("HUB_DB");
+  await db.prepare(`INSERT INTO project (id,tenant_id,slug,kind,display_name,created_at,parts) VALUES (?, ?, 'visual', 'tracker', 'Visual', ?, '["docket","pages"]')`).bind("00000000000000000000000286",ID,Date.now()).run();
+  // Redirect chains bypass Playwright fulfillment; acknowledge the native form POST,
+  // then navigate to its result explicitly (the worker tests assert the 303 target).
+  const {context,page}=await open(undefined, async context => {
+    await context.route(`${BASE}/visual/pages-upload`, async route => {
+      const req=route.request();
+      const response=await mf.dispatchFetch(req.url(),{method:req.method(),headers:{...await req.allHeaders(),"x-local-browser-host":HOST},body:req.postDataBuffer()??undefined,redirect:"manual"});
+      expect(response.status,await response.clone().text()).toBe(303);
+      await route.fulfill({status:200,contentType:"text/html",body:"<p>Uploaded</p>"});
+    });
+  });
+  const source=`<!doctype html><html><head><style>html,body{margin:0;min-height:100dvh;color-scheme:light dark}main{min-height:100dvh;display:grid;place-items:center}h1{color:rgb(1,2,3)}@media(prefers-color-scheme:dark){h1{color:rgb(4,5,6)}}#more:target{font-weight:bold}</style></head><body><main><h1>First version</h1><details><summary>More</summary><p>Visible detail</p></details><a href="#more">Target</a><p id="more">Target content</p></main></body></html>`;
+  try {
+    await page.goto(`${BASE}/visual/pages`);
+    await page.getByLabel("Slug", {exact:true}).fill("report");await page.getByLabel("Title", {exact:true}).fill("Viewport report");
+    await page.locator('input[type=file]').setInputFiles({name:"report.html",mimeType:"text/html",buffer:Buffer.from(source)});
+    await page.getByRole("button",{name:"Upload",exact:true}).click();await browserExpect(page.getByText("Uploaded",{exact:true})).toBeVisible();await page.goto(`${BASE}/visual/pages/report`);
+    const frame=page.frameLocator("iframe");await browserExpect(frame.getByRole("heading")).toHaveText("First version");
+    await frame.getByText("More",{exact:true}).click();await browserExpect(frame.getByText("Visible detail")).toBeVisible();
+    await frame.getByText("Target",{exact:true}).click();await browserExpect(frame.locator("#more")).toHaveCSS("font-weight","700");
+    for(const width of [1280,390])for(const colorScheme of ["light","dark"] as const){
+      await page.setViewportSize({width,height:844});await page.emulateMedia({colorScheme});
+      const box=await page.locator("iframe").boundingBox();expect(box?.width).toBe(width);expect(box!.y).toBeLessThan(120);expect(Math.round(box!.y+box!.height)).toBe(844);
+      await browserExpect(frame.getByRole("heading")).toHaveCSS("color",colorScheme==="dark"?"rgb(4, 5, 6)":"rgb(1, 2, 3)");
+      expect(await frame.locator("body").evaluate(el=>el.scrollWidth)).toBeLessThanOrEqual(width);
+    }
+    await page.getByRole("button",{name:"Full-screen",exact:true}).click();await browserExpect(page.locator(".page-bar")).toBeHidden();
+    await page.evaluate("document.exitFullscreen()");await browserExpect(page.locator(".page-bar")).toBeVisible();
+    await page.goto(`${BASE}/visual/pages?edit=report`);
+    const zip=zipSync({"index.html":strToU8('<link rel="stylesheet" href="assets/theme.css"><h1>Bundle version</h1>'),"assets/theme.css":strToU8("h1{color:rgb(9,8,7)}")});
+    await page.evaluate(({data})=>{const w=globalThis as any;const transfer=new w.DataTransfer();transfer.items.add(new w.File([new Uint8Array(data)],"bundle.zip",{type:"application/zip"}));w.document.getElementById("page-drop").dispatchEvent(new w.DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer:transfer}));},{data:[...zip]});
+    await page.getByRole("button",{name:"Upload",exact:true}).click();await browserExpect(page.getByText("Uploaded",{exact:true})).toBeVisible();await page.goto(`${BASE}/visual/pages/report`);await browserExpect(frame.getByRole("heading")).toHaveText("Bundle version");await browserExpect(frame.getByRole("heading")).toHaveCSS("color","rgb(9, 8, 7)");
+    await page.getByRole("link",{name:"History",exact:true}).click();await page.getByRole("link",{name:/v1 · Viewport report/}).click();await browserExpect(frame.getByRole("heading")).toHaveText("First version");
+    expect(await page.evaluate('window.cspViolations.filter(x=>x.directive==="script-src-elem")')).toEqual([]);
+  } finally {await context.close();}
 });

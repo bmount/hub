@@ -33,6 +33,7 @@ export async function purgeTenantStores(ctx: Ctx, tenant: Tenant): Promise<void>
     .bind(tid, tid).all<{ identity_id: string }>()).results;
   for (const { identity_id } of identities) await inboxStub(ctx.env, tid, identity_id).purgeTenant(tid, identity_id);
   if (!bucket && await db.prepare("/*perf-site:src%2Fdb%2FtenantStores.ts:35:24:purgeTenantStores:ce628869*/ SELECT 1 FROM file_revision WHERE tenant_id = ? LIMIT 1").bind(tid).first()) throw new HubError(503, "unavailable", "file storage unavailable");
+  if (!bucket && await db.prepare("SELECT 1 FROM page_revision WHERE tenant_id = ? LIMIT 1").bind(tid).first()) throw new HubError(503, "unavailable", "page storage unavailable");
   if (bucket) for (const prefix of [`project-files/${tid}/`, `git-push/${tid}/`]) {
     let cursor: string | undefined;
     do {

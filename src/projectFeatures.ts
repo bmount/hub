@@ -1,6 +1,6 @@
 import { badRequest } from "./errors";
 
-export type ProjectFeature = "docket" | "repo" | "wiki" | "knowledge" | "files" | "people";
+export type ProjectFeature = "docket" | "repo" | "wiki" | "knowledge" | "files" | "people" | "pages";
 /** Project capabilities, shared by pages, verbs and project-scoped tool discovery. */
 export const PROJECT_FEATURES = {
   repo: ["docket", "repo", "files"],
@@ -10,7 +10,7 @@ export const PROJECT_FEATURES = {
 } as const satisfies Record<string, readonly ProjectFeature[]>;
 export const PROJECT_KINDS = Object.keys(PROJECT_FEATURES);
 export const FEATURE_LABELS: Record<ProjectFeature, string> = {
-  docket: "Docket", repo: "Repository", wiki: "Wiki pages", knowledge: "Knowledge base", files: "Files", people: "People",
+  docket: "Docket", repo: "Repository", wiki: "Wiki pages", knowledge: "Knowledge base", files: "Files", people: "People", pages: "Pages",
 };
 export function projectFeatures(project: { parts?: string }): readonly ProjectFeature[] {
   return JSON.parse(project.parts ?? "[]") as ProjectFeature[];

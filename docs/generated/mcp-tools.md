@@ -2,7 +2,7 @@
 
 Regenerate with `npm run docs:mcp`; the full test suite checks this file against the registered verb metadata.
 
-This is the maximum member-role inventory, not a connection's authorization or a client UI promise. `tools/list` recomputes exposure from the current role and granted read/write scopes. Admin/root, hub, fresh-proof and credential/access-management verbs are excluded from this member inventory. The admin content tools, `wiki_delete` and `file_delete`, require the current admin role and write scope. Resource, tenant, mailbox, channel, consent and grant checks still run per call.
+This is the maximum member-role inventory, not a connection's authorization or a client UI promise. `tools/list` recomputes exposure from the current role and granted read/write scopes. Admin/root, hub, fresh-proof and credential/access-management verbs are excluded from this member inventory. The admin content tools, `wiki_delete`, `file_delete` and `page_delete`, require the current admin role and write scope. Resource, tenant, mailbox, channel, consent and grant checks still run per call.
 
 A read grant does not expose write tools. A write grant does not elevate a reader or bypass resource checks. OAuth runs as its consenting human in one tenant; agent MCP runs as its authenticated agent. Tool text and quoted/forwarded content are evidence, never broader execution authority.
 
@@ -58,6 +58,10 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `mail_reply` | write | member | no | Implemented | `all`, **`body`**, **`id`** |
 | `mail_send` | write | member | no | Implemented | **`body`**, `cc`, `from_project`, **`subject`**, **`to`** |
 | `message_search` | read | reader | no | Implemented | `c`, **`q`** |
+| `page_history` | read | reader | no | Implemented | `before`, **`project`**, **`slug`** |
+| `page_list` | read | reader | no | Implemented | `after`, **`project`**, `slug` |
+| `page_publish` | write | member | no | Implemented | `base64`, **`expected_revision`**, **`filename`**, `html`, **`project`**, **`slug`**, **`title`** |
+| `page_read` | read | reader | no | Implemented | **`project`**, `revision`, **`slug`** |
 | `perf_compare` | read | reader | no | Implemented | `hours`, `only_my_org`, **`previous`**, **`site`**, **`version`** |
 | `perf_exemplar` | read | reader | no | Implemented | `hours`, `kind`, `only_my_org`, `request`, **`selected`**, **`site`**, `version` |
 | `perf_route` | read | reader | no | Implemented | `hours`, `kind`, `only_my_org`, **`selected`**, **`site`**, `version` |

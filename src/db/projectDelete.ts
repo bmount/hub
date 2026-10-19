@@ -7,7 +7,7 @@ import { repoOwnership } from "../code/artifactPush";
 import { ulid } from "../ids";
 
 // Used by the cascade and the schema-coverage test; children precede their parents.
-export const PROJECT_DELETE_SCOPED_TABLES = ["repository_sync", "repository_commit", "repository", "contact_link", "contact_connection", "contact_entity", "document_delivery", "file_download", "file_revision", "file_upload", "file_multipart", "wiki_revision", "review", "app_error_group", "app_deploy", "site", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"] as const;
+export const PROJECT_DELETE_SCOPED_TABLES = ["repository_sync", "repository_commit", "repository", "contact_link", "contact_connection", "contact_entity", "document_delivery", "page_revision", "page_upload", "file_download", "file_revision", "file_upload", "file_multipart", "wiki_revision", "review", "app_error_group", "app_deploy", "site", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"] as const;
 export const PROJECT_DELETE_OTHER_TABLES = ["channel", "work_item"] as const;
 
 export const projectDeleteKey = (tenant: string, project: string) => `project_delete:v1:${tenant}:${project}`;
@@ -149,7 +149,7 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
     }
 
     const bucket = ctx.env.GIT_PUSH_STAGING;
-    if (!bucket && counts.file_revision) throw new HubError(503, "unavailable", "file storage unavailable; sign in on the web and retry deletion");
+    if (!bucket && (counts.file_revision || counts.page_revision)) throw new HubError(503, "unavailable", "file storage unavailable; sign in on the web and retry deletion");
     const purgeFiles = async () => {
       if (bucket) {
         // Only internal tenant/project ids select storage; trailing slash keeps sibling prefixes disjoint.

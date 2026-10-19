@@ -72,7 +72,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
   return { brandHref: hub, org: null, me, tip: tipFor(key), breadcrumb: [{label: "Pimwell", href: "/"}, {label: ({sessions:"Sessions",models:"Models and keys",orgs:"Organizations",apps:"Apps"} as Record<string,string>)[key] ?? nav.find(n => n.section === active)?.label ?? active, href: new URL(ctx.pageUrl ?? hub).pathname, current: true}], nav: nav.map((n) => ({ href: n.href, label: n.label, active: n.href === new URL(ctx.pageUrl ?? hub).pathname })) };
 }
 
-const VIEW_LABELS: Record<string, string> = { docket: "Docket", graph: "Graph", frontier: "Frontier", w: "Docket", board: "Board", status: "Status", velocity: "Velocity", code: "Code", files: "Files", reviews: "Reviews", wiki: "Wiki", documents: "Files", contacts: "Contacts and graph", c: "Chat", mail: "Mail", attention: "Needs me", people: "People and agents", assistant: "Assistant", apps: "Apps", usage: "AI usage", situations: "Situations", admin: "Admin", search: "Search", new: "File work", archive: "Archive", planned: "Coming" };
+const VIEW_LABELS: Record<string, string> = { docket: "Docket", graph: "Graph", frontier: "Frontier", w: "Docket", board: "Board", status: "Status", velocity: "Velocity", code: "Code", files: "Files", reviews: "Reviews", wiki: "Wiki", pages: "Pages", documents: "Files", contacts: "Contacts and graph", c: "Chat", mail: "Mail", attention: "Needs me", people: "People and agents", assistant: "Assistant", apps: "Apps", usage: "AI usage", situations: "Situations", admin: "Admin", search: "Search", new: "File work", archive: "Archive", planned: "Coming" };
 
 function locationLinks(ctx: Ctx, nav: Shell["nav"]): KitLink[] {
   const url = new URL(ctx.pageUrl ?? "https://pimwell.com/"), segments = url.pathname.split("/").filter(Boolean);
@@ -128,6 +128,7 @@ function projectExplorer(ctx: Ctx, env: Env): string {
   }
   if (features.includes("wiki")) nodes.push(node("Wiki", `${base}/wiki`, p.wiki));
   if (features.includes("knowledge")) nodes.push({...node("Knowledge base and research", `${base}/wiki`, p.wiki), expanded: true, children: [node("Knowledge base", `${base}/wiki`, p.wiki - p.research), node("Research", `${base}/wiki?view=research`, p.research)]});
+  if (features.includes("pages")) nodes.push(node("Pages", `${base}/pages`, undefined));
   if (features.includes("files")) nodes.push(node(features.includes("repo") ? "Attachments" : "Files", `${base}/documents`, p.files));
   if (features.includes("people")) nodes.push(node("Contacts and graph", `${base}/contacts`, p.contacts));
   nodes.push({...node("Channels", "/c", p.channels.length), expanded: true, children: p.channels.sort((a,b)=>a.display_name.localeCompare(b.display_name,undefined,{numeric:true})).map(c => node(c.display_name, `/c/${encodeURIComponent(c.slug)}`, c.count))});

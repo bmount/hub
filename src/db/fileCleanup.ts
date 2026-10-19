@@ -23,6 +23,7 @@ export async function cleanupFileObjects(env: Env, now: number, dryRun = true) {
     // No current-version, deleted, tenant or project existence filter: every
     // surviving metadata reference is evidence that must remain readable.
     if (await env.HUB_DB.prepare("/*perf-site:src%2Fdb%2FfileCleanup.ts:25:15:cleanupFileObjects:79c382a4*/ SELECT 1 FROM file_revision WHERE object_key = ? LIMIT 1").bind(object.key).first()) continue;
+    if (await env.HUB_DB.prepare("SELECT 1 FROM page_revision WHERE object_key = ? LIMIT 1").bind(object.key).first()) continue;
     eligible++;
     if (!dryRun) {
       await bucket.delete(object.key);

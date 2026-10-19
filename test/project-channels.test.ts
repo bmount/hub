@@ -1,4 +1,6 @@
 // Every new project gets #<project>-team and #<project>-ops; a name already taken is skipped, never an error.
+import { zipSync, strToU8 } from "fflate";
+import { pageBundle } from "../src/verbs/pages";
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Buffer } from "node:buffer";
@@ -608,5 +610,76 @@ describe("default project channels", () => {
     expect(rows.results[1]!.topic).toContain("Talk about Site");
     const docket = await (await SELF.fetch(`https://${HOST}/docket`, { headers: cookieHeaders(pat.token, HOST) })).text();
     expect(docket).not.toContain('href="/site-team/docket"');
+  });
+});
+
+describe("versioned project Pages", () => {
+  async function world() {
+    registerAllVerbs();
+    const t=await seedTenant("acme");
+    const h=await seedHuman("page@example.com",{memberships:[{tenant_id:t.id,role:"member"}]});
+    const {grant}=await seedGrant(t,h);
+    const ctx=oauthContext(env,(await liveGrant(env.HUB_DB,grant.id,Date.now()))!,["read","write"],{now:Date.now(),ip:"203.0.113.1"});
+    await createProject(env.HUB_DB,{tenant_id:t.id,namespace_id:null,slug:"visual",kind:"tracker",display_name:"Visual"},Date.now());
+    const headers=cookieHeaders(h.token,HOST);
+    const call=(name:string,args:Record<string,unknown>={})=>callTool(ctx,name,{project:"visual",...args});
+    expect((await call("project_update",{add:["pages"]})).isError).toBeUndefined();
+    return {t,h,ctx,headers,call};
+  }
+  it("publishes and revises over MCP, pins historical assets, searches text and guards tenant/scope/admin boundaries",async()=>{
+    const w=await world();
+    const args={slug:"report",title:"Quarterly",filename:"report.html",expected_revision:0,html:'<h1>visiblepageneedle</h1><script>scriptneedle()</script><style>body{background:red}</style>'};
+    expect((await w.call("page_publish",args)).structuredContent).toMatchObject({revision:1});
+    expect((await w.call("page_publish",args)).isError).toBe(true);
+    expect((await w.call("page_publish",{...args,expected_revision:1,html:"<h1>new version</h1>"})).structuredContent).toMatchObject({revision:2});
+    expect((await w.call("page_history",{slug:"report"})).structuredContent).toMatchObject({history:[{revision:2},{revision:1}]});
+    expect((await w.call("page_read",{slug:"report",revision:1})).structuredContent).toMatchObject({page:{revision:1,text:"visiblepageneedle "}});
+    const asset="https://"+HOST+"/visual/pages-content/report/1/index.html";
+    const old=await SELF.fetch(asset,{headers:w.headers});expect(old.status).toBe(200);
+    const html=await old.text();expect(html).toContain("visiblepageneedle");expect(html).not.toContain("scriptneedle");expect(html).toContain('name="viewport"');
+    expect(old.headers.get("content-security-policy")).toContain("sandbox allow-popups");expect(old.headers.get("content-security-policy")).not.toContain("allow-same-origin");
+    expect((await SELF.fetch(asset)).status).not.toBe(200);
+    const other=await seedTenant("other");const outsider=await seedHuman("outside@example.com",{memberships:[{tenant_id:other.id,role:"admin"}]});
+    expect((await SELF.fetch(asset,{headers:cookieHeaders(outsider.token,HOST)})).status).not.toBe(200);
+    expect((await w.call("page_delete",{slug:"report",expected_revision:2})).isError).toBe(true);
+    expect((await callTool({...w.ctx,role:"reader"},"page_publish",args)).isError).toBe(true);
+    const viewer=await (await SELF.fetch(`https://${HOST}/visual/pages/report?revision=1&history=1`,{headers:w.headers})).text();
+    expect(viewer).toContain("page-view");expect(viewer).toContain("/visual/pages-content/report/1/index.html");expect(viewer).not.toContain('class="rail"');expect(viewer).toContain("Full-screen");
+    expect((await w.call("page_publish",{...args,expected_revision:2,html:"<h1>visiblepageneedle</h1>"})).isError).toBeUndefined();
+    expect(JSON.stringify(await w.call("search_query",{q:"visiblepageneedle"}))).toContain("/visual/pages/report");
+    expect(JSON.stringify(await w.call("search_query",{q:"scriptneedle"}))).not.toContain("/visual/pages/report");
+    expect((await w.call("project_update",{remove:["pages"]})).isError).toBe(true);
+    const deleted=await callTool({...w.ctx,role:"admin"},"page_delete",{project:"visual",slug:"report",expected_revision:3,confirm:true});expect(deleted.isError,JSON.stringify(deleted)).toBeUndefined();
+    expect((await w.call("page_read",{slug:"report"})).isError).toBe(true);
+    expect((await SELF.fetch(asset,{headers:w.headers})).status).toBe(200);
+  });
+  it("uploads HTML and ZIP through web forms and one-use URLs with versioned relative assets",async()=>{
+    const w=await world();
+    async function upload(slug:string,name:string,bytes:Uint8Array,revision=0){const fd=new FormData();fd.set("slug",slug);fd.set("title",slug);fd.set("expected_revision",String(revision));fd.set("file",new File([bytes],name));return SELF.fetch(`https://${HOST}/visual/pages-upload`,{method:"POST",headers:w.headers,body:fd,redirect:"manual"});}
+    expect((await upload("single","single.html",strToU8("<h1>Single</h1>"))).status).toBe(303);
+    const zip=zipSync({"index.html":strToU8('<link rel="stylesheet" href="assets/style.css"><h1>Bundle</h1>'),"assets/style.css":strToU8("h1{color:red}")});
+    const r=await upload("bundle","bundle.zip",zip);expect(r.status,await r.clone().text()).toBe(303);
+    const html=await (await SELF.fetch(`https://${HOST}/visual/pages-content/bundle/1/index.html`,{headers:w.headers})).text();
+    expect(html).toContain("<style>h1{color:red}</style>");
+    expect(html).not.toContain('href="assets/style.css"');
+    expect((await upload("bundle","bundle.zip",zip,1)).status).toBe(303);
+    expect(await (await SELF.fetch(`https://${HOST}/visual/pages-content/bundle/1/assets/style.css`,{headers:w.headers})).text()).toBe("h1{color:red}");
+    const cap=await w.call("page_publish",{slug:"url-upload",title:"URL",filename:"report.zip",expected_revision:0});
+    const url=(cap.structuredContent as {upload_url:string}).upload_url;expect(url).toContain("pages-upload?token=");
+    const put=()=>SELF.fetch(url,{method:"PUT",headers:w.headers,body:zip});expect((await put()).status).toBe(200);expect((await put()).status).toBe(404);
+    const fd=new FormData();fd.set("slug","csrf");fd.set("title","CSRF");fd.set("expected_revision","0");fd.set("file",new File(["<h1>CSRF</h1>"],"x.html"));
+    expect((await SELF.fetch(`https://${HOST}/visual/pages-upload`,{method:"POST",headers:{...w.headers,origin:"https://evil.example"},body:fd})).status).toBe(403);
+    const list=await (await SELF.fetch(`https://${HOST}/visual/pages`,{headers:w.headers})).text();expect(list).toContain("page-drop");expect(list).toContain("Upload new version");
+  });
+  it("rejects unsafe bundle paths, JavaScript, duplicates, unsupported assets and expansion bombs",()=>{
+    const bundle=(files:Record<string,Uint8Array>)=>()=>pageBundle("x.zip",zipSync(files));
+    expect(bundle({"index.html":strToU8("ok"),"app.js":strToU8("alert(1)")})).toThrow("JavaScript");
+    expect(bundle({"../index.html":strToU8("ok")})).toThrow("relative");
+    expect(bundle({"file.txt":strToU8("ok")})).toThrow("unsupported");
+    expect(bundle({"nested/index.html":strToU8("ok")})).toThrow("root");
+    expect(bundle({"index.html":new Uint8Array(6*1024*1024)})).toThrow("5 MiB");
+    expect(bundle({"index.html":strToU8("ok"),"image%2epng":strToU8("x")})).toThrow("paths");
+    expect(()=>pageBundle("file.js",strToU8("x"))).toThrow(".html");
+    expect(bundle(Object.fromEntries(Array.from({length:201},(_,i)=>[`${i}.css`,strToU8("a{}")] )))).toThrow("200 assets");
   });
 });
