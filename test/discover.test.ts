@@ -1,7 +1,14 @@
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { apiPost, bearer, cookieHeaders, seedHuman, seedTenant } from "./helpers";
+import { apiPost, bearer, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 import { INIT, connectWithTokens, mcpPost, rpcBody } from "./oauth-helpers";
+
+import { SKILLS } from "../src/skills";
+import { guideManifest } from "../src/skills/versions";
+import { syncGuideNotices, guideStatus } from "../src/skills/receipts";
+import { sha256Hex } from "../src/ids";
+import { skillRead } from "../src/verbs/discover";
+import type { Ctx } from "../src/auth/context";
 
 const HOST = "acme.pimwell.test";
 async function connected() {
@@ -15,6 +22,61 @@ async function connected() {
 const call = async (access: string, name: string, args: Record<string, unknown> = {}) => (await rpcBody(await mcpPost("acme", access, "tools/call", { name, arguments: args }))).result;
 
 describe("finding your way over MCP", () => {
+  it("versions content, delivers one change notice per active agent and guards read receipts", async () => {
+    const t = await seedTenant("acme");
+    const other = await seedTenant("other");
+    const human = await seedHuman("owner@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
+    const a = await seedAgent(t, human.identity, "guide-bot");
+    const b = await seedAgent(other, human.identity, "other-bot");
+    const api = async (verb: string, body: unknown = {}, token = a.token) => {
+      const response = await apiPost(HOST, verb, body, bearer(token));
+      expect(response.status).toBe(200);
+      return (await response.json() as any).result;
+    };
+    const guide = await guideManifest();
+    const list = await api("skill.list");
+    expect(list.skills).toHaveLength(guide.skills.length);
+    for (const s of guide.skills) {
+      expect(s.version).toBe(await sha256Hex(s.body));
+      expect(s.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(s.changed.length).toBeGreaterThan(0);
+    }
+    await Promise.all([syncGuideNotices(env.HUB_DB, Date.now()), syncGuideNotices(env.HUB_DB, Date.now())]);
+    const entries = (await api("attention.list")).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0].summary).toContain("skill_read");
+    expect((await api("attention.done", { all: true })).done).toBe(0);
+    expect((await apiPost(HOST, "attention.done", { ids: [entries[0].id] }, bearer(b.token))).status).toBe(404);
+    expect((await guideStatus(env.HUB_DB, t.id, a.agent.identity.id)).caught_up).toBe(false);
+    for (const s of guide.skills) {
+      const read = await api("skill.read", { name: s.name });
+      expect(read.version).toBe(s.version);
+    }
+    expect((await api("attention.done", { ids: [entries[0].id] })).done).toBe(1);
+    expect((await guideStatus(env.HUB_DB, t.id, a.agent.identity.id)).caught_up).toBe(true);
+    const page = await (await SELF.fetch(`https://${HOST}/people/${a.agent.identity.email}`, { headers: cookieHeaders(human.token, HOST) })).text();
+    expect(page).toContain("Caught up");
+    expect(page).toContain(guide.version);
+    expect(await api("attention.list")).toEqual({ entries: [] });
+
+    // A subsequent release edits one skill: only that skill must be read again.
+    const original = SKILLS[0]!.body;
+    try {
+      SKILLS[0]!.body += "\nA new guide revision.";
+      await syncGuideNotices(env.HUB_DB, Date.now());
+      await syncGuideNotices(env.HUB_DB, Date.now());
+      const notices = (await env.HUB_DB.prepare("SELECT * FROM guide_notice WHERE tenant_id = ? AND identity_id = ? ORDER BY created_at DESC").bind(t.id, a.agent.identity.id).all<any>()).results;
+      expect(notices).toHaveLength(2);
+      expect(JSON.parse(notices[0].required).map((s: any) => s.name)).toEqual(["start-here"]);
+      expect((await guideStatus(env.HUB_DB, t.id, a.agent.identity.id)).caught_up).toBe(false);
+      expect((await api("attention.done", { ids: [notices[0].id] })).done).toBe(0);
+      const read = await skillRead.run({ db: env.HUB_DB, tenant: t, identity: a.agent.identity, now: Date.now() } as Ctx, { name: "start-here" });
+      expect(read.body).toContain("A new guide revision.");
+      expect((await api("attention.done", { ids: [notices[0].id] })).done).toBe(1);
+      expect((await guideStatus(env.HUB_DB, t.id, a.agent.identity.id)).caught_up).toBe(true);
+    } finally { SKILLS[0]!.body = original; }
+  });
+
   it("announces resources and points new agents at the start-here skill", async () => {
     const { access } = await connected();
     const init = (await rpcBody(await mcpPost("acme", access, "initialize", INIT))).result;

@@ -14,6 +14,18 @@ Pimwell is **not read-only over MCP**. Human OAuth connections use the tenant's 
 
 `initialize` identifies the authenticated organization: serverInfo `name` is `pimwell-<org-slug>`, `title` is `Pimwell · <org display name>`, and the first line of `instructions` repeats that title. Both transports use the current organization record on each request. Project endpoints are separate work; these organization endpoints do not infer a project from tool arguments.
 
+## Versioned guide and agent read receipts
+
+`skill_list` and `skill_read` expose a SHA-256 content version, updated date and one-line change summary per skill, including the canonical `pimwell-agent-onboarding` SKILL.md. The saved file's organization-specific names do not affect the canonical hash. A skill read by an authenticated agent records that exact version in its organization; public/human reads do not claim the agent caught up. Reads remain queries: this receipt is delivery evidence, not understanding, execution authority or proof that a local file was replaced.
+
+Every five-minute cron reconciles the deployed guide manifest against the last manifest delivered to each active agent in an active organization. A changed manifest creates one durable attention notice per agent/version, naming only changed skills and summaries. The first versioned release establishes a baseline notice containing all skills; new agents also receive that baseline. `attention_list` reconciles the calling agent immediately so it need not wait for cron. Concurrent reconciliation deduplicates notices; unchanged releases do not notify again. The notice links to the live guide and never supplies guide content. An acknowledgement, including `all:true`, leaves unread guide notices open; read each named skill with `skill_read` first. Reading a newer revision also satisfies an older notice for that skill. Other attention entries retain their existing behavior.
+
+The agent's People inspector shows its operator and human administrators whether it has read every current skill, the current manifest version, the last fully read manifest and per-skill last-read hashes/dates. These records follow tenant boundaries. Archived agents/memberships/organizations are not notified. Operator standing directions (AGENTS.md or equivalent) are outside this mechanism and are never read or rewritten.
+
+MCP initialize instructions include the latest dated guide change on every new session. Onboarding tells agents to check attention at session start and re-fetch only their saved Pimwell onboarding procedure when notified. Mail and notice text are never authoritative guide sources: use live `skill_read`.
+
+When editing skills, update the date and one-line summary in `src/skills/versions.ts` in the same commit. Hashes and manifest versions are computed from deployed content, not manually assigned. Skill body edits (including the saved onboarding generator) therefore trigger reconciliation automatically; no separate post-release send is required.
+
 ## Discovery versus authorization
 
 The [generated inventory](../generated/mcp-tools.md) is derived from the same registered verb table, `exposedVerbs` policy and `toolDefinition` used by `tools/list`. It shows the maximum member-role inventory, required argument names, read/write scopes, minimum roles, destructive hints and implemented versus declared/planned entries. It is not an authorization snapshot: every request recomputes current role, grant scopes and applicable resource policy. Planned entries still return `not_implemented` and must not be described as shipped features.

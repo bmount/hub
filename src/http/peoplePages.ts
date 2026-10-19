@@ -11,6 +11,7 @@ import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
 import { extraCheck, proofFresh } from "./extraCheck";
 import { tenantAgentActivity } from "../db/agents";
+import { guideStatus } from "../skills/receipts";
 import { listAgentRunsForOperator, listSessions } from "../db/sessions";
 import { listApiTokensForOperator } from "../db/apiTokens";
 
@@ -111,6 +112,11 @@ ${fresh ? `<form method="post" action="/api/invite.create">
       const sessions = await listSessions(ctx.db,ctx.identity.id,ctx.now);
       sessionHtml = inspectorSection("Sessions",[{label:"Active",html:String(sessions.length)}],`<a href="https://${esc(env.HUB_DOMAIN)}/me/sessions">Manage sessions</a>`);
     }
+    let guideHtml = "";
+    if (person.kind === "agent" && ctx.identity.kind === "human" && (admin || person.operator_id === ctx.identity.id)) {
+      const guide = await guideStatus(ctx.db, tid, person.id);
+      guideHtml = `<h2>Guide</h2><p>${guide.caught_up ? "Caught up" : "Not caught up"} · current version <code>${esc(guide.version)}</code></p><p>Last fully read guide: ${guide.last_read_version ? `<code>${esc(guide.last_read_version)}</code>` : "none recorded"}</p><ul>${guide.skills.map(s => `<li>${esc(s.name)}: ${s.read ? `read ${day(s.read.read_at)}` : "not read at current version"}${s.last_read ? ` · last read <code>${esc(s.last_read.version)}</code> ${day(s.last_read.read_at)}` : ""}</li>`).join("")}</ul><p class="lede">Records delivery through skill_read, not proof of understanding or changes to local files. Operator standing directions are never changed.</p>`;
+    }
     const manage = canManage ? `<h2>Manage</h2>
 <form method="post" action="/api/member.set_role"><input type="hidden" name="email" value="${esc(person.email)}"><input type="hidden" name="_back" value="/people/${esc(encodeURIComponent(person.email))}">
 <label>Role <select name="role">${roles.map((r) => option(r, r, r === person.role)).join("")}</select></label> <button type="submit" class="quiet">Change role</button></form>
@@ -125,6 +131,7 @@ ${fresh ? `<form method="post" action="/api/agent.connect"><input type="hidden" 
 ${sponsored.length ? `<h2>Agents who answer to them</h2><ul>${sponsored.map((s) => `<li><a href="/people/${esc(encodeURIComponent(s.email))}">${esc(s.display_name)}</a></li>`).join("")}</ul>` : ""}
 ${person.id === ctx.identity.id || person.operator_id === ctx.identity.id ? '<p><a href="https://' + esc(env.HUB_DOMAIN) + '/me">Account and sessions</a></p>' : ""}
 ${sessionHtml}
+${guideHtml}
 ${manage}
 <h2>Recent activity</h2>${activity.length ? `<ul class="timeline">${activity.map((a) => `<li><time>${ago(a.created_at, ctx.now)}</time><span>${esc(a.summary)}</span></li>`).join("")}</ul>` : `<p class="lede">Nothing yet.</p>`}`;
     key = `person:${person.id}:${person.role}`;

@@ -9,7 +9,7 @@ const TENANT_TABLES = [
   "repository_sync", "repository_commit", "repository", "git_commit", "git_push", "git_legacy_forward", "git_repository",
   "document_delivery", "file_download", "file_download_day", "file_revision", "file_upload", "file_multipart", "wiki_revision", "review_comment", "review",
   "situation", "assistant_message", "assistant_thread", "ardi_cred", "agent_mcp_session", "agent_connect_link", "code_event", "code_sync",
-  "attention", "follow", "work_comment",
+  "guide_notice", "guide_read", "attention", "follow", "work_comment",
   "app_event", "app_error_group", "app_deploy", "app_stat", "site", "app_source",
   "msg_ref", "msg_index", "conversation_member", "agent_chat_state", "chat_control", "channel",
   "model_call", "model_route", "provider_credential", "signin_grant",

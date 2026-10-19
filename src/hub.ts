@@ -1,3 +1,4 @@
+import { syncGuideNotices } from "./skills/receipts";
 import { clientSlow } from "./http/clientSlow";
 import { clientTiming } from "./http/clientTiming";
 import { situationsPage } from "./http/situationPage";
@@ -266,6 +267,7 @@ export default {
         span("cron.cleanup", () => cleanupFileUploads(e, Date.now())),
         span("cron.git.sync", () => syncAll(e, Date.now())),
         span("cron.performance", () => runPerformanceChecks(e)),
+        span("cron.guide", () => syncGuideNotices(e.HUB_DB, Date.now())),
       ]);
     }));
     ctx.waitUntil(tracedInvocation(env, p => ctx.waitUntil(p), "synthetic", async e => {

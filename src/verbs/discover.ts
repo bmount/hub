@@ -4,7 +4,8 @@ import { defineVerb, listVerbs } from "./table";
 import { optInt, reqString } from "./params";
 import { notFound } from "../errors";
 import { exposedVerbs, mcpViolations, toolName } from "../mcp/policy";
-import { SKILLS, skill } from "../skills";
+import { versionedSkills } from "../skills/versions";
+import { recordSkillRead } from "../skills/receipts";
 import { DATA_NOTE, cleanText } from "../mcp/render";
 import { connectionScopes, type Ctx } from "../auth/context";
 import { readableMailEvents } from "../auth/mailAccess";
@@ -15,10 +16,10 @@ export const skillList = defineVerb({
   mcp: {
     scope: "read", destructive: false, title: "Skills",
     input: { type: "object", properties: {}, additionalProperties: false },
-    render: (r) => ["**Skills** (read one with skill_read; start with start-here)", ...(r as { skills: Array<{ name: string; summary: string }> }).skills.map((s) => `- \`${s.name}\`: ${s.summary}`)].join("\n"),
+    render: (r) => ["**Skills** (read one with skill_read; start with start-here)", ...(r as { skills: Array<{ name: string; summary: string; version: string; updated: string; changed: string }> }).skills.map((s) => `- \`${s.name}\`: ${s.summary} (${s.version}, updated ${s.updated}) — ${s.changed}`)].join("\n"),
   },
   parse: () => ({}),
-  run: async () => ({ skills: SKILLS.map(({ name, title, summary }) => ({ name, title, summary, uri: `pimwell://skills/${name}` })) }),
+  run: async () => ({ skills: (await versionedSkills()).map(({ body, ...s }) => ({ ...s, uri: `pimwell://skills/${s.name}` })) }),
 });
 
 export const skillRead = defineVerb({
@@ -27,12 +28,13 @@ export const skillRead = defineVerb({
   mcp: {
     scope: "read", destructive: false, title: "Read a skill",
     input: { type: "object", properties: { name: { type: "string", description: "A skill name from skill_list, e.g. start-here." } }, required: ["name"], additionalProperties: false },
-    render: (r) => { const s = r as { title: string; body: string }; return `# ${s.title}\n\n${s.body}`; },
+    render: (r) => { const s = r as { title: string; body: string; version: string; updated: string; changed: string }; return `# ${s.title}\nVersion: ${s.version}\nUpdated: ${s.updated}\nWhat changed: ${s.changed}\n\n${s.body}`; },
   },
   parse: (i) => ({ name: reqString(i, "name", { max: 60 }) }),
-  run: async (_ctx, p) => {
-    const s = skill(p.name);
+  run: async (ctx, p) => {
+    const s = (await versionedSkills()).find(s => s.name === p.name);
     if (!s) throw notFound("no such skill; see skill_list");
+    await recordSkillRead(ctx, s.name, s.version);
     return s;
   },
 });
