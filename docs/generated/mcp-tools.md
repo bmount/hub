@@ -46,8 +46,8 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `file_get` | read | reader | no | Implemented | `include_base64`, **`path`**, **`project`**, `revision` |
 | `file_history` | read | reader | no | Implemented | `before`, **`path`**, **`project`** |
 | `file_list` | read | reader | no | Implemented | `after`, `folder`, `path`, **`project`** |
-| `file_put` | write | member | no | Implemented | **`base64`**, **`content_type`**, **`expected_revision`**, `item_id`, **`path`**, `person_id`, **`project`** |
-| `file_upload_url` | write | member | no | Implemented | **`content_type`**, **`expected_revision`**, `item_id`, **`path`**, `person_id`, **`project`** |
+| `file_put` | write | member | no | Implemented | **`base64`**, **`content_type`**, **`expected_revision`**, `item_id`, **`path`**, `person_id`, **`project`**, `sha256` |
+| `file_upload_url` | write | member | no | Implemented | **`content_type`**, **`expected_revision`**, `item_id`, **`path`**, `person_id`, **`project`**, `sha256`, `size` |
 | `graph_neighbors` | read | reader | no | Implemented | `hops`, **`id`**, **`project`**, `type` |
 | `graph_path` | read | reader | no | Implemented | **`from`**, **`project`**, **`to`**, `type` |
 | `inbox_ack` | write | reader | no | Implemented | `items`, `through` |

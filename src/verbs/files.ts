@@ -10,8 +10,9 @@ import { requireProjectFeature } from "../projectFeatures";
 import { sha256Hex, ulid } from "../ids";
 import { recordEvent } from "../db/events";
 
-export const FILE_BYTES = 25 * 1024 * 1024;
-export const PROJECT_FILE_BYTES = 250 * 1024 * 1024;
+export const FILE_BYTES = 5 * 1024 * 1024 * 1024;
+export const PROJECT_FILE_BYTES = 50 * 1024 * 1024 * 1024;
+export const FILE_REQUEST_BYTES = 25 * 1024 * 1024;
 export const BASE64_FILE_BYTES = 512 * 1024;
 export const FILE_TEXT_BYTES = 128 * 1024;
 export const currentFile = "r.revision = (SELECT MAX(h.revision) FROM file_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.path = r.path)";
@@ -40,7 +41,7 @@ export function fileType(path: string, type: string): string {
   return TYPES[ext]![0]!;
 }
 export function validateFile(path: string, type: string, bytes: Uint8Array): {type: string; text: string} {
-  if (bytes.byteLength > FILE_BYTES) throw new HubError(413, "too_large", "file limit is 25 MiB");
+  if (bytes.byteLength > FILE_BYTES) throw new HubError(413, "too_large", "file limit is 5 GiB");
   type = fileType(path, type);
   let text = "";
   if (type.startsWith("text/") || type === "application/json" || type === "application/x-ndjson") {
@@ -77,11 +78,12 @@ export async function fileProject(ctx: Ctx, slug: string, writing = false) {
   if (writing && p.state !== "active") throw conflict("project is archived");
   return p;
 }
-export type FileParams = {project: string; path: string; content_type: string; expected_revision: number; item_id: string | null; person_id: string | null};
-export async function putFile(ctx: Ctx, v: FileParams, bytes: Uint8Array, source: string | null = null) {
+export type FileParams = {project: string; path: string; content_type: string; expected_revision: number; item_id: string | null; person_id: string | null; sha256?: string | null};
+export async function putFile(ctx: Ctx, v: FileParams, bytes: Uint8Array, source: string | null = null, prepared?: {key: string; size: number; sha256: string; text: string; type: string; token_hash: string}) {
   const p = await fileProject(ctx, v.project, true), tid = ctx.tenant!.id;
   filePath(v.path);
-  const validated = validateFile(v.path, v.content_type, bytes);
+  const validated = prepared ?? validateFile(v.path, v.content_type, bytes);
+  const size = prepared?.size ?? bytes.length;
   if (v.item_id && !await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:66:27:putFile:10231eec*/ SELECT 1 FROM work_item WHERE id = ? AND tenant_id = ? AND project_id = ?").bind(v.item_id, tid, p.id).first()) throw notFound("no such project item");
   if (v.person_id && !await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:67:29:putFile:2d1e104e*/ SELECT 1 FROM membership WHERE identity_id = ? AND tenant_id = ? AND state = 'active'").bind(v.person_id, tid).first()) throw notFound("no such organization person");
   if (source) {
@@ -91,9 +93,10 @@ export async function putFile(ctx: Ctx, v: FileParams, bytes: Uint8Array, source
   const bucket = ctx.env.GIT_PUSH_STAGING;
   if (!bucket) throw new HubError(503, "unavailable", "file storage unavailable");
   // A private, disjoint prefix reuses the existing R2 binding; keys are never caller supplied.
-  const key = `project-files/${tid}/${p.id}/${ulid(ctx.now)}`;
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
-  await bucket.put(key, bytes);
+  const key = prepared?.key ?? `project-files/${tid}/${p.id}/${ulid(ctx.now)}`;
+  const sha256 = prepared?.sha256 ?? createHash("sha256").update(bytes).digest("hex");
+  if (v.sha256 && v.sha256 !== sha256) throw badRequest("file SHA-256 mismatch");
+  if (!prepared) await bucket.put(key, bytes);
   const name = v.path.split("/").pop()!, folder = v.path.slice(0, -name.length).replace(/\/$/, "");
   try {
     // Quota and revision comparison occur in the insert, including all retained versions.
@@ -101,10 +104,11 @@ export async function putFile(ctx: Ctx, v: FileParams, bytes: Uint8Array, source
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE COALESCE((SELECT MAX(revision) FROM file_revision WHERE tenant_id = ? AND project_id = ? AND path = ?), 0) = ?
       AND COALESCE((SELECT SUM(size) FROM file_revision WHERE tenant_id = ? AND project_id = ?), 0) + ? <= ?
+      AND (? IS NULL OR EXISTS (SELECT 1 FROM file_multipart WHERE token_hash = ? AND state = 'finishing'))
       AND EXISTS (SELECT 1 FROM project WHERE id = ? AND tenant_id = ? AND state = 'active' AND EXISTS (SELECT 1 FROM json_each(project.parts) WHERE value = 'files'))`)
-      .bind(tid, p.id, v.path, v.expected_revision + 1, name, folder, validated.type, bytes.length, sha256, key, ctx.identity!.id, ctx.now, v.item_id, v.person_id, validated.text, source,
-        tid, p.id, v.path, v.expected_revision, tid, p.id, bytes.length, PROJECT_FILE_BYTES, p.id, tid).run();
-    if (!r.meta.changes) throw conflict("stale revision, archived project, or project file quota (250 MiB including history) exceeded");
+      .bind(tid, p.id, v.path, v.expected_revision + 1, name, folder, validated.type, size, sha256, key, ctx.identity!.id, ctx.now, v.item_id, v.person_id, validated.text, source,
+        tid, p.id, v.path, v.expected_revision, tid, p.id, size, PROJECT_FILE_BYTES, prepared?.token_hash ?? null, prepared?.token_hash ?? null, p.id, tid).run();
+    if (!r.meta.changes) throw conflict("stale revision, archived project, or project file quota (50 GiB including history) exceeded");
   } catch (e) {
     if (source) {
       const existing = await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:91:30:putFile:f512903f*/ SELECT path, revision, object_key FROM file_revision WHERE tenant_id = ? AND project_id = ? AND source = ?").bind(tid, p.id, source).first<{path: string; revision: number; object_key: string}>();
@@ -119,7 +123,7 @@ export async function putFile(ctx: Ctx, v: FileParams, bytes: Uint8Array, source
     throw e;
   }
   await recordEvent(ctx.db, {tenant_id: tid, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "file.put", target_kind: "project", target_id: p.id, summary: `File ${v.path} revision ${v.expected_revision + 1}`}, ctx.now);
-  return {project: v.project, path: v.path, revision: v.expected_revision + 1, size: bytes.length, sha256};
+  return {project: v.project, path: v.path, revision: v.expected_revision + 1, size, sha256};
 }
 export async function readFile(ctx: Ctx, project: string, path: string, revision: number | null = null) {
   const p = await fileProject(ctx, project);
@@ -132,15 +136,17 @@ const base = {scope: "tenant", freshProofMinutes: null} as const;
 const props = {project: {type: "string"}, path: {type: "string"}};
 const input = (extra: Record<string, Record<string, unknown>> = {}, required = ["project", "path"]): McpInputSchema => ({type: "object", properties: {...props, ...extra}, required, additionalProperties: false});
 const ref = (i: Record<string, unknown>) => ({project: reqString(i, "project", {max: 127}), path: filePath(reqString(i, "path", {max: 240}))});
-const putProps = {content_type: {type: "string"}, expected_revision: {type: "integer", minimum: 0}, item_id: {type: "string"}, person_id: {type: "string"}};
+const putProps = {content_type: {type: "string"}, expected_revision: {type: "integer", minimum: 0}, item_id: {type: "string"}, person_id: {type: "string"}, sha256: {type: "string", pattern: "^[a-f0-9]{64}$"}};
 export function parseFileParams(i: Record<string, unknown>): FileParams {
   const expected_revision = optInt(i, "expected_revision", {min: 0, max: 2147483646});
   if (expected_revision === null) throw badRequest("expected_revision is required (0 for new files)");
   const v = {...ref(i), content_type: reqString(i, "content_type", {max: 150}), expected_revision, item_id: optString(i, "item_id", {max: 26}), person_id: optString(i, "person_id", {max: 26})};
+  const sha256 = optString(i, "sha256", {max: 64});
+  if (sha256 !== null && !/^[a-f0-9]{64}$/.test(sha256)) throw badRequest("sha256 must be 64 lowercase hexadecimal characters");
   fileType(v.path, v.content_type);
-  return v;
+  return {...v, sha256};
 }
-export const filePut = defineVerb({...base, name: "file.put", kind: "command", minRole: "member", summary: "Upload a document or new version as base64 (512 KiB decoded cap). expected_revision: 0 for new, current otherwise. For larger files use file.upload_url. Limits: 25 MiB/file, 250 MiB/project including history.", mcp: {scope: "write", destructive: false, auditKeysOnly: true, title: "Upload file", input: input({...putProps, base64: {type: "string"}}, ["project", "path", "content_type", "expected_revision", "base64"])}, parse: i => {
+export const filePut = defineVerb({...base, name: "file.put", kind: "command", minRole: "member", summary: "Upload a document or new version as base64 (512 KiB decoded cap). expected_revision: 0 for new, current otherwise. For larger files use file.upload_url. Limits: 5 GiB/file, 50 GiB/project including history.", mcp: {scope: "write", destructive: false, auditKeysOnly: true, title: "Upload file", input: input({...putProps, base64: {type: "string"}}, ["project", "path", "content_type", "expected_revision", "base64"])}, parse: i => {
   const v = parseFileParams(i);
   if (typeof i.base64 !== "string" || i.base64.length > Math.ceil(BASE64_FILE_BYTES / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(i.base64)) throw badRequest("base64 must be standard padded base64, at most 512 KiB decoded");
   const bytes = new Uint8Array(Buffer.from(i.base64, "base64"));
@@ -174,12 +180,19 @@ export const fileDelete = defineVerb({...base, name: "file.delete", kind: "comma
   await recordEvent(ctx.db, {tenant_id: ctx.tenant!.id, identity_id: ctx.identity!.id, session_id: ctx.session?.id ?? null, kind: "file.delete", target_kind: "project", target_id: p.id, summary: `File removed: ${v.path}`}, ctx.now);
   return {project: v.project, path: v.path, deleted: true};
 }});
-export const fileUploadUrl = defineVerb({...base, name: "file.upload_url", kind: "command", minRole: "member", summary: "Mint a one-time upload capability URL, valid 10 minutes. PUT raw bytes with the declared Content-Type and the same authenticated member credential; max 25 MiB. Token is consumed even on failed upload. No redirects or public R2 access.", mcp: {scope: "write", destructive: false, auditKeysOnly: true, title: "File upload URL", input: input(putProps, ["project", "path", "content_type", "expected_revision"])}, parse: parseFileParams, run: async (ctx, v) => {
+export const fileUploadUrl = defineVerb({...base, name: "file.upload_url", kind: "command", minRole: "member", summary: "Upload through Pimwell with your own credential. Supply size and sha256 for a resumable upload (5 GiB, 16 MiB parts, 24h); GET upload_url for status, PUT with &part=N, POST to finish, DELETE to abandon. Without size: legacy one-shot PUT, 25 MiB, 10 minutes. No storage URLs or keys exposed.", mcp: {scope: "write", destructive: false, auditKeysOnly: true, title: "File upload URL", input: input({...putProps, size: {type: "integer", minimum: 1, maximum: FILE_BYTES}, sha256: {type: "string", pattern: "^[a-f0-9]{64}$"}}, ["project", "path", "content_type", "expected_revision"])}, parse: i => {
+  const v = parseFileParams(i);
+  const size = optInt(i, "size", {min: 1, max: FILE_BYTES});
+  const sha256 = optString(i, "sha256", {max: 64});
+  if (size !== null && (!sha256 || !/^[a-f0-9]{64}$/.test(sha256))) throw badRequest("resumable uploads require size and lowercase SHA-256");
+  return {...v, size, sha256};
+}, run: async (ctx, v) => {
+  if (v.size !== null) return (await import("../db/fileMultipart")).startFileUpload(ctx, v, v.size, v.sha256!);
   const p = await fileProject(ctx, v.project, true);
   const token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
   const expires_at = ctx.now + 600000;
   await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:162:9:fileUploadUrl.run:cb1ddbf5*/ DELETE FROM file_upload WHERE expires_at <= ?").bind(ctx.now).run();
   await ctx.db.prepare("/*perf-site:src%2Fverbs%2Ffiles.ts:163:9:fileUploadUrl.run:f67cc9d5*/ INSERT INTO file_upload (token_hash, tenant_id, project_id, identity_id, params, expires_at) VALUES (?, ?, ?, ?, ?, ?)").bind(await sha256Hex(token), ctx.tenant!.id, p.id, ctx.identity!.id, JSON.stringify(v), expires_at).run();
-  return {upload_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${ctx.mcpProject?.path ?? v.project}/documents/upload?token=${token}`, method: "PUT", expires_at, max_bytes: FILE_BYTES};
+  return {upload_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${ctx.mcpProject?.path ?? v.project}/documents/upload?token=${token}`, method: "PUT", expires_at, max_bytes: FILE_REQUEST_BYTES};
 }});
 export const fileVerbs = [filePut, fileGet, fileList, fileHistory, fileDelete, fileUploadUrl];

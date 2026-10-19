@@ -8,6 +8,7 @@ import { boardPage } from "./http/boardPage";
 import { reviewsPage } from "./http/reviewPages";
 import { syncAll } from "./code/sync";
 import { cleanupFileObjects } from "./db/fileCleanup";
+import { cleanupFileUploads } from "./db/fileMultipart";
 import { codePage, filesPage } from "./http/codePages";
 import { searchPage } from "./http/searchPage";
 import { assistantChat, assistantPage } from "./http/assistantPages";
@@ -207,6 +208,8 @@ app.get("/:project/reviews/:n", (c) => reviewsPage(c.req.raw, c.env, c.req.param
 app.get("/:namespace/:project/documents", (c) => filePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`));
 app.get("/:namespace/:project/documents/download", (c) => filePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, "download"));
 app.post("/:namespace/:project/documents/upload", (c) => filePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, "upload"));
+app.get("/:namespace/:project/documents/upload", (c) => filePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, "upload"));
+app.delete("/:namespace/:project/documents/upload", (c) => filePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, "upload"));
 app.put("/:namespace/:project/documents/upload", (c) => filePage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, "upload"));
 app.get("/:namespace/:project/contacts", (c) => contactPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, null));
 app.get("/:namespace/:project/contacts/:id", (c) => contactPage(c.req.raw, c.env, `${c.req.param("namespace")}/${c.req.param("project")}`, c.req.param("id")));
@@ -215,6 +218,8 @@ app.get("/:namespace/:project/wiki/:slug", (c) => wikiPage(c.req.raw, c.env, `${
 app.get("/:project/documents", (c) => filePage(c.req.raw, c.env, c.req.param("project")));
 app.get("/:project/documents/download", (c) => filePage(c.req.raw, c.env, c.req.param("project"), "download"));
 app.post("/:project/documents/upload", (c) => filePage(c.req.raw, c.env, c.req.param("project"), "upload"));
+app.get("/:project/documents/upload", (c) => filePage(c.req.raw, c.env, c.req.param("project"), "upload"));
+app.delete("/:project/documents/upload", (c) => filePage(c.req.raw, c.env, c.req.param("project"), "upload"));
 app.put("/:project/documents/upload", (c) => filePage(c.req.raw, c.env, c.req.param("project"), "upload"));
 app.get("/:project/contacts", (c) => contactPage(c.req.raw, c.env, c.req.param("project"), null));
 app.get("/:project/contacts/:id", (c) => contactPage(c.req.raw, c.env, c.req.param("project"), c.req.param("id")));
@@ -258,6 +263,7 @@ export default {
     ctx.waitUntil(tracedInvocation(env, p => ctx.waitUntil(p), "scheduled", async e => {
       await Promise.all([
         span("cron.cleanup", () => cleanupFileObjects(e, Date.now(), false)),
+        span("cron.cleanup", () => cleanupFileUploads(e, Date.now())),
         span("cron.git.sync", () => syncAll(e, Date.now())),
         span("cron.performance", () => runPerformanceChecks(e)),
       ]);

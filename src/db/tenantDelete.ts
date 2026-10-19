@@ -7,7 +7,7 @@ const TENANT_TABLES = [
   "agent_source_alias", "contact_link", "contact_connection", "contact_entity",
   "work_proposal", "work_dep", "work_resource", "work_graph_rev",
   "repository_sync", "repository_commit", "repository", "git_commit", "git_push", "git_legacy_forward", "git_repository",
-  "document_delivery", "file_revision", "file_upload", "wiki_revision", "review_comment", "review",
+  "document_delivery", "file_revision", "file_upload", "file_multipart", "wiki_revision", "review_comment", "review",
   "situation", "assistant_message", "assistant_thread", "ardi_cred", "agent_mcp_session", "agent_connect_link", "code_event", "code_sync",
   "attention", "follow", "work_comment",
   "app_event", "app_error_group", "app_deploy", "app_stat", "site", "app_source",

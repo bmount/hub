@@ -9,7 +9,8 @@ import { sameOrigin } from "./login";
 import { readRequestBytes, requestWithBytes } from "./body";
 import { HubError, badRequest, notFound } from "../errors";
 import { sha256Hex } from "../ids";
-import { FILE_BYTES, inferredFileType, fileList, fileHistory, fileProject, filePath, parseFileParams, putFile, readFile } from "../verbs/files";
+import { multipartRequest } from "../db/fileMultipart";
+import { FILE_REQUEST_BYTES, inferredFileType, fileList, fileHistory, fileProject, filePath, parseFileParams, putFile, readFile } from "../verbs/files";
 
 import { documentSharing } from "./documentSharing";
 
@@ -17,13 +18,14 @@ export async function filePage(request: Request, env: Env, project: string, acti
   const ctx = await buildContext(request, env, Date.now(), undefined, {longLivedToken: true});
   const url = new URL(request.url);
   try {
-    const writing = request.method !== "GET";
+    const writing = request.method !== "GET" || action === "upload";
     const verb = getVerb(writing ? "file.put" : "file.get")!;
     checkScope(ctx, verb);
     checkAccess(ctx, verb);
-    if (writing && ctx.authKind === "cookie" && !sameOrigin(request)) throw new HubError(403, "bad_origin");
+    if (request.method !== "GET" && ctx.authKind === "cookie" && !sameOrigin(request)) throw new HubError(403, "bad_origin");
     const p = await fileProject(ctx, project, writing);
     if (action === "upload" && writing) {
+      if (url.searchParams.get("multipart") === "1") return Response.json({ok: true, result: await multipartRequest(ctx, request, p.id)}, {headers: {"cache-control": "no-store"}});
       if (request.method === "PUT") {
         const token = url.searchParams.get("token");
         if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw notFound("invalid upload capability");
@@ -31,12 +33,12 @@ export async function filePage(request: Request, env: Env, project: string, acti
         if (!row) throw notFound("expired or consumed upload capability");
         const v = parseFileParams(JSON.parse(row.params));
         if ((request.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase() !== v.content_type.split(";")[0]!.trim().toLowerCase()) throw badRequest("Content-Type must match the upload declaration");
-        const bytes = await readRequestBytes(request, FILE_BYTES);
+        const bytes = await readRequestBytes(request, FILE_REQUEST_BYTES);
         const result = await putFile(ctx, v, bytes);
         return Response.json({ok: true, result}, {headers: {"cache-control": "no-store"}});
       }
       if (request.method !== "POST") throw badRequest("use POST multipart or PUT with an upload capability");
-      const bytes = await readRequestBytes(request, FILE_BYTES + 16384);
+      const bytes = await readRequestBytes(request, FILE_REQUEST_BYTES + 16384);
       const fd = await requestWithBytes(request, bytes).formData();
       const file = fd.get("file");
       if (!(file instanceof File)) throw badRequest("file is required");
@@ -58,11 +60,22 @@ export async function filePage(request: Request, env: Env, project: string, acti
       const n = url.searchParams.get("revision"), revision = n === null ? null : Number(n);
       if (revision !== null && (!Number.isSafeInteger(revision) || revision < 1)) throw badRequest("invalid revision");
       const r = await readFile(ctx, project, path, revision);
-      const object = await env.GIT_PUSH_STAGING?.get(r.object_key);
+      const etag = `"${r.sha256}"`;
+      const rangeHeader = request.headers.get("range");
+      let range: {offset: number; length: number} | undefined;
+      if (rangeHeader && (!request.headers.has("if-range") || request.headers.get("if-range") === etag)) {
+        const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
+        if (!m || (!m[1] && !m[2]) || r.size === 0) return new Response(null, {status: 416, headers: {"content-range": `bytes */${r.size}`, "cache-control": "private, no-store"}});
+        const start = m[1] ? Number(m[1]) : Math.max(0, r.size - Number(m[2]));
+        const end = m[1] && m[2] ? Math.min(r.size - 1, Number(m[2])) : r.size - 1;
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= r.size || end < start) return new Response(null, {status: 416, headers: {"content-range": `bytes */${r.size}`, "cache-control": "private, no-store"}});
+        range = {offset: start, length: end - start + 1};
+      }
+      const object = await env.GIT_PUSH_STAGING?.get(r.object_key, range ? {range} : undefined);
       if (!object) throw notFound("file storage unavailable");
       // Raster images/PDF only can be inline. SVG and HTML are not accepted at ingress.
       const disposition = r.content_type.startsWith("image/") || r.content_type === "application/pdf" ? "inline" : "attachment";
-      return new Response(object.body, {headers: {"content-type": r.content_type, "content-length": String(r.size), "content-disposition": `${disposition}; filename*=UTF-8''${encodeURIComponent(r.name).replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16))}`, "x-content-type-options": "nosniff", "content-security-policy": "sandbox", "cache-control": "private, no-store"}});
+      return new Response(object.body, {status: range ? 206 : 200, headers: {"accept-ranges": "bytes", "etag": etag, "x-content-sha256": r.sha256, ...(range ? {"content-range": `bytes ${range.offset}-${range.offset + range.length - 1}/${r.size}`} : {}), "content-type": r.content_type, "content-length": String(range?.length ?? r.size), "content-disposition": `${disposition}; filename*=UTF-8''${encodeURIComponent(r.name).replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16))}`, "x-content-type-options": "nosniff", "content-security-policy": "sandbox", "cache-control": "private, no-store"}});
     }
     if (action) return notFoundPage();
     const v = await fileList.run(ctx, fileList.parse({project, after: url.searchParams.get("after"), folder: url.searchParams.get("folder")}));
@@ -79,7 +92,7 @@ export async function filePage(request: Request, env: Env, project: string, acti
     const folderTree = (parent: string): import("../html").TreeNode[] => folders.filter(f=>f.substring(0,f.lastIndexOf("/")) === parent || !parent && !f.includes("/")).map(f=>({label:f.split("/").at(-1)!,href:select({folder:f,after:null}),current:query.get("folder") === f,expanded:true,children:folderTree(f)}));
     const uploaders = new Map((await ctx.db.prepare("/*perf-site:src%2Fhttp%2FfilePages.ts:80:38:filePage:90599195*/ SELECT id, display_name FROM identity WHERE id IN (SELECT uploader_id FROM file_revision WHERE tenant_id = ? AND project_id = ?)").bind(ctx.tenant!.id,p.id).all<{id:string;display_name:string}>()).results.map(i=>[i.id,i.display_name]));
     const size = (n: number) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n/1024).toFixed(1)} KiB` : `${(n/1048576).toFixed(1)} MiB`;
-    let list = `<h1>Files</h1><p class="wb-hint">Documents and raster images · 25 MiB per file · 250 MiB including versions.</p>` + toolbar("File actions", rank(ctx.role) >= rank("member") && p.state === "active" ? `<a href="${esc(select({upload:"1"}))}">Upload</a>` : "") + kitTree("Folders", [{label:"All files",href:select({folder:null,after:null}),current:!query.has("folder"),children:folderTree(""),expanded:true}]) + kitTable("Files",[{label:"File"},{label:"Size"},{label:"Modified"},{label:"By",className:"hide-s"}],v.files.map(r=>({href:select({path:r.path}),selected:r.path === url.searchParams.get("path"),cells:[{html:`<a href="${esc(select({path:r.path}))}">${esc(r.path)}</a>`},{html:size(r.size)},{html:localTime(r.created_at)},{html:esc(uploaders.get(r.uploader_id) ?? "Unknown"),className:"hide-s"}]}))) + (v.next_cursor ? `<a href="${esc(select({after:v.next_cursor}))}">Next files</a>` : "");
+    let list = `<h1>Files</h1><p class="wb-hint">Documents and raster images · 5 GiB per file · 50 GiB including versions. Browser form: 25 MiB; use file_upload_url for resumable larger uploads.</p>` + toolbar("File actions", rank(ctx.role) >= rank("member") && p.state === "active" ? `<a href="${esc(select({upload:"1"}))}">Upload</a>` : "") + kitTree("Folders", [{label:"All files",href:select({folder:null,after:null}),current:!query.has("folder"),children:folderTree(""),expanded:true}]) + kitTable("Files",[{label:"File"},{label:"Size"},{label:"Modified"},{label:"By",className:"hide-s"}],v.files.map(r=>({href:select({path:r.path}),selected:r.path === url.searchParams.get("path"),cells:[{html:`<a href="${esc(select({path:r.path}))}">${esc(r.path)}</a>`},{html:size(r.size)},{html:localTime(r.created_at)},{html:esc(uploaders.get(r.uploader_id) ?? "Unknown"),className:"hide-s"}]}))) + (v.next_cursor ? `<a href="${esc(select({after:v.next_cursor}))}">Next files</a>` : "");
     let body = `<a class="back" href="${esc(select({}))}">Close</a>`;
     const path = url.searchParams.get("path");
     if (path) {

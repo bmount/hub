@@ -16,6 +16,9 @@ import { vi } from "vitest";
 import { deleteProject, PROJECT_DELETE_SCOPED_TABLES, PROJECT_DELETE_OTHER_TABLES } from "../src/db/projectDelete";
 import { cleanupFileObjects, FILE_ORPHAN_GRACE_MS, FILE_CLEANUP_CURSOR, FILE_CLEANUP_LIMIT } from "../src/db/fileCleanup";
 import { ulid } from "../src/ids";
+import { createHash } from "node:crypto";
+import { FILE_BYTES, PROJECT_FILE_BYTES } from "../src/verbs/files";
+import { FILE_PART_BYTES, FILE_UPLOAD_LIFETIME, cleanupFileUploads, verifyFileStream } from "../src/db/fileMultipart";
 
 describe("orphan file cleanup", () => {
   it("keeps all versions and hidden evidence; dry runs preserve storage and cursor", async () => {
@@ -285,6 +288,96 @@ describe("wiki pages", () => {
     expect((await SELF.fetch("https://blue.pimwell.test/guide/wiki/secret", {headers: cookieHeaders(outsider.token, "blue.pimwell.test")})).status).toBe(404);
     expect((await SELF.fetch("https://" + w.host + "/guide/wiki/secret")).status).toBe(404);
   });
+  it("resumes authenticated parts, verifies SHA-256, and streams resumable ranges", async () => {
+    const w = await world();
+    const bytes = new Uint8Array(FILE_PART_BYTES + 32).fill(42);
+    bytes.set([31, 139, 8]);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const args = {project: "guide", path: "large.gz", content_type: "application/gzip", expected_revision: 0, size: bytes.length, sha256};
+    const minted = await (await w.post("file.upload_url", args)).json() as any;
+    const url = minted.result.upload_url;
+    expect(url).toMatch(/^https:\/\/.*\.pimwell.test\/guide\/documents\/upload\?multipart=1&token=/);
+    expect(JSON.stringify(minted)).not.toMatch(/upload_id|object_key|r2\.cloudflare/);
+    const req = (method: string, suffix = "", body?: Uint8Array, token = w.member.token) => SELF.fetch(url + suffix, {method, headers: bearer(token), ...(body ? {body} : {})});
+    expect((await req("POST")).status).toBe(409);
+    expect((await req("PUT", "&part=0", bytes.subarray(0, 1))).status).toBe(400);
+    expect((await req("PUT", "&part=3", bytes.subarray(0, 1))).status).toBe(400);
+    expect((await req("PUT", "&part=1", bytes.subarray(0, 100))).status).toBe(400);
+    expect((await req("PUT", "&part=1", bytes.subarray(0, FILE_PART_BYTES), w.reader.token)).status).toBe(403);
+    expect((await req("GET", "", undefined, w.admin.token)).status).toBe(404);
+    expect((await SELF.fetch(url)).status).not.toBe(200);
+    expect((await req("PUT", "&part=1", bytes.subarray(0, FILE_PART_BYTES))).status).toBe(200);
+    expect((await (await req("GET")).json() as any).result.received.map((p: any) => p.part)).toEqual([1]);
+    // A lost success response and an interrupted second part are both retryable.
+    expect((await req("PUT", "&part=1", bytes.subarray(0, FILE_PART_BYTES))).status).toBe(200);
+    expect((await req("PUT", "&part=2", bytes.subarray(FILE_PART_BYTES, FILE_PART_BYTES + 4))).status).toBe(400);
+    expect((await req("POST")).status).toBe(409);
+    expect((await req("PUT", "&part=2", bytes.subarray(FILE_PART_BYTES))).status).toBe(200);
+    const finished = await req("POST");
+    expect(finished.status, await finished.clone().text()).toBe(200);
+    expect((await finished.json() as any).result).toMatchObject({size: bytes.length, sha256, revision: 1});
+    expect((await req("POST")).status).toBe(200);
+    const download = `https://${w.host}/guide/documents/download?path=large.gz&revision=1`;
+    const get = (range: string, extra = {}) => SELF.fetch(download, {headers: {...bearer(w.reader.token), range, ...extra}});
+    const first = await get("bytes=0-9");
+    expect(first.status).toBe(206);
+    expect(first.headers.get("content-range")).toBe(`bytes 0-9/${bytes.length}`);
+    expect(first.headers.get("x-content-sha256")).toBe(sha256);
+    const hash = createHash("sha256").update(new Uint8Array(await first.arrayBuffer()));
+    const resumed = await get("bytes=10-", {"if-range": `"${sha256}"`});
+    expect(resumed.status).toBe(206);
+    hash.update(new Uint8Array(await resumed.arrayBuffer()));
+    expect(hash.digest("hex")).toBe(sha256);
+    const suffix = await get("bytes=-8");
+    expect(new Uint8Array(await suffix.arrayBuffer())).toEqual(bytes.slice(-8));
+    for (const range of ["bytes=9-1", `bytes=${bytes.length}-`, "bytes=-0", "bytes=0-1,3-4"]) expect((await get(range)).status).toBe(416);
+    const changed = await get("bytes=10-", {"if-range": '"different"'});
+    expect(changed.status).toBe(200); await changed.arrayBuffer();
+  });
+  it("rejects digest mismatches, enforces file and historical quota limits, and cleans abandoned parts", async () => {
+    const w = await world();
+    const bytes = new TextEncoder().encode("hello");
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const params = {project: "guide", path: "a.txt", content_type: "text/plain", expected_revision: 0, size: bytes.length, sha256};
+    expect(FILE_BYTES).toBe(5 * 1024 ** 3); expect(PROJECT_FILE_BYTES).toBe(50 * 1024 ** 3);
+    for (const args of [{...params, size: FILE_BYTES + 1}, {...params, size: 0}, {...params, sha256: "bad"}, {...params, sha256: undefined}]) expect((await w.post("file.upload_url", args)).status).toBe(400);
+    const start = async (args = params) => (await (await w.post("file.upload_url", args)).json() as any).result.upload_url;
+    const req = (url: string, method: string, body?: Uint8Array) => SELF.fetch(url, {method, headers: bearer(w.member.token), ...(body ? {body} : {})});
+    let url = await start({...params, sha256: "0".repeat(64)});
+    expect((await req(url + "&part=1", "PUT", new Uint8Array(6))).status).toBe(413);
+    expect((await req(url + "&part=1", "PUT", bytes)).status).toBe(200);
+    expect((await req(url, "POST")).status).toBe(400);
+    expect((await w.post("file.get", {project: "guide", path: "a.txt"})).status).toBe(404);
+    expect((await req(url, "DELETE")).status).toBe(200);
+    expect((await req(url, "GET")).status).toBe(404);
+    expect((await w.post("file.put", {...params, base64: btoa("hello"), sha256: "0".repeat(64)})).status).toBe(400);
+    expect((await w.post("file.put", {...params, base64: btoa("hello")})).status).toBe(200);
+    // Hidden history still consumes the entire quota; unfinished parts consume none.
+    await env.HUB_DB.prepare("UPDATE file_revision SET size = ?, deleted = 1 WHERE tenant_id = ?").bind(PROJECT_FILE_BYTES, w.tenant.id).run();
+    url = await start({...params, path: "b.txt"});
+    expect((await req(url + "&part=1", "PUT", bytes)).status).toBe(200);
+    expect((await req(url, "POST")).status).toBe(409);
+    expect((await w.post("file.get", {project: "guide", path: "b.txt"})).status).toBe(404);
+    const open = await start({...params, path: "c.txt"});
+    expect((await req(open + "&part=1", "PUT", bytes)).status).toBe(200);
+    await cleanupFileUploads(env, Date.now() + FILE_UPLOAD_LIFETIME + 3600001);
+    expect((await env.HUB_DB.prepare("SELECT COUNT(*) n FROM file_multipart WHERE tenant_id = ?").bind(w.tenant.id).first<{n: number}>())!.n).toBe(0);
+    expect((await req(open, "POST")).status).toBe(404);
+  });
+  it("validates streamed UTF-8, JSON and binary signatures across chunk boundaries", async () => {
+    const verify = (path: string, content_type: string, content: string) => {
+      const bytes = new TextEncoder().encode(content);
+      const stream = new ReadableStream<Uint8Array>({start(c) { for (const b of bytes) c.enqueue(new Uint8Array([b])); c.close(); }});
+      return verifyFileStream(stream, {project: "guide", path, content_type, expected_revision: 0, item_id: null, person_id: null}, bytes.length);
+    };
+    expect(await verify("a.json", "application/json", '{"value":"é"}')).toMatchObject({text: '{"value":"é"}'});
+    expect(await verify("a.jsonl", "application/x-ndjson", '{}\r\n\n{"a":2}\n')).toMatchObject({type: "application/x-ndjson"});
+    for (const s of ['{"a":', '{}{}', 'not json']) await expect(verify("a.json", "application/json", s)).rejects.toThrow();
+    await expect(verify("a.jsonl", "application/x-ndjson", '{} {}')).rejects.toThrow();
+    await expect(verify("a.txt", "text/plain", "bad\0text")).rejects.toThrow();
+    await expect(verify("a.parquet", "application/vnd.apache.parquet", "PAR1badPAR1")).rejects.toThrow();
+    await expect(verify("a.gz", "application/gzip", "not gzip")).rejects.toThrow();
+  });
   it("round-trips data formats through MCP, capability PUT and multipart with safe downloads and search", async () => {
     const w = await world();
     const ctx = await buildContext(new Request(`https://${w.host}/mcp`, {headers: bearer(w.member.token)}), env);
@@ -338,7 +431,7 @@ describe("wiki pages", () => {
     for (const [ext, content_type, content] of [["json", "application/json", "{invalid}"], ["jsonl", "application/x-ndjson", '{}\nnot json'], ["parquet", "application/vnd.apache.parquet", "PAR1missing footer"]]) {
       expect((await w.post("file.put", {project: "guide", path: `bad.${ext}`, content_type, expected_revision: 0, base64: btoa(content!)})).status).toBe(400);
     }
-  });
+  }, 45000);
   it("attaches repo screenshots separately from code and denies outsiders", async () => {
     const w = await world("repo");
     const created = await (await w.post("work.create", {project: "guide", kind: "snag", title: "Acceptance"})).json() as any;
@@ -649,7 +742,7 @@ describe("project deletion from the web", () => {
     expect(await w.count("project", "id", w.project.id)).toBe(1);
     expect(await env.HUB_DB.prepare("SELECT 1 FROM event WHERE kind = 'project.delete'").first()).toBeNull();
     expect(await deleteProject(wrapped, w.project)).toMatchObject({ok: true, counts: {inbox_items: 21, project: 3}});
-    expect(countBatches.filter(n => n > 0)).toEqual([44, 44, 44, 44]);
+    expect(countBatches.filter(n => n > 0)).toEqual([45, 45, 45, 45]);
     expect(objectPeak).toBe(3);
     expect(objectActive).toBe(0);
     expect(active).toBe(0);
