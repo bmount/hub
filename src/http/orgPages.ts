@@ -89,7 +89,7 @@ export async function newProjectPage(request: Request, env: Env): Promise<Respon
 async function projectOverview(ctx: Ctx, env: Env, p: Project, selected: string | null) {
   const features = projectFeatures(p), base = `/${p.path}`, t = ctx.tenant!;
   // Current revisions, not history, count as resources. Channel ownership is the existing metadata link.
-  const [work, wiki, files, contacts, reviews, channels, errors, deploy] = await ctx.db.batch([
+  const [work, wiki, files, contacts, reviews, channels, errors, deploy, pages] = await ctx.db.batch([
     ctx.db.prepare("/*perf-site:src%2Fhttp%2ForgPages.ts:89:5:projectOverview:feaabfb7*/ SELECT kind, COUNT(*) AS n, MAX(updated_at) AS at FROM work_item WHERE project_id = ? AND state IN ('open','doing') GROUP BY kind").bind(p.id),
     ctx.db.prepare(`/*perf-site:src%2Fhttp%2ForgPages.ts:90:5:projectOverview:e9c7fb8f*/ SELECT CASE WHEN research IS NULL THEN 'wiki' ELSE 'research' END AS kind, SUM(CASE WHEN deleted = 0 THEN 1 ELSE 0 END) AS n, MAX(created_at) AS at FROM wiki_revision r WHERE tenant_id = ? AND project_id = ? AND revision = (SELECT MAX(revision) FROM wiki_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.slug = r.slug) GROUP BY kind`).bind(t.id,p.id),
     ctx.db.prepare(`/*perf-site:src%2Fhttp%2ForgPages.ts:91:5:projectOverview:6416336b*/ SELECT COALESCE(SUM(CASE WHEN deleted = 0 THEN 1 ELSE 0 END),0) AS n, MAX(created_at) AS at FROM file_revision r WHERE tenant_id = ? AND project_id = ? AND revision = (SELECT MAX(revision) FROM file_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.path = r.path)`).bind(t.id,p.id),
@@ -98,6 +98,7 @@ async function projectOverview(ctx: Ctx, env: Env, p: Project, selected: string 
     ctx.db.prepare(`/*perf-site:src%2Fhttp%2ForgPages.ts:94:5:projectOverview:f5a4e30b*/ SELECT cp.slug, cp.display_name, COALESCE((SELECT MAX(created_at) FROM msg_index WHERE tenant_id = cp.tenant_id AND conversation_id = cp.id),c.created_at) AS at FROM channel c JOIN project cp ON cp.id = c.project_id JOIN meta owner ON owner.key = 'project_channel:v1:' || cp.tenant_id || ':' || cp.id AND owner.value = ? WHERE cp.tenant_id = ? AND cp.state = 'active' ${ctx.identity!.kind === "human" ? "" : "AND EXISTS (SELECT 1 FROM conversation_member cm WHERE cm.tenant_id = cp.tenant_id AND cm.conversation_id = cp.id AND cm.identity_id = ? AND cm.removed_at IS NULL)"} ORDER BY cp.slug`).bind(p.id,t.id,...(ctx.identity!.kind === "human" ? [] : [ctx.identity!.id])),
     ctx.db.prepare("/*perf-site:src%2Fhttp%2ForgPages.ts:95:5:projectOverview:b358fb06*/ SELECT COUNT(*) AS n, MAX(last_seen) AS at FROM app_error_group WHERE tenant_id = ? AND project_id = ?").bind(t.id,p.id),
     ctx.db.prepare("/*perf-site:src%2Fhttp%2ForgPages.ts:96:5:projectOverview:9e6e8f51*/ SELECT id, COALESCE(tag,version_id) AS version, seen_at AS at FROM app_deploy WHERE tenant_id = ? AND project_id = ? ORDER BY seen_at DESC LIMIT 1").bind(t.id,p.id),
+    ctx.db.prepare("SELECT COALESCE(SUM(CASE WHEN deleted = 0 THEN 1 ELSE 0 END),0) AS n, MAX(created_at) AS at FROM page_revision r WHERE tenant_id = ? AND project_id = ? AND revision = (SELECT MAX(revision) FROM page_revision h WHERE h.tenant_id = r.tenant_id AND h.project_id = r.project_id AND h.slug = r.slug)").bind(t.id,p.id),
   ]);
   const resources: Resource[] = [];
   const add = (key: string, label: string, href: string, result: D1Result | undefined, kind?: string) => {
@@ -109,7 +110,7 @@ async function projectOverview(ctx: Ctx, env: Env, p: Project, selected: string 
   if (features.includes("repo")) add("reviews","Open reviews",`${base}/reviews`,reviews);
   if (features.includes("wiki")) add("wiki","Wiki pages",`${base}/wiki`,wiki,"wiki");
   if (features.includes("knowledge")) add("research","Research",`${base}/wiki`,wiki,"research");
-  if (features.includes("pages")) add("pages", "Pages", `${base}/pages`, undefined);
+  if (features.includes("pages")) add("pages", "Pages", `${base}/pages`, pages);
   if (features.includes("files")) add("files","Files",`${base}/documents`,files);
   if (features.includes("people")) add("contacts","Contacts",`${base}/contacts`,contacts);
   const channelRows = channels!.results as Array<{slug: string; display_name: string; at: number}>;

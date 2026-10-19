@@ -644,6 +644,7 @@ describe("versioned project Pages", () => {
     expect((await w.call("page_delete",{slug:"report",expected_revision:2})).isError).toBe(true);
     expect((await callTool({...w.ctx,role:"reader"},"page_publish",args)).isError).toBe(true);
     const viewer=await (await SELF.fetch(`https://${HOST}/visual/pages/report?revision=1&history=1`,{headers:w.headers})).text();
+    const overview=await SELF.fetch(`https://${HOST}/visual`,{headers:w.headers});expect(overview.status).toBe(200);expect(await overview.text()).toContain('href="/visual/pages"');
     expect(viewer).toContain("page-view");expect(viewer).toContain("/visual/pages-content/report/1/index.html");expect(viewer).not.toContain('class="rail"');expect(viewer).toContain("Full-screen");
     expect((await w.call("page_publish",{...args,expected_revision:2,html:"<h1>visiblepageneedle</h1>"})).isError).toBeUndefined();
     expect(JSON.stringify(await w.call("search_query",{q:"visiblepageneedle"}))).toContain("/visual/pages/report");
