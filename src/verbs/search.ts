@@ -188,7 +188,7 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
 
 export const searchQuery = defineVerb({
   name: "search.query", kind: "query", scope: "tenant", minRole: "reader", freshProofMinutes: null,
-  summary: "Search readable text across all projects: work and comments, mail and extracted attachments, chat, wiki and structured workspace research pages, project files (txt/md/csv text up to 128 KiB), reviews, situations, your assistant conversations, people, workspace contacts and companies, projects and app errors. Results include coverage limits.",
+  summary: "Search readable text across all projects: work and comments, mail and extracted attachments, chat, wiki and structured workspace research pages, project files (txt/md/csv/tsv/JSON/JSONL/NDJSON text up to 128 KiB), reviews, situations, your assistant conversations, people, workspace contacts and companies, projects and app errors. Results include coverage limits.",
   mcp: {
     scope: "read", destructive: false, title: "Search available sources",
     input: { type: "object", properties: { q: { type: "string", description: "What to find" } }, required: ["q"], additionalProperties: false },

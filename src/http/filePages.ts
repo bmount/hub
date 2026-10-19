@@ -42,7 +42,7 @@ export async function filePage(request: Request, env: Env, project: string, acti
       if (!(file instanceof File)) throw badRequest("file is required");
       const path = filePath(String(fd.get("path") || file.name));
       const current = await ctx.db.prepare("/*perf-site:src%2Fhttp%2FfilePages.ts:44:29:filePage:20d16db6*/ SELECT COALESCE(MAX(revision), 0) AS revision FROM file_revision WHERE tenant_id = ? AND project_id = ? AND path = ?").bind(ctx.tenant!.id, p.id, path).first<{revision:number}>();
-      const v = parseFileParams({project, path, content_type: file.type || inferredFileType(String(fd.get("path") || file.name)), expected_revision: fd.get("expected_revision") ?? current!.revision, item_id: fd.get("item_id"), person_id: fd.get("person_id")});
+      const v = parseFileParams({project, path, content_type: !file.type || file.type === "application/octet-stream" ? inferredFileType(path) : file.type, expected_revision: fd.get("expected_revision") ?? current!.revision, item_id: fd.get("item_id"), person_id: fd.get("person_id")});
       let back = `/${project}/documents`;
       const returnHref = fd.get("_back");
       if (typeof returnHref === "string" && returnHref.startsWith("/") && !returnHref.startsWith("//")) {

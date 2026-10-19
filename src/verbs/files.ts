@@ -22,6 +22,11 @@ export function filePath(path: string): string {
 }
 const TYPES: Record<string, string[]> = {
   txt: ["text/plain"], md: ["text/markdown", "text/plain"], csv: ["text/csv", "text/plain"],
+  json: ["application/json", "text/plain"], jsonl: ["application/x-ndjson", "application/jsonl", "text/plain"], ndjson: ["application/x-ndjson", "text/plain"],
+  tsv: ["text/tab-separated-values", "text/plain"],
+  sqlite: ["application/vnd.sqlite3", "application/x-sqlite3", "application/octet-stream"], sqlite3: ["application/vnd.sqlite3", "application/x-sqlite3", "application/octet-stream"], db: ["application/vnd.sqlite3", "application/x-sqlite3", "application/octet-stream"],
+  parquet: ["application/vnd.apache.parquet", "application/octet-stream"],
+  gz: ["application/gzip", "application/x-gzip", "application/octet-stream"], zst: ["application/zstd", "application/octet-stream"], zstd: ["application/zstd", "application/octet-stream"], zip: ["application/zip", "application/x-zip-compressed", "application/octet-stream"],
   pdf: ["application/pdf"], png: ["image/png"], jpg: ["image/jpeg"], jpeg: ["image/jpeg"], gif: ["image/gif"], webp: ["image/webp"],
   doc: ["application/msword"], xls: ["application/vnd.ms-excel"], ppt: ["application/vnd.ms-powerpoint"],
   docx: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"], xlsx: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"], pptx: ["application/vnd.openxmlformats-officedocument.presentationml.presentation"],
@@ -31,20 +36,34 @@ export function inferredFileType(path: string): string { return TYPES[path.split
 export function fileType(path: string, type: string): string {
   const ext = path.split(".").pop()!.toLowerCase();
   const clean = type.toLowerCase().split(";")[0]!.trim();
-  if (!TYPES[ext]?.includes(clean)) throw badRequest("unsupported content type or filename/type mismatch (documents, UTF-8 txt/md/csv, and raster images only)");
+  if (!TYPES[ext]?.includes(clean)) throw badRequest("unsupported content type or filename/type mismatch (supported documents, data formats, archives and raster images only)");
   return TYPES[ext]![0]!;
 }
 export function validateFile(path: string, type: string, bytes: Uint8Array): {type: string; text: string} {
   if (bytes.byteLength > FILE_BYTES) throw new HubError(413, "too_large", "file limit is 25 MiB");
   type = fileType(path, type);
   let text = "";
-  if (type.startsWith("text/")) {
-    try { const decoded = new TextDecoder("utf-8", {fatal: true, ignoreBOM: false}).decode(bytes); if (decoded.includes("\0")) throw new Error(); text = new TextDecoder().decode(bytes.slice(0, FILE_TEXT_BYTES)); }
+  if (type.startsWith("text/") || type === "application/json" || type === "application/x-ndjson") {
+    let decoded: string;
+    try { decoded = new TextDecoder("utf-8", {fatal: true, ignoreBOM: false}).decode(bytes); if (decoded.includes("\0")) throw new Error(); }
     catch { throw badRequest("text files must be UTF-8 without NUL bytes"); }
+    if (type === "application/json" || type === "application/x-ndjson") {
+      try {
+        if (type === "application/json") JSON.parse(decoded);
+        else for (const line of decoded.split(/\r?\n/)) if (line.trim()) JSON.parse(line);
+      } catch { throw badRequest("invalid JSON data"); }
+    }
+    if (type === "text/tab-separated-values" && /^\s*(?:<|#!|MZ|\u007fELF)/.test(decoded)) throw badRequest("file bytes do not match the content type");
+    text = new TextDecoder().decode(bytes.slice(0, FILE_TEXT_BYTES));
   } else {
     const starts = (...xs: number[]) => xs.every((x, i) => bytes[i] === x);
     const ascii = (s: string, at = 0) => [...s].every((x, i) => bytes[at + i] === x.charCodeAt(0));
-    const valid = type === "application/pdf" ? ascii("%PDF-") : type === "image/png" ? starts(137,80,78,71,13,10,26,10)
+    const valid = type === "application/vnd.sqlite3" ? ascii("SQLite format 3\0")
+      : type === "application/vnd.apache.parquet" ? bytes.length >= 12 && ascii("PAR1") && ascii("PAR1", bytes.length - 4)
+      : type === "application/gzip" ? starts(31,139,8)
+      : type === "application/zstd" ? starts(40,181,47,253)
+      : type === "application/zip" ? starts(80,75,3,4) || starts(80,75,5,6)
+      : type === "application/pdf" ? ascii("%PDF-") : type === "image/png" ? starts(137,80,78,71,13,10,26,10)
       : type === "image/jpeg" ? starts(255,216,255) : type === "image/gif" ? ascii("GIF87a") || ascii("GIF89a")
       : type === "image/webp" ? ascii("RIFF") && ascii("WEBP",8)
       : /openxmlformats|opendocument/.test(type) ? starts(80,75,3,4) : starts(208,207,17,224,161,177,26,225);

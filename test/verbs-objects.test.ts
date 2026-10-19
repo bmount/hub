@@ -285,6 +285,60 @@ describe("wiki pages", () => {
     expect((await SELF.fetch("https://blue.pimwell.test/guide/wiki/secret", {headers: cookieHeaders(outsider.token, "blue.pimwell.test")})).status).toBe(404);
     expect((await SELF.fetch("https://" + w.host + "/guide/wiki/secret")).status).toBe(404);
   });
+  it("round-trips data formats through MCP, capability PUT and multipart with safe downloads and search", async () => {
+    const w = await world();
+    const ctx = await buildContext(new Request(`https://${w.host}/mcp`, {headers: bearer(w.member.token)}), env);
+    ctx.playground = {scopes: ["read", "write"]};
+    const formats: [string, string, string][] = [
+      ["json", "application/json", '{"value":"dataneedle"}'],
+      ["jsonl", "application/x-ndjson", '{"value":"dataneedle"}\n{"ok":true}\n'],
+      ["ndjson", "application/x-ndjson", '{"value":"dataneedle"}\r\n'],
+      ["tsv", "text/tab-separated-values", "value\tdata\ndataneedle\t42"],
+      ...["sqlite", "sqlite3", "db"].map(ext => [ext, "application/vnd.sqlite3", "SQLite format 3\0dataneedle"] as [string, string, string]),
+      ["parquet", "application/vnd.apache.parquet", "PAR1dataneedlePAR1"],
+      ["gz", "application/gzip", "\x1f\x8b\x08dataneedle"],
+      ["zst", "application/zstd", "\x28\xb5\x2f\xfddataneedle"],
+      ["zstd", "application/zstd", "\x28\xb5\x2f\xfddataneedle"],
+      ["zip", "application/zip", "PK\x03\x04dataneedle"],
+    ];
+    for (const [ext, content_type, content] of formats) {
+      const bytes = Uint8Array.from(content, c => c.charCodeAt(0));
+      for (const mode of ["mcp", "capability", "form"]) {
+        const path = `${mode}.${ext}`;
+        const params = {project: "guide", path, content_type, expected_revision: 0};
+        if (mode === "mcp") expect((await callTool(ctx, "file_put", {...params, base64: btoa(content)})).isError, ext).toBeUndefined();
+        else if (mode === "capability") {
+          const minted = await callTool(ctx, "file_upload_url", params);
+          const url = (minted.structuredContent as any).upload_url;
+          expect((await SELF.fetch(url, {method: "PUT", headers: {...bearer(w.member.token), "content-type": content_type}, body: bytes})).status, ext).toBe(200);
+        } else {
+          const fd = new FormData();
+          fd.set("file", new File([bytes], path));
+          expect((await SELF.fetch(`https://${w.host}/guide/documents/upload`, {method: "POST", headers: cookieHeaders(w.member.token, w.host), body: fd, redirect: "manual"})).status, ext).toBe(303);
+        }
+        const downloaded = await SELF.fetch(`https://${w.host}/guide/documents/download?path=${path}`, {headers: bearer(w.member.token)});
+        expect(downloaded.status).toBe(200);
+        expect(downloaded.headers.get("content-type")).toBe(content_type);
+        expect(downloaded.headers.get("content-disposition")).toMatch(/^attachment;/);
+        expect(downloaded.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(downloaded.headers.get("content-security-policy")).toBe("sandbox");
+        expect(downloaded.headers.get("cache-control")).toBe("private, no-store");
+        expect(new Uint8Array(await downloaded.arrayBuffer())).toEqual(bytes);
+        const got = await callTool(ctx, "file_get", {project: "guide", path, include_base64: true});
+        expect((got.structuredContent as any).base64).toBe(btoa(content));
+      }
+      for (const disguise of ["<html>bad</html>", "#!/bin/sh\necho bad", "MZ executable", "\x7fELF", "\xff\xfe", "bad\0data"]) {
+        expect((await callTool(ctx, "file_put", {project: "guide", path: `bad.${ext}`, content_type, expected_revision: 0, base64: btoa(disguise)})).isError, `${ext}: ${disguise}`).toBe(true);
+      }
+    }
+    const search = (await (await w.post("search.query", {q: "dataneedle"})).json()) as any;
+    expect(search.result.files).toHaveLength(12);
+    expect(search.result.files.every((f: any) => /\.(json|jsonl|ndjson|tsv)/.test(JSON.stringify(f)))).toBe(true);
+    for (const ext of ["html", "svg", "js", "sh", "exe"]) expect((await w.post("file.put", {project: "guide", path: `bad.${ext}`, content_type: "text/plain", expected_revision: 0, base64: btoa("bad")})).status).toBe(400);
+    for (const [ext, content_type, content] of [["json", "application/json", "{invalid}"], ["jsonl", "application/x-ndjson", '{}\nnot json'], ["parquet", "application/vnd.apache.parquet", "PAR1missing footer"]]) {
+      expect((await w.post("file.put", {project: "guide", path: `bad.${ext}`, content_type, expected_revision: 0, base64: btoa(content!)})).status).toBe(400);
+    }
+  });
   it("attaches repo screenshots separately from code and denies outsiders", async () => {
     const w = await world("repo");
     const created = await (await w.post("work.create", {project: "guide", kind: "snag", title: "Acceptance"})).json() as any;
