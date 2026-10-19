@@ -547,6 +547,15 @@ it("retains the next draft while a turn is pending rather than forking context",
 
 it("keeps the HTML/SVG/mutation corpus inert with sanitizer alone, CSP alone, and both", async () => {
   const location = {origin:"https://pages.test", prefix:"/docs/pages/demo/", path:"index.html"};
+  // Positive control: the harness must observe both automatic and clicked JS.
+  const control = await browser.newContext();
+  try {
+    await control.route("**/*", route => route.fulfill({contentType:"text/html", body:'<script>window.__pageXSS=1</script><a href="javascript:window.__pageXSS=2">click</a>'}));
+    const page = await control.newPage(); await page.goto(location.origin);
+    expect(await page.evaluate("window.__pageXSS")).toBe(1);
+    await page.locator("a").dispatchEvent("click");
+    expect(await page.evaluate("window.__pageXSS")).toBe(2);
+  } finally { await control.close(); }
   for (const layer of ["sanitizer", "csp", "both"]) {
     const context = await browser.newContext();
     const outside: string[] = [];
@@ -567,7 +576,7 @@ it("keeps the HTML/SVG/mutation corpus inert with sanitizer alone, CSP alone, an
         source = vector + '<p id="inert">visible inert content</p>';
         await page.goto(location.origin + location.prefix + location.path);
         await page.waitForTimeout(40);
-        for (const link of await page.locator("a").all()) await link.evaluate('el => el.dispatchEvent(new MouseEvent("click", {bubbles:true, cancelable:true}))');
+        for (const link of await page.locator("a").all()) await link.dispatchEvent("click");
         await page.waitForTimeout(20);
         expect(await page.evaluate("window.__pageXSS"), layer + ": " + vector).toBeUndefined();
         expect(dialogs, layer + ": " + vector).toBe(0);
