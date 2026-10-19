@@ -49,7 +49,7 @@ async function sendDocument(ctx: Ctx, v: ReturnType<typeof parse>, mode: "share"
     const file = await readFile(ctx, v.project, v.path);
     revision = file.revision; title = file.name;
     url = `${base}/documents/download?path=${encodeURIComponent(v.path)}&revision=${revision}`;
-    if (file.size <= DOC_ATTACHMENT_BYTES) {
+    if (file.size <= DOC_ATTACHMENT_BYTES && !/\.(?:sqlite3?|db|parquet|gz|zst|zstd|zip|json|jsonl|ndjson|tsv)$/i.test(file.path)) {
       const object = await ctx.env.GIT_PUSH_STAGING?.get(file.object_key);
       if (!object) throw notFound("file storage unavailable");
       const bytes = await object.arrayBuffer();
@@ -94,7 +94,7 @@ async function sendDocument(ctx: Ctx, v: ReturnType<typeof parse>, mode: "share"
 }
 const verb = (mode: "share" | "dispatch") => defineVerb({
   name: `doc.${mode}`, kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
-  summary: `${mode === "share" ? "Share a file or page by one mail" : "Dispatch a file or page in separate mails, one per member"}. Only active human organization members; agents reuse their existing member/contact rule. Files up to 512 KiB attached, otherwise authenticated links. Sending switch, caps and withdrawal apply. Check deliveries and not_attempted before retrying.`,
+  summary: `${mode === "share" ? "Share a file or page by one mail" : "Dispatch a file or page in separate mails, one per member"}. Only active human organization members; agents reuse their existing member/contact rule. Non-data files up to 512 KiB attached; data files and larger files use sign-in links only. Sending switch, caps and withdrawal apply. Check deliveries and not_attempted before retrying.`,
   mcp: {scope: "write", destructive: false, title: mode === "share" ? "Share document" : "Dispatch document", input},
   parse, run: (ctx, v) => sendDocument(ctx, v, mode),
 });

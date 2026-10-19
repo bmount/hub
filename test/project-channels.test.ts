@@ -16,7 +16,7 @@ import { callTool } from "../src/mcp/tools";
 import { registerAllVerbs } from "../src/verbs/index";
 import { createChannel } from "../src/db/chat";
 import { call, chatWorld, ok } from "./chat-helpers";
-import { apiPost, bearer, cookieHeaders, seedGrant, seedHuman, seedTenant } from "./helpers";
+import { apiPost, bearer, cookieHeaders, seedAgent, seedGrant, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
 
@@ -184,6 +184,64 @@ describe("project files", () => {
     const put = (text = "needle original", revision = 0, path = "notes/memo.md") => callTool(ctx, "file_put", {project: "docs", path, content_type: "text/markdown", expected_revision: revision, base64: Buffer.from(text).toString("base64")});
     return {t, p, h, headers, ctx, put};
   }
+  it("audits fetches and range bytes only for admins, shares one atomic daily budget across projects, and privately alerts once", async () => {
+    const w = await world("admin");
+    await w.put("abcdefghij", 0, "private.md");
+    const member = await seedHuman("member@example.com", {memberships:[{tenant_id:w.t.id,role:"member"}]});
+    const headers = cookieHeaders(member.token, HOST);
+    const url = `https://${HOST}/docs/documents/download?path=private.md&revision=1`;
+    await env.HUB_DB.prepare("INSERT INTO meta(key,value) VALUES (?, '6')").bind(`file_download_budget:${w.t.id}:${w.p.id}`).run();
+    expect((await SELF.fetch(url, {headers:{...headers,range:"bytes=0-3"}})).status).toBe(206);
+    expect((await apiPost(HOST,"file.get",{project:"docs",path:"private.md"},headers)).status).toBe(200);
+    const denied = await SELF.fetch(url, {headers});
+    expect(denied.status).toBe(429);
+    expect(await denied.text()).not.toContain("abcdefghij");
+    expect((await apiPost(HOST,"file.get",{project:"docs",path:"private.md",include_base64:true},headers)).status).toBe(429);
+    expect(await env.HUB_DB.prepare("SELECT bytes FROM file_download_day WHERE identity_id = ?").bind(member.identity.id).first("bytes")).toBe(4);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) FROM situation WHERE admin_only = 1").first("COUNT(*)")).toBe(1);
+    const audit = (await apiPost(HOST,"file.get",{project:"docs",path:"private.md"},w.headers));
+    const data = await audit.json() as any;
+    expect(data.result.downloads).toEqual(expect.arrayContaining([expect.objectContaining({identity_id:member.identity.id,revision:1,bytes:4,source:"web",operation:"download"}),expect.objectContaining({bytes:0,operation:"file_get"})]));
+    const memberFetch = await (await apiPost(HOST,"file.get",{project:"docs",path:"private.md"},headers)).json() as any;
+    expect(memberFetch.result).not.toHaveProperty("downloads");
+    for (const [verb,args,key] of [["project.history",{project:"docs"},"events"],["event.list",{},"events"],["situation.list",{},"situations"]] as const) {
+      const admin = JSON.stringify(await (await apiPost(HOST,verb,args,w.headers)).json());
+      const regular = JSON.stringify(await (await apiPost(HOST,verb,args,headers)).json());
+      expect(admin).toContain(verb === "situation.list" ? "Daily file download budget" : "file.download");
+      expect(regular).not.toContain(verb === "situation.list" ? "Daily file download budget" : "file.download");
+    }
+    const id = await env.HUB_DB.prepare("SELECT id FROM situation WHERE admin_only = 1").first<string>("id");
+    expect((await (await SELF.fetch(`https://${HOST}/situations?s=${id}`,{headers})).text())).not.toContain("Identity " + member.identity.id);
+    expect((await apiPost(HOST,"situation.resolve",{id,outcome:"hide"},headers)).status).toBe(404);
+    expect(JSON.stringify(await (await apiPost(HOST,"search.query",{q:"Daily file download budget"},headers)).json())).not.toContain("was refused");
+    expect((await (await SELF.fetch(`https://${HOST}/docs/documents?path=private.md`,{headers:w.headers})).text())).toContain("Download audit");
+    expect((await (await SELF.fetch(`https://${HOST}/docs/documents?path=private.md`,{headers})).text())).not.toContain("Download audit");
+    // Same identity, another project: no fresh allowance; concurrent reservations cannot both win.
+    const second = await createProject(env.HUB_DB,{tenant_id:w.t.id,namespace_id:null,slug:"second",kind:"workspace",display_name:"Second"},Date.now());
+    await putFile(w.ctx,{project:"second",path:"other.txt",content_type:"text/plain",expected_revision:0,item_id:null,person_id:null},new TextEncoder().encode("xyz"));
+    await env.HUB_DB.prepare("INSERT INTO meta(key,value) VALUES (?, '6')").bind(`file_download_budget:${w.t.id}:${second.id}`).run();
+    const attempts = await Promise.all([1,2].map(() => SELF.fetch(`https://${HOST}/second/documents/download?path=other.txt`,{headers:{...headers,range:"bytes=0-1"}})));
+    expect(attempts.map(r=>r.status).sort()).toEqual([206,429]);
+    // UTC midnight resets the allowance (no project-local reset).
+    await env.HUB_DB.prepare("UPDATE file_download_day SET day = day - 1 WHERE identity_id = ?").bind(member.identity.id).run();
+    expect((await SELF.fetch(url,{headers:{...headers,range:"bytes=0-5"}})).status).toBe(206);
+  });
+  it("requires the downloader's own live credential, including other-org credentials and revoked agents", async () => {
+    const w = await world();
+    await w.put("secret",0,"private.md");
+    const agent = await seedAgent(w.t,w.h.identity);
+    const foreign = await seedTenant("foreign");
+    const outsider = await seedHuman("outsider@example.com",{memberships:[{tenant_id:foreign.id,role:"member"}]});
+    const url = `https://${HOST}/docs/documents/download?path=private.md&revision=1`;
+    expect((await SELF.fetch(url)).status).toBe(404);
+    expect((await SELF.fetch(url,{headers:cookieHeaders(outsider.token,HOST)})).status).toBe(404);
+    expect((await SELF.fetch(url,{headers:bearer(agent.token)})).status).toBe(200);
+    const rows = (await env.HUB_DB.prepare("SELECT source, bytes FROM file_download").all()).results;
+    expect(rows).toEqual([{source:"agent",bytes:6}]);
+    await env.HUB_DB.prepare("UPDATE api_token SET revoked_at = ? WHERE identity_id = ?").bind(Date.now(),agent.agent.identity.id).run();
+    expect((await SELF.fetch(url,{headers:bearer(agent.token)})).status).toBe(404);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM file_download").first("n")).toBe(1);
+  });
   it("uploads over MCP, versions with optimistic concurrency, lists folders, fetches bytes and searches current text", async () => {
     const w = await world();
     expect((await w.put()).isError).toBeUndefined();

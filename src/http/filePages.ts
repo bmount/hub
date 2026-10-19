@@ -12,6 +12,7 @@ import { sha256Hex } from "../ids";
 import { multipartRequest } from "../db/fileMultipart";
 import { FILE_REQUEST_BYTES, inferredFileType, fileList, fileHistory, fileProject, filePath, parseFileParams, putFile, readFile } from "../verbs/files";
 
+import { recordFileDownload, fileDownloadAudit } from "../db/fileDownloads";
 import { documentSharing } from "./documentSharing";
 
 export async function filePage(request: Request, env: Env, project: string, action = ""): Promise<Response> {
@@ -73,6 +74,7 @@ export async function filePage(request: Request, env: Env, project: string, acti
       }
       const object = await env.GIT_PUSH_STAGING?.get(r.object_key, range ? {range} : undefined);
       if (!object) throw notFound("file storage unavailable");
+      await recordFileDownload(ctx, p.id, r, range?.length ?? r.size, "download");
       // Raster images/PDF only can be inline. SVG and HTML are not accepted at ingress.
       const disposition = r.content_type.startsWith("image/") || r.content_type === "application/pdf" ? "inline" : "attachment";
       return new Response(object.body, {status: range ? 206 : 200, headers: {"accept-ranges": "bytes", "etag": etag, "x-content-sha256": r.sha256, ...(range ? {"content-range": `bytes ${range.offset}-${range.offset + range.length - 1}/${r.size}`} : {}), "content-type": r.content_type, "content-length": String(range?.length ?? r.size), "content-disposition": `${disposition}; filename*=UTF-8''${encodeURIComponent(r.name).replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16))}`, "x-content-type-options": "nosniff", "content-security-policy": "sandbox", "cache-control": "private, no-store"}});
@@ -99,6 +101,8 @@ export async function filePage(request: Request, env: Env, project: string, acti
       const h = await fileHistory.run(ctx, fileHistory.parse({project, path}));
       const latest = h.history[0];
       body += `<h1>${esc(path)}</h1>${latest ? `<p>${size(latest.size)} · modified ${localTime(latest.created_at)} by ${esc(uploaders.get(latest.uploader_id) ?? "Unknown")}</p>${latest.deleted ? '<p>Removed</p>' : `<p><a class="button quiet" href="${esc(link(path,latest.revision))}">Download</a></p>`}` : ""}`;
+      const downloads = await fileDownloadAudit(ctx, p.id, path);
+      if (downloads) body += `<h2>Download audit · admins only</h2>` + kitTable("Download audit", [{label:"Who"},{label:"Revision"},{label:"Bytes"},{label:"Source"},{label:"When"}], downloads.map(d => ({cells:[{html:esc(String(d.who))},{html:esc(String(d.revision))},{html:esc(String(d.bytes))},{html:esc(`${d.source} · ${d.operation}`)},{html:localTime(Number(d.created_at))}]})));
       body += await documentSharing(ctx, p.id, project, "file", path, p.state === "active", select({path}));
     }
     const upload = url.searchParams.has("upload") && rank(ctx.role) >= rank("member") && p.state === "active";

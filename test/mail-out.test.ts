@@ -273,6 +273,21 @@ async function documentWorld() {
 }
 
 describe("document mail", () => {
+  it.each(["sqlite","sqlite3","db","parquet","gz","zip","zst","zstd","json","jsonl","ndjson","tsv"])("never attaches .%s data even when small", async extension => {
+    const w = await documentWorld();
+    await w.call(w.ada, "mail.sending", {on:true});
+    // Retained metadata is enough to check policy; storage must never be fetched for data attachments.
+    await env.HUB_DB.prepare("UPDATE file_revision SET path = ?, name = ? WHERE path = 'memo.md'").bind("data." + extension,"data." + extension).run();
+    const r = await w.call(w.pat,"doc.share",{...w.file,path:"data." + extension});
+    expect(r.status,r.detail).toBe(200);
+    expect(r.result.attached).toBe(false);
+    expect(w.sent).toHaveLength(1);
+    const body = Buffer.from(w.sent[0]!.raw.split("\r\n\r\n")[1]!.replace(/\s/g, ""), "base64").toString("utf8");
+    expect(body).toContain("sign-in");
+    expect(body).toContain(r.result.url);
+    expect(w.sent[0]!.raw).not.toContain("Content-Disposition: attachment");
+    expect(w.sent[0]!.raw).not.toContain(Buffer.from("Résumé — memo").toString("base64"));
+  });
   it("lets a human share an attachment with a member who never wrote, and records revision, sender, recipients and time", async () => {
     const w = await documentWorld();
     await w.call(w.ada, "mail.sending", {on: true});

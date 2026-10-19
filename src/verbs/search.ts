@@ -1,3 +1,4 @@
+import { adminSituations } from "../db/fileDownloads";
 import { projectPathSql } from "../db/projects";
 // Use existing tables so search needs no migration or separately maintained index.
 import { currentFile } from "./files";
@@ -145,7 +146,7 @@ export async function searchAll(ctx: Ctx, q: string): Promise<SearchResult> {
       AND ${all("r.title || ' ' || r.summary || ' ' || COALESCE((SELECT GROUP_CONCAT(c.body, ' ') FROM review_comment c WHERE c.review_id = r.id AND c.tenant_id = r.tenant_id), '')", ts.length)}
       ORDER BY r.updated_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.reviews),
     ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsearch.ts:147:5:searchAll:80b700ee*/ SELECT s.id, s.title, s.question || ' ' || s.report || ' ' || COALESCE(s.outcome, '') AS text, s.created_at FROM situation s
-      WHERE s.tenant_id = ? AND ${all("s.title || ' ' || s.question || ' ' || s.report || ' ' || COALESCE(s.outcome, '')", ts.length)}
+      WHERE s.tenant_id = ? AND ${adminSituations(ctx)} AND ${all("s.title || ' ' || s.question || ' ' || s.report || ' ' || COALESCE(s.outcome, '')", ts.length)}
       ORDER BY s.created_at DESC LIMIT ?`).bind(tid, ...ts.map(like), SOURCE_LIMITS.situations),
     ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fsearch.ts:150:5:searchAll:fb79a4bd*/ SELECT t.id, t.title, t.updated_at, COALESCE((SELECT GROUP_CONCAT(m.text, ' ') FROM assistant_message m WHERE m.thread_id = t.id AND m.tenant_id = t.tenant_id), '') AS text FROM assistant_thread t
       WHERE t.tenant_id = ? AND t.identity_id = ? AND ${all("t.title || ' ' || COALESCE((SELECT GROUP_CONCAT(m.text, ' ') FROM assistant_message m WHERE m.thread_id = t.id AND m.tenant_id = t.tenant_id), '')", ts.length)}

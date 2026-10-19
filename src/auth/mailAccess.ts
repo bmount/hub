@@ -51,9 +51,9 @@ export function readableMailEvents(ctx: Ctx, alias = "e"): SqlFilter {
   const mail = readableMail(ctx);
   const outgoing = readableOutgoingMail(ctx);
   return {
-    sql: `(${alias}.target_kind NOT IN ('inbound_mail', 'outbound_mail') OR
+    sql: `((${alias}.kind <> 'file.download' OR ${rank(ctx.role) >= rank("admin") ? 1 : 0} = 1) AND (${alias}.target_kind NOT IN ('inbound_mail', 'outbound_mail') OR
       (${alias}.target_kind = 'inbound_mail' AND EXISTS (SELECT 1 FROM inbound_mail m WHERE m.id = ${alias}.target_id AND ${mail.sql})) OR
-      (${alias}.target_kind = 'outbound_mail' AND EXISTS (SELECT 1 FROM outbound_mail o WHERE o.id = ${alias}.target_id AND ${outgoing.sql})))`,
+      (${alias}.target_kind = 'outbound_mail' AND EXISTS (SELECT 1 FROM outbound_mail o WHERE o.id = ${alias}.target_id AND ${outgoing.sql}))))`,
     bindings: [...mail.bindings, ...outgoing.bindings],
   };
 }

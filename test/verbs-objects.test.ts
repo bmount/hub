@@ -742,7 +742,7 @@ describe("project deletion from the web", () => {
     expect(await w.count("project", "id", w.project.id)).toBe(1);
     expect(await env.HUB_DB.prepare("SELECT 1 FROM event WHERE kind = 'project.delete'").first()).toBeNull();
     expect(await deleteProject(wrapped, w.project)).toMatchObject({ok: true, counts: {inbox_items: 21, project: 3}});
-    expect(countBatches.filter(n => n > 0)).toEqual([45, 45, 45, 45]);
+    expect(countBatches.filter(n => n > 0)).toEqual([46, 46, 46, 46]);
     expect(objectPeak).toBe(3);
     expect(objectActive).toBe(0);
     expect(active).toBe(0);

@@ -41,6 +41,20 @@ Authenticated downloads stream directly through Pimwell. Responses include `Acce
 - `file_list` supports folder-prefix filtering and path cursor pagination. `file_get` returns metadata and an authenticated download URL; optional `include_base64` fetches small files. `file_history` supports revision-cursor pagination. Lists/history return at most 200 rows per call.
 - `file_delete` requires current admin role and write scope. It hides every version from downloads, current lists and search, retaining metadata, private objects and history as evidence. This does not reclaim quota. A later upload at the same path uses the last revision number and does not revive old downloads.
 
+## Download audit and daily budget
+
+Every authenticated download and `file_get` call records the identity, project, path, pinned revision, reserved byte count, UTC time, operation and source (web/human or agent). Only current organization admins see the last 100 records in the file inspector and `file_get.downloads`; download events also appear in their project history and event list. Regular members retain org-wide file access but cannot see download audit records, including their own.
+
+The default budget is **50 GiB per identity per organization per UTC day**, across all projects, versions and credentials. A metadata-only `file_get` records zero bytes; base64 fetches reserve the file size. Downloads reserve the complete response size or the selected range length before any response bytes are handed out. Reservations and audit inserts are atomic; concurrent requests cannot overspend. Interrupted streams conservatively retain their reservation. Invalid ranges, unavailable objects and authentication failures do not consume bytes. A new UTC day starts a new allowance; deleting a project does not reset it.
+
+An over-budget request returns 429 without file bytes and opens one deterministic Situation per identity/day, visible only to current organization admins (including search and direct inspector access). The report identifies the attempted file/revision, identity, byte count and limit so admins can investigate credential misuse. No model call is needed for this alert.
+
+For an isolated live exercise, operations can insert a lower byte limit in D1 `meta` using key `file_download_budget:<tenant-id>:<project-id>` and a nonnegative integer string value. It only lowers the limit on requests to that project; the usage counter is still identity-wide. Remove the key immediately after the exercise. This is not a member-controlled setting.
+
+Download URLs contain only the project path and revision, never a storage credential. Every request independently requires the downloader's own current session/token, active identity and organization membership; a copied URL without credentials, another organization's credential or a revoked agent credential grants nothing.
+
+Mail sharing and dispatch **never attach SQLite, archives, Parquet, JSON/JSONL/NDJSON or TSV data files**, regardless of size. They send the version-pinned sign-in link only. Other supported documents retain the 512 KiB attachment cap.
+
 ## Inline project images
 
 In wiki bodies and work-item bodies/comments, put an image on its own line:

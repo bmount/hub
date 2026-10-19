@@ -7,7 +7,7 @@ import { repoOwnership } from "../code/artifactPush";
 import { ulid } from "../ids";
 
 // Used by the cascade and the schema-coverage test; children precede their parents.
-export const PROJECT_DELETE_SCOPED_TABLES = ["repository_sync", "repository_commit", "repository", "contact_link", "contact_connection", "contact_entity", "document_delivery", "file_revision", "file_upload", "file_multipart", "wiki_revision", "review", "app_error_group", "app_deploy", "site", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"] as const;
+export const PROJECT_DELETE_SCOPED_TABLES = ["repository_sync", "repository_commit", "repository", "contact_link", "contact_connection", "contact_entity", "document_delivery", "file_download", "file_revision", "file_upload", "file_multipart", "wiki_revision", "review", "app_error_group", "app_deploy", "site", "app_source", "code_event", "code_sync", "git_commit", "git_push", "git_legacy_forward", "git_repository", "model_call", "inbound_mail"] as const;
 export const PROJECT_DELETE_OTHER_TABLES = ["channel", "work_item"] as const;
 
 export const projectDeleteKey = (tenant: string, project: string) => `project_delete:v1:${tenant}:${project}`;

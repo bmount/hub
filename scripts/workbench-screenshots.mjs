@@ -430,7 +430,7 @@ try {
         }
         if (name === 'fileRecord') {
           await expect(page.locator('#inspector')).not.toContainText('SHA-256');
-          await expect(page.locator('#inspector table')).toHaveCount(0);
+          await expect(page.locator('#inspector table[aria-label="Download audit"]')).toHaveCount(1);
           await expect(page.locator('#inspector')).toContainText('modified');
           await expect(page.locator('#inspector button').last()).toHaveText('Remove file and all downloads');
           await expect(page.locator('#inspector button').last()).toHaveClass(/quiet destructive/);

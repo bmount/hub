@@ -1,4 +1,5 @@
 import { featureProject } from "./featureProject";
+import { recordFileDownload, fileDownloadAudit } from "../db/fileDownloads";
 import { documentDeliveries } from "../db/documentDelivery";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
@@ -165,9 +166,12 @@ export const fileGet = defineVerb({...base, name: "file.get", kind: "query", min
     if (r.size > BASE64_FILE_BYTES) throw badRequest("file too large for base64; use authenticated download_url");
     const object = await ctx.env.GIT_PUSH_STAGING?.get(r.object_key);
     if (!object) throw notFound("file storage unavailable");
+    await recordFileDownload(ctx, (await fileProject(ctx, v.project)).id, r, r.size, "file_get");
     base64 = Buffer.from(await object.arrayBuffer()).toString("base64");
   }
-  return {file: fileMetadata(r), deliveries: await documentDeliveries(ctx, (await fileProject(ctx, v.project)).id, "file", v.path), download_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${ctx.mcpProject?.path ?? v.project}/documents/download?path=${encodeURIComponent(v.path)}&revision=${r.revision}`, ...(base64 === undefined ? {} : {base64})};
+  if (!v.include_base64) await recordFileDownload(ctx, (await fileProject(ctx, v.project)).id, r, 0, "file_get");
+  const audit = await fileDownloadAudit(ctx, (await fileProject(ctx, v.project)).id, v.path);
+  return {...(audit === undefined ? {} : {downloads: audit}), file: fileMetadata(r), deliveries: await documentDeliveries(ctx, (await fileProject(ctx, v.project)).id, "file", v.path), download_url: `https://${ctx.tenant!.slug}.${ctx.env.HUB_DOMAIN}/${ctx.mcpProject?.path ?? v.project}/documents/download?path=${encodeURIComponent(v.path)}&revision=${r.revision}`, ...(base64 === undefined ? {} : {base64})};
 }});
 export const fileHistory = defineVerb({...base, name: "file.history", kind: "query", minRole: "reader", summary: "List file versions newest first (200/page); before revision selects older history.", mcp: {scope: "read", destructive: false, title: "File history", input: input({before: {type: "integer", minimum: 1}})}, parse: i => ({...ref(i), before: optInt(i, "before", {min: 1, max: 2147483647}) ?? 2147483648}), run: async (ctx, v) => {
   const p = await fileProject(ctx, v.project);
