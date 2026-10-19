@@ -1,0 +1,145 @@
+#!/usr/bin/env node
+// Standalone Node 22+ client. Credentials are read only from a private file.
+import * as fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { resolve, dirname, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
+
+export function safePath(path) {
+  if (typeof path !== 'string' || path.length > 240 || path.endsWith('.pimwell-part') || path.split('/').some(x => !x || x === '.' || x === '..' || /[\\\x00-\x1f\x7f]/.test(x))) throw Error('Unsafe file path');
+  return path;
+}
+export async function digest(path) {
+  const hash = createHash('sha256');
+  for await (const bytes of createReadStream(path)) hash.update(bytes);
+  return hash.digest('hex');
+}
+async function exists(path) { try { return await fs.lstat(path); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
+async function local(root, path) {
+  safePath(path);
+  let current = root;
+  for (const bit of path.split('/')) {
+    current = join(current, bit);
+    if ((await exists(current))?.isSymbolicLink()) throw Error('Symlinks are not supported');
+  }
+  return current;
+}
+const types = {txt:'text/plain',md:'text/markdown',csv:'text/csv',tsv:'text/tab-separated-values',json:'application/json',jsonl:'application/x-ndjson',ndjson:'application/x-ndjson',sqlite:'application/vnd.sqlite3',sqlite3:'application/vnd.sqlite3',db:'application/vnd.sqlite3',parquet:'application/vnd.apache.parquet',gz:'application/gzip',zst:'application/zstd',zstd:'application/zstd',zip:'application/zip',pdf:'application/pdf',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp',doc:'application/msword',xls:'application/vnd.ms-excel',ppt:'application/vnd.ms-powerpoint',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',odt:'application/vnd.oasis.opendocument.text',ods:'application/vnd.oasis.opendocument.spreadsheet',odp:'application/vnd.oasis.opendocument.presentation'};
+export async function main(args) {
+  const [action, address, project, directory, manifestPath] = args;
+  if (!['push','pull'].includes(action) || !directory) throw Error('Usage: node pimwell-files.mjs push|pull https://ORG.pimwell.com PROJECT LOCAL_FOLDER [MANIFEST.json]; PIMWELL_TOKEN_FILE must name your credential file');
+  const origin = new URL(address);
+  if (origin.protocol !== 'https:' || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== '/') throw Error('Expected HTTPS organization origin');
+  let token = (await fs.readFile(process.env.PIMWELL_TOKEN_FILE, 'utf8')).trim();
+  async function request(url, options = {}) {
+    const u = new URL(url, origin);
+    if (u.origin !== origin.origin || u.username || u.password) throw Error('Refusing off-organization URL');
+    const response = await fetch(u, {...options, redirect:'error', headers:{...options.headers, authorization:`Bearer ${token}`}});
+    if (!response.ok) { await response.body?.cancel(); throw Error(`Pimwell request failed (${response.status}); rerun to resume`); }
+    return response;
+  }
+  async function api(verb, input) {
+    const response = await request(`/api/${verb}`, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(input)});
+    const data = await response.json();
+    return data.result ?? data;
+  }
+  if (token.startsWith('pmw_')) {
+    const session = await api('session.start',{label:'Files folder transfer',ttl:3600});
+    if (typeof session.session_token !== 'string' || !session.session_token) throw Error('Transfer session missing');
+    token = session.session_token;
+  }
+  await fs.mkdir(directory, {recursive:true,mode:0o700});
+  if ((await fs.lstat(directory)).isSymbolicLink()) throw Error('Symlink root refused');
+  const root = await fs.realpath(directory);
+  // Sidecars live outside the data folder; never publish capabilities with data.
+  const statePath = root + '.pimwell-transfer.json';
+  let state = {};
+  if (await exists(statePath)) state = JSON.parse(await fs.readFile(statePath,'utf8'));
+  if ((await exists(statePath))?.isSymbolicLink()) throw Error('Symlink state refused');
+  const save = () => fs.writeFile(statePath,JSON.stringify(state),{mode:0o600});
+  let files = [];
+  let after;
+  do { const page = await api('file.list',{project,...(after ? {after} : {})}); files.push(...page.files); after = page.next_cursor; } while(after);
+  if (action === 'push') {
+    const remote = new Map(files.map(f => [f.path,f]));
+    files = [];
+    async function walk(folder, prefix = '') {
+      for (const entry of await fs.readdir(folder,{withFileTypes:true})) {
+        const path = safePath(prefix + entry.name);
+        if (entry.isSymbolicLink()) throw Error('Symlinks are not supported');
+        if (entry.isDirectory()) await walk(join(folder,entry.name),path+'/');
+        else if (entry.isFile()) files.push({path});
+        else throw Error('Only regular files are supported');
+      }
+    }
+    await walk(root);
+    for (const file of files) {
+      const path = await local(root,file.path), stat = await fs.stat(path), sha256 = await digest(path);
+      const previous = remote.get(file.path);
+      if (previous?.sha256 === sha256) { Object.assign(file,previous); console.log(`unchanged ${file.path}`); continue; }
+      const content_type = types[file.path.split('.').pop().toLowerCase()];
+      if (!content_type || !stat.size || stat.size > 5 * 1024**3) throw Error('Unsupported type or size: '+file.path);
+      const key = JSON.stringify([origin.origin,project,file.path,sha256,stat.size]);
+      let upload = state[key];
+      if (!upload || upload.expires_at <= Date.now()) {
+        upload = await api('file.upload_url',{project,path:file.path,content_type,expected_revision:previous?.revision ?? 0,size:stat.size,sha256});
+        state[key] = upload; await save();
+      }
+      const status = (await (await request(upload.upload_url)).json()).result;
+      const received = new Map(status.received.map(p => [p.part,p.sha256]));
+      const handle = await fs.open(path,'r');
+      try {
+        for (let part = 1; part <= upload.parts; part++) {
+          const start = (part-1)*upload.part_bytes, bytes = Buffer.alloc(Math.min(upload.part_bytes,stat.size-start));
+          const {bytesRead} = await handle.read(bytes,0,bytes.length,start);
+          if (bytesRead !== bytes.length) throw Error('Local file changed during upload');
+          const checksum = createHash('sha256').update(bytes).digest('hex');
+          if (received.has(part)) { if (received.get(part) !== checksum) throw Error('Stored part checksum mismatch'); continue; }
+          const result = await (await request(upload.upload_url+'&part='+part,{method:'PUT',headers:{'X-Content-SHA256':checksum},body:bytes})).json();
+          if (result.result.sha256 !== checksum) throw Error('Part checksum mismatch');
+        }
+      } finally { await handle.close(); }
+      if (await digest(path) !== sha256) throw Error('Local file changed during upload');
+      await (await request(upload.upload_url,{method:'POST'})).json();
+      const metadata = await api('file.get',{project,path:file.path});
+      if (metadata.file.sha256 !== sha256) throw Error('Published checksum mismatch');
+      Object.assign(file,metadata.file);
+      delete state[key]; await save();
+      console.log(`pushed ${file.path}`);
+    }
+    if (manifestPath) await fs.writeFile(manifestPath,JSON.stringify({version:1,project,files:files.map(({path,revision,sha256}) => ({path,revision,sha256}))},null,2)+'\n');
+  } else {
+    if (manifestPath) {
+      const manifest = JSON.parse(await fs.readFile(manifestPath,'utf8'));
+      if (manifest.version !== 1 || manifest.project !== project || !Array.isArray(manifest.files)) throw Error('Invalid manifest');
+      files = manifest.files;
+    }
+    const seen = new Set();
+    for (const file of files) {
+      safePath(file.path);
+      if (seen.has(file.path) || !Number.isInteger(file.revision) || file.revision < 1 || !/^[a-f0-9]{64}$/.test(file.sha256)) throw Error('Invalid manifest entry');
+      seen.add(file.path);
+      const path = await local(root,file.path);
+      if (await exists(path) && await digest(path) === file.sha256) { console.log(`unchanged ${file.path}`); continue; }
+      const metadata = await api('file.get',{project,path:file.path,revision:file.revision});
+      if (metadata.file.sha256 !== file.sha256) throw Error('Manifest checksum differs from pinned revision');
+      await fs.mkdir(dirname(path),{recursive:true,mode:0o700});
+      const partial = path + '.pimwell-part';
+      if ((await exists(partial))?.isSymbolicLink()) throw Error('Symlink partial refused');
+      let offset = (await exists(partial))?.size ?? 0;
+      if (offset > metadata.file.size) { await fs.truncate(partial,0); offset = 0; }
+      if (offset < metadata.file.size) {
+        const response = await request(metadata.download_url,{headers:offset ? {Range:`bytes=${offset}-`,'If-Range':`"${file.sha256}"`} : {}});
+        if (offset && (response.status !== 206 || response.headers.get('content-range') !== `bytes ${offset}-${metadata.file.size-1}/${metadata.file.size}`)) throw Error('Invalid resume response');
+        const handle = await fs.open(partial,offset ? 'a' : 'w',0o600);
+        try { await pipeline(Readable.fromWeb(response.body),handle.createWriteStream()); } finally { await handle.close(); }
+      }
+      if ((await fs.stat(partial)).size !== metadata.file.size || await digest(partial) !== file.sha256) { await fs.unlink(partial); throw Error('Download checksum mismatch; rerun'); }
+      await fs.rename(partial,path); console.log(`pulled ${file.path}`);
+    }
+  }
+  await fs.unlink(statePath).catch(e => { if(e.code !== 'ENOENT') throw e; });
+}
+if (process.argv[1] && resolve(process.argv[1]) === new URL(import.meta.url).pathname) main(process.argv.slice(2)).catch(() => { console.error('Transfer failed. Check arguments, permissions, file types and connection; rerun the same command to resume. No credentials or capability URLs are printed.'); process.exitCode=1; });

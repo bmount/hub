@@ -3,6 +3,7 @@
 // /skills/pimwell-agent-onboarding/SKILL.md. Fetched from an organization's host it carries that organization's exact
 // names; from the hub's own host, placeholders. It holds no secret and no link.
 import { connectionNames } from "../auth/connect";
+import { filesGuide } from "./files";
 
 export const AGENT_SKILL_NAME = "pimwell-agent-onboarding";
 export const agentSkillPath = `/skills/${AGENT_SKILL_NAME}/SKILL.md`;
@@ -68,6 +69,8 @@ At each connected session, check \`attention_list\`. Read changed guides only wi
 - Check access with \`git ls-remote\`, never a test push.
 - History is never overwritten: force pushes are refused. Small changes can go straight to main; fetch before you push. Keep feature branches short and easy to merge.
 - Git gets one-hour sessions; your token never goes in a URL, a remote or a command line.
+
+${filesGuide(host, tokenFile)}
 
 ## Always
 - Never print or log a token, the claim answer, or a connect link.

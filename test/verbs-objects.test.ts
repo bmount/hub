@@ -328,6 +328,22 @@ describe("wiki pages", () => {
     expect(resumed.status).toBe(206);
     hash.update(new Uint8Array(await resumed.arrayBuffer()));
     expect(hash.digest("hex")).toBe(sha256);
+    // Published data is org-wide, unlike the identity-bound upload capability.
+    const peer = await seedAgent(w.tenant, w.admin.identity, "data-peer");
+    expect((await req("GET", "", undefined, peer.token)).status).toBe(404);
+    for (const token of [w.member.token, w.admin.token, w.reader.token, peer.token]) {
+      const response = await SELF.fetch(download, {headers: {...bearer(token), range: "bytes=0-9"}});
+      expect(response.status).toBe(206); await response.arrayBuffer();
+    }
+    const foreignTenant = await seedTenant("foreign-files");
+    const foreign = await seedHuman("files-outsider@example.com", {memberships: [{tenant_id: foreignTenant.id, role: "admin"}]});
+    for (const url of [download, minted.result.upload_url]) {
+      const response = await SELF.fetch(url, {headers: bearer(foreign.token)});
+      expect(response.status).not.toBe(200); expect(response.status).not.toBe(206);
+      await response.arrayBuffer();
+    }
+    const anonymous = await SELF.fetch(download);
+    expect(anonymous.status).not.toBe(200); await anonymous.arrayBuffer();
     const suffix = await get("bytes=-8");
     expect(new Uint8Array(await suffix.arrayBuffer())).toEqual(bytes.slice(-8));
     for (const range of ["bytes=9-1", `bytes=${bytes.length}-`, "bytes=-0", "bytes=0-1,3-4"]) expect((await get(range)).status).toBe(416);

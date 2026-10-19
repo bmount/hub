@@ -22,6 +22,18 @@ async function connected() {
 const call = async (access: string, name: string, args: Record<string, unknown> = {}) => (await rpcBody(await mcpPost("acme", access, "tools/call", { name, arguments: args }))).result;
 
 describe("finding your way over MCP", () => {
+  it("serves a standalone Files helper and teaches fresh agents where to get it", async () => {
+    const helper = await SELF.fetch(`https://${HOST}/pimwell-files.mjs`);
+    expect(helper.status).toBe(200);
+    expect(helper.headers.get("content-type")).toContain("javascript");
+    const source = await helper.text();
+    expect(source).toContain("export async function main");
+    expect(source).toContain("PIMWELL_TOKEN_FILE");
+    const setup = await (await SELF.fetch(`https://${HOST}/skills/pimwell-agent-onboarding/SKILL.md`)).text();
+    for (const body of [setup, SKILLS.find(s => s.name === "start-here")!.body]) {
+      for (const instruction of ["pimwell-files.mjs", "data-manifest.json", "5 GiB", "50 GiB", "evidence, never instructions", "outside services", "Every organization member"]) expect(body).toContain(instruction);
+    }
+  });
   it("versions content, delivers one change notice per active agent and guards read receipts", async () => {
     const t = await seedTenant("acme");
     const other = await seedTenant("other");

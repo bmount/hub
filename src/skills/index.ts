@@ -3,6 +3,7 @@
 // agent should learn it in a few hundred tokens.
 
 import { onboardSkill } from "./onboard";
+import { filesGuide } from "./files";
 
 export type Skill = { name: string; title: string; summary: string; body: string };
 
@@ -41,6 +42,8 @@ Find ready work with \`work_frontier\`, then take one item with \`work_claim\` (
 
 **Measuring a change**
 Use \`site_list\` to find the registered site. \`perf_summary\` ranks routes and interactions by total waiting time; \`perf_route\` takes site and selected (for example \`/:project/docket\`) for percentiles, breakdown and colo/version/cold-start splits. Set hours to 1, 24 (default) or 168, and optionally version; kind defaults to routes, or use interactions. Measure before and after with the same window and population. \`perf_compare\` takes version and previous for a side-by-side route comparison. \`perf_exemplar\` returns a slow request waterfall (optionally request from the exemplars); \`perf_statements\` returns slow D1 fingerprints and recorded call sites for selected. Missing or sampled telemetry is not proof of zero latency. All five tools follow the Performance view's owning-project membership and site/project boundaries; they aggregate all organizations on that site by default. Use only_my_org: true for your organization alone. No organization identities or tenant hashes are exposed.
+
+${filesGuide("<org>.pimwell.com", "~/.config/pimwell/<org>.token")}
 
 **Everything else you can reach**
 - **Work:** \`work_create\`, \`work_update\`, \`work_comment\` (@handle mentions), \`work_subscribe\`, \`work_board\`, \`work_bulk_update\`, \`work_search\`.

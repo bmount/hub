@@ -42,7 +42,7 @@ beforeAll(async () => {
     name: "assistant-browser", modulesRoot: build, modules: [
       { type: "ESModule", path: path.join(build, "browser-entry.js") },
       { type: "ESModule", path: path.join(build, "index.js") },
-      ...(await readdir(build)).filter(f => f.endsWith(".html")).map(f => ({ type: "Text" as const, path: path.join(build, f) })),
+      ...(await readdir(build)).filter(f => (f.endsWith(".html") || f.endsWith(".txt"))).map(f => ({ type: "Text" as const, path: path.join(build, f) })),
     ],
     compatibilityDate: "2026-09-01", compatibilityFlags: ["nodejs_compat"],
     bindings: { HUB_DOMAIN: "pimwell.test", HUB_SECRETS_KEY: KEY },

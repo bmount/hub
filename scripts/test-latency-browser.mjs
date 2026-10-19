@@ -45,7 +45,7 @@ try {
     name: 'chat-browser-local', modulesRoot: path.join(temp, 'build'), modules: [
       { type: 'ESModule', path: path.join(temp, 'build/browser-entry.js') },
       { type: 'ESModule', path: path.join(temp, 'build/index.js') },
-      ...(await readdir(path.join(temp, 'build'))).filter(f => f.endsWith('.html')).map(f => ({ type: 'Text', path: path.join(temp, 'build', f) })),
+      ...(await readdir(path.join(temp, 'build'))).filter(f => (f.endsWith('.html') || f.endsWith(".txt"))).map(f => ({ type: 'Text', path: path.join(temp, 'build', f) })),
     ],
     compatibilityDate: '2026-09-01', compatibilityFlags: ['nodejs_compat'],
     bindings: { HUB_DOMAIN: 'pimwell.test', ARDI_REPO_CREATE: 'off', HUB_SECRETS_KEY: fixtureKey.toString('base64') },

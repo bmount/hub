@@ -56,6 +56,7 @@ import { doPage } from "./intent/page";
 import { intentEvalRoute } from "./intent/evalRoute";
 import { claimConnectLink, connectInstructions } from "./auth/connect";
 import { gitHelperResponse } from "./http/gitHelper";
+import filesHelper from "./files-helper.txt";
 import { agentOnboardingResponse } from "./skills/agentOnboarding";
 import { classifyHost } from "./tenant";
 import { channelPage, channelPost, channelsPage, inboxPage, permalinkPage, threadPage } from "./http/chatPages";
@@ -246,6 +247,7 @@ app.all("/mcp", (c) => handleMcp(c.req.raw, c.env, (p) => c.executionCtx.waitUnt
 app.all("/p/:namespace/:project/mcp", (c) => handleProjectMcp(c.req.raw, c.env, c.req.param("project"), (p) => c.executionCtx.waitUntil(p), c.req.param("namespace")));
 app.all("/p/:project/mcp", (c) => handleProjectMcp(c.req.raw, c.env, c.req.param("project"), (p) => c.executionCtx.waitUntil(p)));
 app.all("/agent/mcp", (c) => handleAgentMcp(c.req.raw, c.env, (p) => c.executionCtx.waitUntil(p)));
+app.get("/pimwell-files.mjs", (c) => classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN).kind === "tenant" ? new Response(filesHelper, {headers: {"content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff"}}) : notFoundPage());
 app.get("/git-credential-helper", (c) => { const h = classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN); return h.kind === "tenant" ? gitHelperResponse(c.env, h.slug) : notFoundPage(); });
 app.get("/connect/:token", (c) => classifyHost(c.req.header("host") ?? new URL(c.req.url).host, c.env.HUB_DOMAIN).kind === "tenant" ? connectInstructions(c.req.raw) : notFoundPage());
 app.post("/connect/:token", (c) => {

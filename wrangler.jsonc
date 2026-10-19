@@ -26,7 +26,7 @@
   "r2_buckets": [{ "binding": "GIT_PUSH_STAGING", "bucket_name": "pimwell-git-staging" }],
   // Push sync from the git host every five minutes (src/code/sync.ts).
   "triggers": { "crons": ["*/5 * * * *"] },
-  "rules": [{ "type": "Text", "globs": ["**/*.html"], "fallthrough": true }],
+  "rules": [{ "type": "Text", "globs": ["**/*.html", "**/files-helper.txt"], "fallthrough": true }],
   "d1_databases": [
     {
       "binding": "HUB_DB",
