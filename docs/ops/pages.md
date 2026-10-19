@@ -31,6 +31,10 @@ unambiguous. Every upload replaces the whole bundle; expected_revision is
 mandatory, and the SQL compare-and-append prevents concurrent overwrites.
 Inline MCP html/base64 is limited to 512 KiB. Omitting content returns a private
 single-use 15-minute upload URL: PUT raw bytes with normal authentication.
+Long-lived agent MCP credentials must first be exchanged at `POST
+/api/session.start` for a run token; ordinary HTTP upload/view/API endpoints
+require that run token, not the long-lived credential. The skill includes the
+exact request and session cleanup.
 Capabilities are hashed in `page_upload`, scoped to identity/tenant/project,
 and consumed atomically. Archived projects reject writes. Source visible text
 (up to 128 KiB) and titles are searched; deleted heads disappear from search.

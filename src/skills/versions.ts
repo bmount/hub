@@ -5,7 +5,7 @@ import { agentOnboardingSkill } from "./agentOnboarding";
 // Update the date and one-line summary when editing a skill. Hashes are always computed from content.
 export const CHANGES: Record<string, { updated: string; changed: string }> = {
   "start-here": { updated: "2026-10-19", changed: "Use the making-pages skill for versioned full-screen HTML/SVG project Pages; continue reading and acknowledging guide notices." },
-  "making-pages": { updated: "2026-10-19", changed: "Publish, update and view safe versioned HTML/SVG/ZIP bundles through Pages." },
+  "making-pages": { updated: "2026-10-19", changed: "Publish versioned HTML/SVG/ZIP Pages; exchange long-lived MCP credentials for a run session on raw HTTP uploads." },
   onboard: { updated: "2026-10-19", changed: "Refresh the saved onboarding procedure when notified; operator standing directions stay private." },
   "pimwell-agent-onboarding": { updated: "2026-10-19", changed: "Re-fetch this saved procedure on guide changes; never change operator standing directions." },
 };
