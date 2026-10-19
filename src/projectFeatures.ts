@@ -3,10 +3,10 @@ import { badRequest } from "./errors";
 export type ProjectFeature = "docket" | "repo" | "wiki" | "knowledge" | "files" | "people" | "pages";
 /** Project capabilities, shared by pages, verbs and project-scoped tool discovery. */
 export const PROJECT_FEATURES = {
-  repo: ["docket", "repo", "files"],
-  tracker: ["docket"],
-  wiki: ["wiki", "files"],
-  workspace: ["docket", "wiki", "knowledge", "files", "people"],
+  repo: ["docket", "repo", "files", "pages"],
+  tracker: ["docket", "pages"],
+  wiki: ["wiki", "files", "pages"],
+  workspace: ["docket", "wiki", "knowledge", "files", "people", "pages"],
 } as const satisfies Record<string, readonly ProjectFeature[]>;
 export const PROJECT_KINDS = Object.keys(PROJECT_FEATURES);
 export const FEATURE_LABELS: Record<ProjectFeature, string> = {

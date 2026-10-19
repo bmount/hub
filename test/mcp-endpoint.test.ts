@@ -39,7 +39,7 @@ describe("project MCP", () => {
     expect(await names()).toContain("wiki_write");
     const denied = await rpcBody(await projectRpc("team/desk",agent.longLived,"tools/call",{name:"project_update",arguments:{project:"elsewhere",add:["wiki"]}}));
     expect(denied.result.isError).toBe(true);
-    expect((await env.HUB_DB.prepare("SELECT parts FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = 'desk'").bind(acme.id).first<string>("parts"))).toBe('["docket"]');
+    expect((await env.HUB_DB.prepare("SELECT parts FROM project WHERE tenant_id = ? AND namespace_id IS NULL AND slug = 'desk'").bind(acme.id).first<string>("parts"))).toBe('["docket","pages"]');
     const removed = await rpcBody(await projectRpc("team/desk",agent.longLived,"tools/call",{name:"project_update",arguments:{remove:["wiki"]}}));
     expect(removed.result.isError).toBeUndefined();
     expect(await names()).not.toContain("wiki_write");
@@ -69,7 +69,7 @@ describe("project MCP", () => {
       expect(JSON.stringify(denied)).not.toContain("Private to other endpoint");
     }
     const pages = (await rpcBody(await projectRpc("pages", access, "tools/list"))).result.tools.map((t: any) => t.name);
-    expect(pages.sort()).toEqual(["file_get", "file_history", "file_list", "wiki_history", "wiki_list", "wiki_read"]);
+    expect(pages.sort()).toEqual(["file_get", "file_history", "file_list", "page_history", "page_list", "page_read", "wiki_history", "wiki_list", "wiki_read"]);
     const repos = (await rpcBody(await projectRpc("code", access, "tools/list"))).result.tools.map((t: any) => t.name);
     expect(repos).toContain("repo_file");
     expect(repos).not.toContain("wiki_list");

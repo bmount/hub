@@ -46,7 +46,7 @@ Use \`site_list\` to find the registered site. \`perf_summary\` ranks routes and
 
 ${filesGuide("<org>.pimwell.com", "~/.config/pimwell/<org>.token")}
 
-**Visual reports and dashboards:** read the \`making-pages\` skill (skill_read). Enable Pages with project_update add: ["pages"]; page_publish creates or updates script-free HTML/SVG/ZIP bundles with retained versions and a full-screen viewer.
+**Visual reports and dashboards:** read the \`making-pages\` skill (skill_read). Pages is on by default in every project (restore it with project_update add: ["pages"] only if someone removed it); page_publish creates or updates script-free HTML/SVG/ZIP bundles with retained versions and a full-screen viewer.
 
 **Everything else you can reach**
 - **Work:** \`work_create\`, \`work_update\`, \`work_comment\` (@handle mentions), \`work_subscribe\`, \`work_board\`, \`work_bulk_update\`, \`work_search\`.

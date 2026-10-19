@@ -1,7 +1,7 @@
 # Script-free project pages
 
 Pages are versioned project bundles, rendered under the organization’s own host.
-Enable the `pages` part with `project_update`. Members publish through
+Pages is on by default for every project kind, including existing and archived projects (except private agent-source projects). An empty Pages part can still be removed; only then is `project_update` with `add: ["pages"]` needed to restore it. Members publish through
 `page_publish` (MCP/API) or the Pages list’s multipart form and drop target.
 `page_list`, `page_read`, `page_history` and admin-only `page_delete` manage
 metadata and retained history. The `making-pages` skill is the agent guide.

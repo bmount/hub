@@ -1,19 +1,19 @@
 # Project kinds
 
-`src/projectFeatures.ts` defines creation templates. The stored `project.parts` JSON set is the source of truth for feature checks, navigation, the overview, search and project-scoped MCP tool families. Kind stays unchanged. Migration 0039 seeds existing projects from their kind and adds `repo` wherever a repository already exists. New projects are seeded at insertion; repository creation enables `repo`. Discovery never changes roles or grant scopes.
+`src/projectFeatures.ts` defines creation templates. The stored `project.parts` JSON set is the source of truth for feature checks, navigation, the overview, search and project-scoped MCP tool families. Kind stays unchanged. Migration 0039 seeds existing projects from their kind and adds `repo` wherever a repository already exists. Migration 0044 adds Pages to active and archived ordinary projects without changing content or private agent-source projects. Pages is on by default for every kind and can still be removed while empty. New projects are seeded at insertion; repository creation enables `repo`. Discovery never changes roles or grant scopes.
 
 | Kind | Features |
 | --- | --- |
-| repo | Docket, repository, files |
-| tracker | Docket |
-| wiki | Wiki pages, files |
-| workspace | Docket, wiki pages, knowledge base, files, people |
+| repo | Docket, repository, files, Pages |
+| tracker | Docket, Pages |
+| wiki | Wiki pages, files, Pages |
+| workspace | Docket, wiki pages, knowledge base, files, people, Pages |
 
 Wiki tabs open the page list, editor and revision history; see [wiki pages](wiki.md). Knowledge/research, uploaded files and contact people are project content, not repository files or organization membership. The source-file browser belongs to `repo`.
 
 Members add parts with `project_update {project, add: ["repo", "wiki"]}` or `POST /api/project.update`. Use the existing project; never create a separate `<name>-source` project. Adding `repo` provisions its default `<project>.git` if no repository exists. `repo_create` works in every ordinary project and enables `repo`. Both tools remain discoverable on project MCP endpoints even when repo is absent.
 
-`remove` accepts the same part names (`docket`, `repo`, `wiki`, `knowledge`, `files`, `people`). Only empty parts may be removed. Work items, retained revisions (including deleted pages/files), research, pending uploads, contacts/connections and repository records block removal with counts; removal never deletes content. Wiki owns the shared wiki/KB/research revision store, so research also prevents removing wiki. Adding knowledge also enables wiki, its page/history store; removing wiki requires removing empty knowledge in the same call. Archived/deleting projects reject updates. Tenant and pinned-project boundaries still apply.
+`remove` accepts the same part names (`docket`, `repo`, `wiki`, `knowledge`, `files`, `people`, `pages`). Only empty parts may be removed. Work items, retained revisions (including deleted pages/files), research, pending uploads, contacts/connections and repository records block removal with counts; removal never deletes content. Wiki owns the shared wiki/KB/research revision store, so research also prevents removing wiki. Adding knowledge also enables wiki, its page/history store; removing wiki requires removing empty knowledge in the same call. Archived/deleting projects reject updates. Tenant and pinned-project boundaries still apply.
 
 Members can create projects over `project_create`, `/api/project.create`, or the kind picker at `/projects/new`. Project navigation opens the project overview so non-Docket kinds remain reachable. Explicit Docket and repository operations reject projects without the required capability; hidden channel and agent-source projects remain excluded from ordinary project resolution. Archiving remains admin-only.
 

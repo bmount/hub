@@ -24,7 +24,7 @@ const HOST = "acme.pimwell.test";
 
 describe("project kinds", () => {
   it("defines all capabilities in one table", () => {
-    expect(PROJECT_FEATURES).toEqual({ repo: ["docket", "repo", "files"], tracker: ["docket"], wiki: ["wiki", "files"], workspace: ["docket", "wiki", "knowledge", "files", "people"] });
+    expect(PROJECT_FEATURES).toEqual({ repo: ["docket", "repo", "files", "pages"], tracker: ["docket", "pages"], wiki: ["wiki", "files", "pages"], workspace: ["docket", "wiki", "knowledge", "files", "people", "pages"] });
     expect(projectFeatures({parts: "[]"})).toEqual([]);
     expect(() => requireProjectFeature({ slug: "docs", kind: "wiki" }, "repo")).toThrow("does not support Repository");
   });
@@ -80,6 +80,9 @@ describe("stored project parts", () => {
       const p = await createProject(env.HUB_DB, {tenant_id:w.t.id, namespace_id:null, slug:kind, kind, display_name:kind}, Date.now());
       expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,kind))!)).toEqual(parts);
       expect(projectFeatures(p)).toEqual(parts);
+      const overview = await SELF.fetch(`https://${HOST}/${kind}`, {headers:cookieHeaders(w.h.token,HOST)});
+      expect(overview.status).toBe(200);
+      expect(await overview.text()).toContain(`href="/${kind}/pages"`);
     }
     expect((await callTool(w.ctx,"wiki_list",{project:"desk"})).isError).toBe(true);
     expect((await w.update({add:["wiki","people","files","knowledge","wiki"]})).isError).toBeUndefined();
@@ -101,7 +104,7 @@ describe("stored project parts", () => {
     expect(remove.isError).toBe(true);
     expect(JSON.stringify(remove)).toContain("wiki revisions");
     expect((await w.update({remove:["people","knowledge","files"]})).isError).toBeUndefined();
-    expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"desk"))!)).toEqual(["docket","wiki"]);
+    expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"desk"))!)).toEqual(["docket","pages","wiki"]);
   });
   it("offers member-only web controls and accepts add/remove form arrays", async () => {
     const w = await world();
@@ -133,7 +136,23 @@ describe("stored project parts", () => {
     const migration = env.TEST_MIGRATIONS.find(m=>m.name.includes("0039"))!;
     for (const sql of migration.queries.filter(sql=>sql.trim().startsWith("UPDATE project"))) await env.HUB_DB.prepare(sql).run();
     expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"desk"))!)).toEqual(["docket"]);
-    expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"barefoot"))!)).toEqual([...PROJECT_FEATURES.workspace,"repo"]);
+    expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"barefoot"))!)).toEqual([...PROJECT_FEATURES.workspace.filter(p=>p!=="pages"),"repo"]);
+  });
+  it("adds Pages once to active and archived projects without changing other parts or agent source", async () => {
+    const w = await world();
+    const archived = await createProject(env.HUB_DB,{tenant_id:w.t.id,namespace_id:null,slug:"old",kind:"wiki",display_name:"Old"},Date.now());
+    await env.HUB_DB.prepare("UPDATE project SET state='archived', parts='[\"wiki\"]' WHERE id=?").bind(archived.id).run();
+    await env.HUB_DB.prepare("UPDATE project SET parts='[\"docket\",\"files\"]' WHERE id=?").bind(w.p.id).run();
+    await env.HUB_DB.prepare("INSERT INTO project (id,tenant_id,slug,kind,display_name,state,created_at,parts) VALUES ('source',?,'source','agent-src','Source','active',?,'[\"repo\"]')").bind(w.t.id,Date.now()).run();
+    const migration = env.TEST_MIGRATIONS.find(m=>m.name.includes("0044"))!;
+    const update = migration.queries.find(sql=>sql.includes("UPDATE project SET parts = json_insert"))!;
+    await env.HUB_DB.prepare(update).run();
+    await env.HUB_DB.prepare(update).run();
+    expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"desk"))!)).toEqual(["docket","files","pages"]);
+    expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"old"))!)).toEqual(["wiki","pages"]);
+    expect(await env.HUB_DB.prepare("SELECT parts FROM project WHERE id='source'").first("parts")).toBe('["repo"]');
+    expect((await w.update({remove:["pages"]})).isError).toBeUndefined();
+    expect(projectFeatures((await getProjectByPath(env.HUB_DB,w.t.id,null,"desk"))!)).not.toContain("pages");
   });
   it("refuses content-bearing parts and preserves content, including retained history", async () => {
     const w = await world();
@@ -169,7 +188,7 @@ describe("stored project parts", () => {
     w.ctx.mcpProject = undefined;
     await env.HUB_DB.prepare("UPDATE project SET state = 'archived' WHERE id = ?").bind(w.p.id).run();
     expect((await w.update({add:["wiki"]})).isError).toBe(true);
-    expect(projectFeatures((await getProjectByPath(env.HUB_DB,foreign.id,null,"foreign"))!)).toEqual(["docket"]);
+    expect(projectFeatures((await getProjectByPath(env.HUB_DB,foreign.id,null,"foreign"))!)).toEqual(["docket","pages"]);
     expect(() => projectUpdate.parse({project:"desk",remove:[null]})).toThrow();
   });
 });

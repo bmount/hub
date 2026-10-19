@@ -87,7 +87,7 @@ describe("Artifacts repository provisioning", () => {
     const args = projectUpdate.parse({project:"tasks",add:["repo","wiki"]});
     const first = await projectUpdate.run(s.ctx,args);
     expect(first.project.kind).toBe("tracker");
-    expect(first.parts).toEqual(["docket","repo","wiki"]);
+    expect(first.parts).toEqual(["docket","pages","repo","wiki"]);
     const again = await projectUpdate.run(s.ctx,args);
     expect(again.parts).toEqual(first.parts);
     expect(create).toHaveBeenCalledTimes(1);
