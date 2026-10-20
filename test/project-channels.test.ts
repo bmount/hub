@@ -314,32 +314,28 @@ describe("project files", () => {
     const evil = new FormData(); evil.set("file", new File(["evil"], "a.txt", {type: "text/plain"})); evil.set("expected_revision", "0");
     expect((await SELF.fetch(`https://${HOST}/docs/documents/upload`, {method: "POST", headers: {...w.headers, origin: "https://evil.test"}, body: evil})).status).toBe(403);
   });
-  it("serves page bundles with Files authorization, fresh sanitization and download-only originals", async () => {
+  it("retires Files rendering without colliding with the Pages viewer or exposing originals", async () => {
     const w = await world();
-    const source = '<h1>Safe</h1><script>window.bad=1</script><svg onload="bad()"><circle r="10"/></svg><img src="https://outside.test/x"><link rel="stylesheet" href="style.css">';
-    for (const [path, content_type, text] of [["demo/index.html", "text/html", source], ["demo/style.css", "text/css", "h1{color:red}"], ["demo/image.svg", "image/svg+xml", '<svg onload="bad()"><circle r="10"/></svg>']]) {
-      const put = await apiPost(HOST, "file.put", {project:"docs", path, content_type, expected_revision:0, base64:btoa(text!)}, w.headers);
-      expect(put.status, await put.clone().text()).toBe(200);
+    const source = '<h1>Original</h1><script>bad()</script>';
+    await apiPost(HOST, "file.put", {project:"docs",path:"demo/index.html",content_type:"text/html",expected_revision:0,base64:btoa(source)},w.headers);
+    for (const asset of ["index.html", "style.css", "image.svg", "images/logo.png", "font.woff2"]) {
+      const url = `https://${HOST}/docs/pages/demo/${asset}`;
+      const res = await SELF.fetch(url,{headers:w.headers});
+      expect(res.status).toBe(410);
+      expect(await res.text()).toContain("Publish an HTML/SVG/ZIP bundle in Pages");
+      expect(res.headers.get("content-type")).toContain("text/plain");
+      expect(res.headers.get("cache-control")).toContain("no-store");
+      expect((await SELF.fetch(url)).status).toBe(404);
+      expect((await SELF.fetch(url.replace("/docs/", "/absent/"),{headers:w.headers})).status).toBe(404);
     }
-    const url = `https://${HOST}/docs/pages/demo/index.html`;
-    const res = await SELF.fetch(url, {headers:w.headers});
-    expect(res.status).toBe(200);
-    const output = await res.text();
-    expect(output).toContain("<h1>Safe</h1>"); expect(output).not.toMatch(/<script|onload|outside.test/);
-    expect(output).toContain(`https://${HOST}/docs/pages/demo/style.css`);
-    expect(res.headers.get("content-security-policy")).toContain("default-src 'none'");
-    expect(res.headers.get("content-security-policy")).not.toContain("allow-scripts");
-    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
-    expect(res.headers.get("cache-control")).toBe("private, no-store");
-    expect((await SELF.fetch(url)).status).toBe(404);
-    expect((await SELF.fetch(url.replace("/docs/", "/absent/"), {headers:w.headers})).status).toBe(404);
-    const original = await SELF.fetch(`https://${HOST}/docs/documents/download?path=demo/index.html`, {headers:w.headers});
-    expect(original.headers.get("content-disposition")).toMatch(/^attachment;/); expect(await original.text()).toBe(source);
-    const svg = await SELF.fetch(url.replace("index.html", "image.svg"), {headers:w.headers});
-    expect(svg.headers.get("content-type")).toBe("image/svg+xml"); expect(await svg.text()).not.toContain("onload");
-    const style = await SELF.fetch(url.replace("index.html", "style.css"), {headers:w.headers}); expect(await style.text()).toBe("h1{color:red}");
-    await apiPost(HOST, "file.put", {project:"docs", path:"demo/index.html",content_type:"text/html",expected_revision:1,base64:btoa("<h1>Updated</h1><script>bad()</script>")},w.headers);
-    expect(await (await SELF.fetch(url, {headers:w.headers})).text()).toContain("<h1>Updated</h1>");
+    const published = await apiPost(HOST,"page.publish",{project:"docs",slug:"demo",title:"Demo",filename:"index.html",expected_revision:0,html:"<h1>Versioned page</h1>"},w.headers);
+    expect(published.status,await published.clone().text()).toBe(200);
+    const viewer = await SELF.fetch(`https://${HOST}/docs/pages/demo`,{headers:w.headers});
+    expect(viewer.status).toBe(200);
+    expect(await viewer.text()).toContain("/docs/pages-content/demo/1/index.html");
+    const original = await SELF.fetch(`https://${HOST}/docs/documents/download?path=demo/index.html`,{headers:w.headers});
+    expect(original.headers.get("content-disposition")).toMatch(/^attachment;/);
+    expect(await original.text()).toBe(source);
   });
   it("consumes upload capabilities once, pins tenant/project/identity, expires, and checks Content-Type", async () => {
     const w = await world();

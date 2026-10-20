@@ -14,7 +14,6 @@ import { FILE_REQUEST_BYTES, inferredFileType, fileList, fileHistory, fileProjec
 
 import { recordFileDownload, fileDownloadAudit } from "../db/fileDownloads";
 import { documentSharing } from "./documentSharing";
-import { pageCSS, pageHeaders, sanitizePage } from "../security/pages";
 
 export async function filePage(request: Request, env: Env, project: string, action = ""): Promise<Response> {
   const ctx = await buildContext(request, env, Date.now(), undefined, {longLivedToken: true});
@@ -58,24 +57,7 @@ export async function filePage(request: Request, env: Env, project: string, acti
     }
     if (writing) throw badRequest("invalid file route");
     if (action === "page") {
-      const match = /^([^/]+)\/(.+)$/.exec(url.pathname.slice(`/${project}/pages/`.length));
-      if (!match) throw notFound("page not found");
-      const bundle = decodeURIComponent(match[1]!);
-      const asset = decodeURIComponent(match[2]!);
-      filePath(bundle); filePath(asset);
-      if (bundle.includes("/")) throw badRequest("invalid bundle");
-      const r = await readFile(ctx, project, filePath(bundle + "/" + asset), null);
-      const location = {origin: url.origin, prefix: `/${project}/pages/${encodeURIComponent(bundle)}/`, path: asset};
-      const headers = pageHeaders(location);
-      const allowed = ["text/html", "image/svg+xml", "text/css", "image/png", "image/jpeg", "image/gif", "image/webp", "font/woff", "font/woff2"];
-      if (!allowed.includes(r.content_type)) throw notFound("unsupported page asset");
-      if (r.size > 5 * 1024 * 1024) throw new HubError(413, "too_large", "page assets are limited to 5 MiB");
-      const object = await env.GIT_PUSH_STAGING?.get(r.object_key);
-      if (!object) throw notFound("file storage unavailable");
-      await recordFileDownload(ctx, p.id, r, r.size, "download");
-      const markup = ["text/html", "image/svg+xml"].includes(r.content_type);
-      const body = markup ? sanitizePage(await object.text(), location, r.content_type === "image/svg+xml") : r.content_type === "text/css" ? pageCSS(await object.text(), location) : object.body;
-      return new Response(body, {headers: {...headers, "content-type": r.content_type === "text/html" ? "text/html; charset=utf-8" : r.content_type, "access-control-allow-origin": "*"}});
+      return new Response("Files HTML rendering has been retired. Publish an HTML/SVG/ZIP bundle in Pages to view it, or download the original from Files.\n", {status: 410, headers: {"content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox"}});
     }
     if (action === "download") {
       const path = filePath(url.searchParams.get("path") ?? "");
@@ -96,7 +78,7 @@ export async function filePage(request: Request, env: Env, project: string, acti
       const object = await env.GIT_PUSH_STAGING?.get(r.object_key, range ? {range} : undefined);
       if (!object) throw notFound("file storage unavailable");
       await recordFileDownload(ctx, p.id, r, range?.length ?? r.size, "download");
-      // Active source is downloadable only; the page route sanitizes on every serve.
+      // Active source in Files is downloadable only; publish visual content through Pages.
       const disposition = (r.content_type.startsWith("image/") && r.content_type !== "image/svg+xml") || r.content_type === "application/pdf" ? "inline" : "attachment";
       return new Response(object.body, {status: range ? 206 : 200, headers: {"accept-ranges": "bytes", "etag": etag, "x-content-sha256": r.sha256, ...(range ? {"content-range": `bytes ${range.offset}-${range.offset + range.length - 1}/${r.size}`} : {}), "content-type": r.content_type, "content-length": String(range?.length ?? r.size), "content-disposition": `${disposition}; filename*=UTF-8''${encodeURIComponent(r.name).replace(/['()]/g, c => '%' + c.charCodeAt(0).toString(16))}`, "x-content-type-options": "nosniff", "content-security-policy": "sandbox", "cache-control": "private, no-store"}});
     }

@@ -44,27 +44,9 @@ The Files orphan sweep protects all page revision object references too;
 project/tenant deletion removes page metadata and sweeps the same prefix.
 Conflicting uploads remove their unattached object. No thumbnails are generated.
 
-## Legacy Files rendering
-
-The earlier Files rendering endpoint remains supported, separately from Pages.
-Upload source and assets with the existing Files upload mechanisms. Keep a
-bundle in one top-level folder, for example `report/index.html`,
-`report/style.css`, `report/chart.svg`, and `report/images/logo.png`. Open:
-
-```
-https://<org>.pimwell.com/<project>/pages/report/index.html
-```
-
-Namespaced projects use `/<namespace>/<project>/pages/<bundle>/<asset>`.
-A bundle is the first folder of a Files path, not a separate storage object.
-Relative asset references resolve from the source file's folder. Bundle assets
-are read at their latest revision. Individual uploads remain versioned Files;
-this endpoint does not promise an atomic multi-file snapshot. Page assets are
-limited to 5 MiB each when rendered, even if Files accepts a larger upload.
-
-Supported source is UTF-8 HTML, SVG, and CSS, plus raster PNG/JPEG/GIF/WebP and
-WOFF/WOFF2 fonts. Download URLs return the unmodified original, with HTML and
-SVG forced to attachments. Rendering never overwrites stored source.
+Files stores downloadable originals only. Publish visual HTML/SVG/ZIP content
+through Pages; Files downloads force HTML and SVG to attachments and never
+render active source inline.
 
 ## Independent defenses
 
@@ -93,15 +75,13 @@ are bundle-local or data, and fonts are bundle-local. Frames and network APIs
 are not enabled. Popups and popup sandbox escape are enabled solely so clicked
 outside links can open normally; scripts still cannot execute in the page.
 Frame ancestors are self, base and form actions are none. Responses carry
-nosniff, no-referrer, and private/no-store caching. Browser font CORS/credential
-restrictions still apply to opaque-origin documents; system font fallbacks are
-recommended. Asset responses permit CORS reads but never skip Files access
-checks or publish unauthenticated URLs.
+nosniff, no-referrer, and private/no-store caching. Embedded bundle assets require no separate browser authentication or CORS
+permissions; system font fallbacks are recommended.
 
 ## Authorization and maintenance
 
-The page route uses Files' existing context, scope, organization/project
-membership and feature checks, storage, download audit and download budgets.
+Pages uses organization/project authorization, its own feature checks,
+shared storage, download audit and download budgets.
 Neither CORS nor possession of a page URL confers access. A request without
 membership cannot read either markup or assets. Deleted files are not served.
 
@@ -116,7 +96,7 @@ The regression corpus is `test/page-vectors.ts`. The real-browser test in
 CSP only, and both. It checks script side effects and dialogs, and verifies
 that sanitized content initiates no outside requests. Worker integration tests
 in `test/project-channels.test.ts` cover Files ingress, original downloads,
-asset delivery, fresh sanitization, authentication, headers and revisions.
+retirement responses, fresh sanitization, authentication, headers and revisions.
 Pages uses this same sanitizer and headers on every asset serve, including
 historical revisions. Page metadata authorization is independent of Files;
 a project needs only its Pages part enabled.
