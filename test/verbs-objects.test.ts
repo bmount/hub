@@ -18,7 +18,7 @@ import { cleanupFileObjects, FILE_ORPHAN_GRACE_MS, FILE_CLEANUP_CURSOR, FILE_CLE
 import { ulid } from "../src/ids";
 import { createHash } from "node:crypto";
 import { FILE_BYTES, PROJECT_FILE_BYTES } from "../src/verbs/files";
-import { FILE_PART_BYTES, FILE_UPLOAD_LIFETIME, cleanupFileUploads, verifyFileStream } from "../src/db/fileMultipart";
+import { FILE_JSON_MAX_DEPTH, FILE_PART_BYTES, FILE_UPLOAD_LIFETIME, cleanupFileUploads, verifyFileStream } from "../src/db/fileMultipart";
 
 describe("orphan file cleanup", () => {
   it("keeps all versions and hidden evidence; dry runs preserve storage and cursor", async () => {
@@ -392,11 +392,31 @@ describe("wiki pages", () => {
     };
     expect(await verify("a.json", "application/json", '{"value":"é"}')).toMatchObject({text: '{"value":"é"}'});
     expect(await verify("a.jsonl", "application/x-ndjson", '{}\r\n\n{"a":2}\n')).toMatchObject({type: "application/x-ndjson"});
-    for (const s of ['{"a":', '{}{}', 'not json']) await expect(verify("a.json", "application/json", s)).rejects.toThrow();
+    for (const s of ['{"a":', '{}{}', 'not json', '[1,]', '{"a":01}', '1e+', '/* comment */ {}', '"\\uZZZZ"', '[}']) await expect(verify("a.json", "application/json", s)).rejects.toThrow();
     await expect(verify("a.jsonl", "application/x-ndjson", '{} {}')).rejects.toThrow();
+    for (const [path, type] of [["a.json", "application/json"], ["a.jsonl", "application/x-ndjson"]]) {
+      const nested = "[".repeat(FILE_JSON_MAX_DEPTH) + "0" + "]".repeat(FILE_JSON_MAX_DEPTH);
+      await expect(verify(path!, type!, nested)).resolves.toMatchObject({type});
+      await expect(verify(path!, type!, "[" + nested + "]")).rejects.toThrow("JSON nesting exceeds");
+      await expect(verify(path!, type!, '{"a":'.repeat(FILE_JSON_MAX_DEPTH + 1))).rejects.toThrow("JSON nesting exceeds");
+      await expect(verify(path!, type!, JSON.stringify({s: '[{\\"'.repeat(1024)}))).resolves.toMatchObject({type});
+    }
+    await expect(verify("a.jsonl", "application/x-ndjson", '[0]\n[1]\n')).resolves.toMatchObject({type: "application/x-ndjson"});
     await expect(verify("a.txt", "text/plain", "bad\0text")).rejects.toThrow();
     await expect(verify("a.parquet", "application/vnd.apache.parquet", "PAR1badPAR1")).rejects.toThrow();
     await expect(verify("a.gz", "application/gzip", "not gzip")).rejects.toThrow();
+  });
+  it("cancels adversarial JSON streams before reading the rest of the object", async () => {
+    for (const content of ["[".repeat(100_000), '{"a":'.repeat(100_000)]) {
+      let cancelled = false;
+      const bytes = new TextEncoder().encode(content);
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) { c.enqueue(bytes); },
+        cancel() { cancelled = true; },
+      });
+      await expect(verifyFileStream(stream, {project: "guide", path: "a.json", content_type: "application/json", expected_revision: 0, item_id: null, person_id: null}, bytes.length)).rejects.toThrow("JSON nesting exceeds");
+      expect(cancelled).toBe(true);
+    }
   });
   it("round-trips data formats through MCP, capability PUT and multipart with safe downloads and search", async () => {
     const w = await world();

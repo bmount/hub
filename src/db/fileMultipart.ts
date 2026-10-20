@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
-import Verifier from "stream-json/utils/Verifier.js";
+import verifier from "stream-json/utils/verifier.js";
+import type { Duplex } from "node:stream";
 import type { Ctx } from "../auth/context";
 import type { Env } from "../env";
 import { badRequest, conflict, notFound, HubError } from "../errors";
@@ -8,6 +9,7 @@ import { sha256Hex, ulid } from "../ids";
 import { fileProject, fileType, putFile, validateFile, FILE_BYTES, FILE_TEXT_BYTES, type FileParams } from "../verbs/files";
 import { readRequestBytes } from "../http/body";
 
+export const FILE_JSON_MAX_DEPTH = 256;
 export const FILE_PART_BYTES = 16 * 1024 * 1024;
 export const FILE_UPLOAD_LIFETIME = 24 * 60 * 60 * 1000;
 type Upload = {token_hash: string; tenant_id: string; project_id: string; identity_id: string; params: string; object_key: string; upload_id: string; size: number; sha256: string; expires_at: number; state: string; result: string | null};
@@ -96,12 +98,26 @@ export async function verifyFileStream(body: ReadableStream<Uint8Array>, v: File
   let head = new Uint8Array(), tail = new Uint8Array(), text = "", total = 0;
   // Verifier checks grammar without constructing values (even a multi-GB JSON string).
   const json = type === "application/json", ndjson = type === "application/x-ndjson";
-  const newVerifier = () => { const p = new Verifier({decodeStrings: false}); p.on("error", () => {}); return p; };
-  let parser: Verifier | null = json ? newVerifier() : null;
+  const newVerifier = () => { const p = verifier.asStream(); p.on("error", () => {}); return p; };
+  let parser: Duplex | null = json ? newVerifier() : null;
+  let depth = 0, inString = false, escaped = false;
   const endJson = async () => {
-    if (parser) { const p = parser; parser = null; await new Promise<void>((resolve, reject) => p.end((e: Error | null | undefined) => e ? reject(e) : resolve())); }
+    if (parser) { const p = parser; try { await new Promise<void>((resolve, reject) => p.end((e: Error | null | undefined) => e ? reject(e) : resolve())); } finally { p.destroy(); parser = null; } }
+    depth = 0; inString = false; escaped = false;
   };
   const writeJson = async (s: string) => {
+    // Bound the verifier's stack before handing it untrusted input. String/escape
+    // state survives chunk boundaries; grammar remains the verifier's job.
+    for (const c of s) {
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (c === "\\") escaped = true;
+        else if (c === '"') inString = false;
+      } else if (c === '"') inString = true;
+      else if (c === "[" || c === "{") {
+        if (++depth > FILE_JSON_MAX_DEPTH) throw badRequest(`JSON nesting exceeds ${FILE_JSON_MAX_DEPTH}`);
+      } else if (c === "]" || c === "}") depth--;
+    }
     if (!parser && ndjson && s.trim()) parser = newVerifier();
     if (parser) { const p = parser; await new Promise<void>((resolve, reject) => p.write(s, e => e ? reject(e) : resolve())); }
   };
@@ -109,7 +125,9 @@ export async function verifyFileStream(body: ReadableStream<Uint8Array>, v: File
   try {
     for (;;) {
       const {done, value} = await reader.read(); if (done) break;
-      total += value.length; hash.update(value);
+      total += value.length;
+      if (total > size || total > FILE_BYTES) throw badRequest("file size mismatch");
+      hash.update(value);
       if (head.length < FILE_TEXT_BYTES) { const next = new Uint8Array(Math.min(FILE_TEXT_BYTES, head.length + value.length)); next.set(head); next.set(value.subarray(0, next.length - head.length), head.length); head = next; }
       tail = value.length >= 4 ? value.slice(-4) : new Uint8Array([...tail, ...value].slice(-4));
       if (textual) {
