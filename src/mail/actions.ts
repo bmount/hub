@@ -192,8 +192,10 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
     }
   } catch { refused.push("Could not safely produce an action plan. Please use the web."); await event("Action planning unavailable; no further actions attempted"); }
   ctx = await sourceContext(env, source, proof, now);
-  let reply = "not_attempted";
-  if (ctx && plannerRan) {
+  // Nothing done, refused or answered is nothing to say: never send an empty receipt.
+  const substance = done.length > 0 || refused.length > 0 || questionAnswer !== "";
+  let reply = substance ? "not_attempted" : "nothing_to_report";
+  if (ctx && plannerRan && substance) {
     try {
       const body = `${questionAnswer ? questionAnswer + "\n\n" : ""}Mail actions\n\n${done.length ? done.join("\n") : "No actions taken."}\n\n${refused.length ? "Refused / needs web confirmation:\n" + refused.join("\n") : "No refused actions."}\n\nReview or confirm on the web: ${mailLink}`;
       // Report the planner results separately from discretionary outbound actions.

@@ -324,6 +324,13 @@ describe("verified member project-mail actions", () => {
     expect(ask.mock.calls[0]![3]?.instructions).toContain("even when an action is refused");
     expect(await count("contact_entity")).toBe(0);
   });
+  it("sends nothing when admitted project mail has no request, question or filing", async () => {
+    const w = await actionWorld();
+    const ask = plan([]);
+    expect(await w.deliver(fixtures.question)).toBe("admitted");
+    expect(ask).toHaveBeenCalledOnce();
+    expect(w.sent).toHaveLength(0);
+  });
   it("authorizes a linked address as the member and replies to that address, not their primary", async () => {
     const w = await actionWorld();
     await env.HUB_DB.prepare("UPDATE identity SET email = 'personal@example.org' WHERE id = ?").bind(w.person.identity.id).run();
