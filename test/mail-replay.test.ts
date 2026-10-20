@@ -32,6 +32,33 @@ function wrappedBatch(batch: D1Database["batch"]): Env {
 afterEach(() => vi.restoreAllMocks());
 
 describe("atomic independent-proof storage candidate", () => {
+  it("admits a confirmed secondary address as the same identity, never an unlinked or removed address", async () => {
+    const tenant = await seedTenant("replaytest");
+    const human = await seedHuman("primary@example.org", {memberships: [{tenant_id: tenant.id, role: "member"}]});
+    expect((await store()).status).toBe("ineligible");
+    await env.HUB_DB.prepare("INSERT INTO identity_email (email, identity_id, confirmed_at, confirmed_by) VALUES (?, ?, ?, ?)")
+      .bind(from, human.identity.id, now, human.identity.id).run();
+    const result = await store();
+    expect(result).toMatchObject({status: "stored", identity_id: human.identity.id});
+    expect((await rows())[0]).toMatchObject({identity_id: human.identity.id, from_email: from});
+    await env.HUB_DB.prepare("DELETE FROM identity_email WHERE email = ?").bind(from).run();
+    expect((await store()).status).toBe("ineligible");
+  });
+
+  it("does not admit an address removed while DKIM verification is awaiting DNS", async () => {
+    const tenant = await seedTenant("replaytest");
+    const human = await seedHuman("primary@example.org", {memberships: [{tenant_id: tenant.id, role: "member"}]});
+    const {linkIdentityEmail} = await import("../src/db/identityEmails");
+    await linkIdentityEmail(env.HUB_DB, human.identity.id, from, human.identity.id, now);
+    const result = await storeIndependentMailCandidate(env, input(), now, async () => {
+      await env.HUB_DB.prepare("DELETE FROM identity_email WHERE identity_id = ?").bind(human.identity.id).run();
+      return [[fixtures.record]];
+    });
+    expect(result.status).toBe("ineligible");
+    expect(await rows()).toHaveLength(0);
+    expect(await states()).toHaveLength(0);
+  });
+
   it("stores signed evidence, proof-bound Message-ID and atomic audit without sending or waking", async () => {
     const w = await world();
     const send = vi.spyOn(delivery, "sendMail");

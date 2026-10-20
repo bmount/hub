@@ -234,6 +234,22 @@ const action = (tool: string, input: Record<string, unknown>, as?: string) => ({
 const count = (table: string) => env.HUB_DB.prepare(`SELECT COUNT(*) n FROM ${table} WHERE tenant_id != 'perf-synthetic-tenant'`).first<number>("n");
 
 describe("verified member project-mail actions", () => {
+  it("authorizes a linked address as the member and replies to that address, not their primary", async () => {
+    const w = await actionWorld();
+    await env.HUB_DB.prepare("UPDATE identity SET email = 'personal@example.org' WHERE id = ?").bind(w.person.identity.id).run();
+    const {linkIdentityEmail} = await import("../src/db/identityEmails");
+    expect(await w.deliver()).toBe("rejected"); // Not confirmed yet.
+    await linkIdentityEmail(env.HUB_DB, w.person.identity.id, "member@example.com", w.person.identity.id, actionNow);
+    const ask = plan([action("person.upsert", {name: "Jane Doe"})]);
+    expect(await w.deliver()).toBe("admitted");
+    expect(ask.mock.calls[0]![3]).toMatchObject({identity_id: w.person.identity.id});
+    expect(await count("contact_entity")).toBe(1);
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]!.to).toBe("member@example.com");
+    await env.HUB_DB.prepare("DELETE FROM identity_email WHERE identity_id = ?").bind(w.person.identity.id).run();
+    expect(await w.deliver()).toBe("rejected");
+  });
+
   it("creates sender-attributed people, company, introduction and affiliation, files the deck and replies once across replay", async () => {
     const w = await actionWorld();
     const ask = plan([

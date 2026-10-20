@@ -39,6 +39,25 @@ explicit request to `login@`/`signup@` can establish new consent only through
 the existing successful reply path. This limitation must remain visible
 until provenance of revocation can be recorded independently.
 
+## Linked member addresses
+
+A human identity keeps its primary email and may have additional confirmed addresses
+in `identity_email`. An administrator confirms ownership in the person's People and
+agents inspector (`identity.email_add`); an unconfirmed address has no identity or
+mail authority. Account lists linked addresses and lets their owner remove them;
+root can also confirm their own additional address directly in Account.
+Only root may link addresses for admins/root or for people belonging to several
+organizations: a tenant admin must not grant access to another tenant through a
+global identity. Primary and linked addresses are globally unique, enforced in D1.
+This is the admin-confirmation path; self-service emailed verification is not offered.
+
+Admission, current mail-action authority, passive consent, welcome and agent reply
+eligibility resolve linked addresses to the same human. Atomic admission rechecks
+the link so removal races cannot retain sender authority. DKIM still authenticates
+the exact address that wrote, replay keys remain exact-address scoped, and replies
+and consent use that address, not the primary address. Linking alone grants no mail
+consent and does not change roles or memberships.
+
 ## Independent verifier and admission policy
 
 `src/mail/dkim.ts` produces independent **DKIM proof** from

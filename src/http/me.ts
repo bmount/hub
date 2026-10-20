@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { listIdentityEmails } from "../db/identityEmails";
 import { shellFor } from "./shell";
 import { localTime, address, esc, htmlResponse, kitTable, page, toolbar } from "../html";
 import { buildContext, rank } from "../auth/context";
@@ -11,6 +12,7 @@ import { listApiTokensForOperator } from "../db/apiTokens";
 import { listConsent } from "../db/consent";
 import { listLiveGrantsForIdentity } from "../db/oauthGrants";
 import { notFoundPage } from "./pages";
+import { extraCheck, proofFresh } from "./extraCheck";
 
 const when = localTime;
 const BACK = `<input type="hidden" name="_back" value="/me">`;
@@ -47,6 +49,13 @@ export async function mePage(request: Request, env: Env): Promise<Response> {
     : memberships.filter((m) => rank(m.membership.role) >= rank("member")).map((m) => m.tenant.slug);
 
   let body = `<h1>Your account</h1><p>${esc(me.display_name)} ${address(me.email)}</p>${toolbar("Account actions",`<a href="/me/sessions">Sessions</a><a href="/">All organizations</a>`)}`;
+
+  const addresses = (await listIdentityEmails(ctx.db, me.id)).results;
+  const emailProof = proofFresh(ctx);
+  body += `<h2>Email addresses</h2><p>Your primary address is ${address(me.email)}. Mail from any confirmed address counts as you; replies go to the address that wrote. Ask an organization admin to confirm an additional address in People and agents. Linking does not grant mail consent.</p>`
+    + table(["Confirmed address", "Confirmed", "Action"], addresses.map(a => [address(a.email), when(a.confirmed_at), emailProof ? button("identity.email_remove", {email: a.email}, "Remove") : "Confirm it’s you first" ]))
+    + (!emailProof && (me.is_root === 1 || addresses.length) ? extraCheck(env, ctx, "/me", "Confirm it’s you before managing email addresses.", new URL(request.url).searchParams.get("check") === "sent") : "")
+    + (me.is_root === 1 && emailProof ? `<form method="post" action="/api/identity.email_add">${BACK}<label>Additional email <input type="email" name="email" required maxlength="254"></label><p>As root, confirm only an address you control.</p><button type="submit">Confirm address</button></form>` : "");
 
   body += `<h2>Sessions</h2>` + table(["Session", "Kind", "Started", "Last seen", "Action"], sessions.map((s) => [
     `${esc(s.label ?? s.kind)}${s.id === ctx.session!.id ? " (this one)" : ""}`, esc(s.kind) + (s.kind === "git" && s.label ? ` (${esc(s.label)})` : ""), when(s.created_at), when(s.last_seen_at),

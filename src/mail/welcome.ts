@@ -1,3 +1,4 @@
+import { mailIdentityAddress } from "../db/identityEmails";
 import type { Env } from "../env";
 import { ulid } from "../ids";
 import type { DkimProof } from "./dkim";
@@ -34,7 +35,7 @@ export async function sendNewcomerWelcome(env: Env, source: WelcomeSource, proof
     JOIN identity i ON i.id = m.identity_id JOIN tenant t ON t.id = m.tenant_id
     WHERE m.id = ? AND m.tenant_id = ? AND m.identity_id = ?
       AND m.verdict = 'admitted' AND m.reason IS NULL AND m.released_by IS NULL
-      AND m.message_id = ? AND i.email = m.from_email
+      AND m.message_id = ? AND ${mailIdentityAddress()}
       AND i.kind = 'human' AND i.state = 'active' AND t.state = 'active'
       AND (i.is_root = 1 OR EXISTS (SELECT 1 FROM membership p
         WHERE p.tenant_id = t.id AND p.identity_id = i.id AND p.state = 'active'))`)
@@ -61,7 +62,7 @@ export async function sendNewcomerWelcome(env: Env, source: WelcomeSource, proof
       JOIN tenant t ON t.id = m.tenant_id
     WHERE m.id = ? AND m.tenant_id = ? AND m.identity_id = ?
       AND m.verdict = 'admitted' AND m.reason IS NULL AND m.released_by IS NULL
-      AND m.message_id = ? AND i.email = m.from_email AND i.email = ? AND m.to_address = ?
+      AND m.message_id = ? AND ${mailIdentityAddress()} AND m.from_email = ? AND m.to_address = ?
       AND m.project_id IS ? AND m.recipient_id IS ?
       AND (m.recipient_id IS NOT NULL OR (m.project_id IS NULL AND m.to_address = t.slug || '@' || ?)
         OR EXISTS (SELECT 1 FROM project pr WHERE pr.id = m.project_id
@@ -74,8 +75,8 @@ export async function sendNewcomerWelcome(env: Env, source: WelcomeSource, proof
       AND i.kind = 'human' AND i.state = 'active' AND t.state = 'active'
       AND (i.is_root = 1 OR EXISTS (SELECT 1 FROM membership p
         WHERE p.tenant_id = t.id AND p.identity_id = i.id AND p.state = 'active'))
-      AND EXISTS (SELECT 1 FROM consent c WHERE c.email = i.email AND c.revoked_at IS NULL)
-      AND (SELECT c.revoked_at FROM consent c WHERE c.email = i.email
+      AND EXISTS (SELECT 1 FROM consent c WHERE c.email = m.from_email AND c.revoked_at IS NULL)
+      AND (SELECT c.revoked_at FROM consent c WHERE c.email = m.from_email
         ORDER BY c.granted_at DESC, c.id DESC LIMIT 1) IS NULL
     ON CONFLICT(key) DO NOTHING`)
     .bind(keyFor(source), JSON.stringify(state), source.mail_id, source.tenant_id, source.identity_id, proof.messageId,

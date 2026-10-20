@@ -19,6 +19,7 @@ import { appApprove, appList, appRegister, deployList, deployRead, deployRecord,
 import { modelPriceSet, usageReport, usageSummary } from "./usage";
 import { attentionDone, attentionList, workComment, workSubscribe } from "./collab";
 import { memberRemove, memberSetRole } from "./member";
+import { identityEmailAdd, identityEmailRemove, identityEmailList } from "./identityEmails";
 import { registerVerbs } from "./table";
 import { plannedVerbs } from "./planned";
 import { workDelete, workDepend, workFrontier, workGraph, workRelease, workResources } from "./graph";
@@ -62,7 +63,7 @@ export function registerAllVerbs(): void {
     mailList, mailRead, mailRelease, mailProposeWork, mailResponseRecipients, mailSetResponseRecipients, mailResponseIntent, mailSetResponseIntent,
     workCreate, workList, workRead, workUpdate, workClaim, workLink,
     ...plannedVerbs,
-    memberSetRole, memberRemove,
+    memberSetRole, memberRemove, identityEmailAdd, identityEmailRemove, identityEmailList,
     workComment, workSubscribe, attentionList, attentionDone,
     usageReport, usageSummary, modelPriceSet,
     siteList, siteRead, siteRegister, appRegister, appApprove, appList, traceList, traceRead, deployList, deployRead, deployRecord,

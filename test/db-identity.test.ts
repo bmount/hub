@@ -9,6 +9,16 @@ const db = () => env.HUB_DB;
 const now = 1_700_000_000_000;
 
 describe("identities and memberships", () => {
+  it("normalizes linked addresses and enforces uniqueness against present and future primary addresses", async () => {
+    const primary = await createIdentity(db(), {kind: "human", email: "a@example.com", display_name: "A", is_root: 0, operator_id: null}, now);
+    const {linkIdentityEmail} = await import("../src/db/identityEmails");
+    expect(await getIdentityByEmail(db(), "unconfirmed@example.com")).toBeNull();
+    await linkIdentityEmail(db(), primary.id, " WORK@EXAMPLE.COM ", primary.id, now);
+    expect((await getIdentityByEmail(db(), "WORK@EXAMPLE.COM"))?.id).toBe(primary.id);
+    await expect(linkIdentityEmail(db(), primary.id, primary.email, primary.id, now)).rejects.toMatchObject({status: 409});
+    await expect(createIdentity(db(), {kind: "human", email: "work@example.com", display_name: "Duplicate", is_root: 0, operator_id: null}, now)).rejects.toMatchObject({status: 409});
+  });
+
   it("creates a human, normalises email, detects root", async () => {
     expect(await rootExists(db())).toBe(false);
     const id = await createIdentity(db(), { kind: "human", email: " Ada@Example.com ", display_name: "Ada", is_root: 1, operator_id: null }, now);

@@ -25,7 +25,7 @@ export type IndependentStoreResult =
 // CASE binds the exact mailbox and destination identity/project, including active
 // membership of an addressed agent. Never permit a renamed/replaced destination.
 const ELIGIBLE = `EXISTS (SELECT 1 FROM identity i JOIN tenant t ON t.id = ?
-  WHERE i.id = ? AND i.email = ? AND i.kind = 'human' AND i.state = 'active' AND t.state = 'active'
+  WHERE i.id = ? AND ? IN (SELECT i.email UNION ALL SELECT email FROM identity_email WHERE identity_id = i.id) AND i.kind = 'human' AND i.state = 'active' AND t.state = 'active'
     AND (i.is_root = 1 OR EXISTS (SELECT 1 FROM membership m
       WHERE m.tenant_id = t.id AND m.identity_id = i.id AND m.state = 'active'))
     AND CASE WHEN ? IS NOT NULL THEN EXISTS (SELECT 1 FROM identity a JOIN membership am

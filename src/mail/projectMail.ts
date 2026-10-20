@@ -1,3 +1,4 @@
+import { mailIdentityAddress } from "../db/identityEmails";
 // Mail to an organization or a project (2026-10-07): <org>@HUB_DOMAIN and <org>.<project>@HUB_DOMAIN.
 //
 // Vetting, in order:
@@ -132,7 +133,7 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
         SELECT ?, m.from_email, NULL, 'inbound_email', ?, NULL, m.message_id, ?
         FROM inbound_mail m JOIN identity i ON i.id = m.identity_id JOIN tenant t ON t.id = m.tenant_id
         WHERE m.id = ? AND m.tenant_id = ? AND m.identity_id = ? AND m.verdict = 'admitted'
-          AND m.reason IS NULL AND m.released_by IS NULL AND i.email = m.from_email
+          AND m.reason IS NULL AND m.released_by IS NULL AND ${mailIdentityAddress()}
           AND i.kind = 'human' AND i.state = 'active' AND t.state = 'active'
           AND (i.is_root = 1 OR EXISTS (SELECT 1 FROM membership p
             WHERE p.tenant_id = t.id AND p.identity_id = i.id AND p.state = 'active'))

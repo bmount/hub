@@ -23,14 +23,14 @@ export async function createIdentity(
       "/*perf-site:src%2Fdb%2Fidentities.ts:22:11:createIdentity:df55869d*/ INSERT INTO identity (id, kind, display_name, is_root, email, operator_id, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ).bind(row.id, row.kind, row.display_name, row.is_root, row.email, row.operator_id, row.state, row.created_at).run();
   } catch (e) {
-    if (String(e).includes("UNIQUE")) throw conflict("email exists");
+    if (String(e).includes("UNIQUE") || String(e).includes("email exists")) throw conflict("email exists");
     throw e;
   }
   return row;
 }
 
 export function getIdentityByEmail(db: D1Database, email: string): Promise<Identity | null> {
-  return db.prepare("/*perf-site:src%2Fdb%2Fidentities.ts:33:10:getIdentityByEmail:56ac1bfc*/ SELECT * FROM identity WHERE email = ?").bind(normalizeEmail(email)).first<Identity>();
+  return db.prepare("/*perf-site:src%2Fdb%2Fidentities.ts:33:10:getIdentityByEmail:56ac1bfc*/ SELECT * FROM identity WHERE email = ?1 OR id IN (SELECT identity_id FROM identity_email WHERE email = ?1)").bind(normalizeEmail(email)).first<Identity>();
 }
 
 export function getIdentityById(db: D1Database, id: string): Promise<Identity | null> {

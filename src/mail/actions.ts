@@ -60,7 +60,7 @@ async function sourceContext(env: Env, source: WelcomeSource, proof: DkimProof, 
   if (!m || m.from_email.split("@").pop() !== proof.domain) return null;
   const target = await resolveMailAddress(env.HUB_DB, env.HUB_DOMAIN, m.to_address);
   const tenant = await getTenantById(env.HUB_DB, source.tenant_id), identity = await getIdentityById(env.HUB_DB, source.identity_id);
-  if (!target || target.tenant_id !== source.tenant_id || target.project_id !== m.project_id || !tenant || tenant.state !== "active" || !identity || identity.kind !== "human" || identity.email !== m.from_email) return null;
+  if (!target || target.tenant_id !== source.tenant_id || target.project_id !== m.project_id || !tenant || tenant.state !== "active" || !identity || identity.kind !== "human" || (await getIdentityByEmail(env.HUB_DB, m.from_email))?.id !== identity.id) return null;
   const role = roleFor(identity, await getMembership(env.HUB_DB, identity.id, tenant.id));
   if (!role) return null;
   const p = await env.HUB_DB.prepare("/*perf-site:src%2Fmail%2Factions.ts:66:19:sourceContext:c0ed9033*/ SELECT id, slug, kind, display_name FROM project WHERE id = ? AND tenant_id = ? AND state = 'active'")

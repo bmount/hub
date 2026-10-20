@@ -3,6 +3,7 @@
 // everyone else sees who is here and what they are on. One D1 batch per page.
 import { agentSrcAccess } from "../code/agentSrc";
 import type { Env } from "../env";
+import { listIdentityEmails } from "../db/identityEmails";
 import { localTime, address, naturalName, plural, emptyState, esc, htmlResponse, inspectorSection, kitTable, toolbar, workbench } from "../html";
 import { buildContext, rank, type Ctx } from "../auth/context";
 import { readableMailEvents } from "../auth/mailAccess";
@@ -117,6 +118,15 @@ ${fresh ? `<form method="post" action="/api/invite.create">
       const guide = await guideStatus(ctx.db, tid, person.id);
       guideHtml = `<h2>Guide</h2><p>${guide.caught_up ? "Caught up" : "Not caught up"} · current version <code>${esc(guide.version)}</code></p><p>Last fully read guide: ${guide.last_read_version ? `<code>${esc(guide.last_read_version)}</code>` : "none recorded"}</p><ul>${guide.skills.map(s => `<li>${esc(s.name)}: ${s.read ? `read ${day(s.read.read_at)}` : "not read at current version"}${s.last_read ? ` · last read <code>${esc(s.last_read.version)}</code> ${day(s.last_read.read_at)}` : ""}</li>`).join("")}</ul><p class="lede">Records delivery through skill_read, not proof of understanding or changes to local files. Operator standing directions are never changed.</p>`;
     }
+    let emailHtml = "";
+    if (admin && person.kind === "human") {
+      const linked = (await listIdentityEmails(ctx.db, person.id)).results;
+      const mayConfirm = ctx.identity.is_root === 1 || (!person.is_root && person.role !== "admin");
+      const back = `/people/${encodeURIComponent(person.email)}`;
+      const fields = `<input type="hidden" name="member" value="${esc(person.email)}"><input type="hidden" name="_back" value="${esc(back)}">`;
+      emailHtml = `<h2>Confirmed email addresses</h2><p>These addresses identify this person across all organizations. Linking does not grant mail consent.</p><ul><li>${address(person.email)} (primary)</li>${linked.map(a => `<li>${address(a.email)}${mayConfirm ? `<form class="inline" method="post" action="/api/identity.email_remove">${fields}<input type="hidden" name="email" value="${esc(a.email)}"><button class="quiet" type="submit">Remove</button></form>` : ""}</li>`).join("")}</ul>`
+        + (mayConfirm ? fresh ? `<form method="post" action="/api/identity.email_add">${fields}<label>Additional email <input name="email" type="email" required maxlength="254"></label><p>Confirm only an address you know this person controls.</p><button type="submit">Confirm address</button></form>` : extraCheck(env, ctx, back, "Confirm it’s you before linking an address.", sent) : "");
+    }
     const manage = canManage ? `<h2>Manage</h2>
 <form method="post" action="/api/member.set_role"><input type="hidden" name="email" value="${esc(person.email)}"><input type="hidden" name="_back" value="/people/${esc(encodeURIComponent(person.email))}">
 <label>Role <select name="role">${roles.map((r) => option(r, r, r === person.role)).join("")}</select></label> <button type="submit" class="quiet">Change role</button></form>
@@ -130,6 +140,7 @@ ${person.kind === "agent" && canConnect && (admin || person.operator_id === ctx.
 ${fresh ? `<form method="post" action="/api/agent.connect"><input type="hidden" name="agent_id" value="${esc(person.id)}"><button type="submit" class="quiet">Make connect link</button></form>` : extraCheck(env, ctx, `/people/${encodeURIComponent(person.email)}`, AGENT_WHY, sent)}` : ""}
 ${sponsored.length ? `<h2>Agents who answer to them</h2><ul>${sponsored.map((s) => `<li><a href="/people/${esc(encodeURIComponent(s.email))}">${esc(s.display_name)}</a></li>`).join("")}</ul>` : ""}
 ${person.id === ctx.identity.id || person.operator_id === ctx.identity.id ? '<p><a href="https://' + esc(env.HUB_DOMAIN) + '/me">Account and sessions</a></p>' : ""}
+${emailHtml}
 ${sessionHtml}
 ${guideHtml}
 ${manage}

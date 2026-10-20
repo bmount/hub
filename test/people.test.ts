@@ -22,6 +22,40 @@ async function world() {
 const status = async (r: Promise<Response>) => (await r).status;
 
 describe("people management", () => {
+  it("only admin-confirmed addresses link; Account removes them and admins see them in People", async () => {
+    const w = await world();
+    const rootAccount = await SELF.fetch("https://pimwell.test/me", {headers: cookieHeaders(w.root.token, "pimwell.test")});
+    expect(await rootAccount.text()).toContain('/api/identity.email_add');
+    expect((await apiPost("pimwell.test", "identity.email_add", {email: "root@work.example"}, cookieHeaders(w.root.token, "pimwell.test"))).status).toBe(200);
+    const add = {member: "sam@example.com", email: "sam@work.example"};
+    expect(await status(w.as(w.sam)("identity.email_add", add))).toBe(403);
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM identity_email WHERE identity_id = ?").bind(w.sam.identity.id).first()).toBeNull();
+    expect(await status(w.as(w.ada)("identity.email_add", add))).toBe(200);
+    expect(await (await w.get("/people/sam%40example.com", w.ada.token)).text()).toContain("sam@work.example");
+    expect(await (await w.get("/people/sam%40example.com", w.lee.token)).text()).toContain("sam@work.example");
+    expect(await (await w.get("/people/sam%40example.com", w.sam.token)).text()).not.toContain("sam@work.example");
+    const account = await SELF.fetch("https://pimwell.test/me", {headers: cookieHeaders(w.sam.token, "pimwell.test")});
+    expect(await account.text()).toContain("sam@work.example");
+    expect(await status(w.as(w.sam)("identity.email_remove", {email: add.email}))).toBe(200);
+    expect(await env.HUB_DB.prepare("SELECT 1 FROM identity_email WHERE identity_id = ?").bind(w.sam.identity.id).first()).toBeNull();
+    expect(await status(w.as(w.sam)("identity.email_remove", {email: "sam@example.com"}))).toBe(400);
+  });
+
+  it("refuses identity collisions, outsiders, cross-organization admin authority, and admin takeover", async () => {
+    const w = await world();
+    const add = (member: string, email: string) => w.as(w.ada)("identity.email_add", {member,email});
+    expect(await status(add("sam@example.com", "lee@example.com"))).toBe(409);
+    expect(await status(add("lee@example.com", "lee@work.example"))).toBe(403);
+    expect(await status(add("ada@example.com", "ada@work.example"))).toBe(403);
+    await seedHuman("outside@example.com");
+    expect(await status(add("outside@example.com", "outside@work.example"))).toBe(404);
+    const other = await seedTenant("other");
+    await env.HUB_DB.prepare("INSERT INTO membership (id, identity_id, tenant_id, role, state, created_at) VALUES ('other-sam', ?, ?, 'member', 'active', ?)")
+      .bind(w.sam.identity.id, other.id, Date.now()).run();
+    expect(await status(add("sam@example.com", "sam@work.example"))).toBe(403);
+    expect(await status(w.as(w.root)("identity.email_add", {member: "ada@example.com", email: "ada@work.example"}))).toBe(200);
+  });
+
   it("shows admins the invite form and pending invites, and members neither", async () => {
     const w = await world();
     const adminPage = await (await w.get("/people", w.ada.token)).text();

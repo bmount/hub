@@ -49,6 +49,20 @@ async function world() {
 }
 
 describe("outbound mail", () => {
+  it("an agent replies to a linked sender address, but refuses it after removal", async () => {
+    const w = await world();
+    await w.call(w.ada, "mail.sending", {on: true});
+    const person = await env.HUB_DB.prepare("SELECT id FROM identity WHERE email = 'pat@example.com'").first<string>("id");
+    await env.HUB_DB.prepare("UPDATE identity SET email = 'personal@example.org' WHERE id = ?").bind(person).run();
+    const {linkIdentityEmail} = await import("../src/db/identityEmails");
+    await linkIdentityEmail(env.HUB_DB, person!, "pat@example.com", person!, Date.now());
+    expect((await w.call(w.bot, "mail.reply", {id: w.agentMail, body: "Linked"})).status).toBe(200);
+    expect(w.sent[0]!.to).toBe("pat@example.com");
+    await env.HUB_DB.prepare("DELETE FROM identity_email WHERE identity_id = ?").bind(person).run();
+    expect((await w.call(w.bot, "mail.reply", {id: w.agentMail, body: "Removed"})).status).toBe(403);
+    expect(w.sent).toHaveLength(1);
+  });
+
   it("sends nothing until an admin turns sending on", async () => {
     const w = await world();
     expect((await w.call(w.pat, "mail.reply", { id: w.projectMail, body: "Thanks" })).status).toBe(403);

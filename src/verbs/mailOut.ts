@@ -45,7 +45,7 @@ export async function agentRecipientRefusals(ctx: Ctx, recipients: string[]): Pr
   const out: string[] = [];
   for (const r of recipients) {
     const [member, known] = await ctx.db.batch([
-      ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:48:7:agentRecipientRefusals:eee56f87*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id WHERE lower(i.email) = ? AND i.kind = 'human' AND i.state = 'active'
+      ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:48:7:agentRecipientRefusals:eee56f87*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id WHERE (lower(i.email) = ?1 OR EXISTS (SELECT 1 FROM identity_email ie WHERE ie.identity_id = i.id AND ie.email = ?1)) AND i.kind = 'human' AND i.state = 'active'
         AND m.tenant_id = ? AND m.state = 'active' LIMIT 1`).bind(r, ctx.tenant!.id),
       ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:50:7:agentRecipientRefusals:db98becf*/ SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND recipient_id = ? AND verdict = 'admitted'
         AND (from_email = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(inbound_mail.copied, '[]')) WHERE value = ?)) LIMIT 1`).bind(ctx.tenant!.id, ctx.identity!.id, r, r),
