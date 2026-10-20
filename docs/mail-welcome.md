@@ -1,12 +1,11 @@
 # One-time newcomer mail context (#130)
 
-**Superseded ingress behavior:** member explanations now replace the separate
-newcomer welcome in `handleProjectMail`. Members receive one per-message reply
-when mail is held or instructions are not honored; admitted questions can be
-answered without granting execution authority. Strangers receive no reply.
-See [the current contract](ops/mail-authentication.md#member-explanations).
+**Historical helper, not ingress behavior:** ingress sends no welcome, receipt,
+held-mail notice or unexecuted-instructions reply. Agents answer their admitted
+mail themselves; authorized project planning can send substantive action results.
+See [the current contract](ops/mail-authentication.md#no-automatic-replies).
 The standalone welcome helper and its historical state remain for compatibility;
-the rollout details below describe that helper, not current ingress replies.
+the details below describe that helper, not current ingress replies.
 
 ## Rollout contract
 
@@ -14,8 +13,8 @@ the rollout details below describe that helper, not current ingress replies.
 atomic replay/evidence/audit storage before admission. Organization, project and
 agent mail never sends routine `Received` replies, including when proof is
 unknown. Unknown proof stays admin-only quarantine and does not wake agents or
-grant consent. The welcome is optional **after** admission and addressed-agent
-wake. Its delivery result is never sender authentication. There is no API that
+grant consent. Ingress never calls the retained welcome helper. Its delivery result, if separately
+invoked, is never sender authentication. There is no API that
 accepts proof objects from mail bodies/headers or external callers.
 
 This is strict, exactly aligned, full-coverage DKIM, **not universal DMARC** or
@@ -25,8 +24,7 @@ Explicit `login@`/`signup@` proof and substantive replies remain separate flows.
 
 Verified project-address ingress now uses the [bounded sender-action pipeline](ops/mail-authentication.md#verified-project-mail-actions)
 instead of a separate newcomer welcome: it attempts one per-message results reply,
-subject to the normal outbound gates. Organization and agent ingress retain the
-one-time welcome below. The welcome helper's cross-mailbox reservation contract
+subject to the normal outbound gates. Organization and agent ingress send no server reply. The welcome helper's cross-mailbox reservation contract
 still applies when called, but project ingress no longer invokes it.
 
 ## State and boundaries
@@ -122,6 +120,6 @@ regressions. Conditional-guidance tests cover unset/empty/nonempty/stale/corrupt
 preferences, namespace isolation, exact destination/owner binding, configuration
 and target changes before reservation, legacy/terminal deduplication, and
 reservation-time wording. Signed production-entry tests verify unchanged proof,
-mailbox ownership, no extra wake, one welcome and no later routine receipt. Public release smoke does not claim a real external mailbox delivery
+mailbox ownership, no extra wake and no automatic replies. Public release smoke does not claim a real external mailbox delivery
 or universal provider compatibility; source/live version/rollback evidence is
 recorded on the issue after the managed release.

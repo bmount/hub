@@ -1,28 +1,14 @@
 # Independent mail authentication
 
-## Member explanations
+## No automatic replies
 
-Authentication and notification are separate. Member/root mail that cannot be
-honored gets one explanatory reply from the addressed mailbox, with the reason,
-what was not done and a tenant-web link for review/confirmation. Unknown DKIM
-still goes to admin-only quarantine: a receipt never authenticates or releases
-mail, grants consent or authorizes actions. Non-members get no reply. Explicit
-consent withdrawal remains respected.
-
-Notices use a durable pre-transport reservation keyed by tenant, envelope sender,
-exact mailbox and original-byte fingerprint (or admitted mail id). Ambiguous
-transport is never retried automatically. Repeated over-limit deliveries get at
-most one explanation per sender/mailbox/hour. Admission and agent wakes do not
-depend on notification success.
-
-Admitted project mail combines plain-question answers, actual action results and
-refusals in one summary. Organization/agent mail gets a no-tool conversational
-answer and explains that instructions were not executed. These replies never
-quote unverified content, use Reply-To, CC bystanders, or execute quoted text.
-Server-owned receipts do not require discretionary outbound sending to be enabled
-or a sender mutation role; consent withdrawal and normal discretionary mail gates
-are unchanged. The ingress receipt replaces the old separate newcomer welcome;
-the retained welcome helper is not called by ingress.
+Pimwell mails only members, and only with substance: an answer or results of work
+it did. Held, refused, unexecuted and unverified mail sends nothing; authentication
+exists to prevent spam, not to trigger receipts. Admitted agent mail wakes the
+agent, which answers for itself. Organization mail gets no server reply. Project
+mail gets an action-results reply only when proof authorizes instructions and the
+planner ran. Otherwise it is admitted and the skipped instructions are recorded,
+without planning or replying. Historical notice/conversation meta rows stay untouched.
 
 ## Verified platform contract (2026-10-09)
 
@@ -47,15 +33,15 @@ envelope sender**, and strict independent cryptographic aligned DKIM proof or
 verified Cloudflare ARC on the original bytes. Atomic tenant/sender/exact-mailbox/Message-ID replay storage and
 scoped audit precede admission. Duplicate,
 multiple, missing, or grouped From headers stay quarantined without new consent;
-the member receives an explanation without granting authentication authority. Display names and address case are supported through
+no reply is sent. Display names and address case are supported through
 PostalMime's address parser. Inner forwarded From headers are only evidence.
 
 Unknown proof stays admin-only, never wakes an agent, and does not gain new
-consent. Neither pre-existing consent nor welcome success authenticates mail.
+consent. Pre-existing consent never authenticates mail.
 Unsigned Authentication-Results, ARC-Authentication-Results and custom headers
 never grant admission. Only the cryptographically verified Cloudflare ARC verdict
 described below is trusted. Optional
-welcome failure does not downgrade verified evidence. `login@`/`signup@` retain
+consent failure does not downgrade verified evidence. `login@`/`signup@` retain
 successful Cloudflare reply proof; reply failure never implies DMARC failure.
 
 Passive project mail does not reinstate revoked consent. Existing consent
@@ -99,7 +85,7 @@ organizations: a tenant admin must not grant access to another tenant through a
 global identity. Primary and linked addresses are globally unique, enforced in D1.
 This is the admin-confirmation path; self-service emailed verification is not offered.
 
-Admission, current mail-action authority, passive consent, welcome and agent reply
+Admission, current mail-action authority, passive consent and agent reply
 eligibility resolve linked addresses to the same human. Atomic admission rechecks
 the link so removal races cannot retain sender authority. DKIM still authenticates
 the exact address that wrote, replay keys remain exact-address scoped, and replies
@@ -145,7 +131,7 @@ including response-body reads: an explicit deadline race bounds even a transport
 which ignores abort. Stalled bodies are cancelled, locks/listeners are released,
 and cancellation completion is never a prerequisite for a limit/abort failure.
 Late responses are disposed without consuming or authorizing their keys. Budget
-exhaustion remains authentication unknown, without consent or agent wake; members receive a receipt.
+exhaustion remains authentication unknown, without consent, agent wake or outgoing mail.
 Trust is the fixed HTTPS resolver; DNSSEC validation is not claimed. No
 sender-controlled URLs or native DNS fallback are used.
 
@@ -284,10 +270,10 @@ no action authority. Existing manual evidence-to-proposal tools remain proposals
 
 ## Scope and remaining limitations
 
-The member explanations above supersede routine receipt suppression and the
-separate [one-time welcome](../mail-welcome.md) in ingress, with signed native-Workers handler tests.
+Ingress sends no automatic notices or [one-time welcome](../mail-welcome.md).
+Signed native-Workers handler tests cover silent admission and quarantine.
 [Explicit shared-mailbox response-recipient preferences](mail-response-recipients.md)
-and browser setup are available to human admins. The optional one-time welcome
+and browser setup are available to human admins. The retained standalone welcome helper (not called by ingress)
 includes conditional recipient-setup guidance only for absent/validly empty
 shared preferences; it is not response routing/scheduling. Durable automated
 scheduling remains separate work; setup links, configured recipients and

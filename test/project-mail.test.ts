@@ -59,6 +59,28 @@ describe("mailbox names", () => {
 });
 
 describe("mail to organizations and projects", () => {
+  it("sends nothing for held, oversized, unreadable, stranger or over-limit mail", async () => {
+    await world();
+    const sent: delivery.SentMail[] = [];
+    delivery.setTestTransport(async m => { sent.push(m); });
+    const now = Date.now();
+    const to = `acme.site@${HUB}`;
+    const receive = (sender: string, size?: number) => fake(sender, to, "unverified", {rawSize: size});
+    const held = receive("pat@example.com");
+    expect(await handleProjectMail(held.message, env, now)).toBe("quarantined");
+    const oversized = receive("pat@example.com", 11 * 1024 * 1024);
+    expect(await handleProjectMail(oversized.message, env, now)).toBe("rejected");
+    const unreadable = receive("pat@example.com");
+    Object.defineProperty(unreadable.message, "raw", {value: new ReadableStream({start(c) { c.error(new Error("unreadable")); }})});
+    expect(await handleProjectMail(unreadable.message, env, now)).toBe("rejected");
+    expect(await handleProjectMail(receive("pat@example.com").message, env, now)).toBe("limited");
+    expect(await handleProjectMail(receive("stranger@example.com").message, env, now)).toBe("rejected");
+    expect(sent).toHaveLength(0);
+    expect(oversized.calls.rejects).toEqual(["Message too large"]);
+    expect(unreadable.calls.rejects).toEqual(["Message too large or unreadable"]);
+    expect(await env.HUB_DB.prepare("SELECT key FROM meta WHERE key GLOB 'mail_notice:*' OR key GLOB 'mail_conversation:*'").first()).toBeNull();
+  });
+
   it("refuses addresses that name nothing", async () => {
     await world();
     for (const to of [`nosuch@${HUB}`, `acme.nosuch@${HUB}`, `acme.site@elsewhere.com`]) {
@@ -247,20 +269,17 @@ describe("verified member project-mail actions", () => {
     const evidence = await env.HUB_DB.prepare("SELECT auth_results FROM inbound_mail").first<string>("auth_results");
     expect(JSON.parse(evidence!).independent).toMatchObject({ source: "cloudflare_arc", actionEligible: true });
   });
-  it.each(["old", "unsigned-semantic"])("answers %s mail but never executes a model's proposed actions", async kind => {
+  it.each(["old", "unsigned-semantic"])("admits %s mail without planning or replying", async kind => {
     const w = await actionWorld();
     const ask = vi.spyOn(model, "ask").mockResolvedValue({text: JSON.stringify({actions: [action("person.upsert", {name: "Jane Doe"})], refused: [], answer: "Which products and dates?"}), purpose: "reasoning", provider: "test", model: "fixed", key_fingerprint: "test", ms: 1});
     const raw = kind === "old" ? fixtures.actions : "Reply-To: attacker@example.org\r\n" + fixtures.actions;
     const time = actionNow + (kind === "old" ? 73 * 3600_000 : 0);
     expect(await handleProjectMail(fake("member@example.com", "actiontest.space@pimwell.test", raw).message, env, time, async () => [[fixtures.record]])).toBe("admitted");
     expect(await count("contact_entity")).toBe(0);
-    expect(w.sent).toHaveLength(1);
-    expect(w.sent[0]!.text).toContain("instructions were skipped");
-    expect(w.sent[0]!.text).toContain("Which products and dates?");
-    expect(w.sent[0]!.to).toBe("member@example.com");
-    expect(ask.mock.calls[0]![3]?.instructions).toContain("Authentication permits answering only");
+    expect(w.sent).toHaveLength(0);
+    expect(ask).not.toHaveBeenCalled();
   });
-  it("answers admitted agent-mail questions without granting instruction authority", async () => {
+  it("admits agent-mail questions without server planning or replies", async () => {
     const w = await world();
     const agent = await seedAgent(w.org, w.member.identity, "scout");
     const sent: delivery.SentMail[] = [];
@@ -269,29 +288,19 @@ describe("verified member project-mail actions", () => {
     const receive = (from = "pat@example.com") => handleProjectMail(fake(from, agent.agent.identity.email, fixtures.agentQuestion).message, env, actionNow, async () => [[fixtures.record]]);
     expect(await receive()).toBe("admitted");
     expect(await receive()).toBe("admitted");
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({from: "acme.scout@pimwell.test", to: "pat@example.com"});
-    expect(sent[0]!.text).toContain("Which products?");
-    expect(sent[0]!.text).toContain("No instructions were run");
-    expect(sent[0]!.text).toContain("https://acme.pimwell.test/mail/");
-    expect(ask).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveLength(0);
+    expect(ask).not.toHaveBeenCalled();
     expect(await receive("stranger@example.com")).toBe("rejected");
-    expect(sent).toHaveLength(1);
-    expect(ask).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveLength(0);
+    expect(ask).not.toHaveBeenCalled();
   });
-  it("explains a member DKIM failure without leaking its contents or replying to a stranger", async () => {
+  it("holds failed DKIM silently and never replies to a stranger", async () => {
     const w = await actionWorld();
     const ask = plan([]);
     const raw = "Reply-To: outside@example.org\r\n" + fixtures.question.replace("Are you able", "SECRET altered body. Are you able");
     expect(await w.deliver(raw)).toBe("quarantined");
     expect(await w.deliver(raw)).toBe("quarantined");
-    expect(w.sent).toHaveLength(1);
-    expect(w.sent[0]).toMatchObject({from: "actiontest.space@pimwell.test", to: "member@example.com"});
-    expect(w.sent[0]!.text).toContain("email signature (DKIM)");
-    expect(w.sent[0]!.text).toContain("has not been delivered to an agent");
-    expect(w.sent[0]!.text).toContain("administrator can release");
-    expect(w.sent[0]!.text).not.toContain("SECRET");
-    expect(w.sent[0]!.raw).not.toContain("outside@example.org");
+    expect(w.sent).toHaveLength(0);
     expect(await hasActiveConsent(env.HUB_DB, "member@example.com")).toBe(false);
     expect(ask).not.toHaveBeenCalled();
     w.sent.length = 0;
@@ -406,19 +415,15 @@ describe("verified member project-mail actions", () => {
     expect(ask).not.toHaveBeenCalled();
     expect(await count("contact_entity")).toBe(0);
     expect(await count("file_revision")).toBe(0);
-    expect(w.sent).toHaveLength(1);
+    expect(w.sent).toHaveLength(0);
     const unsigned = mime({from: "member@example.com", to: "actiontest.space@pimwell.test", body: request});
     expect(await w.deliver(unsigned)).toBe("quarantined");
     expect(await w.deliver(fixtures.actions, "stranger@example.com")).toBe("rejected");
     expect(ask).not.toHaveBeenCalled();
     expect(await count("contact_entity")).toBe(0);
-    expect(w.sent).toHaveLength(2);
-    expect(w.sent[1]).toMatchObject({from: "actiontest.space@pimwell.test", to: "member@example.com"});
-    expect(w.sent[1]!.text).toContain("DKIM");
-    expect(w.sent[1]!.text).toContain("No instructions were run");
-    expect(w.sent[1]!.text).toContain("https://actiontest.pimwell.test/mail/");
+    expect(w.sent).toHaveLength(0);
     await w.deliver(unsigned);
-    expect(w.sent).toHaveLength(2); // Same uncertain-auth bytes never send a second notice.
+    expect(w.sent).toHaveLength(0);
   });
 
   it("does not turn a signed message originally addressed elsewhere into a command", async () => {
@@ -427,8 +432,7 @@ describe("verified member project-mail actions", () => {
     expect(await w.deliver(fixtures.first)).toBe("admitted");
     expect(ask).not.toHaveBeenCalled();
     expect(await count("contact_entity")).toBe(0);
-    expect(w.sent).toHaveLength(1);
-    expect(w.sent[0]!.text).toContain("original recipients");
+    expect(w.sent).toHaveLength(0);
     expect(await env.HUB_DB.prepare("SELECT key FROM meta WHERE key LIKE ?").bind(ACTION_PREFIX + "%").first()).toBeNull();
   });
 

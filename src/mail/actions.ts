@@ -81,6 +81,7 @@ function resolve(v: unknown, aliases: Map<string, string>): unknown {
 /** Atomic reservation, intentionally never reclaimed: a lost response may have
  * committed a verb or sent mail. Reconciliation is explicit, not a replay retry. */
 export async function runMailActions(env: Env, source: WelcomeSource, proof: DkimProof, ownText: string, now: number): Promise<"ineligible" | "already_reserved" | "processed"> {
+  if (proof.authentication !== "pass" || !proof.actionEligible || !ownText) return "ineligible";
   let ctx = await sourceContext(env, source, proof, now);
   if (!ctx) return "ineligible";
   const key = `${ACTION_PREFIX}${source.tenant_id}:${source.mail_id}`;
@@ -91,13 +92,10 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
   const mailLink = `${base}/mail/${source.mail_id}`;
   const done: string[] = [], refused: string[] = [];
   let questionAnswer = "";
+  let plannerRan = false;
   const event = (summary: string) => recordEvent(env.HUB_DB, {tenant_id: source.tenant_id, identity_id: source.identity_id, session_id: null,
     kind: "mail.action", target_kind: "inbound_mail", target_id: source.mail_id, summary: summary.slice(0,300)}, now);
   try {
-    const canAct = proof.authentication === "pass" && proof.actionEligible === true;
-    if (!canAct) {
-      refused.push(proof.authentication === "pass" ? proof.actionReason ?? "Authentication does not authorize instructions." : "Authentication does not authorize instructions.");
-    }
     // Retention precedes planning. Report its actual effects even if the model
     // omits an attachment action or is unavailable; never claim it did nothing.
     const retained = await ctx.db.prepare("/*perf-site:src%2Fmail%2Factions.ts:98:28:runMailActions:fb19b830*/ SELECT attachments FROM inbound_mail WHERE id = ?").bind(source.mail_id).first<string>("attachments");
@@ -110,17 +108,18 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
       const contacts = (await ctx.db.prepare("/*perf-site:src%2Fmail%2Factions.ts:105:31:runMailActions:8d9019a7*/ SELECT id, kind, name, revision, json_extract(data, '$.title') AS title, json_extract(data, '$.domain') AS domain FROM contact_entity WHERE tenant_id = ? AND project_id = ? ORDER BY id LIMIT 200")
         .bind(source.tenant_id, ctx.mcpProject!.id).all()).results;
       const attachments = await ctx.db.prepare("/*perf-site:src%2Fmail%2Factions.ts:107:33:runMailActions:fb19b830*/ SELECT attachments FROM inbound_mail WHERE id = ?").bind(source.mail_id).first<string>("attachments");
+      plannerRan = true;
       const answer = await ask(env, PROPOSE_PURPOSE, JSON.stringify({project: ctx.mcpProject!.slug, new_text: ownText, contacts_evidence: contacts,
         attachments_evidence: (JSON.parse(attachments ?? "[]") as Array<Record<string, unknown>>).map(p => ({filename: p.filename, file_path: p.file_path, file_status: p.file_status, file_reason: p.file_reason})), tools: [...verbs.map(v => ({name: v.name, description: v.summary, input: v.mcp!.input})),
           {name: "file.attach", input: {path: "retained attachment file_path"}}, {name: "document.share", input: {path: "document path", to: "member email", subject: "subject"}}]}),
         {tenant_id: source.tenant_id, identity_id: source.identity_id, project_id: ctx.mcpProject!.id,
-          instructions: canAct ? instructions : `${instructions}\nAuthentication permits answering only: return actions=[] and explain that instructions were skipped. Do not claim any actions were performed.`, maxOutputTokens: 6000});
+          instructions, maxOutputTokens: 6000});
       const plan: unknown = JSON.parse(answer.text.replace(/^\s*```(?:json)?\s*/, "").replace(/\s*```\s*$/, ""));
       if (!object(plan) || !Array.isArray(plan.actions) || plan.actions.length > 20 || !Array.isArray(plan.refused) || plan.refused.length > 20) throw new ActionRefused("Invalid action plan");
       if (typeof plan.answer === "string") questionAnswer = plan.answer.slice(0, 12000);
       refused.push(...plan.refused.filter((x): x is string => typeof x === "string").map(x => x.slice(0,500)));
       for (const reason of refused) await event(`Refused request: ${reason}`);
-      actions = canAct ? plan.actions as Action[] : [];
+      actions = plan.actions as Action[];
     }
     const aliases = new Map<string, string>();
     for (const a of actions) {
@@ -194,15 +193,14 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
   } catch { refused.push("Could not safely produce an action plan. Please use the web."); await event("Action planning unavailable; no further actions attempted"); }
   ctx = await sourceContext(env, source, proof, now);
   let reply = "not_attempted";
-  if (ctx) {
+  if (ctx && plannerRan) {
     try {
-      const body = `We received your mail.\n\n${questionAnswer ? questionAnswer + "\n\n" : ""}Mail actions\n\n${done.length ? done.join("\n") : "No actions taken."}\n\n${refused.length ? "Refused / needs web confirmation:\n" + refused.join("\n") : "No refused actions."}\n\nReview or confirm on the web: ${mailLink}`;
-      // This server-owned receipt is not a sender-authorized mail action. Readers
-      // and disabled discretionary outbound mail still get an explanation.
+      const body = `${questionAnswer ? questionAnswer + "\n\n" : ""}Mail actions\n\n${done.length ? done.join("\n") : "No actions taken."}\n\n${refused.length ? "Refused / needs web confirmation:\n" + refused.join("\n") : "No refused actions."}\n\nReview or confirm on the web: ${mailLink}`;
+      // Report the planner results separately from discretionary outbound actions.
       const mail = await ctx.db.prepare("SELECT from_email, to_address, message_id FROM inbound_mail WHERE id = ? AND tenant_id = ?")
         .bind(source.mail_id, source.tenant_id).first<{from_email: string; to_address: string; message_id: string}>();
       if (mail) {
-        await deliver(ctx, {to: mail.from_email, from: mail.to_address, inbound_id: source.mail_id, message_id: mail.message_id, basis: "member"}, "Your mail was received", body, [], async () => {});
+        await deliver(ctx, {to: mail.from_email, from: mail.to_address, inbound_id: source.mail_id, message_id: mail.message_id, basis: "member"}, "Mail action results", body, [], async () => {});
         reply = "sent";
       }
     } catch { reply = "failed_or_unknown"; }

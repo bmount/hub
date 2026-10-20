@@ -128,7 +128,6 @@ describe("outbound mail", () => {
     }
     expect(w.sent).toHaveLength(0);
     expect((await env.HUB_DB.prepare("SELECT status, error FROM outbound_mail").all()).results).toEqual([
-      { status: "sent", error: null }, // server-owned receipt, independent of discretionary sending
       { status: "refused", error: "recipient_policy" }, { status: "refused", error: "recipient_policy" },
     ]);
   });
