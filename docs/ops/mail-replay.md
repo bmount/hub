@@ -4,7 +4,7 @@
 
 `src/mail/replay.ts` is integrated with `handleProjectMail`. Independently
 verified admission no longer depends on outbound acknowledgments. Routine
-`Received` replies are removed; optional one-time welcome follows agent wake.
+Authentication does not rely on replies. Server-owned member explanations follow admission/wake or quarantine; they never grant authentication.
 There is no new public API, D1 migration, binding or recovery scheduler.
 
 `storeIndependentMailCandidate` takes original bounded bytes plus the transport
@@ -13,7 +13,7 @@ record. It resolves current sender/destination authority and runs the pinned
 mailauth Workers verifier itself. It copies the input before awaiting anything,
 so the bytes authenticated, hashed and parsed cannot diverge through mutation.
 Unknown DKIM proof produces no reservation/admission here; ingress stores it in
-protected admin-only quarantine without consent, notification or agent wake.
+protected admin-only quarantine without consent or agent wake. Members receive an explanatory reply; strangers receive nothing.
 
 This is **strict, exactly domain-aligned, full-coverage DKIM**, not universal
 DMARC, SPF, ARC, mailbox login proof, proof of fresh SMTP delivery, or a claim that
@@ -91,11 +91,11 @@ response is lost and no independent redelivery occurs, administrator reconciliat
 may be needed; do not claim guaranteed eventual wake or external welcome delivery.
 The existing inbox/item tenant binding remains authoritative.
 
-After agent delivery, optional first-ever consent and atomic one-time welcome run
+After agent delivery, optional first-ever consent and a per-message member reply run
 independently of authentication. Existing consent history prevents passive re-grant.
 Unexpected optional errors log a fixed code and cannot undo admission or the wake.
-Welcome ambiguous/failed states are never automatically retried. Explicit login
-proof and substantive replies are unchanged. See [welcome](../mail-welcome.md).
+Reply reservations and uncertain deliveries are never automatically retried. Explicit
+login proof is unchanged. See [member explanations](mail-authentication.md#member-explanations).
 Signed-fixture handler tests cover the production DoH path and these interruption,
 concurrency, failure, consent and mailbox isolation contracts.
 

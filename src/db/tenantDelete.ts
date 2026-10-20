@@ -53,6 +53,9 @@ export async function deleteTenant(db: D1Database, slug: string, deleted_by: str
   stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:53:14:deleteTenant:93df41e6*/ DELETE FROM meta WHERE key GLOB ?").bind(`mail_replay:v1:${t.id}:*`));
   stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:54:14:deleteTenant:93df41e6*/ DELETE FROM meta WHERE key GLOB ?").bind(`mail_response_recipients:v1:${t.id}:*`));
   stmts.push(db.prepare("/*perf-site:src%2Fdb%2FtenantDelete.ts:55:14:deleteTenant:93df41e6*/ DELETE FROM meta WHERE key GLOB ?").bind(`mail_response_intent:v1:${t.id}:*`));
+  for (const prefix of ["mail_notice", "mail_conversation"]) {
+    stmts.push(db.prepare("DELETE FROM meta WHERE key GLOB ?").bind(`${prefix}:v1:${t.id}:*`));
+  }
   const sessions = "SELECT id FROM session WHERE tenant_id = ?";
   // Records elsewhere that point at this organization's sessions keep their meaning without the link.
   stmts.push(db.prepare(`/*perf-site:src%2Fdb%2FtenantDelete.ts:58:14:deleteTenant:9672c376*/ UPDATE event SET session_id = NULL WHERE session_id IN (${sessions}) AND IFNULL(tenant_id, '') != ?`).bind(t.id, t.id));

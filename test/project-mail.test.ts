@@ -9,7 +9,7 @@ import { handleEmail } from "../src/mail/inbound";
 import { STRANGER_REASON } from "../src/mail/projectMail";
 import { grantConsent, hasActiveConsent, listConsent, revokeConsent } from "../src/db/consent";
 import { createProject } from "../src/db/projects";
-import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
+import { apiPost, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const ctx = {} as ExecutionContext;
 const HUB = "pimwell.test";
@@ -234,6 +234,61 @@ const action = (tool: string, input: Record<string, unknown>, as?: string) => ({
 const count = (table: string) => env.HUB_DB.prepare(`SELECT COUNT(*) n FROM ${table} WHERE tenant_id != 'perf-synthetic-tenant'`).first<number>("n");
 
 describe("verified member project-mail actions", () => {
+  it("answers admitted agent-mail questions without granting instruction authority", async () => {
+    const w = await world();
+    const agent = await seedAgent(w.org, w.member.identity, "scout");
+    const sent: delivery.SentMail[] = [];
+    delivery.setTestTransport(async m => { sent.push(m); });
+    const ask = vi.spyOn(model, "ask").mockResolvedValue({text: "I can help frame pricing questions around Dallas. Which products? I do not have verified current prices.", purpose: "reasoning", provider: "test", model: "fixed", key_fingerprint: "test", ms: 1});
+    const receive = (from = "pat@example.com") => handleProjectMail(fake(from, agent.agent.identity.email, fixtures.agentQuestion).message, env, actionNow, async () => [[fixtures.record]]);
+    expect(await receive()).toBe("admitted");
+    expect(await receive()).toBe("admitted");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({from: "acme.scout@pimwell.test", to: "pat@example.com"});
+    expect(sent[0]!.text).toContain("Which products?");
+    expect(sent[0]!.text).toContain("No instructions were run");
+    expect(sent[0]!.text).toContain("https://acme.pimwell.test/mail/");
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(await receive("stranger@example.com")).toBe("rejected");
+    expect(sent).toHaveLength(1);
+    expect(ask).toHaveBeenCalledTimes(1);
+  });
+  it("explains a member DKIM failure without leaking its contents or replying to a stranger", async () => {
+    const w = await actionWorld();
+    const ask = plan([]);
+    const raw = "Reply-To: outside@example.org\r\n" + fixtures.question.replace("Are you able", "SECRET altered body. Are you able");
+    expect(await w.deliver(raw)).toBe("quarantined");
+    expect(await w.deliver(raw)).toBe("quarantined");
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]).toMatchObject({from: "actiontest.space@pimwell.test", to: "member@example.com"});
+    expect(w.sent[0]!.text).toContain("email signature (DKIM)");
+    expect(w.sent[0]!.text).toContain("has not been delivered to an agent");
+    expect(w.sent[0]!.text).toContain("administrator can release");
+    expect(w.sent[0]!.text).not.toContain("SECRET");
+    expect(w.sent[0]!.raw).not.toContain("outside@example.org");
+    expect(await hasActiveConsent(env.HUB_DB, "member@example.com")).toBe(false);
+    expect(ask).not.toHaveBeenCalled();
+    w.sent.length = 0;
+    expect(await w.deliver(raw, "stranger@example.com")).toBe("rejected");
+    expect(w.sent).toHaveLength(0);
+    await grantConsent(env.HUB_DB, {email: "member@example.com", kind: "inbound_email", source_message_id: null, evidence: null}, actionNow - 1);
+    await revokeConsent(env.HUB_DB, "member@example.com", actionNow);
+    expect(await w.deliver(raw + "\r\n")).toBe("quarantined");
+    expect(w.sent).toHaveLength(0);
+  });
+
+  it("answers an admitted member question alongside an instruction refusal, once", async () => {
+    const w = await actionWorld();
+    const ask = vi.spyOn(model, "ask").mockResolvedValue({text: JSON.stringify({actions: [], refused: ["Deleting contacts requires web confirmation."], answer: "I can help with pricing questions around Dallas. Which products and dates? I do not have verified current prices here."}), purpose: "reasoning", provider: "test", model: "fixed", key_fingerprint: "test", ms: 1});
+    expect(await w.deliver(fixtures.question)).toBe("admitted");
+    await w.deliver(fixtures.question);
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]!.text).toContain("Which products and dates?");
+    expect(w.sent[0]!.text).toContain("Deleting contacts requires web confirmation");
+    expect(ask.mock.calls[0]![2]).toContain("Are you able to answer pricing questions around Dallas?");
+    expect(ask.mock.calls[0]![3]?.instructions).toContain("even when an action is refused");
+    expect(await count("contact_entity")).toBe(0);
+  });
   it("authorizes a linked address as the member and replies to that address, not their primary", async () => {
     const w = await actionWorld();
     await env.HUB_DB.prepare("UPDATE identity SET email = 'personal@example.org' WHERE id = ?").bind(w.person.identity.id).run();
@@ -331,7 +386,13 @@ describe("verified member project-mail actions", () => {
     expect(await w.deliver(fixtures.actions, "stranger@example.com")).toBe("rejected");
     expect(ask).not.toHaveBeenCalled();
     expect(await count("contact_entity")).toBe(0);
-    expect(w.sent).toHaveLength(1);
+    expect(w.sent).toHaveLength(2);
+    expect(w.sent[1]).toMatchObject({from: "actiontest.space@pimwell.test", to: "member@example.com"});
+    expect(w.sent[1]!.text).toContain("DKIM");
+    expect(w.sent[1]!.text).toContain("No instructions were run");
+    expect(w.sent[1]!.text).toContain("https://actiontest.pimwell.test/mail/");
+    await w.deliver(unsigned);
+    expect(w.sent).toHaveLength(2); // Same uncertain-auth bytes never send a second notice.
   });
 
   it("does not turn a signed message originally addressed elsewhere into a command", async () => {
@@ -340,7 +401,8 @@ describe("verified member project-mail actions", () => {
     expect(await w.deliver(fixtures.first)).toBe("admitted");
     expect(ask).not.toHaveBeenCalled();
     expect(await count("contact_entity")).toBe(0);
-    expect(w.sent).toHaveLength(0);
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]!.text).toContain("original recipients");
     expect(await env.HUB_DB.prepare("SELECT key FROM meta WHERE key LIKE ?").bind(ACTION_PREFIX + "%").first()).toBeNull();
   });
 
@@ -350,9 +412,9 @@ describe("verified member project-mail actions", () => {
     expect(await w.deliver()).toBe("admitted");
     expect(await count("contact_entity")).toBe(0);
     expect(await count("file_revision")).toBe(0);
-    expect(w.sent).toHaveLength(0);
+    expect(w.sent).toHaveLength(1);
     const state = await env.HUB_DB.prepare("SELECT value FROM meta WHERE key LIKE ?").bind(ACTION_PREFIX + "%").first<string>("value");
-    expect(JSON.parse(state!)).toMatchObject({reply: "failed_or_unknown"});
+    expect(JSON.parse(state!)).toMatchObject({reply: "sent"});
   });
 
   it("refuses disallowed verbs, ungrounded quotes, cross-project work and outsider sharing with reasons and links", async () => {

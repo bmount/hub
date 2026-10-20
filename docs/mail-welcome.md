@@ -1,5 +1,13 @@
 # One-time newcomer mail context (#130)
 
+**Superseded ingress behavior:** member explanations now replace the separate
+newcomer welcome in `handleProjectMail`. Members receive one per-message reply
+when mail is held or instructions are not honored; admitted questions can be
+answered without granting execution authority. Strangers receive no reply.
+See [the current contract](ops/mail-authentication.md#member-explanations).
+The standalone welcome helper and its historical state remain for compatibility;
+the rollout details below describe that helper, not current ingress replies.
+
 ## Rollout contract
 
 `handleProjectMail` now uses independently verified original-byte DKIM and

@@ -4,6 +4,7 @@ import { agentOnboardingSkill } from "./agentOnboarding";
 
 // Update the date and one-line summary when editing a skill. Hashes are always computed from content.
 export const CHANGES: Record<string, { updated: string; changed: string }> = {
+  "mail-as-evidence": { updated: "2026-10-20", changed: "Member mail gets an explanation when not honored; admitted questions can be answered without executing instructions." },
   "start-here": { updated: "2026-10-19", changed: "Pages is on by default for every project; use making-pages to publish visual reports." },
   "making-pages": { updated: "2026-10-19", changed: "Pages is on by default; restore the part only if removed, then publish versioned HTML/SVG/ZIP bundles." },
   onboard: { updated: "2026-10-19", changed: "Refresh the saved onboarding procedure when notified; operator standing directions stay private." },

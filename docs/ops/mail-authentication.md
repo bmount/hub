@@ -1,4 +1,28 @@
-# Receipt-free mail authentication (#85/#134)
+# Independent mail authentication
+
+## Member explanations
+
+Authentication and notification are separate. Member/root mail that cannot be
+honored gets one explanatory reply from the addressed mailbox, with the reason,
+what was not done and a tenant-web link for review/confirmation. Unknown DKIM
+still goes to admin-only quarantine: a receipt never authenticates or releases
+mail, grants consent or authorizes actions. Non-members get no reply. Explicit
+consent withdrawal remains respected.
+
+Notices use a durable pre-transport reservation keyed by tenant, envelope sender,
+exact mailbox and original-byte fingerprint (or admitted mail id). Ambiguous
+transport is never retried automatically. Repeated over-limit deliveries get at
+most one explanation per sender/mailbox/hour. Admission and agent wakes do not
+depend on notification success.
+
+Admitted project mail combines plain-question answers, actual action results and
+refusals in one summary. Organization/agent mail gets a no-tool conversational
+answer and explains that instructions were not executed. These replies never
+quote unverified content, use Reply-To, CC bystanders, or execute quoted text.
+Server-owned receipts do not require discretionary outbound sending to be enabled
+or a sender mutation role; consent withdrawal and normal discretionary mail gates
+are unchanged. The ingress receipt replaces the old separate newcomer welcome;
+the retained welcome helper is not called by ingress.
 
 ## Verified platform contract (2026-10-09)
 
@@ -21,9 +45,9 @@ Organization, project, and agent mail requires an active human member/root,
 rate and actual-byte size checks, **exactly one outer From mailbox matching the
 envelope sender**, and strict independent cryptographic DKIM proof on the
 original bytes. Atomic tenant/sender/exact-mailbox/Message-ID replay storage and
-scoped audit precede admission. Routine receipts are not sent. Duplicate,
-multiple, missing, or grouped From headers stay quarantined without new consent
-or notification. Display names and address case are supported through
+scoped audit precede admission. Duplicate,
+multiple, missing, or grouped From headers stay quarantined without new consent;
+the member receives an explanation without granting authentication authority. Display names and address case are supported through
 PostalMime's address parser. Inner forwarded From headers are only evidence.
 
 Unknown proof stays admin-only, never wakes an agent, and does not gain new
@@ -116,7 +140,7 @@ including response-body reads: an explicit deadline race bounds even a transport
 which ignores abort. Stalled bodies are cancelled, locks/listeners are released,
 and cancellation completion is never a prerequisite for a limit/abort failure.
 Late responses are disposed without consuming or authorizing their keys. Budget
-exhaustion remains authentication unknown, without receipt, consent or agent wake.
+exhaustion remains authentication unknown, without consent or agent wake; members receive a receipt.
 Trust is the fixed HTTPS resolver; DNSSEC validation is not claimed. No
 sender-controlled URLs or native DNS fallback are used.
 
@@ -221,16 +245,17 @@ reservation prevents replay or concurrent execution and summary replies; pending
 attempts are never automatically reclaimed. Interrupted processing needs explicit
 reconciliation, not resubmission. The handler attempts one summary reply to the sender
 with results, links and refusals, instead of a separate newcomer welcome for project mail.
-Normal outbound gates still apply: disabled sending, withdrawn consent, limits or a
-transport outage can prevent delivery, and are recorded, not reported as success.
+The server-owned summary is independent of discretionary outbound sending and
+mutation roles. Withdrawn consent or a transport outage can prevent delivery;
+failures are recorded, not reported as success.
 
 Unverified, quarantined, manually released, stranger, organization and agent mail gain
 no action authority. Existing manual evidence-to-proposal tools remain proposals only.
 
 ## Scope and remaining limitations
 
-Routine receipt suppression and [one-time welcome](../mail-welcome.md) are
-implemented in the ingress integration, with signed native-Workers handler tests.
+The member explanations above supersede routine receipt suppression and the
+separate [one-time welcome](../mail-welcome.md) in ingress, with signed native-Workers handler tests.
 [Explicit shared-mailbox response-recipient preferences](mail-response-recipients.md)
 and browser setup are available to human admins. The optional one-time welcome
 includes conditional recipient-setup guidance only for absent/validly empty

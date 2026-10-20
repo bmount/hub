@@ -11,7 +11,7 @@ import { grantConsent, revokeConsent } from "../src/db/consent";
 import { inboxStub } from "../src/chat/stubs";
 import * as stubs from "../src/chat/stubs";
 import { REPLAY_PREFIX } from "../src/mail/replay";
-import { WELCOME_PREFIX } from "../src/mail/welcome";
+import * as model from "../src/models/ask";
 import { RESPONSE_RECIPIENT_PREFIX } from "../src/mail/responseRecipients";
 import * as delivery from "../src/mail/send";
 import type { Env } from "../src/env";
@@ -35,19 +35,20 @@ async function world() {
   const human = await seedHuman(from, { memberships: [{ tenant_id: tenant.id, role: "member" }] });
   const bot = await seedAgent(tenant, human.identity, "helper");
   await createProject(env.HUB_DB, { tenant_id: tenant.id, namespace_id: null, slug: "site", kind: "repo", display_name: "Site" }, now);
+  vi.spyOn(model, "ask").mockResolvedValue({text: "Please specify the products and dates; current prices are not verified.", purpose: "reasoning", provider: "test", model: "fixed", key_fingerprint: "test", ms: 1});
   const sent: delivery.SentMail[] = [];
   delivery.setTestTransport(async (m) => { sent.push(m); });
   return { tenant, human, bot, sent };
 }
 const welcome = async () => {
-  const value = await env.HUB_DB.prepare("SELECT value FROM meta WHERE key GLOB ?").bind(WELCOME_PREFIX + "*").first<string>("value");
+  const value = await env.HUB_DB.prepare("SELECT value FROM meta WHERE key GLOB ?").bind("mail_notice:v1:*").first<string>("value");
   return value ? JSON.parse(value) : null;
 };
 const inbox = (w: Awaited<ReturnType<typeof world>>) => inboxStub(env, w.tenant.id, w.bot.agent.identity.id);
 const page = (w: Awaited<ReturnType<typeof world>>) => inbox(w).list(w.tenant.id, w.bot.agent.identity.id, { after: 0, limit: 100, include_acked: true });
 afterEach(() => { delivery.setTestTransport(null); vi.restoreAllMocks(); });
 
-describe("receipt-free independently authenticated ingress", () => {
+describe("independently authenticated ingress with member explanations", () => {
   it("recipient preferences alone do not schedule, wake extra agents, grant access or suppress one-time context", async () => {
     const w = await world();
     // Preferences affect optional setup guidance, never response scheduling,
@@ -59,16 +60,16 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(await handleProjectMail(m, env, now, lookup)).toBe("admitted");
     expect(m.reply).not.toHaveBeenCalled();
     expect(w.sent).toHaveLength(1);
-    expect(w.sent[0]!.subject).toBe("Welcome to Pimwell");
+    expect(w.sent[0]!.subject).toBe("Your mail was received, but needs attention");
     expect(w.sent[0]!.text).not.toContain("/mail/recipients");
-    expect(w.sent[0]!.text).toContain("Delivery does not guarantee");
+    expect(w.sent[0]!.text).toContain("does not automatically execute instructions");
     expect((await page(w)).items).toHaveLength(0);
     expect(await count("outbound_mail")).toBe(0);
     expect(await env.HUB_DB.prepare("SELECT recipient_id FROM inbound_mail").first()).toEqual({ recipient_id: null });
     expect(await receive(fixtures.second)).toBe("admitted");
-    expect(w.sent).toHaveLength(1);
+    expect(w.sent).toHaveLength(2);
   });
-  it.each(["unset", "empty", "configured", "corrupt"])("signed production entry preserves admission/no receipt with %s setup preferences", async mode => {
+  it.each(["unset", "empty", "configured", "corrupt"])("signed production entry preserves admission and explanations with %s setup preferences", async mode => {
     const w = await world();
     if (mode !== "unset") await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?)")
       .bind(`${RESPONSE_RECIPIENT_PREFIX}${w.tenant.id}:org`, mode === "corrupt" ? "{bad" : JSON.stringify({
@@ -84,11 +85,11 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(await env.HUB_DB.prepare("SELECT verdict, reason, recipient_id FROM inbound_mail").first())
       .toEqual({ verdict: "admitted", reason: null, recipient_id: null });
     expect(w.sent).toHaveLength(1);
-    expect(w.sent[0]!.text.includes("/mail/recipients")).toBe(mode === "unset" || mode === "empty");
-    expect(w.sent[0]!.text).toContain("Delivery does not guarantee");
+    expect(w.sent[0]!.text).toContain("https://ingress.pimwell.test/mail/");
+    expect(w.sent[0]!.text).toContain("does not automatically execute instructions");
     expect((await page(w)).items).toHaveLength(0);
     await handleEmail(message(fixtures.second), env, {} as ExecutionContext);
-    expect(w.sent).toHaveLength(1);
+    expect(w.sent).toHaveLength(2);
   });
   it.each([false, true])("production entry verifies observed chunks, not source buffers mutated at EOF (tampered=%s)", async tampered => {
     const w = await world();
@@ -120,12 +121,12 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(m.setReject).not.toHaveBeenCalled();
     expect(await count("consent")).toBe(tampered ? 0 : 1);
     expect((await page(w)).items).toHaveLength(tampered ? 0 : 1);
-    expect(w.sent).toHaveLength(tampered ? 0 : 1);
+    expect(w.sent).toHaveLength(1);
     if (tampered) {
-      expect(await welcome()).toBeNull();
+      expect(await welcome()).toMatchObject({status: "sent"});
       expect(await env.HUB_DB.prepare("SELECT key FROM meta WHERE key GLOB ?").bind(REPLAY_PREFIX + "*").first()).toBeNull();
     } else {
-      expect(w.sent[0]!.subject).toBe("Welcome to Pimwell");
+      expect(w.sent[0]!.subject).toBe("Your mail was received, but needs attention");
       // A normal immutable redelivery reconciles the same observed bytes: no
       // collision, second wake, consent or welcome, regardless of source reuse.
       expect(await receive(fixtures.first, w.bot.agent.identity.email)).toBe("admitted");
@@ -136,7 +137,7 @@ describe("receipt-free independently authenticated ingress", () => {
     }
   });
 
-  it("production ingress quarantines stalled DNS body proof without receipt, consent or wake", async () => {
+  it("production ingress explains stalled DNS proof without consent or wake", async () => {
     const w = await world();
     vi.spyOn(Date, "now").mockReturnValue(now);
     const cancel = vi.fn(() => new Promise<void>(() => {}));
@@ -155,9 +156,9 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(m.reply).not.toHaveBeenCalled();
     expect(m.setReject).not.toHaveBeenCalled();
     expect(await count("consent")).toBe(0);
-    expect(await welcome()).toBeNull();
+    expect(await welcome()).toMatchObject({status: "sent"});
     expect((await page(w)).items).toHaveLength(0);
-    expect(w.sent).toHaveLength(0);
+    expect(w.sent).toHaveLength(1);
     expect(log.mock.calls.at(-1)?.[0]).toContain('"error":null');
   });
 
@@ -174,12 +175,12 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(m.reply).not.toHaveBeenCalled();
     expect(m.setReject).not.toHaveBeenCalled();
     expect(await count("consent")).toBe(0);
-    expect(await welcome()).toBeNull();
+    expect(await welcome()).toMatchObject({status: "sent"});
     expect((await page(w)).items).toHaveLength(0);
-    expect(w.sent).toHaveLength(0);
+    expect(w.sent).toHaveLength(1);
   });
 
-  it("production entry keeps signed control framing quarantined before any DNS or notification", async () => {
+  it("production entry explains signed control framing quarantine without DNS", async () => {
     const w = await world();
     vi.spyOn(Date, "now").mockReturnValue(now);
     const fetcher = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected network"));
@@ -191,12 +192,12 @@ describe("receipt-free independently authenticated ingress", () => {
     });
     expect(m.reply).not.toHaveBeenCalled();
     expect(await count("consent")).toBe(0);
-    expect(await welcome()).toBeNull();
+    expect(await welcome()).toMatchObject({status: "sent"});
     expect((await page(w)).items).toHaveLength(0);
-    expect(w.sent).toHaveLength(0);
+    expect(w.sent).toHaveLength(1);
   });
 
-  it("admits signed folded HTAB and UTF-8 headers with unchanged replay/welcome behavior", async () => {
+  it("admits signed folded HTAB and UTF-8 headers with deduplicated explanations", async () => {
     const w = await world();
     const lookup = async () => [[framingFixtures.record]];
     const m = message(framingFixtures.valid, w.bot.agent.identity.email);
@@ -208,11 +209,11 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(await count("consent")).toBe(1);
     expect((await page(w)).items).toHaveLength(1);
     expect(w.sent).toHaveLength(1);
-    expect(w.sent[0]!.subject).toBe("Welcome to Pimwell");
+    expect(w.sent[0]!.subject).toBe("Your mail was received, but needs attention");
     expect(m.reply).not.toHaveBeenCalled();
   });
 
-  it("admits fully signed outer MIME extensions and wakes once without a receipt", async () => {
+  it("admits fully signed outer MIME extensions, explains once and wakes once", async () => {
     const w = await world();
     const address = w.bot.agent.identity.email;
     const lookup = async () => [[mimeFixtures.record]];
@@ -226,7 +227,7 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(await count("consent")).toBe(1);
     expect((await page(w)).items).toHaveLength(1);
     expect(w.sent).toHaveLength(1);
-    expect(w.sent[0]!.subject).toBe("Welcome to Pimwell");
+    expect(w.sent[0]!.subject).toBe("Your mail was received, but needs attention");
   });
 
   it.each(["unsignedMime", "splitCoverage"] as const)("quarantines %s MIME proof without consent or wake", async (name) => {
@@ -240,23 +241,24 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(m.reply).not.toHaveBeenCalled();
     expect(await count("consent")).toBe(0);
     expect((await page(w)).items).toHaveLength(0);
-    expect(w.sent).toHaveLength(0);
+    expect(w.sent).toHaveLength(1);
   });
 
-  it("admits first and subsequent signed mail, sends guidance once and never replies with Received", async () => {
+  it("admits first and subsequent signed mail and sends one threaded explanation per message", async () => {
     const w = await world();
     expect(await receive()).toBe("admitted");
     expect(await receive(fixtures.second)).toBe("admitted");
     expect(await count("inbound_mail")).toBe(2);
     expect(await count("event")).toBe(2);
     expect(await count("consent")).toBe(1);
-    expect(w.sent).toHaveLength(1);
-    expect(w.sent[0]).toMatchObject({ subject: "Welcome to Pimwell", from: to });
+    expect(w.sent).toHaveLength(2);
+    expect(w.sent[0]).toMatchObject({ subject: "Your mail was received, but needs attention", from: to });
+    expect(w.sent[0]!.text).toContain("No instructions were run");
     expect(w.sent[0]!.raw).toContain("In-Reply-To: <first@example.com>");
     expect(await welcome()).toMatchObject({ status: "sent" });
   });
 
-  it("deduplicates concurrent different messages across project and agent mailboxes", async () => {
+  it("keeps explanations separate for different messages across project and agent mailboxes", async () => {
     const w = await world();
     const address = w.bot.agent.identity.email;
     expect(await Promise.all([receive(fixtures.first, address), receive(fixtures.second, "ingress.site@pimwell.test"), receive(fixtures.third)]))
@@ -265,11 +267,11 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(await count("consent")).toBe(1);
     expect(await count("event")).toBe(3); // signed To names the agent, not this redirected project
     expect(await count("outbound_mail")).toBe(0);
-    expect(w.sent).toHaveLength(1);
+    expect(w.sent).toHaveLength(3);
     expect((await page(w)).items).toHaveLength(1);
   });
 
-  it("deduplicates concurrent identical arrivals, audit, welcome and agent wake", async () => {
+  it("deduplicates concurrent identical arrivals, audit, explanations and agent wake", async () => {
     const w = await world();
     expect(await Promise.all(Array.from({ length: 3 }, () => receive(fixtures.first, w.bot.agent.identity.email))))
       .toEqual(["admitted", "admitted", "admitted"]);
@@ -290,17 +292,18 @@ describe("receipt-free independently authenticated ingress", () => {
     expect((await page(w)).items).toHaveLength(1);
     expect(await env.HUB_DB.prepare("SELECT verdict, reason FROM inbound_mail").first()).toEqual({ verdict: "admitted", reason: null });
     expect(JSON.stringify(log.mock.calls)).not.toContain("secret");
-    if (failure === "consent_storage") expect(await welcome()).toBeNull();
-    else expect(await welcome()).toMatchObject({ status: failure === "transport" ? "failed" : failure === "no_consent" ? "no_consent" : "pending" });
+    expect(await welcome()).toMatchObject({ status: failure === "consent_storage" ? "sent" : failure === "transport" ? "unknown" : failure === "no_consent" ? "no_consent" : "pending" });
     if (failure === "consent_storage") await env.HUB_DB.exec("DROP TRIGGER fail_optional");
   });
 
-  it("never retries an ambiguous or failed welcome on another incoming message", async () => {
+  it("never retries an ambiguous reply, while allowing replies to new incoming messages", async () => {
     const w = await world();
     const send = vi.spyOn(delivery, "sendMail").mockRejectedValue(new Error("ambiguous delivery"));
     expect(await receive()).toBe("admitted");
     expect(await receive(fixtures.second)).toBe("admitted");
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(2);
+    await receive();
+    expect(send).toHaveBeenCalledTimes(2);
     expect(await welcome()).toMatchObject({ status: "pending" });
     expect(w.sent).toHaveLength(0);
   });
@@ -314,7 +317,7 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(await count("consent")).toBe(1);
     expect(await env.HUB_DB.prepare("SELECT revoked_at FROM consent").first("revoked_at")).toBe(now - 50);
     expect(w.sent).toHaveLength(0);
-    expect(await welcome()).toBeNull();
+    expect(await welcome()).toMatchObject({status: "no_consent"});
   });
 
   it("an atomic first-consent grant cannot race past a withdrawal", async () => {
@@ -372,18 +375,18 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(w.sent).toHaveLength(1);
   });
 
-  it("keeps unknown proof admin-only with no consent, notification or wake", async () => {
+  it("explains unknown proof while keeping evidence admin-only without consent or wake", async () => {
     const w = await world();
     const m = message("Authentication-Results: forged; dkim=pass; dmarc=pass\r\n" + fixtures.first.replace("Original body.", "Tampered body."), w.bot.agent.identity.email);
     expect(await handleProjectMail(m, env, now, lookup)).toBe("quarantined");
     expect(m.reply).not.toHaveBeenCalled();
     expect(await count("consent")).toBe(0);
-    expect(w.sent).toHaveLength(0);
+    expect(w.sent).toHaveLength(1);
     expect((await page(w)).items).toHaveLength(0);
     expect(await env.HUB_DB.prepare("SELECT verdict, reason FROM inbound_mail").first()).toMatchObject({ verdict: "quarantined", reason: expect.stringContaining("authentication unknown") });
   });
 
-  it("does not replay any effects for byte collision or legacy admitted evidence", async () => {
+  it("explains replay refusals without replaying admission or agent wake", async () => {
     const w = await world();
     expect(await receive(fixtures.first, w.bot.agent.identity.email)).toBe("admitted");
     expect(await receive("Received: from another-hop.example\r\n" + fixtures.first, w.bot.agent.identity.email)).toBe("rejected");
@@ -392,10 +395,10 @@ describe("receipt-free independently authenticated ingress", () => {
     expect(await count("inbound_mail")).toBe(1);
     expect(await count("event")).toBe(1);
     expect((await page(w)).items).toHaveLength(1);
-    expect(w.sent).toHaveLength(1);
+    expect(w.sent).toHaveLength(3);
   });
 
-  it("isolates human and tenant welcome state while preserving exact destination mailboxes", async () => {
+  it("isolates human and tenant reply state while preserving exact destination mailboxes", async () => {
     const w = await world();
     const other = await seedTenant("otheringress");
     await seedHuman("other@example.com", { memberships: [{ tenant_id: w.tenant.id, role: "member" }] });

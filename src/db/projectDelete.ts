@@ -125,6 +125,9 @@ export async function deleteProject(ctx: Ctx, project: Project, throwaway = fals
     stmts.push(scoped(`DELETE FROM meta WHERE substr(key, 1, length('review_request:v1:' || ?1 || ':')) = 'review_request:v1:' || ?1 || ':' AND json_valid(value) AND json_extract(value, '$.result.review.project_id') IN (${projects})`));
     stmts.push(scoped(`DELETE FROM meta WHERE substr(key, 1, length('mail_response_intent:v1:' || ?1 || ':')) = 'mail_response_intent:v1:' || ?1 || ':' AND substr(key, length('mail_response_intent:v1:' || ?1 || ':') + 1, 26) IN (${mail})`));
     stmts.push(scoped(`DELETE FROM meta WHERE (substr(key, 1, length('mail_replay:v1:' || ?1 || ':')) = 'mail_replay:v1:' || ?1 || ':' OR substr(key, 1, length('mail_welcome:v1:' || ?1 || ':')) = 'mail_welcome:v1:' || ?1 || ':') AND json_valid(value) AND json_extract(value, '$.mail_id') IN (${mail})`));
+    for (const prefix of ["mail_notice", "mail_conversation"]) {
+      stmts.push(scoped(`DELETE FROM meta WHERE substr(key, 1, length('${prefix}:v1:' || ?1 || ':')) = '${prefix}:v1:' || ?1 || ':' AND json_valid(value) AND json_extract(value, '$.mail_id') IN (${mail})`));
+    }
     for (const [table, condition] of rules) {
       // The one deletion event remains as the audit record.
       stmts.push(statement(`DELETE FROM ${table} WHERE ${condition}${table === "event" ? " AND kind NOT IN ('project.delete', 'project.deleted')" : ""}`, condition));

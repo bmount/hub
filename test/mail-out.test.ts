@@ -114,6 +114,7 @@ describe("outbound mail", () => {
       await env.HUB_DB.prepare("UPDATE membership SET tenant_id = ? WHERE identity_id = ?").bind(other.id, pat.id).run();
     }
     await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    w.sent.length = 0; // Discretionary replies below are separate from the automatic receipt.
     const mail = (await env.HUB_DB.prepare("SELECT id, identity_id, verdict FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string; identity_id: string; verdict: string }>())!;
     expect(mail).toMatchObject({ identity_id: pat.id, verdict: "admitted" });
     for (const [verb, input] of [
@@ -127,7 +128,7 @@ describe("outbound mail", () => {
     }
     expect(w.sent).toHaveLength(0);
     expect((await env.HUB_DB.prepare("SELECT status, error FROM outbound_mail").all()).results).toEqual([
-      { status: "refused", error: "sending_off" }, // verified project-mail action summary
+      { status: "sent", error: null }, // server-owned receipt, independent of discretionary sending
       { status: "refused", error: "recipient_policy" }, { status: "refused", error: "recipient_policy" },
     ]);
   });
@@ -165,6 +166,7 @@ describe("outbound mail", () => {
     if (state === "inactive identity") await env.HUB_DB.prepare("UPDATE identity SET state = 'disabled' WHERE id = ?").bind(kim.identity.id).run();
     if (state === "agent identity") await env.HUB_DB.prepare("UPDATE identity SET kind = 'agent' WHERE id = ?").bind(kim.identity.id).run();
     await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    w.sent.length = 0; // Discretionary replies below are separate from the automatic receipt.
     const mail = (await env.HUB_DB.prepare("SELECT id FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string }>())!;
     const r = await w.call(w.bot, "mail.reply", { id: mail.id, body: "Update", all: true });
     expect(r.status, r.detail).toBe(200);
@@ -185,6 +187,7 @@ describe("outbound mail", () => {
     await seedHuman("kim@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
     await seedHuman("outside@example.org", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
     await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    w.sent.length = 0; // Discretionary replies below are separate from the automatic receipt.
     const mail = (await env.HUB_DB.prepare("SELECT id FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string }>())!;
     const r = await w.call(w.bot, "mail.reply", { id: mail.id, body: "Everyone", all: true });
     expect(r.status).toBe(200);
@@ -198,6 +201,7 @@ describe("outbound mail", () => {
     await w.call(w.ada, "mail.sending", { on: true });
     await seedHuman("kim@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
     await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    w.sent.length = 0; // Discretionary replies below are separate from the automatic receipt.
     const mail = (await env.HUB_DB.prepare("SELECT id FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string }>())!;
     await env.HUB_DB.prepare("INSERT INTO consent (id, email, tenant_id, kind, granted_at, revoked_at) VALUES ('withdrawn', ?, NULL, 'inbound_email', ?, ?)").bind(email, Date.now() + 1, Date.now() + 2).run();
     const r = await w.call(w.bot, "mail.reply", { id: mail.id, body: "Update", all: true });
@@ -211,6 +215,7 @@ describe("outbound mail", () => {
     const w = await world();
     await w.call(w.ada, "mail.sending", { on: true });
     await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    w.sent.length = 0; // Discretionary replies below are separate from the automatic receipt.
     const mail = (await env.HUB_DB.prepare("SELECT id FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string }>())!;
     const r = await w.call(w.bot, "mail.reply", { id: mail.id, body: "Just you" });
     expect(r.status).toBe(200);
@@ -235,6 +240,7 @@ describe("outbound mail", () => {
     await seedHuman("lee@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
     // Pat writes to the agent, copying Kim (a member) and someone outside the organization.
     await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    w.sent.length = 0; // Discretionary replies below are separate from the automatic receipt.
     const copiedMail = (await env.HUB_DB.prepare("SELECT id, copied FROM inbound_mail WHERE subject = 'Launch plan'").first<{ id: string; copied: string }>())!;
     expect(JSON.parse(copiedMail.copied)).toEqual(["kim@example.com", "outside@example.org"]);
 
@@ -337,6 +343,7 @@ describe("document mail", () => {
     const w = await documentWorld();
     await seedHuman("kim@example.com", {memberships: [{tenant_id: w.t.id, role: "reader"}]});
     await inbound(fixtures.outCopied, "acme.scout@pimwell.test");
+    w.sent.length = 0; // Discretionary replies below are separate from the automatic receipt.
     w.sent.length = 0;
     await w.call(w.ada, "mail.sending", {on: true});
     const r = await w.call(w.bot, "doc.dispatch", {...w.page, recipients: ["pat@example.com", "kim@example.com"]});

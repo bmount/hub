@@ -1,3 +1,4 @@
+import { answerAdmittedMail, memberMailNotice } from "./notice";
 import { mailIdentityAddress } from "../db/identityEmails";
 // Mail to an organization or a project (2026-10-07): <org>@HUB_DOMAIN and <org>.<project>@HUB_DOMAIN.
 //
@@ -7,8 +8,8 @@ import { mailIdentityAddress } from "../db/identityEmails";
 //   3. The sender (envelope from) must be an active human member of the organization, or root. Strangers are refused.
 //   4. Per-sender rate limit.
 //   5. Strict independently verified, aligned DKIM on original bytes, with atomic replay storage.
-//      Unknown proof is quarantined for an admin, unread by agents. No routine receipts.
-//   6. Optional one-time welcome after admission; delivery is never authentication.
+//      Unknown proof is quarantined for an admin, unread by agents; members receive a notice.
+//   6. One member explanation/answer, independent of admission; delivery is never authentication.
 // Independently admitted project mail may authorize bounded actions as its sender.
 // Quoted/forwarded content and all other mail remain evidence only.
 import { runMailActions, newSenderText } from "./actions";
@@ -25,9 +26,10 @@ import { recordEvent } from "../db/events";
 import { takeRateDetail } from "../rate";
 import { safeMessageId } from "./mime";
 import { storeIndependentMailCandidate } from "./replay";
-import { sendNewcomerWelcome } from "./welcome";
 import { MAX_RAW_MAIL_BYTES, readOriginalMail } from "./raw";
 import { retainAttachmentEvidence, type AttachmentEvidence } from "./attachments";
+
+const mailFingerprint = async (bytes: Uint8Array<ArrayBuffer>) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), b => b.toString(16).padStart(2, "0")).join("");
 
 export const MAX_MAIL_BYTES = MAX_RAW_MAIL_BYTES;
 export const MAX_TEXT_CHARS = 400_000;
@@ -95,7 +97,6 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
   resolver?: DNSResolver): Promise<"rejected" | "limited" | "admitted" | "quarantined"> {
   const target = await resolveMailAddress(env.HUB_DB, env.HUB_DOMAIN, message.to);
   if (!target) { message.setReject("Unknown recipient"); return "rejected"; }
-  if (message.rawSize > MAX_MAIL_BYTES) { message.setReject("Message too large"); return "rejected"; }
 
   const from = normalizeEmail(message.from);
   const identity = await getIdentityByEmail(env.HUB_DB, from);
@@ -107,12 +108,20 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
   const rate = await takeRateDetail(env.RATE, "addr", from, now);
   if (!rate.ok) {
     if (rate.first) await recordEvent(env.HUB_DB, { tenant_id: target.tenant_id, identity_id: identity.id, session_id: null, kind: "mail.limited", target_kind: "identity", target_id: identity.id, summary: "Mail over the hourly limit; not stored" }, now);
+    await memberMailNotice(env, target, from, message.to, `limited:${Math.floor(now / 3600000)}`, "Your mail exceeded the hourly limit and was not stored.", now);
     return "limited";
   }
 
+  if (message.rawSize > MAX_MAIL_BYTES) {
+    await memberMailNotice(env, target, from, message.to, `oversized:${Math.floor(now / 3600000)}`, "Your message was too large to store or process. Please send a smaller message or use the web.", now);
+    message.setReject("Message too large"); return "rejected";
+  }
   let bytes: Uint8Array<ArrayBuffer>;
   try { bytes = await readOriginalMail(message.raw); }
-  catch { message.setReject("Message too large or unreadable"); return "rejected"; }
+  catch {
+    await memberMailNotice(env, target, from, message.to, `unreadable:${safeMessageId(message.headers.get("message-id")) ?? Math.floor(now / 3600000)}`, "We could not read the complete message within the size/time limits. It was not stored or processed. Please send a smaller message or use the web.", now);
+    message.setReject("Message too large or unreadable"); return "rejected";
+  }
   const result = await storeIndependentMailCandidate(env, { bytes, from, to: message.to }, now, resolver);
   if (result.status === "stored" || result.status === "duplicate") {
     // Reconcile a lost storage/wake response using the stable mail id. The inbox
@@ -140,19 +149,24 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
           AND NOT EXISTS (SELECT 1 FROM consent c WHERE c.email = m.from_email)`)
         .bind(ulid(now), now, JSON.stringify({ to: message.to.trim().toLowerCase(), received_at: now }),
           result.mail_id, result.target.tenant_id, result.identity_id).run();
+    } catch { console.log(JSON.stringify({ msg: "mail optional consent unavailable" })); }
+    try {
       const source = { tenant_id: result.target.tenant_id, identity_id: result.identity_id, mail_id: result.mail_id };
       if (result.target.project_id && !result.target.recipient_id) {
         const ownText = await newSenderText(bytes.buffer, message.to);
         if (ownText !== null) await runMailActions(env, source, result.proof, ownText, now);
+        else await memberMailNotice(env, target, from, message.to, result.mail_id, "The message was admitted, but its original recipients do not match this address, so its instructions were not accepted.", now, result.mail_id);
       } else {
-        await sendNewcomerWelcome(env, source, result.proof, now);
+        const ownText = await newSenderText(bytes.buffer, message.to);
+        await answerAdmittedMail(env, target, from, message.to, result.mail_id, ownText ?? "", now, result.proof.messageId);
       }
-    } catch { console.log(JSON.stringify({ msg: "mail optional welcome unavailable" })); }
+    } catch { console.log(JSON.stringify({ msg: "mail optional reply unavailable" })); }
     return "admitted";
   }
   if (result.status !== "unknown") {
     // Valid-signature byte collisions, legacy/pending/corrupt replay state and
     // changed authority must not insert new evidence or trigger any effects.
+    await memberMailNotice(env, target, from, message.to, await mailFingerprint(bytes), "We could not safely admit this message because its delivery record needs administrator review.", now);
     message.setReject("Mail admission blocked; requires administrator reconciliation");
     return "rejected";
   }
@@ -171,5 +185,6 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
     tenant_id: target.tenant_id, identity_id: identity.id, session_id: null, kind: "mail.quarantined", target_kind: "inbound_mail", target_id: id,
     summary: `Mail quarantined for ${target.recipient_name ? `the agent ${target.recipient_name}` : target.project_slug ?? "the organization inbox"}: ${parsed.subject || "(no subject)"}`.slice(0, 300),
   }, now);
+  await memberMailNotice(env, target, from, message.to, await mailFingerprint(bytes), "We could not verify the sender's email signature (DKIM). The message is held for administrator review and has not been delivered to an agent.", now, id);
   return verdict;
 }

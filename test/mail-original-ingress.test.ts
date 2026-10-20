@@ -34,7 +34,9 @@ async function noEffects(w: Awaited<ReturnType<typeof world>>) {
   const page = await inboxStub(env, w.tenant.id, w.bot.agent.identity.id).list(w.tenant.id, w.bot.agent.identity.id,
     { after: 0, limit: 100, include_acked: true });
   expect(page.items).toHaveLength(0);
-  expect(w.sent).toHaveLength(0);
+  expect(w.sent).toHaveLength(1);
+  expect(w.sent[0]!.text).toContain("could not read the complete message");
+  expect(w.sent[0]!.text).not.toContain("secret");
 }
 
 describe("production original-mail read refusal", () => {
@@ -93,8 +95,8 @@ describe("production original-mail read refusal", () => {
       const page = await inboxStub(env, w.tenant.id, w.bot.agent.identity.id).list(w.tenant.id, w.bot.agent.identity.id,
         { after: 0, limit: 100, include_acked: true });
       expect(page.items).toHaveLength(1);
-      expect(w.sent).toHaveLength(1);
-      expect(w.sent[0]!.subject).toBe("Welcome to Pimwell");
+      expect(w.sent).toHaveLength(2); // Read refusal, then the independently admitted redelivery.
+      expect(w.sent[1]!.subject).toBe("Your mail was received, but needs attention");
       expect(vi.getTimerCount()).toBe(0);
     }
   });

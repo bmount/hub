@@ -126,7 +126,7 @@ describe("tenant.delete", () => {
   it("removes everything for the organization, keeps people who belong elsewhere, and leaves a tombstone", async () => {
     const w = await world();
     await setTenantState(env.HUB_DB, w.old.id, "archived", Date.now());
-    for (const t of [w.old, w.keep]) for (const prefix of ["review_request", "mail_actions"]) await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?)")
+    for (const t of [w.old, w.keep]) for (const prefix of ["review_request", "mail_actions", "mail_notice", "mail_conversation"]) await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?)")
       .bind(`${prefix}:v1:${t.id}:caller:key`, JSON.stringify({ result: "private snapshot" })).run();
     const res = await apiPost(HOST, "tenant.delete", { slug: "oldorg", confirm: "OldOrg" }, w.h);
     expect(res.status).toBe(200);
@@ -135,8 +135,10 @@ describe("tenant.delete", () => {
     }
     expect(await count("SELECT COUNT(*) AS n FROM meta WHERE key GLOB ?", `review_request:v1:${w.old.id}:*`)).toBe(0);
     expect(await count("SELECT COUNT(*) AS n FROM meta WHERE key GLOB ?", `review_request:v1:${w.keep.id}:*`)).toBe(1);
-    expect(await count("SELECT COUNT(*) AS n FROM meta WHERE key GLOB ?", `mail_actions:v1:${w.old.id}:*`)).toBe(0);
-    expect(await count("SELECT COUNT(*) AS n FROM meta WHERE key GLOB ?", `mail_actions:v1:${w.keep.id}:*`)).toBe(1);
+    for (const prefix of ["mail_actions", "mail_notice", "mail_conversation"]) {
+      expect(await count("SELECT COUNT(*) AS n FROM meta WHERE key GLOB ?", `${prefix}:v1:${w.old.id}:*`)).toBe(0);
+      expect(await count("SELECT COUNT(*) AS n FROM meta WHERE key GLOB ?", `${prefix}:v1:${w.keep.id}:*`)).toBe(1);
+    }
     expect(await count("SELECT COUNT(*) AS n FROM identity WHERE id = ?", w.bot.agent.identity.id)).toBe(0);
     expect(await count("SELECT COUNT(*) AS n FROM identity WHERE id = ?", w.person.identity.id)).toBe(1);
     expect(await count("SELECT COUNT(*) AS n FROM wiki_revision WHERE tenant_id = ?", w.keep.id)).toBe(1);
