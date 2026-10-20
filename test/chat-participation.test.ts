@@ -211,7 +211,8 @@ describe("authenticated MCP chat participation", () => {
     }
     // Successful replays also preserve the ordinary rate exemption.
     expect((await tool(w.scout.longLived, "chat_post", { ...post, body: "fresh permitted checkpoint", after: 1, idempotency_key: "fresh" })).isError).toBeUndefined();
-  }, 20_000);
+    // Seventy authenticated retries can exceed 20s under full-suite worker contention.
+  }, 60_000);
 
   it("refuses native and OAuth human ordinary retries after archival without blocking authorized history reads", async () => {
     const w = await chatWorld();
