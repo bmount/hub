@@ -1,5 +1,4 @@
-// Outbound mail (B3): the golden rule in code. Only to someone who wrote to that address in the last 30 days, only
-// when the organization has sending on, within daily caps, and kept in full.
+// Member-started mail requires signed-up organization membership, switch, caps and consent.
 import { env, SELF } from "cloudflare:test";
 import PostalMime from "postal-mime";
 import { Buffer } from "node:buffer";
@@ -49,6 +48,30 @@ async function world() {
 }
 
 describe("outbound mail", () => {
+  it.each(["person", "agent"])("checks signed-up recipients for a %s, including linked addresses", async sender => {
+    const w = await world();
+    await w.call(w.ada, "mail.sending", {on: true});
+    expect((await w.call(w.ada, "invite.create", {email: "invited@example.org", role: "member"})).status).toBe(200);
+    const ada = await env.HUB_DB.prepare("SELECT id FROM identity WHERE email = 'ada@example.com'").first<string>("id");
+    const {linkIdentityEmail} = await import("../src/db/identityEmails");
+    // An address not yet confirmed has no identity_email row (confirmed_at is NOT NULL).
+    const send = (to: string) => w.call(sender === "agent" ? w.bot : w.pat, "mail.send",
+      {to, subject: "Membership", body: "Hello", ...(sender === "person" ? {from_project: "site"} : {})});
+    for (const to of ["outsider@example.org", "invited@example.org", "linked@example.org"]) {
+      const r = await send(to);
+      expect(r.status, r.detail).toBe(403);
+    }
+    expect(w.sent).toHaveLength(0);
+    await linkIdentityEmail(env.HUB_DB, ada!, "linked@example.org", ada!, Date.now());
+    expect((await send("linked@example.org")).status).toBe(200);
+    expect(w.sent[0]!.from).toBe(sender === "agent" ? "acme.scout@pimwell.test" : "acme.site@pimwell.test");
+    await env.HUB_DB.prepare("UPDATE membership SET state = 'archived' WHERE identity_id = ?").bind(ada).run();
+    expect((await send("linked@example.org")).status).toBe(403);
+    expect((await send("ada@example.com")).status).toBe(403);
+    expect(w.sent).toHaveLength(1);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM outbound_mail WHERE status = 'refused' AND error = 'recipient_policy'").first("n")).toBe(5);
+  });
+
   it("an agent replies to a linked sender address, but refuses it after removal", async () => {
     const w = await world();
     await w.call(w.ada, "mail.sending", {on: true});
@@ -86,7 +109,7 @@ describe("outbound mail", () => {
     expect(w.sent[0]).toMatchObject({ from: "acme.scout@pimwell.test", to: "pat@example.com", text: "Done." });
   });
 
-  it("people write only to those who wrote in the last 30 days; agents to members who wrote, at any time", async () => {
+  it("people and agents send to members without contact history and reply after 30 days", async () => {
     const w = await world();
     await w.call(w.ada, "mail.sending", { on: true });
     expect((await w.call(w.bot, "mail.send", { to: "pat@example.com", subject: "Follow-up", body: "Hi" })).status).toBe(200);
@@ -96,10 +119,12 @@ describe("outbound mail", () => {
     expect((await w.call(w.pat, "mail.send", { to: "pat@example.com", subject: "Update", body: "x", from_project: "site" })).status).toBe(200);
     expect((await w.call(w.bot, "mail.send", { to: "pat@example.com", subject: "a\r\nBcc: x@y.z", body: "x" })).status).toBe(400);
     await env.HUB_DB.prepare("UPDATE inbound_mail SET received_at = received_at - 31 * 86400000").run();
-    // A member who wrote to the agent stays reachable; the 30-day window is for people writing from project addresses.
+    // Neither sender has a contact-history or reply-age restriction.
     expect((await w.call(w.bot, "mail.send", { to: "pat@example.com", subject: "Late", body: "x" })).status).toBe(200);
     expect((await w.call(w.bot, "mail.reply", { id: w.agentMail, body: "Late" })).status).toBe(200);
-    expect((await w.call(w.pat, "mail.send", { to: "pat@example.com", subject: "Late", body: "x", from_project: "site" })).status).toBe(403);
+    expect((await w.call(w.pat, "mail.send", { to: "ada@example.com", subject: "Late", body: "x", from_project: "site" })).status).toBe(200);
+    expect((await w.call(w.pat, "mail.reply", { id: w.projectMail, body: "Late" })).status).toBe(200);
+    expect((await w.call(w.bot, "mail.send", { to: "ada@example.com", subject: "New", body: "Hi" })).status).toBe(200);
   });
 
   it.each(["absent", "archived", "other tenant"])("admits root mail but explains agent refusal for %s membership", async (state) => {
@@ -232,7 +257,7 @@ describe("outbound mail", () => {
     expect(() => buildMime({ from: "a@pimwell.test", to: "b@example.com", subject: "x", text: "é", messageId: "<x@pimwell.test>", date: new Date(0), inReplyTo: null })).toThrow();
   });
 
-  it("lets agents write to members who wrote to them or were copied by a member, and to no one else", async () => {
+  it("lets agents write to any signed-up member, and to no one else", async () => {
     const w = await world();
     await w.call(w.ada, "mail.sending", { on: true });
     await seedHuman("kim@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
@@ -248,10 +273,9 @@ describe("outbound mail", () => {
     expect(outsider.status).toBe(403);
     expect(outsider.detail).toContain("not a member");
     const lee = await w.call(w.bot, "mail.send", { to: "lee@example.com", subject: "Plan", body: "x" });
-    expect(lee.status).toBe(403);
-    expect(lee.detail).toContain("hasn't written to you");
+    expect(lee.status).toBe(200);
     // Several recipients: all must qualify; one message, every recipient in its headers.
-    expect((await w.call(w.bot, "mail.send", { to: "pat@example.com, kim@example.com", cc: "lee@example.com", subject: "x", body: "x" })).status).toBe(403);
+    expect((await w.call(w.bot, "mail.send", { to: "pat@example.com, kim@example.com", cc: "outside@example.org", subject: "x", body: "x" })).status).toBe(403);
     w.sent.length = 0;
     expect((await w.call(w.bot, "mail.send", { to: "pat@example.com", cc: "kim@example.com", subject: "Both of you", body: "x" })).status).toBe(200);
     expect(w.sent.map((m) => m.to).sort()).toEqual(["kim@example.com", "pat@example.com"]);
@@ -361,7 +385,7 @@ describe("document mail", () => {
     expect((await SELF.fetch(r.result.url as string)).status).toBe(404);
   });
 
-  it.each(["share", "dispatch"])("refuses non-member contacts and unfamiliar agent recipients before any %s transport", async mode => {
+  it.each(["share", "dispatch"])("refuses non-member contacts but allows unfamiliar member recipients for %s", async mode => {
     const w = await documentWorld();
     await w.call(w.ada, "mail.sending", {on: true});
     expect((await w.call(w.pat, "person.upsert", {project: "docs", name: "Contact", emails: ["contact@example.org"]})).status).toBe(200);
@@ -370,9 +394,9 @@ describe("document mail", () => {
       expect(r.status).toBe(403); expect(r.detail).toContain("member");
     }
     const unfamiliar = await w.call(w.bot, `doc.${mode}`, {...w.page, recipients: ["pat@example.com", "ada@example.com"]});
-    expect(unfamiliar.status).toBe(403); expect(unfamiliar.detail).toContain("hasn't written to you");
-    expect(w.sent).toHaveLength(0);
-    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM document_delivery").first("n")).toBe(0);
+    expect(unfamiliar.status, unfamiliar.detail).toBe(200);
+    expect(w.sent).toHaveLength(2);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) n FROM document_delivery").first("n")).toBe(2);
   });
 
   it.each(["archived membership", "disabled identity", "agent identity", "other tenant"])("refuses %s as a human recipient", async state => {

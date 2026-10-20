@@ -194,6 +194,7 @@ describe("mail in the workbench", () => {
   it("shows consent withdrawal as a block, never invites an immediate retry", async () => {
     const w = await world();
     await env.HUB_DB.prepare("UPDATE tenant SET mail_out = 1 WHERE id = ?").bind(w.t.id).run();
+    await grantConsent(env.HUB_DB, { email: "pat@example.com", kind: "inbound_email", source_message_id: null, evidence: null }, Date.now());
     await revokeConsent(env.HUB_DB, "pat@example.com", Date.now());
     let calls = 0;
     setTestTransport(async () => { calls++; });

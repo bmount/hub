@@ -1,10 +1,5 @@
-// Outbound mail (design 2026-10-07, B3): the golden rule in code. The organization must have sending turned on; each
-// sender has a daily cap, and so does the organization; every message is kept in full; no one who withdrew consent is
-// ever written to. Who may be written to:
-// - People, from a project's address: someone who wrote to that address within the last 30 days.
-// - Agents, from their own address (owner, 2026-10-08): members of the agent's organization who wrote to the agent, or
-//   whom a member copied on mail to it. Every recipient must qualify; several may share one message (to and cc).
-// Replies go from the address the message came to.
+// Member-started mail goes only to signed-up human organization members.
+// Sending switch, daily caps, consent withdrawal and refusal records apply to all senders.
 import { defineVerb } from "./table";
 import { optString, reqString } from "./params";
 import { badRequest, forbidden, notFound } from "../errors";
@@ -17,7 +12,6 @@ import { sendMail } from "../mail/send";
 import type { MailAttachment } from "../mail/mime";
 import { DATA_NOTE } from "../mcp/render";
 
-export const REPLY_WINDOW_MS = 30 * 86_400_000;
 export const SENDER_DAILY = 50;
 export const TENANT_DAILY = 500;
 
@@ -35,23 +29,14 @@ export function addresses(v: unknown, name: string): string[] {
   return list;
 }
 
-/**
- * Who an agent may write to (owner, 2026-10-08), every recipient checked:
- * 1. they wrote to this agent, or a member copied them on a message to it (admitted mail only), and
- * 2. they are an active member of the agent's organization.
- * Returns the refusals, one line per recipient that doesn't qualify.
- */
-export async function agentRecipientRefusals(ctx: Ctx, recipients: string[]): Promise<string[]> {
+/** Every member-started send uses signed-up human membership, never contact history. */
+export async function memberRecipientRefusals(ctx: Ctx, recipients: string[]): Promise<string[]> {
   const out: string[] = [];
   for (const r of recipients) {
-    const [member, known] = await ctx.db.batch([
-      ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:48:7:agentRecipientRefusals:eee56f87*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id WHERE (lower(i.email) = ?1 OR EXISTS (SELECT 1 FROM identity_email ie WHERE ie.identity_id = i.id AND ie.email = ?1)) AND i.kind = 'human' AND i.state = 'active'
-        AND m.tenant_id = ? AND m.state = 'active' LIMIT 1`).bind(r, ctx.tenant!.id),
-      ctx.db.prepare(`/*perf-site:src%2Fverbs%2FmailOut.ts:50:7:agentRecipientRefusals:db98becf*/ SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND recipient_id = ? AND verdict = 'admitted'
-        AND (from_email = ? OR EXISTS (SELECT 1 FROM json_each(COALESCE(inbound_mail.copied, '[]')) WHERE value = ?)) LIMIT 1`).bind(ctx.tenant!.id, ctx.identity!.id, r, r),
-    ]);
-    if (!member!.results.length) out.push(`${r} is not a member of this organization with an active human membership; an administrator must set up membership for this exact address before an agent can write to it. Root authority or incoming mail admission does not replace membership`);
-    else if (!known!.results.length) out.push(`${r} hasn't written to you, and no member copied them on mail to you`);
+    const member = await ctx.db.prepare(`SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id
+      WHERE (lower(i.email) = ?1 OR EXISTS (SELECT 1 FROM identity_email ie WHERE ie.identity_id = i.id AND lower(ie.email) = ?1 AND ie.confirmed_at IS NOT NULL))
+      AND i.kind = 'human' AND i.state = 'active' AND m.tenant_id = ?2 AND m.state = 'active' LIMIT 1`).bind(r, ctx.tenant!.id).first();
+    if (!member) out.push(`${r} is not a member of this organization with an active human membership; an administrator must set up membership for this exact address through an accepted invitation or verified sign-in. Root authority or incoming mail admission does not replace membership`);
   }
   return out;
 }
@@ -102,7 +87,7 @@ const body = (i: Record<string, unknown>) => {
 
 export const mailReply = defineVerb({
   name: "mail.reply", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
-  summary: "Reply by mail from the address a message was sent to. Agents reply to their own mail only to active human members of their organization, even for admitted root senders (all: true also writes to eligible copied members). People reply to organization/project mail within 30 days.",
+  summary: "Reply from the address a message was sent to, only to signed-up active human members of this organization (primary or confirmed linked addresses). No prior-contact or age limit. Agents reply to their own mail; people reply to organization/project mail. Agents may use all to include eligible copied members.",
   mcp: {
     scope: "write", destructive: false, title: "Reply by mail",
     input: { type: "object", properties: { id: { type: "string", description: "The received message's id (mail_list, mail_read)" }, body: { type: "string", description: "Plain text" }, all: { type: "boolean", description: "Agents: also write to the members it was addressed or copied to" } }, required: ["id", "body"], additionalProperties: false },
@@ -126,33 +111,31 @@ export const mailReply = defineVerb({
       if (p.all) {
         let others: string[] = [];
         try { others = (JSON.parse(m.copied ?? "[]") as string[]).filter((a) => a !== m.from_email && a !== ctx.identity!.email.toLowerCase()); } catch { others = []; }
-        for (const a of others.slice(0, MAX_RECIPIENTS - 1)) ((await agentRecipientRefusals(ctx, [a])).length ? skipped : cc).push(a);
+        for (const a of others.slice(0, MAX_RECIPIENTS - 1)) ((await memberRecipientRefusals(ctx, [a])).length ? skipped : cc).push(a);
       }
     }
     const subject = /^re:/i.test(m.subject) ? m.subject : `Re: ${m.subject || "your message"}`;
     const earlier = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:133:28:mailReply.run:04887000*/ SELECT o.id FROM outbound_mail o WHERE o.in_reply_to = ? AND o.status = 'sent' ORDER BY o.created_at").bind(m.id).all<{ id: string }>()).results.map((o) => `<${o.id}@${ctx.env.HUB_DOMAIN}>`);
     const notice = skipped.length
-      ? `Reply-all omitted: ${skipped.join(", ")}. No mail was sent to these addresses. Recipients must join this organization or accept its membership invitation, with an active human membership for their exact email address set up by an administrator, and must have written to this agent or been copied on admitted mail to it. Membership checks cannot be bypassed by external mail.`
+      ? `Reply-all omitted: ${skipped.join(", ")}. No mail was sent to these addresses. Recipients must join this organization or accept its membership invitation, with an active human membership for their exact email address set up by an administrator. Membership checks cannot be bypassed by external mail.`
       : undefined;
     const text = notice ? `${p.body}\n\n${notice}` : p.body;
-    const r = await deliver(ctx, { from: m.to_address, to: m.from_email, cc, inbound_id: m.id, message_id: m.message_id, basis: agent ? "member" : "consent" }, subject.slice(0, 200), text, [...(m.message_id ? [m.message_id] : []), ...earlier], async () => {
-      if (agent) {
-        const refused = await agentRecipientRefusals(ctx, [m.from_email]);
-        if (refused.length) throw new HubError(403, "forbidden", `agents write only to members who wrote to them or were copied on mail to them: ${refused.join("; ")}`, { mail_block: "recipient_policy" });
-      } else if (ctx.now - m.received_at > REPLY_WINDOW_MS) throw new HubError(403, "forbidden", "it has been more than 30 days; wait for them to write again", { mail_block: "reply_window" });
+    const r = await deliver(ctx, { from: m.to_address, to: m.from_email, cc, inbound_id: m.id, message_id: m.message_id, basis: "member" }, subject.slice(0, 200), text, [...(m.message_id ? [m.message_id] : []), ...earlier], async () => {
+      const refused = await memberRecipientRefusals(ctx, [m.from_email, ...cc]);
+      if (refused.length) throw new HubError(403, "forbidden", refused.join("; "), { mail_block: "recipient_policy" });
       await capsAndSwitch(ctx);
     });
-    return { ...r, to: [m.from_email, ...cc].join(", "), from: m.to_address, ...(skipped.length ? { left_out: skipped, why: "copied recipients are not eligible under the organization membership and contact policy", notice } : {}) };
+    return { ...r, to: [m.from_email, ...cc].join(", "), from: m.to_address, ...(skipped.length ? { left_out: skipped, why: "copied recipients are not eligible under the organization membership policy", notice } : {}) };
   },
 });
 
 export const mailSend = defineVerb({
   name: "mail.send", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
-  summary: "Send a new message. Agents send from their own address to active human members of their organization who wrote to them or were copied by a member on mail to them (to and cc, up to 10 in all). Root authority or incoming admission does not replace membership. People send from a project's address with from_project, to someone who wrote to it in the last 30 days.",
+  summary: "Send to signed-up active human members of this organization, at primary or confirmed linked addresses (to and cc, up to 10 total). No prior mail required. Agents send from their own address; people use from_project. Sending switch, daily caps and consent withdrawal apply.",
   mcp: {
     scope: "write", destructive: false, title: "Send mail",
     input: { type: "object", properties: {
-      to: { type: "string", description: "An address, or several separated by commas" }, cc: { type: "string", description: "Agents: more addresses, separated by commas" },
+      to: { type: "string", description: "An address, or several separated by commas" }, cc: { type: "string", description: "More addresses, separated by commas" },
       subject: { type: "string" }, body: { type: "string" }, from_project: { type: "string", description: "People: send from this project's address" } }, required: ["to", "subject", "body"], additionalProperties: false },
     render: (r) => { const x = r as { to: string; from: string }; return `${DATA_NOTE}\n\nSent to ${x.to} from ${x.from}.`; },
   },
@@ -175,29 +158,18 @@ export const mailSend = defineVerb({
       if (!pr) throw notFound("no such project");
       from = `${ctx.tenant!.slug}.${pr.slug}@${ctx.env.HUB_DOMAIN}`;
     }
-    if (ctx.identity!.kind === "agent") {
-      const r = await deliver(ctx, { from, to: p.to[0]!, cc: [...p.to.slice(1), ...p.cc], inbound_id: null, message_id: null, basis: "member" }, p.subject, p.body, [], async () => {
-        const refused = await agentRecipientRefusals(ctx, [...p.to, ...p.cc]);
-        if (refused.length) throw new HubError(403, "forbidden", `agents write only to members who wrote to them or were copied on mail to them: ${refused.join("; ")}`, { mail_block: "recipient_policy" });
-        await capsAndSwitch(ctx);
-      });
-      return { ...r, to: [...p.to, ...p.cc].join(", "), from };
-    }
-    if (p.to.length > 1 || p.cc.length) throw badRequest("people send to one address at a time");
-    const one = p.to[0]!;
-    const r = await deliver(ctx, { from, to: one, inbound_id: null, message_id: null }, p.subject, p.body, [], async () => {
-      const wrote = await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:189:27:mailSend.run:5573f4de*/ SELECT 1 FROM inbound_mail WHERE tenant_id = ? AND from_email = ? AND to_address = ? AND verdict = 'admitted' AND received_at > ? AND (? IS NULL OR project_id = ?) LIMIT 1")
-        .bind(ctx.tenant!.id, one, from, ctx.now - REPLY_WINDOW_MS, ctx.mcpProject?.id ?? null, ctx.mcpProject?.id ?? null).first();
-      if (!wrote) throw new HubError(403, "forbidden", `Pimwell writes only to people who wrote to ${from} in the last 30 days`, { mail_block: "reply_window" });
+    const r = await deliver(ctx, { from, to: p.to[0]!, cc: [...p.to.slice(1), ...p.cc], inbound_id: null, message_id: null, basis: "member" }, p.subject, p.body, [], async () => {
+      const refused = await memberRecipientRefusals(ctx, [...p.to, ...p.cc]);
+      if (refused.length) throw new HubError(403, "forbidden", refused.join("; "), { mail_block: "recipient_policy" });
       await capsAndSwitch(ctx);
     });
-    return { ...r, to: one, from };
+    return { ...r, to: [...p.to, ...p.cc].join(", "), from };
   },
 });
 
 export const mailSending = defineVerb({
   name: "mail.sending", kind: "command", scope: "tenant", minRole: "admin", freshProofMinutes: 60, humanOnly: true,
-  summary: "Turn outbound mail on or off for this organization. Off by default; the 30-day and daily limits apply either way.",
+  summary: "Turn outbound mail on or off for this organization. Off by default; membership, consent withdrawal and daily limits still apply.",
   parse: (i) => ({ on: i.on === true || i.on === "1" || i.on === "true" }),
   run: async (ctx, p) => {
     if (rank(ctx.role) < rank("admin")) throw forbidden();

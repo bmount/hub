@@ -4,7 +4,7 @@ import { reqString, optString } from "./params";
 import { badRequest, forbidden, HubError, notFound } from "../errors";
 import { filePath, fileProject, readFile } from "./files";
 import { readWiki, wikiSlug } from "./wiki";
-import { addresses, agentRecipientRefusals, capsAndSwitch, deliver, MAX_RECIPIENTS } from "./mailOut";
+import { addresses, memberRecipientRefusals, capsAndSwitch, deliver, MAX_RECIPIENTS } from "./mailOut";
 import { consentWithdrawn } from "../db/consent";
 import { ulid } from "../ids";
 import type { Ctx } from "../auth/context";
@@ -26,14 +26,8 @@ function parse(i: Record<string, unknown>) {
     recipients, note: reqString(i, "note", {max: 2000}).trim()};
 }
 async function recipientsAllowed(ctx: Ctx, recipients: string[]) {
-  if (ctx.identity!.kind === "agent") {
-    const refused = await agentRecipientRefusals(ctx, recipients);
-    if (refused.length) throw forbidden(refused.join("; "));
-  } else for (const r of recipients) {
-    const member = await ctx.db.prepare(`/*perf-site:src%2Fverbs%2Fdoc.ts:33:26:recipientsAllowed:eee56f87*/ SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id
-      WHERE lower(i.email) = ? AND i.kind = 'human' AND i.state = 'active' AND m.tenant_id = ? AND m.state = 'active' LIMIT 1`).bind(r, ctx.tenant!.id).first();
-    if (!member) throw forbidden(`${r} is not an active human member of this organization`);
-  }
+  const refused = await memberRecipientRefusals(ctx, recipients);
+  if (refused.length) throw new HubError(403, "forbidden", refused.join("; "), {mail_block: "recipient_policy"});
   for (const r of recipients) if (await consentWithdrawn(ctx.db, r)) throw forbidden(`${r} withdrew consent; no mail was sent`);
 }
 async function sendDocument(ctx: Ctx, v: ReturnType<typeof parse>, mode: "share" | "dispatch") {
@@ -94,7 +88,7 @@ async function sendDocument(ctx: Ctx, v: ReturnType<typeof parse>, mode: "share"
 }
 const verb = (mode: "share" | "dispatch") => defineVerb({
   name: `doc.${mode}`, kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
-  summary: `${mode === "share" ? "Share a file or page by one mail" : "Dispatch a file or page in separate mails, one per member"}. Only active human organization members; agents reuse their existing member/contact rule. Non-data files up to 512 KiB attached; data files and larger files use sign-in links only. Sending switch, caps and withdrawal apply. Check deliveries and not_attempted before retrying.`,
+  summary: `${mode === "share" ? "Share a file or page by one mail" : "Dispatch a file or page in separate mails, one per member"}. Only signed-up active human organization members, at primary or confirmed linked addresses; no prior mail required, for people and agents alike. Non-data files up to 512 KiB attached; data files and larger files use sign-in links only. Sending switch, caps and withdrawal apply. Check deliveries and not_attempted before retrying.`,
   mcp: {scope: "write", destructive: false, title: mode === "share" ? "Share document" : "Dispatch document", input},
   parse, run: (ctx, v) => sendDocument(ctx, v, mode),
 });
