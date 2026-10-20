@@ -21,8 +21,8 @@ const SEMANTIC = new Set(["from", "sender", "reply-to", "to", "cc", "bcc", "subj
 const isSemantic = (key: string) => SEMANTIC.has(key) || key.startsWith("content-");
 export type DkimProof =
   | { authentication: "pass"; source: "aligned_dkim"; domain: string; messageId: string }
-  | { authentication: "unknown"; source: null; reason: string };
-const unknown = (reason: string): DkimProof => ({ authentication: "unknown", source: null,
+  | { authentication: "unknown"; source: null; reason: string; results?: unknown };
+const unknown = (reason: string): Extract<DkimProof, { authentication: "unknown" }> => ({ authentication: "unknown", source: null,
   reason: `authentication unknown: independent DKIM ${reason}` });
 
 /** Cryptographic proof candidate only: callers MUST enforce membership, consent and
@@ -76,6 +76,7 @@ export async function verifyIndependentDkim(bytes: Uint8Array, envelope: string,
       if (!semantic.every((h) => signed.has(h.key))) continue;
       return { authentication: "pass", source: "aligned_dkim", domain, messageId };
     }
-    return unknown("no acceptable aligned full-coverage signature");
+    return { ...unknown("no acceptable aligned full-coverage signature"), results: verified.results.map(r => ({ result: r.status.result, signingDomain: r.signingDomain, selector: r.selector,
+      algo: r.algo, signatureTimeValid: r.signatureTimeValid, canonBodyLengthLimited: r.canonBodyLengthLimited })) };
   } catch { return unknown("verification unavailable"); }
 }

@@ -53,7 +53,7 @@ const TABLE: Record<string, Decl> = {
   "project.update": T("tenant", "member", null, { mcp: "write" }),
   "project.delete": T("tenant", "member", null, { mcp: "write" }),
   "mail.list": T("tenant", "reader", null, { mcp: "read" }), "mail.read": T("tenant", "reader", null, { mcp: "read" }),
-  "mail.release": T("tenant", "admin", 60, { humanOnly: true }),
+  "mail.release": T("tenant", "admin", null, { humanOnly: true }),
   "mail.response_recipients": T("tenant", "admin", null, { humanOnly: true }),
   "mail.set_response_recipients": T("tenant", "admin", 60, { humanOnly: true }),
   "mail.response_intent": T("tenant", "member", null, { humanOnly: true }),

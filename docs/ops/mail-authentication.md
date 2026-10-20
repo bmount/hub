@@ -39,6 +39,28 @@ explicit request to `login@`/`signup@` can establish new consent only through
 the existing successful reply path. This limitation must remain visible
 until provenance of revocation can be recorded independently.
 
+## Quarantine adjudication
+
+Held rows retain a machine-readable `reason_code`, the detailed `reason`, and
+`auth_results` containing independent verification evidence and the original
+Authentication-Results/Received-SPF/ARC-Authentication-Results header values.
+Those headers are explicitly untrusted, not a provider verdict. Older rows are
+marked `auth_unknown` with results unavailable; historical results cannot be
+reconstructed. Size/rate/stranger/replay refusals remain ingress refusals, not
+quarantined rows, and are not misrepresented as authentication failures.
+Mail list/read and the web inspector expose the retained evidence.
+
+A human admin can release one message using their existing browser session:
+per-message evidence adjudication does not require a second sign-in. Release
+retains the hold evidence, admits the message, establishes first inbound consent
+without overriding a withdrawal, and delivers the addressed agent inbox entry.
+Retries reconcile delivery using the permanent mail-id tombstone. Normal agent
+handling and outbound policy still apply; release is not guaranteed reply delivery
+and does not authorize project-mail actions. Release-and-trust keeps an already
+linked sender linked or uses the existing member address-link authorization for
+an unlinked address. Linking requires fresh proof and never bypasses DKIM for
+future messages. Strangers still cannot enter through ingress.
+
 ## Linked member addresses
 
 A human identity keeps its primary email and may have additional confirmed addresses

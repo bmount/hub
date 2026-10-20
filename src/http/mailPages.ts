@@ -17,7 +17,7 @@ const when = localTime;
 const ago = (ms: number | null, _now: number) => localTime(ms);
 
 type Row = { id: string; project: string | null; from_email: string; subject: string; received_at: number; verdict: string; forwarded: number };
-type Msg = { id: string; recipient_id: string | null; project: string | null; from_email: string; to_address: string; subject: string; received_at: number; verdict: string; reason: string | null; text: string; attachments: string; forwarded: number };
+type Msg = { id: string; recipient_id: string | null; project: string | null; from_email: string; to_address: string; subject: string; received_at: number; verdict: string; reason: string | null; reason_code: string | null; auth_results: string | null; text: string; attachments: string; forwarded: number };
 
 export const mailListPage = (request: Request, env: Env) => mailPage(request, env, null);
 export const mailReadPage = (request: Request, env: Env, id: string) => mailPage(request, env, id);
@@ -72,7 +72,7 @@ ${rows.length ? kitTable("Mail", [{label:"To"},{label:"From",className:"hide-s"}
     const workSection = (title: string, rows: MailWorkItem[]) => rows.length ? `<h2>${title}</h2><table><tbody>${rows.map(w => `<tr data-href="/${esc(encodeURIComponent(w.project))}/w/${w.number}"><td class="ref">${esc(w.ref)}</td><td class="k-${w.kind}"><span class="kd"></span>${esc(KINDS[w.kind].name)}</td><td><a href="/${esc(encodeURIComponent(w.project))}/w/${w.number}">${esc(w.title)}</a></td><td>${esc(STATES[w.state])}</td></tr>`).join("")}</tbody></table>` : "";
     const intent = m.recipient_id || m.verdict !== "admitted" ? { html: "", key: "" } : await mailIntentPanel(ctx, m.id);
     const release = m.verdict === "quarantined"
-      ? `<div class="planned"><b>Held:</b> ${esc(m.reason ?? "")}<form method="post" action="/api/mail.release"><input type="hidden" name="id" value="${esc(m.id)}"><input type="hidden" name="_back" value="${esc(messageUrl(m.id))}"><button type="submit">I know who sent this: release it</button></form></div>` : "";
+      ? `<div class="planned"><b>Held:</b> ${esc(m.reason_code ?? "auth_unknown")} — ${esc(m.reason ?? "Original reason was not retained.")}<details><summary>Authentication results (headers are untrusted evidence)</summary><pre>${esc(m.auth_results ?? "Not retained for this older message.")}</pre></details><form method="post" action="/api/mail.release"><input type="hidden" name="id" value="${esc(m.id)}"><input type="hidden" name="_back" value="${esc(messageUrl(m.id))}"><p>Release delivers this message to the addressed agent. Your admin session is sufficient; no sign-in round trip is needed.</p><button type="submit">I know who sent this: release it</button><button type="submit" name="trust" value="true">Release and trust this sender</button><label>Member email (only for an unlinked sender) <input name="member" type="email"></label><p>Trust links the address to a member; already-linked senders stay linked. Future messages still require independent DKIM verification.</p></form></div>` : "";
     const propose = m.verdict === "admitted" && rank(ctx.role) >= rank("member")
       ? `<form method="post" action="/api/mail.propose_work"><input type="hidden" name="id" value="${esc(m.id)}"><button type="submit" class="quiet">Propose work from this</button></form>` : "";
     inspector = `<a class="back" href="${esc(mailboxUrl)}">‹ Mail</a>

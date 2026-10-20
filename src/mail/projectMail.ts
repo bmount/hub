@@ -160,12 +160,13 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
   const verdict = "quarantined";
   const id = ulid(now);
   await env.HUB_DB.prepare(
-    `/*perf-site:src%2Fmail%2FprojectMail.ts:161:9:handleProjectMail:4893da46*/ INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `/*perf-site:src%2Fmail%2FprojectMail.ts:161:9:handleProjectMail:4893da46*/ INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied, reason_code, auth_results)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(id, target.tenant_id, target.project_id, target.recipient_id ?? null, identity.id, from, message.to.trim().toLowerCase(), parsed.subject, safeMessageId(message.headers.get("message-id")),
     parsed.date, now, bytes.byteLength, verdict, result.proof.authentication === "unknown" ? result.proof.reason : "authentication unknown",
     parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0,
-    JSON.stringify(parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`)))).run();
+    JSON.stringify(parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`))), "dkim_unknown",
+    JSON.stringify({ independent: result.proof, headers: parsed.headers.filter(h => /^(authentication-results|received-spf|arc-authentication-results)$/i.test(h.key)), header_trust: "untrusted evidence, not authentication" })).run();
   await recordEvent(env.HUB_DB, {
     tenant_id: target.tenant_id, identity_id: identity.id, session_id: null, kind: "mail.quarantined", target_kind: "inbound_mail", target_id: id,
     summary: `Mail quarantined for ${target.recipient_name ? `the agent ${target.recipient_name}` : target.project_slug ?? "the organization inbox"}: ${parsed.subject || "(no subject)"}`.slice(0, 300),

@@ -58,6 +58,26 @@ describe("agent mail", () => {
     expect(patMine.result.mail).toEqual([]);
   });
 
+  it("explains quarantine and releases to the agent once, including from an old admin session", async () => {
+    const w = await world();
+    const admin = await seedHuman("admin@example.com", { memberships: [{ tenant_id: w.t.id, role: "admin" }] });
+    const { m } = message("member@example.com", "acme.scout@pimwell.test", "Held", "Please investigate.");
+    expect(await handleProjectMail(m, env, Date.now())).toBe("quarantined");
+    const held = await env.HUB_DB.prepare("SELECT id, reason_code, auth_results FROM inbound_mail").first<{id: string; reason_code: string; auth_results: string}>();
+    expect(held!.reason_code).toBe("dkim_unknown");
+    expect(JSON.parse(held!.auth_results).independent.reason).toContain("signature count");
+    expect((await apiPost(HOST, "mail.release", {id: held!.id}, bearer(w.scout.token))).status).toBe(403);
+    expect((await apiPost(HOST, "mail.release", {id: held!.id}, cookieHeaders(w.pat.token, HOST))).status).toBe(403);
+    await env.HUB_DB.prepare("UPDATE session SET last_proof_at = 0 WHERE identity_id = ?").bind(admin.identity.id).run();
+    const headers = cookieHeaders(admin.token, HOST);
+    const listed = await (await apiPost(HOST, "mail.list", {quarantined: true}, headers)).json() as any;
+    expect(listed.result.mail[0].auth_results).toBe(held!.auth_results);
+    for (let i = 0; i < 2; i++) expect((await apiPost(HOST, "mail.release", {id: held!.id, trust: true}, headers)).status).toBe(200);
+    const inbox = await (await apiPost(HOST, "chat.inbox", {}, bearer(w.scout.token))).json() as any;
+    expect(inbox.result.items.filter((i: any) => i.kind === "mail")).toHaveLength(1);
+    expect((await apiPost(HOST, "mail.read", {id: held!.id}, bearer(w.scout.token))).status).toBe(200);
+  });
+
   it("rejects strangers and unknown agents", async () => {
     await world();
     const a = message("stranger@example.com", "acme.scout@pimwell.test", "hi", "x");
