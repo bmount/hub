@@ -20,13 +20,13 @@ const SEMANTIC = new Set(["from", "sender", "reply-to", "to", "cc", "bcc", "subj
   "in-reply-to", "references", "mime-version"]);
 const isSemantic = (key: string) => SEMANTIC.has(key) || key.startsWith("content-");
 export type DkimProof =
-  | { authentication: "pass"; source: "aligned_dkim"; domain: string; messageId: string }
+  | { authentication: "pass"; source: "aligned_dkim" | "cloudflare_arc"; domain: string; messageId: string; recipientsAuthenticated?: boolean; actionEligible?: boolean; actionReason?: string; results?: unknown }
   | { authentication: "unknown"; source: null; reason: string; results?: unknown };
 const unknown = (reason: string): Extract<DkimProof, { authentication: "unknown" }> => ({ authentication: "unknown", source: null,
   reason: `authentication unknown: independent DKIM ${reason}` });
 
 /** Cryptographic proof candidate only: callers MUST enforce membership, consent and
- * atomic replay deduplication before admission. Not SPF, ARC or universal DMARC.
+ * atomic replay deduplication before admission. Not SPF or universal DMARC.
  * Verifies original bytes through mailauth's strict RFC verifier, never reserialized MIME.
  */
 export async function verifyIndependentDkim(bytes: Uint8Array, envelope: string, now: number,
@@ -56,7 +56,7 @@ export async function verifyIndependentDkim(bytes: Uint8Array, envelope: string,
   if (!envelopeMatchesFrom(envelope, fields)) return unknown("From/envelope mismatch");
   const domain = envelope.trim().toLowerCase().split("@").pop()!;
   const signatures = fields.filter((h) => h.key === "dkim-signature");
-  if (!signatures.length || signatures.length > MAX_SIGNATURES) return unknown("signature count");
+  if (signatures.length > MAX_SIGNATURES || (!signatures.length && !fields.some(h => h.key === "arc-seal"))) return unknown("signature count");
   const semantic = fields.filter((h) => isSemantic(h.key));
   if (new Set(semantic.map((h) => h.key)).size !== semantic.length) return unknown("duplicate semantic header");
   const id = fields.find((h) => h.key === "message-id")?.value.trim();
@@ -64,19 +64,57 @@ export async function verifyIndependentDkim(bytes: Uint8Array, envelope: string,
   if (!id || !messageId || messageId !== id) return unknown("missing or ambiguous Message-ID");
   try {
     const verified = await verifyDkimInWorker(bytes, { sender: envelope, resolver, curTime: new Date(now),
-      strict: true, minBitLength: 2048 });
+      strict: true, minBitLength: 1024 });
     // Independent parser agreement: neither may accept a different outer identity.
     if (verified.fromFields !== 1 || verified.headerFrom.length !== 1
       || verified.headerFrom[0]!.trim().toLowerCase() !== envelope.trim().toLowerCase()) return unknown("parser disagreement");
+    const date = Date.parse(fields.find(h => h.key === "date")?.value ?? "");
+    const recent = Number.isFinite(date) && date <= now + 5 * 60_000 && now - date <= 72 * 3600_000;
+    const actionState = (covered: boolean) => ({ actionEligible: covered && recent,
+      actionReason: !covered ? "The signature lacks required header coverage; instructions were skipped."
+        : !recent ? "The signed Date is missing, future-dated or older than 72 hours; instructions were skipped." : undefined });
+    const ar = verified.arcResult;
+    const last = verified.sets.at(-1);
+    const ams = verified.highestSignature;
+    const signedArc = new Set(ams?.signingHeaders?.headers.map(h => h.slice(0, h.indexOf(":")).toLowerCase()));
+    const sealEvidence = fields.filter(h => h.key === "arc-seal").map(h => {
+      const tags = Object.fromEntries(h.value.replace(/\r\n[ \t]+/g, " ").split(";").map(tag => {
+        const at = tag.indexOf("="); return [tag.slice(0, at).trim(), tag.slice(at + 1).trim()];
+      }));
+      return { i: tags.i, cv: tags.cv, d: tags.d, s: tags.s };
+    });
+    const arcChecks = { sets: sealEvidence, parsedSets: verified.sets, instance: ar.i, sealAndChain: ar.status.result,
+      messageSignature: ams?.status.result ?? "none", messageSignatureDomain: ams?.signingDomain,
+      messageSignatureSelector: ams?.selector, signatureTimeValid: ams?.signatureTimeValid === true,
+      completeBody: ams?.canonBodyLengthLimited === false, nonTesting: !!ams && !ams.status.testing,
+      fromCovered: signedArc.has("from"), messageIdCovered: signedArc.has("message-id"),
+      signedDateRecent: signedArc.has("date") && recent, pinnedSealer: typeof last?.d === "string" && last.d.toLowerCase() === "email.cloudflare.net",
+      authserv: ar.authenticationResults?.mta?.toLowerCase() === "mx.cloudflare.net",
+      alignedDmarc: ar.authenticationResults?.dmarc?.result === "pass" && ar.authenticationResults?.dmarc?.header?.from?.toLowerCase() === domain };
+    if (arcChecks.sealAndChain === "pass" && arcChecks.messageSignature === "pass" && arcChecks.pinnedSealer
+      && arcChecks.authserv && arcChecks.alignedDmarc && arcChecks.signatureTimeValid
+      && arcChecks.completeBody && arcChecks.nonTesting && arcChecks.fromCovered && arcChecks.messageIdCovered) {
+      return { authentication: "pass", source: "cloudflare_arc", domain, messageId,
+        recipientsAuthenticated: ["to", "cc"].every(key => !fields.some(h => h.key === key) || signedArc.has(key)),
+        ...actionState(["date", "to", "cc"].every(key => !fields.some(h => h.key === key) || signedArc.has(key))), results: { arc: arcChecks } };
+    }
+    let partial: DkimProof | undefined;
     for (const result of verified.results) {
       if (result.status.result !== "pass" || result.status.testing || result.signatureTimeValid !== true
         || result.signingDomain?.toLowerCase() !== domain || result.canonBodyLengthLimited !== false
         || !["rsa-sha256", "ed25519-sha256"].includes(result.algo ?? "")) continue;
       const signed = new Set(result.signingHeaders?.headers.map((h) => h.slice(0, h.indexOf(":")).toLowerCase()));
-      if (!semantic.every((h) => signed.has(h.key))) continue;
-      return { authentication: "pass", source: "aligned_dkim", domain, messageId };
+      // A replay key without signed Message-ID could be changed by a re-sender.
+      if (!signed.has("message-id")) continue;
+      const covered = semantic.every((h) => signed.has(h.key));
+      const candidate: DkimProof = { authentication: "pass", source: "aligned_dkim", domain, messageId,
+        recipientsAuthenticated: ["to", "cc"].every(key => !fields.some(h => h.key === key) || signed.has(key)),
+        ...actionState(covered), results: { arc: arcChecks } };
+      if (covered) return candidate;
+      partial = candidate;
     }
-    return { ...unknown("no acceptable aligned full-coverage signature"), results: verified.results.map(r => ({ result: r.status.result, signingDomain: r.signingDomain, selector: r.selector,
-      algo: r.algo, signatureTimeValid: r.signatureTimeValid, canonBodyLengthLimited: r.canonBodyLengthLimited })) };
+    if (partial) return partial;
+    return { ...unknown("no acceptable aligned signature or Cloudflare ARC verdict"), results: { arc: arcChecks, dkim: verified.results.map(r => ({ result: r.status.result, signingDomain: r.signingDomain, selector: r.selector,
+      algo: r.algo, signatureTimeValid: r.signatureTimeValid, canonBodyLengthLimited: r.canonBodyLengthLimited })) } };
   } catch { return unknown("verification unavailable"); }
 }

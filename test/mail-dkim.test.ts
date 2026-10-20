@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import arcFixtures from "./fixtures/arc.json";
 import fixtures from "./fixtures/dkim.json";
 import { createDkimResolver, verifyIndependentDkim } from "../src/mail/dkim";
 import { readBoundedMail } from "../src/mail/raw";
@@ -9,9 +10,55 @@ const encode = (s: string) => new TextEncoder().encode(s);
 const resolver = vi.fn(async () => [[fixtures.record]]);
 const verify = (s: string, from = "member@example.com") => verifyIndependentDkim(encode(s), from, now, resolver);
 
+describe("verified Cloudflare ARC and separate instruction bar", () => {
+  const check = (raw: string, time = Date.parse(arcFixtures.now) + 60_000) => verifyIndependentDkim(encode(raw), "member@example.com", time, async () => [[arcFixtures.record]]);
+  it("accepts the pinned highest seal, AMS and aligned Cloudflare verdict", async () => {
+    expect(await check(arcFixtures.valid)).toMatchObject({ authentication: "pass", source: "cloudflare_arc", actionEligible: true,
+      results: { arc: { instance: 1, sealAndChain: "pass", messageSignature: "pass", pinnedSealer: true, authserv: true, alignedDmarc: true } } });
+  });
+  it.each(["untrusted", "untrustedHigher", "misaligned", "wrongAuthserv"] as const)("rejects sealed but unauthorized verdict %s", async name => {
+    const crypto = await verifyDkimInWorker(encode(arcFixtures[name]), { resolver: async () => [[arcFixtures.record]], strict: true, minBitLength: 1024, curTime: new Date(arcFixtures.now) });
+    expect(crypto.arcResult.status.result).toBe("pass");
+    expect((await check(arcFixtures[name])).authentication).toBe("unknown");
+  });
+  it("verifies the highest Cloudflare set in a genuine two-instance chain", async () => {
+    expect(await check(arcFixtures.validChain)).toMatchObject({ authentication: "pass", source: "cloudflare_arc",
+      results: { arc: { instance: 2, sealAndChain: "pass", sets: [{ i: "2", d: "email.cloudflare.net", cv: "pass" }, { i: "1", d: "attacker.example", cv: "none" }] } } });
+  });
+  it("does not fall back to a valid lower set under forged higher sets", async () => {
+    const higher = arcFixtures.valid.split("\r\nFrom:")[0]!.replace(/i=1/g, "i=2").replace(/cv=none/, "cv=pass");
+    expect((await check(higher + "\r\n" + arcFixtures.valid)).authentication).toBe("unknown");
+  });
+  it("records the actual AMS outcome even when the seal is forged", async () => {
+    const forged = arcFixtures.valid.replace(/b=([A-Za-z0-9])/, (_, c) => `b=${c === "A" ? "B" : "A"}`);
+    expect(await check(forged)).toMatchObject({ authentication: "unknown", results: { arc: {
+      sealAndChain: "fail", messageSignature: "pass", pinnedSealer: true,
+      sets: [{ i: "1", d: "email.cloudflare.net", s: "test", cv: "none" }],
+    } } });
+  });
+  it("rejects a forged seal, tampered verdict or body", async () => {
+    for (const raw of [arcFixtures.valid.replace(/b=([A-Za-z0-9])/, (_, c) => `b=${c === "A" ? "B" : "A"}`), arcFixtures.valid.replace("dmarc=pass", "dmarc=fail"), arcFixtures.valid.replace("Hello.", "Forged.")])
+      expect((await check(raw)).authentication).toBe("unknown");
+  });
+  it("admits 1024-bit M365-style DKIM without To coverage, but skips instructions", async () => {
+    expect(await check(arcFixtures.m365)).toMatchObject({ authentication: "pass", source: "aligned_dkim", actionEligible: false });
+  });
+  it("never upgrades incomplete DKIM with forged unsigned provider verdicts", async () => {
+    const forged = "Authentication-Results: mx.cloudflare.net; dmarc=pass header.from=example.com\r\nARC-Authentication-Results: i=1; mx.cloudflare.net; dmarc=pass header.from=example.com\r\n";
+    expect(await check(forged + arcFixtures.m365)).toMatchObject({ authentication: "pass", source: "aligned_dkim", actionEligible: false });
+  });
+  it("answers older signed mail without instruction authority", async () => {
+    expect(await check(arcFixtures.valid, Date.parse(arcFixtures.now) + 73 * 3600_000)).toMatchObject({ authentication: "pass", actionEligible: false });
+  });
+  it("never executes instructions authorized only by incomplete semantic coverage", async () => {
+    for (const raw of [fixtures.unsignedCc, "Reply-To: attacker@example.com\r\n" + fixtures.valid, "Content-Disposition: attachment\r\n" + fixtures.valid])
+      expect(await verify(raw)).toMatchObject({ authentication: "pass", actionEligible: false });
+  });
+});
+
 describe("independent strict DKIM proof in Workers", () => {
   it("verifies an original RSA signed fixture without sending mail", async () => {
-    expect(await verify(fixtures.valid)).toEqual({ authentication: "pass", source: "aligned_dkim",
+    expect(await verify(fixtures.valid)).toMatchObject({ authentication: "pass", source: "aligned_dkim",
       domain: "example.com", messageId: "<dkim-fixture@example.com>" });
     expect(resolver).toHaveBeenCalledWith("test._domainkey.example.com", "TXT");
   });
@@ -20,7 +67,7 @@ describe("independent strict DKIM proof in Workers", () => {
       async () => [[fixtures.edRecord]])).authentication).toBe("pass");
   });
   it("rejects otherwise cryptographically passing but incomplete signatures", async () => {
-    for (const raw of [fixtures.limitedFull, fixtures.unsignedCc]) {
+    for (const raw of [fixtures.limitedFull]) {
       const result = await verifyDkimInWorker(encode(raw), { resolver, sender: "member@example.com", curTime: now, strict: true, minBitLength: 2048 });
       expect(result.results[0]!.status.result).toBe("pass");
       expect((await verify(raw)).authentication).toBe("unknown");
@@ -30,7 +77,7 @@ describe("independent strict DKIM proof in Workers", () => {
     expect((await verifyIndependentDkim(encode(fixtures.valid), "member@example.com", now,
       async () => [[fixtures.record + "; t=y"]])).authentication).toBe("unknown");
   });
-  it.each(["unaligned", "expired", "future", "limited", "limitedFull", "unsignedCc"] as const)("fails closed on %s", async (name) => {
+  it.each(["unaligned", "expired", "future", "limited", "limitedFull"] as const)("fails closed on %s", async (name) => {
     expect((await verify(fixtures[name])).authentication).toBe("unknown");
   });
   it.each([
@@ -43,8 +90,6 @@ describe("independent strict DKIM proof in Workers", () => {
     ["multiple From", (s: string) => s.replace("Member <member@example.com>", "member@example.com, other@example.com")],
     ["group From", (s: string) => s.replace("Member <member@example.com>", "Authors: member@example.com;")],
     ["duplicate Cc", (s: string) => "Cc: attacker@example.com\r\n" + s],
-    ["unsigned Reply-To", (s: string) => "Reply-To: attacker@example.com\r\n" + s],
-    ["unsigned Content-Disposition", (s: string) => "Content-Disposition: attachment\r\n" + s],
     ["duplicate Message-ID", (s: string) => "Message-ID: <injected@example.com>\r\n" + s],
     ["LF framing", (s: string) => s.replaceAll("\r\n", "\n")],
     ["signature", (s: string) => s.replace(/b=([A-Za-z0-9])/, (_, c) => `b=${c === "A" ? "B" : "A"}`)],
@@ -90,7 +135,7 @@ describe("bounded trusted DKIM DoH", () => {
     const [url, options] = fetcher.mock.calls[0]! as unknown as [URL, RequestInit];
     expect(url.origin + url.pathname).toBe("https://cloudflare-dns.com/dns-query");
     expect(url.searchParams.get("name")).toBe(name);
-    expect(options.redirect).toBe("error");
+    expect(options.redirect).toBe("manual");
     expect(options.signal).toBeInstanceOf(AbortSignal);
   });
   it("rejects arbitrary query names and types without network access", async () => {

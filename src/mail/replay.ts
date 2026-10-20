@@ -76,13 +76,13 @@ export async function storeIndependentMailCandidate(env: Env,
       ON CONFLICT(key) DO NOTHING`).bind(key, pending, ...eligibility, ...legacy),
     env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:77:5:storeIndependentMailCandidate:f37f0c47*/ INSERT INTO inbound_mail
       (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id,
-       sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'admitted', NULL, ?, ?, ?, ?
+       sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied, auth_results)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'admitted', NULL, ?, ?, ?, ?, ?
       FROM meta r WHERE r.key = ? AND r.value = ? AND ${ELIGIBLE} AND NOT ${LEGACY}`)
       .bind(state.mail_id, target.tenant_id, target.project_id, target.recipient_id ?? null, identity.id,
         from, to, parsed.subject, proof.messageId, parsed.date, now, bytes.byteLength,
         parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0,
-        JSON.stringify(parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`))),
+        JSON.stringify(proof.recipientsAuthenticated !== true ? [] : parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`))), JSON.stringify({ independent: proof }),
         key, pending, ...eligibility, ...legacy),
     env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:87:5:storeIndependentMailCandidate:c4ea8469*/ UPDATE meta SET value = ? WHERE key = ? AND value = ?
       AND EXISTS (SELECT 1 FROM inbound_mail WHERE id = ? AND tenant_id = ? AND identity_id = ?

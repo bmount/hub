@@ -14,29 +14,29 @@ const mimeHeaders = ["Content-ID", "Content-Description", "Content-Language", "C
 
 describe("same-signature outer MIME header coverage", () => {
   it.each(["valid", "ed25519", "laterComplete"] as const)("accepts %s with fully signed mixed-case and folded MIME fields", async (name) => {
-    expect(await verify(fixtures[name])).toEqual({ authentication: "pass", source: "aligned_dkim",
+    expect(await verify(fixtures[name])).toMatchObject({ authentication: "pass", source: "aligned_dkim",
       domain: "example.com", messageId: "<mime-coverage@example.com>" });
   });
 
-  it("refuses cryptographically passing signatures with unsigned outer MIME metadata", async () => {
+  it("answers but refuses instructions with unsigned outer MIME metadata", async () => {
     const result = await verifyDkimInWorker(encode(fixtures.unsignedMime), options);
     expect(result.results[0]!.status.result).toBe("pass");
-    expect((await verify(fixtures.unsignedMime)).authentication).toBe("unknown");
+    expect(await verify(fixtures.unsignedMime)).toMatchObject({ authentication: "pass", actionEligible: false });
   });
 
   it("cannot union coverage of two independently passing aligned signatures", async () => {
     const result = await verifyDkimInWorker(encode(fixtures.splitCoverage), options);
     expect(result.results).toHaveLength(2);
     expect(result.results.map(r => r.status.result)).toEqual(["pass", "pass"]);
-    expect((await verify(fixtures.splitCoverage)).authentication).toBe("unknown");
+    expect(await verify(fixtures.splitCoverage)).toMatchObject({ authentication: "pass", actionEligible: false });
   });
 
-  it.each(mimeHeaders)("rejects unsigned injected %s even when the original signature still verifies", async (header) => {
+  it.each(mimeHeaders)("refuses instructions with unsigned injected %s even when the original signature still verifies", async (header) => {
     const bytes = encode(`${header}: attacker-controlled\r\n${base.valid}`);
     const lookup: DNSResolver = async () => [[base.record]];
     const result = await verifyDkimInWorker(bytes, { ...options, resolver: lookup });
     expect(result.results[0]!.status.result).toBe("pass");
-    expect((await verifyIndependentDkim(bytes, "member@example.com", now, lookup)).authentication).toBe("unknown");
+    expect(await verifyIndependentDkim(bytes, "member@example.com", now, lookup)).toMatchObject({ authentication: "pass", actionEligible: false });
   });
 
   it.each(mimeHeaders)("rejects duplicate %s instead of trusting a parser's occurrence choice", async (header) => {

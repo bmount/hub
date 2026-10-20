@@ -230,17 +230,17 @@ describe("independently authenticated ingress with member explanations", () => {
     expect(w.sent[0]!.subject).toBe("Your mail was received, but needs attention");
   });
 
-  it.each(["unsignedMime", "splitCoverage"] as const)("quarantines %s MIME proof without consent or wake", async (name) => {
+  it.each(["unsignedMime", "splitCoverage"] as const)("admits %s MIME proof for answering but not instructions", async (name) => {
     const w = await world();
     const m = message(mimeFixtures[name], w.bot.agent.identity.email);
     const lookup = async (q: string) => [[q.startsWith("ed.") ? mimeFixtures.edRecord : mimeFixtures.record]];
-    expect(await handleProjectMail(m, env, Date.parse(mimeFixtures.now) + 120_000, lookup)).toBe("quarantined");
-    expect(await env.HUB_DB.prepare("SELECT verdict, reason FROM inbound_mail").first()).toMatchObject({
-      verdict: "quarantined", reason: "authentication unknown: independent DKIM no acceptable aligned full-coverage signature",
-    });
+    expect(await handleProjectMail(m, env, Date.parse(mimeFixtures.now) + 120_000, lookup)).toBe("admitted");
+    const row = await env.HUB_DB.prepare("SELECT verdict, reason, auth_results FROM inbound_mail").first<{verdict: string; reason: null; auth_results: string}>();
+    expect(row).toMatchObject({ verdict: "admitted", reason: null });
+    expect(JSON.parse(row!.auth_results).independent.actionEligible).toBe(false);
     expect(m.reply).not.toHaveBeenCalled();
-    expect(await count("consent")).toBe(0);
-    expect((await page(w)).items).toHaveLength(0);
+    expect(await count("consent")).toBe(1);
+    expect((await page(w)).items).toHaveLength(1);
     expect(w.sent).toHaveLength(1);
   });
 

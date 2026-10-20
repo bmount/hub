@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { defineConfig, defineProject } from "vitest/config";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
 import { writeLocalTestWranglerConfig } from "./test/wrangler-test-config";
@@ -10,6 +11,17 @@ const workers = defineProject({
     cloudflareTest(async () => ({
       wrangler: { configPath: writeLocalTestWranglerConfig() },
       miniflare: {
+        outboundService: async (request: Request) => {
+          const url = new URL(request.url);
+          const name = url.searchParams.get("name");
+          if (url.origin === "https://cloudflare-dns.com" && name === "runtime._domainkey.runtime.example") {
+            const { record } = JSON.parse(readFileSync(path.join(import.meta.dirname, "test/fixtures/dkim.json"), "utf8"));
+            return Response.json({ Status: 0, Question: [{ name, type: 16 }],
+              Answer: [{ name, type: 16, data: record.match(/.{1,200}/g).map((s: string) => `"${s}"`).join(" ") }] },
+              { headers: { "content-type": "application/dns-json" } });
+          }
+          return fetch(request);
+        },
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations(path.join(import.meta.dirname, "migrations")),
           HUB_DOMAIN: "pimwell.test",
@@ -44,7 +56,7 @@ const workers = defineProject({
   test: {
     // mailauth's transitive tldts uses extensionless ES imports. Bundle the
     // verifier entry point as in a Wrangler release, keeping native crypto.
-    deps: { optimizer: { ssr: { enabled: true, include: ["mailauth/lib/dkim/dkim-verifier.js"],
+    deps: { optimizer: { ssr: { enabled: true, include: ["mailauth/lib/dkim/dkim-verifier.js", "mailauth/lib/arc/index.js"],
       rolldownOptions: { external: [/^node:/, "buffer", "string_decoder"] } } } },
     // Only this checkout's tests: worktrees under .claude/worktrees hold other copies of test/.
     name: "workers",

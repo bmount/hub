@@ -52,7 +52,7 @@ export async function newSenderText(bytes: ArrayBuffer, recipient?: string): Pro
 }
 
 async function sourceContext(env: Env, source: WelcomeSource, proof: DkimProof, now: number): Promise<Ctx | null> {
-  if (proof.authentication !== "pass" || proof.source !== "aligned_dkim") return null;
+  if (proof.authentication !== "pass") return null;
   const m = await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Factions.ts:56:19:sourceContext:10f4b7a3*/ SELECT m.to_address, m.from_email, m.project_id FROM inbound_mail m
     WHERE m.id = ? AND m.tenant_id = ? AND m.identity_id = ? AND m.message_id = ?
     AND m.verdict = 'admitted' AND m.reason IS NULL AND m.released_by IS NULL AND m.recipient_id IS NULL AND m.project_id IS NOT NULL`)
@@ -94,6 +94,10 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
   const event = (summary: string) => recordEvent(env.HUB_DB, {tenant_id: source.tenant_id, identity_id: source.identity_id, session_id: null,
     kind: "mail.action", target_kind: "inbound_mail", target_id: source.mail_id, summary: summary.slice(0,300)}, now);
   try {
+    const canAct = proof.authentication === "pass" && proof.actionEligible === true;
+    if (!canAct) {
+      refused.push(proof.authentication === "pass" ? proof.actionReason ?? "Authentication does not authorize instructions." : "Authentication does not authorize instructions.");
+    }
     // Retention precedes planning. Report its actual effects even if the model
     // omits an attachment action or is unavailable; never claim it did nothing.
     const retained = await ctx.db.prepare("/*perf-site:src%2Fmail%2Factions.ts:98:28:runMailActions:fb19b830*/ SELECT attachments FROM inbound_mail WHERE id = ?").bind(source.mail_id).first<string>("attachments");
@@ -109,13 +113,14 @@ export async function runMailActions(env: Env, source: WelcomeSource, proof: Dki
       const answer = await ask(env, PROPOSE_PURPOSE, JSON.stringify({project: ctx.mcpProject!.slug, new_text: ownText, contacts_evidence: contacts,
         attachments_evidence: (JSON.parse(attachments ?? "[]") as Array<Record<string, unknown>>).map(p => ({filename: p.filename, file_path: p.file_path, file_status: p.file_status, file_reason: p.file_reason})), tools: [...verbs.map(v => ({name: v.name, description: v.summary, input: v.mcp!.input})),
           {name: "file.attach", input: {path: "retained attachment file_path"}}, {name: "document.share", input: {path: "document path", to: "member email", subject: "subject"}}]}),
-        {tenant_id: source.tenant_id, identity_id: source.identity_id, project_id: ctx.mcpProject!.id, instructions, maxOutputTokens: 6000});
+        {tenant_id: source.tenant_id, identity_id: source.identity_id, project_id: ctx.mcpProject!.id,
+          instructions: canAct ? instructions : `${instructions}\nAuthentication permits answering only: return actions=[] and explain that instructions were skipped. Do not claim any actions were performed.`, maxOutputTokens: 6000});
       const plan: unknown = JSON.parse(answer.text.replace(/^\s*```(?:json)?\s*/, "").replace(/\s*```\s*$/, ""));
       if (!object(plan) || !Array.isArray(plan.actions) || plan.actions.length > 20 || !Array.isArray(plan.refused) || plan.refused.length > 20) throw new ActionRefused("Invalid action plan");
       if (typeof plan.answer === "string") questionAnswer = plan.answer.slice(0, 12000);
       refused.push(...plan.refused.filter((x): x is string => typeof x === "string").map(x => x.slice(0,500)));
       for (const reason of refused) await event(`Refused request: ${reason}`);
-      actions = plan.actions as Action[];
+      actions = canAct ? plan.actions as Action[] : [];
     }
     const aliases = new Map<string, string>();
     for (const a of actions) {

@@ -89,7 +89,7 @@ export function createDkimResolver(fetcher: typeof fetch = fetch): DNSResolver {
         url.searchParams.set("name", current); url.searchParams.set("type", "TXT");
         const load = async () => {
           const response = await fetcher(url, { headers: { accept: "application/dns-json" },
-            signal: controller.signal, redirect: "error" });
+            signal: controller.signal, redirect: "manual" });
           if (controller.signal.aborted || !response.ok
             || !response.headers.get("content-type")?.includes("application/dns-json")) {
             // Dispose even a late response without trusting/consuming its key.

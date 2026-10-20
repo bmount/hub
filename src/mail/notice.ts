@@ -7,7 +7,7 @@ import { sha256Hex } from "../ids";
 import { sendMail } from "./send";
 import type { MailTarget } from "./projectMail";
 
-export async function answerAdmittedMail(env: Env, target: MailTarget, from: string, to: string, mailId: string, ownText: string, now: number, messageId: string): Promise<void> {
+export async function answerAdmittedMail(env: Env, target: MailTarget, from: string, to: string, mailId: string, ownText: string, now: number, messageId: string, skippedReason?: string): Promise<void> {
   const key = `mail_conversation:v1:${target.tenant_id}:${mailId}`;
   const reserved = await env.HUB_DB.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING")
     .bind(key, JSON.stringify({mail_id: mailId, status: "reserved"})).run();
@@ -22,7 +22,7 @@ export async function answerAdmittedMail(env: Env, target: MailTarget, from: str
       answer = result.text.slice(0, 12000);
     } catch { answer = "We could not prepare an answer right now. Please use the web to follow up."; }
   }
-  await memberMailNotice(env, target, from, to, mailId, "The message was admitted to the mailbox. This address does not automatically execute instructions from mail; confirm requested actions on the web.", now, mailId, answer, messageId);
+  await memberMailNotice(env, target, from, to, mailId, `The message was admitted to the mailbox. This address does not automatically execute instructions from mail; confirm requested actions on the web.${skippedReason ? ` ${skippedReason}` : ""}`, now, mailId, answer, messageId);
 }
 
 /** A receipt is not authentication. Never quote unverified content or send to a header Reply-To. */

@@ -109,7 +109,7 @@ describe("atomic independent-proof storage candidate", () => {
     expect(await rows()).toHaveLength(1);
   });
 
-  it.each([fixtures.raw, fixtures.expired, fixtures.unsignedCc, fixtures.limitedFull,
+  it.each([fixtures.raw, fixtures.expired, fixtures.limitedFull,
     fixtures.valid.replace("Original body.", "Altered body."), "Message-ID: <duplicate@example.com>\r\n" + fixtures.valid,
     "From: member@example.com\r\n" + fixtures.valid])("does not reserve unknown proof %#", async (raw) => {
     await world();
@@ -118,6 +118,15 @@ describe("atomic independent-proof storage candidate", () => {
     expect(await states()).toHaveLength(0);
   });
 
+  it("never grants copied-member permissions from unsigned Cc on admitted answering-only mail", async () => {
+    await world();
+    const result = await store(fixtures.unsignedCc.replace("copied@example.com", "attacker@example.com"));
+    expect(result.status).toBe("stored");
+    if (result.status !== "stored") throw new Error("expected stored proof");
+    expect(result.proof).toMatchObject({ actionEligible: false, recipientsAuthenticated: false });
+    const copied = await env.HUB_DB.prepare("SELECT copied FROM inbound_mail WHERE id = ?").bind(result.mail_id).first<string>("copied");
+    expect(JSON.parse(copied!)).toEqual([]);
+  });
   it("cannot reuse a member signature for a different envelope identity", async () => {
     const w = await world();
     await seedHuman("other@example.com", { memberships: [{ tenant_id: w.tenant.id, role: "member" }] });

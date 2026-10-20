@@ -15,12 +15,28 @@ const proof = (lookup: ReturnType<typeof createDkimResolver>, raw = fixtures.val
   new TextEncoder().encode(raw), "member@example.com", Date.parse(fixtures.now) + 120_000, lookup);
 
 describe("trusted bounded DKIM key delegation", () => {
+  it("uses workerd's real fetch with supported redirect policy and refuses redirects", async () => {
+    // The pool's outbound service supplies only this reserved DNS response;
+    // RequestInit still passes through the actual workerd fetch implementation.
+    expect(await createDkimResolver()("runtime._domainkey.runtime.example", "TXT"))
+      .toEqual([fixtures.record.match(/.{1,200}/g)]);
+    const fetcher: typeof fetch = async (url, options) => {
+      // Exercise workerd's native RequestInit validation, not a JS-only stub.
+      new Request(url, options);
+      return response(name, [key(name)]);
+    };
+    expect((await proof(createDkimResolver(fetcher))).authentication).toBe("pass");
+    await expect(createDkimResolver(async (url, options) => {
+      new Request(url, options);
+      return new Response(null, { status: 302, headers: { location: "https://evil.example/key" } });
+    })(name, "TXT")).rejects.toThrow("refused");
+  });
   it.each([false, true])("verifies original signed mail through provider-style CNAME (bundled=%s)", async (bundled) => {
     const fetcher = vi.fn(async (url: RequestInfo | URL, options?: RequestInit) => {
       const u = new URL(String(url));
       expect(u.origin + u.pathname).toBe("https://cloudflare-dns.com/dns-query");
       expect(u.searchParams.get("type")).toBe("TXT");
-      expect(options?.redirect).toBe("error");
+      expect(options?.redirect).toBe("manual");
       const q = u.searchParams.get("name")!;
       if (q === name) return response(name.toUpperCase() + ".", bundled
         ? [key(target.toUpperCase() + "."), alias(name, target.toUpperCase() + ".")] : [alias(name, target + ".")]);

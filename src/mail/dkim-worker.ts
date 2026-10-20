@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { finished } from "node:stream/promises";
 import { DkimVerifier, type PreparedSignature } from "mailauth/lib/dkim/dkim-verifier.js";
+import { arc } from "mailauth/lib/arc/index.js";
 import type { DKIMVerifyOptions } from "mailauth";
 
 /** mailauth 7.1.1 uses Node's rsa-sha256 digest alias in crypto.verify().
@@ -26,5 +27,11 @@ export async function verifyDkimInWorker(bytes: Uint8Array, options: DKIMVerifyO
   const complete = finished(verifier);
   verifier.end(Buffer.from(bytes));
   await complete;
-  return { fromFields: verifier.fromFields, headerFrom: verifier.headerFrom, results: verifier.results };
+  const sets = (verifier.arc.chain || []).map(entry => ({ i: entry.i,
+    cv: entry["arc-seal"].parsed.cv?.value, d: entry["arc-seal"].parsed.d?.value,
+    s: entry["arc-seal"].parsed.s?.value }));
+  const highestSignature = verifier.arc.lastEntry?.messageSignature;
+  const arcResult = await arc(verifier.arc, options);
+  return { fromFields: verifier.fromFields, headerFrom: verifier.headerFrom, results: verifier.results,
+    arcResult, sets, highestSignature };
 }

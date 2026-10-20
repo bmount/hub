@@ -158,7 +158,7 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
         else await memberMailNotice(env, target, from, message.to, result.mail_id, "The message was admitted, but its original recipients do not match this address, so its instructions were not accepted.", now, result.mail_id);
       } else {
         const ownText = await newSenderText(bytes.buffer, message.to);
-        await answerAdmittedMail(env, target, from, message.to, result.mail_id, ownText ?? "", now, result.proof.messageId);
+        await answerAdmittedMail(env, target, from, message.to, result.mail_id, ownText ?? "", now, result.proof.messageId, result.proof.actionReason);
       }
     } catch { console.log(JSON.stringify({ msg: "mail optional reply unavailable" })); }
     return "admitted";

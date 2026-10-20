@@ -43,8 +43,8 @@ trusted verdict either.
 
 Organization, project, and agent mail requires an active human member/root,
 rate and actual-byte size checks, **exactly one outer From mailbox matching the
-envelope sender**, and strict independent cryptographic DKIM proof on the
-original bytes. Atomic tenant/sender/exact-mailbox/Message-ID replay storage and
+envelope sender**, and strict independent cryptographic aligned DKIM proof or
+verified Cloudflare ARC on the original bytes. Atomic tenant/sender/exact-mailbox/Message-ID replay storage and
 scoped audit precede admission. Duplicate,
 multiple, missing, or grouped From headers stay quarantined without new consent;
 the member receives an explanation without granting authentication authority. Display names and address case are supported through
@@ -52,7 +52,9 @@ PostalMime's address parser. Inner forwarded From headers are only evidence.
 
 Unknown proof stays admin-only, never wakes an agent, and does not gain new
 consent. Neither pre-existing consent nor welcome success authenticates mail.
-No Authentication-Results, ARC, or custom header grants admission. Optional
+Unsigned Authentication-Results, ARC-Authentication-Results and custom headers
+never grant admission. Only the cryptographically verified Cloudflare ARC verdict
+described below is trusted. Optional
 welcome failure does not downgrade verified evidence. `login@`/`signup@` retain
 successful Cloudflare reply proof; reply failure never implies DMARC failure.
 
@@ -118,14 +120,17 @@ requires rechecking that private adapter interface and signed fixtures.
 Policy requires exact signing-domain alignment (not relaxed organizational
 alignment), exactly one outer From bound to the expected envelope, agreement
 between address parsers, an unambiguous Message-ID, non-testing keys, RSA keys
-of at least 2048 bits, valid signature time and no `l=` body limit—even one
+of at least 1024 bits, valid signature time and no `l=` body limit—even one
 covering the currently complete body. Each present semantic header affecting
 content, copied-mail permissions, reply targets or threading must be covered
-by the **same** passing signature. This includes **every outer `Content-*`
+by the **same** passing signature for instruction authority. Aligned DKIM with
+less coverage can authenticate admission and answering, but not instructions;
+unsigned To/Cc never grants copied-mail permissions. This includes **every outer `Content-*`
 header**, not only Content-Type, Transfer-Encoding and Disposition: Content-ID,
 Content-Description, Content-Language and future MIME extensions cannot carry
 unsigned semantic authority. Fully signed mixed-case/folded MIME fields work;
-unsigned extensions and duplicate semantic headers are refused. Inner MIME part
+unsigned extensions prevent instruction authority; duplicate semantic headers
+are refused for admission. Inner MIME part
 headers are protected by the full signed body hash, not separately by `h=`.
 Coverage from different passing signatures is never combined; a later complete
 signature may pass even if an earlier signature lacks coverage.
@@ -213,13 +218,38 @@ replay storage: a valid signature alone is not enough to bypass conflicting,
 legacy or pending state. See [replay](mail-replay.md) for storage, audit and
 permanent agent-wake dedup, including lost-response reconciliation.
 
-This is limited domain-aligned DKIM coverage, **not universal DMARC**, SPF or
-ARC forwarding support. Failure/absence/unsupported formats remain unknown.
+### Verified Cloudflare ARC
+
+The strict mailauth verifier validates the complete ARC chain and highest-instance
+ARC-Message-Signature against original bytes. No lower passing set substitutes
+for an invalid or forged higher set. The highest ARC-Seal signing domain must be
+exactly `email.cloudflare.net`; selectors are resolved normally, not pinned.
+Its sealed ARC-Authentication-Results must name exactly `mx.cloudflare.net` and
+report `dmarc=pass header.from=<outer From domain>`. A non-Cloudflare valid seal,
+unsigned verdict, mismatched domain or authserv-id cannot authorize admission.
+The AMS must be non-testing, have valid time, cover From and Message-ID and
+have no body-length limit. Instruction authority also requires signed Date and
+present To/Cc coverage, protecting against envelope redirection.
+
+Verified Cloudflare ARC or full-coverage aligned DKIM permits instructions only
+when the signed Date is within 72 hours (at most five minutes into the future).
+Older authenticated mail can be answered, with a reason explaining skipped
+instructions. Atomic Message-ID replay protection remains mandatory. Agent and
+organization mailbox replies remain no-tool answers; project actions enforce
+the instruction bar separately. Stored auth_results includes the source,
+instruction eligibility, ARC instances, cv/d/s, chain/seal and AMS outcomes,
+pinned-sealer, authserv-id and aligned-DMARC checks. Quarantine exposes the same
+evidence, including unverified seal metadata for malformed chains.
+
+This is limited domain-aligned DKIM plus pinned Cloudflare ARC support,
+**not universal DMARC**, SPF or arbitrary ARC forwarding trust.
+Failure/absence/unsupported formats remain unknown.
 
 ## Verified project-mail actions
 
 Only mail to an active project address, admitted through **all** existing active-human
-member/root, strict aligned-DKIM, rate and atomic replay gates, can authorize actions.
+member/root, verified Cloudflare ARC or full-coverage aligned-DKIM, recent signed
+Date, rate and atomic replay gates, can authorize actions.
 The signed outer To/Cc must name the exact addressed project mailbox: DKIM authenticates
 the author, not the delivery envelope, so redirecting signed mail sent elsewhere gains
 no action authority or summary reply. Evidence admission is unchanged.
@@ -266,7 +296,7 @@ automatically released or relabeled. No D1 migration, real tenant/membership or
 credential changes are performed by deployment. The inbox adds a non-destructive
 DO-local mail dedup table through its existing initialization path.
 
-Proof remains deliberately limited: no universal DMARC, SPF/ARC forwarding or
+Proof remains deliberately limited: no universal DMARC, SPF/arbitrary ARC forwarding or
 fresh-delivery guarantee. DNS chains beyond the bounded limits, escaped DNS names,
 non-ASCII TXT data and other unsupported proof remain accurately unknown and
 fail-closed. Real provider compatibility and external

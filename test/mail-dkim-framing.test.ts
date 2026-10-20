@@ -12,7 +12,7 @@ const options = { resolver, sender: "member@example.com", curTime: new Date(now)
 
 describe("strict outer header byte framing", () => {
   it.each(["valid", "ed25519", "bodyControls"] as const)("accepts %s without confusing HTAB/UTF-8/folding/body bytes with controls", async (name) => {
-    expect(await verify(fixtures[name])).toEqual({ authentication: "pass", source: "aligned_dkim",
+    expect(await verify(fixtures[name])).toMatchObject({ authentication: "pass", source: "aligned_dkim",
       domain: "example.com", messageId: "<framing@example.com>" });
   });
 

@@ -1,3 +1,4 @@
+import arcFixtures from "./fixtures/arc.json";
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fixtures from "./fixtures/mail-ingress.json";
@@ -234,6 +235,31 @@ const action = (tool: string, input: Record<string, unknown>, as?: string) => ({
 const count = (table: string) => env.HUB_DB.prepare(`SELECT COUNT(*) n FROM ${table} WHERE tenant_id != 'perf-synthetic-tenant'`).first<number>("n");
 
 describe("verified member project-mail actions", () => {
+  it("executes fresh project instructions authenticated by verified Cloudflare ARC and deduplicates replay", async () => {
+    const w = await actionWorld();
+    plan([action("person.upsert", {name: "Jane Doe"})]);
+    const receive = () => handleProjectMail(fake("member@example.com", "actiontest.space@pimwell.test", arcFixtures.sealedActions).message,
+      env, Date.parse(arcFixtures.now) + 60_000, async () => [[arcFixtures.record]]);
+    expect(await receive()).toBe("admitted");
+    expect(await receive()).toBe("admitted");
+    expect(await count("contact_entity")).toBe(1);
+    expect(w.sent).toHaveLength(1);
+    const evidence = await env.HUB_DB.prepare("SELECT auth_results FROM inbound_mail").first<string>("auth_results");
+    expect(JSON.parse(evidence!).independent).toMatchObject({ source: "cloudflare_arc", actionEligible: true });
+  });
+  it.each(["old", "unsigned-semantic"])("answers %s mail but never executes a model's proposed actions", async kind => {
+    const w = await actionWorld();
+    const ask = vi.spyOn(model, "ask").mockResolvedValue({text: JSON.stringify({actions: [action("person.upsert", {name: "Jane Doe"})], refused: [], answer: "Which products and dates?"}), purpose: "reasoning", provider: "test", model: "fixed", key_fingerprint: "test", ms: 1});
+    const raw = kind === "old" ? fixtures.actions : "Reply-To: attacker@example.org\r\n" + fixtures.actions;
+    const time = actionNow + (kind === "old" ? 73 * 3600_000 : 0);
+    expect(await handleProjectMail(fake("member@example.com", "actiontest.space@pimwell.test", raw).message, env, time, async () => [[fixtures.record]])).toBe("admitted");
+    expect(await count("contact_entity")).toBe(0);
+    expect(w.sent).toHaveLength(1);
+    expect(w.sent[0]!.text).toContain("instructions were skipped");
+    expect(w.sent[0]!.text).toContain("Which products and dates?");
+    expect(w.sent[0]!.to).toBe("member@example.com");
+    expect(ask.mock.calls[0]![3]?.instructions).toContain("Authentication permits answering only");
+  });
   it("answers admitted agent-mail questions without granting instruction authority", async () => {
     const w = await world();
     const agent = await seedAgent(w.org, w.member.identity, "scout");
