@@ -29,14 +29,16 @@ export function addresses(v: unknown, name: string): string[] {
   return list;
 }
 
-/** Every member-started send uses signed-up human membership, never contact history. */
+/** Anyone who may write to this organization may be written to: a signed-up human who is a member here, or root.
+ * Never contact history, and never anyone else. */
 export async function memberRecipientRefusals(ctx: Ctx, recipients: string[]): Promise<string[]> {
   const out: string[] = [];
   for (const r of recipients) {
-    const member = await ctx.db.prepare(`SELECT 1 FROM identity i JOIN membership m ON m.identity_id = i.id
+    const member = await ctx.db.prepare(`SELECT 1 FROM identity i
       WHERE (lower(i.email) = ?1 OR EXISTS (SELECT 1 FROM identity_email ie WHERE ie.identity_id = i.id AND lower(ie.email) = ?1 AND ie.confirmed_at IS NOT NULL))
-      AND i.kind = 'human' AND i.state = 'active' AND m.tenant_id = ?2 AND m.state = 'active' LIMIT 1`).bind(r, ctx.tenant!.id).first();
-    if (!member) out.push(`${r} is not a member of this organization with an active human membership; an administrator must set up membership for this exact address through an accepted invitation or verified sign-in. Root authority or incoming mail admission does not replace membership`);
+      AND i.kind = 'human' AND i.state = 'active'
+      AND (i.is_root = 1 OR EXISTS (SELECT 1 FROM membership m WHERE m.identity_id = i.id AND m.tenant_id = ?2 AND m.state = 'active')) LIMIT 1`).bind(r, ctx.tenant!.id).first();
+    if (!member) out.push(`${r} is not a signed-up member of this organization; they need to accept an invitation or sign in with this address`);
   }
   return out;
 }

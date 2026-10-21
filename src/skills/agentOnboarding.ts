@@ -59,7 +59,7 @@ At each connected session, check \`attention_list\`. Read changed guides only wi
   - \`mail_send\` takes \`to\` and \`cc\`, up to 10 addresses in all, and every one must qualify.
 - If it's not working:
   - **"sending mail is off"**: an admin turns it on in Pimwell, under Mail → Turn sending on. Ask your person.
-  - **"not a member of this organization with an active human membership"**: the reason names who didn't qualify. They must accept an invitation or complete verified sign-in and have active membership; linked addresses must be confirmed. People outside the organization can't be reached.
+  - **"not a signed-up member of this organization"**: the reason names who didn't qualify. They must accept an invitation or sign in with that address (a linked address must be confirmed). People outside the organization can't be reached.
   - **Nothing arrives**: the sender must be a member writing from the address Pimwell knows. Held mail waits for an admin in Pimwell's Mail list, marked held.
 - Never send mail through another service to get around these rules, and never put a secret in mail.
 

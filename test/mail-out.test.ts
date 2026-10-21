@@ -127,7 +127,7 @@ describe("outbound mail", () => {
     expect((await w.call(w.bot, "mail.send", { to: "ada@example.com", subject: "New", body: "Hi" })).status).toBe(200);
   });
 
-  it.each(["absent", "archived", "other tenant"])("admits root mail but explains agent refusal for %s membership", async (state) => {
+  it.each(["absent", "archived", "other tenant"])("admits root mail and lets agents answer root with %s membership", async (state) => {
     const w = await world();
     await w.call(w.ada, "mail.sending", { on: true });
     const pat = (await env.HUB_DB.prepare("SELECT id FROM identity WHERE email = 'pat@example.com'").first<{ id: string }>())!;
@@ -147,14 +147,10 @@ describe("outbound mail", () => {
       ["mail.send", { to: "pat@example.com", subject: "Follow-up", body: "Thanks" }],
     ] as const) {
       const r = await w.call(w.bot, verb, input);
-      expect(r.status).toBe(403);
-      expect(r.detail).toContain("an administrator must set up membership for this exact address");
-      expect(r.detail).toContain("Root authority or incoming mail admission does not replace membership");
+      expect(r.status, r.detail).toBe(200);
     }
-    expect(w.sent).toHaveLength(0);
-    expect((await env.HUB_DB.prepare("SELECT status, error FROM outbound_mail").all()).results).toEqual([
-      { status: "refused", error: "recipient_policy" }, { status: "refused", error: "recipient_policy" },
-    ]);
+    expect(w.sent.map(m => m.to)).toEqual(["pat@example.com", "pat@example.com"]);
+    expect((await env.HUB_DB.prepare("SELECT status FROM outbound_mail").all()).results).toEqual([{ status: "sent" }, { status: "sent" }]);
   });
 
   it("allows a root recipient with active explicit membership but still honors withdrawal", async () => {
@@ -271,7 +267,7 @@ describe("outbound mail", () => {
     expect((await w.call(w.bot, "mail.send", { to: "kim@example.com", subject: "Plan", body: "Kim, here is the plan." })).status).toBe(200);
     const outsider = await w.call(w.bot, "mail.send", { to: "outside@example.org", subject: "Plan", body: "x" });
     expect(outsider.status).toBe(403);
-    expect(outsider.detail).toContain("not a member");
+    expect(outsider.detail).toContain("not a signed-up member");
     const lee = await w.call(w.bot, "mail.send", { to: "lee@example.com", subject: "Plan", body: "x" });
     expect(lee.status).toBe(200);
     // Several recipients: all must qualify; one message, every recipient in its headers.
