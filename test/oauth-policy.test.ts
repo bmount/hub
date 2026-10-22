@@ -39,6 +39,13 @@ describe("redirect allowlist", () => {
     expect(await redirectAllowed(env.HUB_DB, "https://claude.ai/api/mcp/auth_callback")).not.toBeNull();
   });
 
+  it("allows ChatGPT's stable connector callback and nothing else on chatgpt.com", async () => {
+    const p = await loadRedirectPatterns(env.HUB_DB);
+    expect(matchRedirect(p, "https://chatgpt.com/connector_platform_oauth_redirect")).toEqual({ host: "chatgpt.com", label: "ChatGPT", loopback: false });
+    for (const bad of ["https://chatgpt.com/connector/oauth/abc123", "https://chatgpt.com/connector_platform_oauth_redirect/", "http://chatgpt.com/connector_platform_oauth_redirect",
+      "https://chatgpt.com.evil.example/connector_platform_oauth_redirect", "https://chatgpt.com/connector_platform_oauth_redirect?x=1"]) expect({ bad, got: matchRedirect(p, bad) }).toEqual({ bad, got: null });
+  });
+
   it("rejects everything else", async () => {
     const p = await loadRedirectPatterns(env.HUB_DB);
     for (const bad of [

@@ -6,6 +6,7 @@ import { APEX, CLAUDE, LOOPBACK, register } from "./oauth-helpers";
 const get = (url: string) => SELF.fetch(url);
 const anonymousMcp = (slug: string, headers: Record<string, string> = {}) =>
   SELF.fetch(`https://${slug}.pimwell.test/mcp`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: "{}" });
+const CHATGPT = "https://chatgpt.com/connector_platform_oauth_redirect";
 const good = (redirect = LOOPBACK) => ({ client_name: "Claude Code", redirect_uris: [redirect], token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] });
 
 describe("discovery", () => {
@@ -63,7 +64,7 @@ describe("discovery", () => {
 
 describe("dynamic client registration", () => {
   it("registers public clients with allowed redirect URIs and records it", async () => {
-    for (const redirect of [LOOPBACK, CLAUDE]) {
+    for (const redirect of [LOOPBACK, CLAUDE, CHATGPT]) {
       const res = await register(good(redirect));
       expect(res.status).toBe(201);
       const body = (await res.json()) as any;
@@ -72,7 +73,7 @@ describe("dynamic client registration", () => {
       expect(body.client_secret).toBeUndefined();
     }
     const ev = await env.HUB_DB.prepare("SELECT summary FROM event WHERE kind = 'oauth.client.register'").all<{ summary: string }>();
-    expect(ev.results.map((r) => r.summary)).toEqual(['Registered "Claude Code"', 'Registered "Claude Code"']);
+    expect(ev.results.map((r) => r.summary)).toEqual(['Registered "Claude Code"', 'Registered "Claude Code"', 'Registered "Claude Code"']);
   });
 
   it("rejects redirect URIs off the allowlist, confidential clients, and junk", async () => {
