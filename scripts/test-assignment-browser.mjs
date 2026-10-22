@@ -1,0 +1,134 @@
+#!/usr/bin/env node
+// Entirely disposable local acceptance: real bundled Worker, D1/DOs, browser and
+// synthetic sessions. No remote services, production cookies or credential files.
+import { execFileSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdtemp, readdir, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import { chromium, expect } from '@playwright/test';
+
+const root = path.resolve(import.meta.dirname, '..');
+const temp = await mkdtemp(path.join(tmpdir(), 'pimwell-assignment-browser-'));
+const artifacts = path.resolve(process.env.ASSIGNMENT_BROWSER_ARTIFACTS || await mkdtemp(path.join(tmpdir(), 'pimwell-assignment-screenshots-')));
+await mkdir(artifacts, { recursive: true });
+const host = 'acme.pimwell.test';
+const base = `https://${host}`;
+let mf, browser;
+let counter = 0;
+const id = () => String(++counter).padStart(26, '0');
+const now = Date.now();
+try {
+  execFileSync(path.join(root, 'node_modules/.bin/wrangler'), ['deploy', '--dry-run', '--outdir', path.join(temp, 'build')], {
+    cwd: root, stdio: 'pipe', env: { ...process.env, WRANGLER_SEND_METRICS: 'false' },
+  });
+  // Miniflare's HTTP bridge rewrites Host to loopback. Recover the synthetic
+  // browser host only in this temporary test entry; auth/verbs remain unchanged.
+  await writeFile(path.join(temp, 'build/browser-entry.js'), `
+    import worker from './index.js';
+    export { Conversation, Inbox } from './index.js';
+    export default { fetch(request, env, ctx) {
+      const headers = new Headers(request.headers);
+      headers.set('host', headers.get('x-local-browser-host') || 'acme.pimwell.test');
+      headers.delete('x-local-browser-host');
+      const url = new URL(request.url); url.host = headers.get('host'); url.protocol = 'https:';
+      return worker.fetch(new Request(url, new Request(request, { headers })), env, ctx);
+    }};
+  `);
+  mf = new Miniflare(convertV4MiniflareOptions({ workers: [{
+    name: 'chat-browser-local', modulesRoot: path.join(temp, 'build'), modules: [
+      { type: 'ESModule', path: path.join(temp, 'build/browser-entry.js') },
+      { type: 'ESModule', path: path.join(temp, 'build/index.js') },
+      ...(await readdir(path.join(temp, 'build'))).filter(f => (f.endsWith('.html') || f.endsWith(".txt"))).map(f => ({ type: 'Text', path: path.join(temp, 'build', f) })),
+    ],
+    compatibilityDate: '2026-09-01', compatibilityFlags: ['nodejs_compat'],
+    bindings: { HUB_DOMAIN: 'pimwell.test', ARDI_REPO_CREATE: 'off' },
+    r2Buckets: ['GIT_PUSH_STAGING'], d1Databases: ['HUB_DB'], kvNamespaces: ['RATE', 'OAUTH_KV'],
+    durableObjects: { CONVERSATION: { className: 'Conversation', useSQLite: true }, INBOX: { className: 'Inbox', useSQLite: true } },
+    serviceBindings: { ARDI: () => new Response('Local acceptance denies external services', { status: 503 }) },
+    outboundService: () => new Response('Local acceptance denies network access', { status: 503 }),
+    // No persistence directory: everything, including sessions and memberships,
+    // is in this process's temporary Miniflare storage and disposed in finally.
+  }] }));
+  const db = await mf.getD1Database('HUB_DB');
+  for (const file of (await readdir(path.join(root, 'migrations'))).filter(f => f.endsWith('.sql')).sort()) {
+    // Wrangler's SQL parser handles multiline statements and comments.
+    const { unstable_splitSqlQuery } = await import('wrangler');
+    for (const sql of unstable_splitSqlQuery(await readFile(path.join(root, 'migrations', file), 'utf8'))) await db.prepare(sql).run();
+  }
+  const tenant = id();
+  const otherTenant = id();
+  for (const [tid, slug] of [[tenant, 'acme'], [otherTenant, 'other']]) {
+    await db.prepare('INSERT INTO tenant (id,slug,display_name,created_at) VALUES (?,?,?,?)').bind(tid, slug, slug.toUpperCase(), now).run();
+  }
+  async function human(name, tid, role) {
+    const identity = id();
+    const token = randomBytes(32).toString('hex'); // local-only, never logged
+    await db.prepare('INSERT INTO identity (id,kind,display_name,email,created_at) VALUES (?,\'human\',?,?,?)').bind(identity, name, `${name}@example.test`, now).run();
+    await db.prepare('INSERT INTO membership (id,identity_id,tenant_id,role,created_at) VALUES (?,?,?,?,?)').bind(id(), identity, tid, role, now).run();
+    await db.prepare('INSERT INTO session (id,identity_id,kind,token_hash,created_at,last_seen_at,expires_at,last_proof_at) VALUES (?,?,\'browser\',?,?,?,?,?)')
+      .bind(id(), identity, createHash('sha256').update(token).digest('hex'), now, now, now + 3600000, now).run();
+    return token;
+  }
+  const member = await human('dev', tenant, 'admin');
+  const reader = await human('reader', tenant, 'reader');
+  const peer = await human('peer', tenant, 'member');
+  const outsider = await human('outsider', otherTenant, 'admin');
+  async function verb(token, name, input, hostname = host) {
+    const res = await mf.dispatchFetch(`https://${hostname}/api/${name}`, { method: 'POST',
+      headers: { 'x-local-browser-host': hostname, cookie: `pmw_session=${token}`, origin: `https://${hostname}`, 'content-type': 'application/json' }, body: JSON.stringify(input) });
+    expect(res.status, name).toBe(200);
+    return (await res.json()).result;
+  }
+
+
+  await verb(member, 'project.create', {slug:'assignment',kind:'workspace',display_name:'Assignment'});
+  await verb(member, 'agent.create', {slug:'helper',display_name:'Helper'});
+  const bot = (await db.prepare("SELECT email FROM identity WHERE kind = 'agent'").first()).email;
+  browser = await chromium.launch({headless:true});
+  for (const width of [1440, 390, 320]) {
+    for (const javaScriptEnabled of [true, false]) {
+      const ctx = await browser.newContext({viewport:{width,height:900},javaScriptEnabled,serviceWorkers:'block'});
+      await ctx.addCookies([{name:'pmw_session',value:member,domain:host,path:'/',secure:true,httpOnly:true,sameSite:'Lax'}]);
+      await ctx.route('**/*', async route => {
+        const req = route.request();
+        if (new URL(req.url()).hostname !== host) return route.abort('blockedbyclient');
+        let res = await mf.dispatchFetch(req.url(), {method:req.method(),headers:{...await req.allHeaders(),'x-local-browser-host':host},body:req.postDataBuffer() || undefined,redirect:'manual'});
+        for (let n=0; res.status >= 300 && res.status < 400 && res.headers.has('location'); n++) {
+          if (n >= 5) throw new Error('Too many redirects');
+          const target = new URL(res.headers.get('location'), req.url());
+          if (target.hostname !== host) throw new Error('External redirect');
+          res = await mf.dispatchFetch(target.href,{headers:{'x-local-browser-host':host,cookie:'pmw_session='+member},redirect:'manual'});
+        }
+        await route.fulfill({status:res.status,headers:Object.fromEntries(res.headers),body:Buffer.from(await res.arrayBuffer())});
+      });
+      const page = await ctx.newPage();
+      for (const owner of ['peer@example.test',bot]) {
+        await page.goto(base+'/new?project=assignment');
+        await page.getByLabel('Title',{exact:true}).fill('Assignment '+width+' '+javaScriptEnabled+' '+owner);
+        await page.getByLabel('Owner',{exact:true}).selectOption(owner);
+        await expect(page.getByLabel('Owner',{exact:true}).locator('option',{hasText:'Helper (agent)'})).toHaveCount(1);
+        await page.getByRole('button',{name:'File it',exact:true}).click();
+        await expect(page.getByRole('group',{name:'Item actions',exact:true})).toContainText(owner === bot ? 'Owner: Helper (agent)' : 'Owner: peer');
+        const assignment = page.locator('.wb-assign');
+        const next = owner === bot ? 'peer@example.test' : bot;
+        await assignment.getByRole('combobox').selectOption(next);
+        const bounds = await assignment.boundingBox();
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+        const button = assignment.getByRole('button',{name:'Assign',exact:true});
+        await expect(button).toBeVisible();
+        await button.click();
+        await expect(page.getByRole('group',{name:'Item actions',exact:true})).toContainText(next === bot ? 'Owner: Helper (agent)' : 'Owner: peer');
+      }
+      await page.screenshot({path:path.join(artifacts,'assignment-'+width+'-'+javaScriptEnabled+'.png'),fullPage:true});
+      await ctx.close();
+    }
+  }
+  console.log('PASS assignment: File work and visible item assignment to human/agent at 1440, 390, 320px, with and without JavaScript');
+} finally {
+  await browser?.close();
+  await mf?.dispose();
+  await rm(temp,{recursive:true,force:true});
+}

@@ -18,7 +18,7 @@ export const COMPONENTS_CSS = `
 .wb-tabs{border-bottom:var(--separator) solid var(--line);margin-bottom:var(--space-2)}
 .wb-tabs a{padding:var(--space-1) var(--space-2);min-height:var(--row-h);display:inline-flex;align-items:center;text-decoration:none;color:var(--muted);border-bottom:2px solid transparent}
 .wb-tabs a[aria-current]{color:var(--accent);border-bottom-color:var(--accent)}
-.wb-toolbar{padding:var(--space-1) 0;border-bottom:var(--separator) solid var(--line);margin-bottom:var(--space-2);justify-content:space-between}
+.wb-assign{display:flex;align-items:end;flex-wrap:wrap;gap:var(--space-2);min-width:0;max-width:100%}.wb-assign label{min-width:0;max-width:100%}.wb-assign select{width:16rem;max-width:100%}.wb-actions>span{overflow-wrap:anywhere;min-width:0}.pane .wb-assign label:has(>select){margin:0}.wb-toolbar{padding:var(--space-1) 0;border-bottom:var(--separator) solid var(--line);margin-bottom:var(--space-2);justify-content:space-between}
 .wb-filters{min-width:0;max-width:100%}.wb-filters .filters{margin:0}.wb-filters label{max-width:100%}.wb-filters select{max-width:200px}
 .wb-count{margin-left:var(--space-2);color:var(--muted);font-variant-numeric:tabular-nums}
 .wb-table-wrap{max-width:100%;overflow-x:auto}.wb-table{width:100%;border-collapse:collapse;table-layout:auto}

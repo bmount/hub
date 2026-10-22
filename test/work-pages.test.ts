@@ -2,7 +2,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { createProject } from "../src/db/projects";
-import { apiPost, cookieHeaders, seedHuman, seedTenant } from "./helpers";
+import { apiPost, cookieHeaders, seedAgent, seedHuman, seedTenant } from "./helpers";
 
 const HOST = "acme.pimwell.test";
 type Item = { id: string; number: number; kind: string; state: string; title: string; body: string; owner_id: string | null; parent_id: string | null };
@@ -29,6 +29,38 @@ async function world() {
 }
 
 describe("work item editing", () => {
+  it("offers active people and agents in visible assignment and File work forms without script", async () => {
+    const w = await world();
+    const bot = await seedAgent(w.t, w.pat.identity, "helper");
+    const inactive = await seedHuman("inactive@example.com", { memberships: [{ tenant_id: w.t.id, role: "member" }] });
+    await env.HUB_DB.prepare("UPDATE membership SET state = 'suspended' WHERE identity_id = ?").bind(inactive.identity.id).run();
+    const other = await seedTenant("outside");
+    await seedHuman("outsider@example.com", { memberships: [{ tenant_id: other.id, role: "member" }] });
+    const item = await w.create({ kind: "errand", title: "Assign this" });
+    for (const path of [`/site/w/${item.number}`, "/new"]) {
+      const html = await (await w.get(path)).text();
+      const form = path === "/new" ? html.match(/<form method="post" action="\/api\/work.create">[\s\S]*?<\/form>/)![0]
+        : html.match(/<form class="wb-assign"[\s\S]*?<\/form>/)![0];
+      for (const email of [w.pat.identity.email, w.sam.identity.email, bot.agent.identity.email]) expect(form).toContain(`value="${email}"`);
+      expect(form).toContain("helper (agent)");
+      expect(form).not.toContain("inactive@example.com");
+      expect(form).not.toContain("outsider@example.com");
+      expect(form).not.toContain("onchange");
+      if (path !== "/new") {
+        expect(html.indexOf(form)).toBeLessThan(html.indexOf("I'm on it"));
+        expect(form).toContain('name="expected_updated_at"');
+        expect(form).toContain('>Assign</button>');
+      }
+    }
+    for (const owner of [w.sam.identity, bot.agent.identity]) {
+      expect((await w.form("work.update", {id: item.id, owner: owner.email, _back: `/site/w/${item.number}`})).status).toBe(303);
+      expect((await w.read(item.id)).owner_id).toBe(owner.id);
+      expect(await env.HUB_DB.prepare("SELECT id FROM attention WHERE tenant_id = ? AND identity_id = ? AND reason = 'assigned'").bind(w.t.id, owner.id).first()).not.toBeNull();
+      expect(await (await w.get(`/site/w/${item.number}`)).text()).toContain(`Owner: <strong>${owner.display_name}${owner.kind === "agent" ? " (agent)" : ""}</strong>`);
+      expect((await w.form("work.create", {project: "site", kind: "errand", title: "Filed assigned", owner: owner.email, _back: "@result"})).status).toBe(303);
+    }
+    expect(await (await w.get(`/site/w/${item.number}`, w.rae.token)).text()).not.toContain('class="wb-assign"');
+  });
   it("renders readiness, dependency stages and ranked frontier using the shared inspector and verbs", async () => {
     const w = await world();
     const prerequisite = await w.create({kind: "errand", title: "Prepare <unsafe>", priority: 1});

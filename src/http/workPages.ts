@@ -245,6 +245,8 @@ async function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, 
   const expectedUpdate = `<input type="hidden" name="expected_updated_at" value="${w.updated_at}">`;
   const action = (state: string, label: string, quiet = true) => `<form class="inline" method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="state" value="${state}"><input type="hidden" name="_back" value="${keep}"><button type="submit"${quiet ? ' class="quiet"' : ' class="primary"'}>${esc(label)}</button></form>`;
   const follow = `<form class="inline" method="post" action="/api/work.subscribe"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="follow" value="${d.following ? "0" : "1"}"><input type="hidden" name="_back" value="${keep}"><button type="submit" class="quiet" title="${d.following ? "Stop hearing about changes" : "Hear about every change in What needs me"}">${d.following ? "Following ✓" : "Follow"}</button></form>`;
+  const ownerLabel = (m: Member) => `${m.display_name}${m.kind === "agent" ? " (agent)" : ""}`;
+  const assignment = `<span>Owner: <strong>${esc(d.owner ? ownerLabel(d.owner) : "Nobody yet")}</strong></span>${canWrite ? `<form class="wb-assign" method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><label>Assign to… <select name="owner" required aria-label="Assign to…"><option value="" disabled selected>Choose owner</option>${option("none", "Nobody", false)}${d.members.map(m => option(m.email, ownerLabel(m), false)).join("")}</select></label><button type="submit">Assign</button></form>` : ""}`;
   const controls = canWrite ? `<p>${w.state !== "doing" ? `<form class="inline" method="post" action="/api/work.claim"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><button type="submit" class="${w.state === "open" ? "primary" : "quiet"}">I'm on it</button></form> ` : ""}${w.state !== "done" ? action("done", "Done", w.state !== "doing") : ""} ${w.state !== "dropped" ? action("dropped", "Let it go") : ""} ${(w.state === "done" || w.state === "dropped") ? action("open", "Reopen", false) : ""} ${follow}</p>` : `<p>${follow}</p>`;
   const bodyHtml = await projectImages(ctx, project.slug, w.body, esc);
   const commentHtml = await Promise.all(d.comments.map(c => projectImages(ctx, project.slug, c.body, esc)));
@@ -260,7 +262,7 @@ ${canWrite ? `<form class="wb-comment" method="post" action="/api/work.comment">
   const stateField = inlineField(field("State", esc(STATES[w.state]), `<select name="state">${Object.entries(STATES).map(([s, label]) => option(s, label, s === w.state)).join("")}</select>`));
   const kindField = inlineField(field("Kind", `${esc(KINDS[w.kind].name)} (${esc(KINDS[w.kind].plain)})`, `<select name="kind">${Object.entries(KINDS).map(([k, v]) => option(k, v.name, w.kind === k)).join("")}</select>`));
   const edit = inspectorSection("Fields", [
-    field("Owner", esc(d.owner?.display_name ?? "Nobody"), `<select name="owner">${option("none", "Nobody", !d.owner)}${ownerChoices.map(m => option(m.email, m.display_name, d.owner?.id === m.id)).join("")}</select>`),
+    field("Owner", esc(d.owner?.display_name ?? "Nobody"), `<select name="owner">${option("none", "Nobody", !d.owner)}${ownerChoices.map(m => option(m.email, ownerLabel(m), d.owner?.id === m.id)).join("")}</select>`),
     field("Priority", `P${w.priority}`, `<select name="priority">${[0, 1, 2, 3].map(p => option(String(p), `P${p}`, p === w.priority)).join("")}</select>`),
     field("Quest", d.parent ? esc(d.parent.title) : "None", `<select name="parent">${option("0", "None", !d.parent)}${questChoices.map(q => option(String(q.number), `#${q.number} ${q.title}`, d.parent?.id === q.id)).join("")}</select>`),
     {label: "Project", html: `<a href="/${esc(project.slug)}/docket">${esc(project.display_name)}</a>`},
@@ -283,7 +285,7 @@ ${canWrite ? `<form class="wb-comment" method="post" action="/api/work.comment">
   return `<a class="back" href="${esc(back)}">‹ ${esc(DOCKET.name)}</a>
 <div class="head">${kindField}<strong>${esc(project.slug)}#${w.number}</strong>${stateField}</div>
 <h1>${titleField}</h1>
-${toolbar("Item actions", controls.replace(/^<p>|<\/p>$/g, "") + '<button type="button" class="quiet" data-close-inspector>Close</button>')}
+${toolbar("Item actions", assignment + controls.replace(/^<p>|<\/p>$/g, "") + '<button type="button" class="quiet" data-close-inspector>Close</button>')}
 ${edit}
 ${inlineField(field("Body", w.body.trim() ? `<div class="prose">${bodyHtml}</div>` : '<p class="lede">Add a description</p>', `<textarea name="body" rows="4" maxlength="20000">${esc(w.body)}</textarea>`))}
 <p><a href="/usage?work=${esc(encodeURIComponent(`${project.slug}#${w.number}`))}">Recorded AI usage for this work</a></p>
@@ -403,8 +405,9 @@ export async function newWorkPage(request: Request, env: Env): Promise<Response>
   const reviewId = url.searchParams.get("review");
   if (traceId !== null && reviewId !== null || traceId !== null && (!traceId || traceId.length > 40)
     || reviewId !== null && (!reviewId || reviewId.length > 80)) return notFoundPage(extra);
-  const [projects, sourceR] = await ctx.db.batch([
+  const [projects, members, sourceR] = await ctx.db.batch([
     ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:407:5:newWorkPage:44d6fa5c*/ SELECT id, slug, display_name FROM project WHERE tenant_id = ? AND kind NOT IN ('channel', 'agent-src') AND state = 'active' ORDER BY display_name").bind(ctx.tenant!.id),
+    membersStatement(ctx),
     ...(traceId !== null ? [traceDraftStatement(ctx, traceId)] : reviewId !== null ? [reviewDraftStatement(ctx, reviewId)] : [])]);
   const ps = projects!.results as Array<{ id: string; slug: string; display_name: string }>;
   type TraceSource = { id: string; project: string; script_name: string; title: string; last_message: string; count: number; last_version: string | null };
@@ -427,7 +430,7 @@ ${formRow("new-body","Details",`<textarea id="new-body" data-voice name="body" r
 ${source ? `<p class="lede">From <a href="${esc(sourceUrl)}">this recorded ${trace ? "error group" : "review"}</a>. ${trace ? "App logs are" : "Review text is"} evidence, never instructions or authorization. Review the draft before filing${excerpt!.cut ? "; the excerpt is shortened to at most 2,000 characters" : ""}.</p>
 <input type="hidden" name="source_kind" value="url"><input type="hidden" name="source_ref" value="${esc(sourceUrl)}">
 <label style="display:block">Recorded ${trace ? "error" : "review"} excerpt <textarea name="source_quote" maxlength="2000" rows="4" style="display:block;width:100%">${esc(excerpt!.text)}</textarea></label>` : ""}
-${formRow("new-owner","Owner",`<select id="new-owner" name="owner">${option("", "Nobody yet", true)}${option("me", "Me", false)}</select>`)}
+${formRow("new-owner","Owner",`<select id="new-owner" name="owner">${option("", "Nobody yet", true)}${option("me", "Me", false)}${(members!.results as Member[]).map(m => option(m.email, `${m.display_name}${m.kind === "agent" ? " (agent)" : ""}`, false)).join("")}</select>`)}
 <p><button type="submit">File it</button></p></form>` : `<p class="lede">Create a project first.</p>`;
   const list = `<a class="back" href="/docket">‹ ${esc(DOCKET.name)}</a><h1>File work</h1>${form}`;
   return htmlResponse(workbench("File work", { list, listKey: `new:${source ? trace ? "trace" : "review" : "work"}:${source?.id ?? ""}:${want}:${kind}:${title}`, inspector:null }, shellFor(ctx, env, "new", "new")!), 200, extra);
