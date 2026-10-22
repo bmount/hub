@@ -114,6 +114,10 @@ try {
         const assignment = page.locator('.wb-assign');
         const next = owner === bot ? 'peer@example.test' : bot;
         await assignment.getByRole('combobox').selectOption(next);
+        const selectBounds = await assignment.getByRole('combobox').boundingBox();
+        expect(selectBounds.width).toBeGreaterThanOrEqual(200);
+        const ownerBounds = await page.getByRole('group',{name:'Item actions',exact:true}).locator('.wb-actions > span').boundingBox();
+        expect(ownerBounds.height).toBeLessThan(70);
         const bounds = await assignment.boundingBox();
         expect(bounds.x).toBeGreaterThanOrEqual(0);
         expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
