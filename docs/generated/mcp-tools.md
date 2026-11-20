@@ -91,7 +91,7 @@ A read grant does not expose write tools. A write grant does not elevate a reade
 | `research_save` | write | member | no | Implemented | **`expected_revision`**, `items`, **`note`**, `orgs`, `people`, **`project`**, **`slug`**, **`sources`**, **`status`**, **`summary`**, **`topic`** |
 | `review_ai` | write | member | no | Implemented | **`id`** |
 | `review_comment` | write | member | no | Implemented | **`body`**, **`id`**, `line`, `path` |
-| `review_integrate` | write | member | no | Declared/planned | **`id`** |
+| `review_integrate` | write | member | no | Implemented | **`id`** |
 | `review_list` | read | reader | no | Implemented | `closed`, `project` |
 | `review_read` | read | reader | no | Implemented | **`id`** |
 | `review_request` | write | member | no | Implemented | `base`, **`branch`**, `idempotency_key`, **`project`**, `repo`, `reviewers`, `summary`, `title` |

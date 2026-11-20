@@ -68,7 +68,8 @@ async function deletableBranch(update: RefUpdate, main: () => Promise<string>): 
 /** Stage the pack using native Git, prove allowed changes, then replay it to the published repo using Git's old-OID checks. */
 export async function artifactPush(request: Request, env: Env, grant: GitGrant, api: ArtifactsRest,
   // Access is checked again before publishing, by the same rule that granted it (project repo or agent source).
-  reauthorize: () => Promise<GitGrant | null> = () => authorizeGit(env, request.headers.get("authorization"), grant.tenant.slug, grant.project.slug + (grant.repository && !grant.repository.is_default ? `/${grant.repository.name}` : "")), defer?: (promise: Promise<unknown>) => void): Promise<Response> {
+  reauthorize: () => Promise<GitGrant | null> = () => authorizeGit(env, request.headers.get("authorization"), grant.tenant.slug, grant.project.slug + (grant.repository && !grant.repository.is_default ? `/${grant.repository.name}` : "")), defer?: (promise: Promise<unknown>) => void,
+  integration?: { pushId: string; reviewId: string }): Promise<Response> {
   if (!env.GIT_PUSH_STAGING) throw new HubError(503, "unavailable", "Git push validation storage is not configured");
   if (!request.body) throw new HubError(400, "bad_request", "push body required");
   if (request.headers.get("content-encoding") && request.headers.get("content-encoding") !== "identity")
@@ -82,7 +83,7 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
   if (updates.some(update => !refAllowed(update.ref, grant.refPrefixes))) {
     await stream.cancel();throw new HubError(403, "forbidden", "push includes a reserved or unauthorized ref");
   }
-  const id = crypto.randomUUID(), namespace = artifactNamespace(grant.tenant.slug), repo = grant.repository?.storage_name ?? grant.project.slug;
+  const id = integration?.pushId ?? crypto.randomUUID(), namespace = artifactNamespace(grant.tenant.slug), repo = grant.repository?.storage_name ?? grant.project.slug;
   const repoName = grant.repository && !grant.repository.is_default ? grant.repository.name : "";
   let shadow = await validationRepository(repo);
   const replayKey = `git-push/${grant.tenant.id}/${grant.project.id}/${id}`;
@@ -126,7 +127,7 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
         }
       }
     }
-    if (refused.size && capabilities.includes("atomic")) {
+    if (refused.size && (integration || capabilities.includes("atomic"))) {
       const outcomes = updates.map(update => ({ ...update, outcome: "ng" as const, reason: refused.get(update.ref) ?? "atomic push rejected" }));
       await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:131:13:artifactPush:9bdc73d9*/ UPDATE git_push SET state = 'refused', outcomes_json = ?, completed_at = ? WHERE id = ?").bind(JSON.stringify(outcomes), Date.now(), id).run();
       return statusResponse(outcomes, capabilities);
@@ -163,7 +164,15 @@ export async function artifactPush(request: Request, env: Env, grant: GitGrant, 
     if (publish.length) {
       const saved = await storage.get(replayKey);
       if (!saved) throw new HubError(503, "unavailable", "Git replay unavailable");
-      await db.prepare("/*perf-site:src%2Fcode%2FartifactPush.ts:166:13:artifactPush:fce1cca5*/ UPDATE git_push SET state = 'publishing', published_json = ? WHERE id = ?").bind(JSON.stringify(publish.map(update => ({ ...update, outcome: "unknown" }))), id).run();
+      // A review pins its source as well as its base. Serialize admission here (not at
+      // staging) so ordinary pushes and other integrations respect that short-lived fence.
+      const publishing = await db.prepare(`UPDATE git_push SET state = 'publishing', published_json = ?1 WHERE id = ?2
+        AND (?3 IS NULL OR EXISTS (SELECT 1 FROM review WHERE id = ?3 AND merge_push_id = ?2))
+        AND NOT EXISTS (SELECT 1 FROM review r, json_each(?1) u WHERE r.project_id = ?4 AND r.repo = ?5
+          AND r.merge_push_id IS NOT NULL AND r.merge_push_id <> ?2
+          AND json_extract(u.value, '$.ref') IN ('refs/heads/' || r.branch, 'refs/heads/' || r.base))`)
+        .bind(JSON.stringify(publish.map(update => ({ ...update, outcome: "unknown" }))), id, integration?.reviewId ?? null, grant.project.id, repoName).run();
+      if (!publishing.meta.changes) throw new HubError(409, "conflict", "review integration in progress");
       phase = "publishing";
       disposable = false; // An ambiguous upstream response must retain the durable recovery record and pack.
       const canonical = await api.git(namespace, repo, "git-receive-pack", request, replaceCommands(saved.body, prefixBytes, publish, capabilities), true);

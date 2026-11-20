@@ -21,17 +21,7 @@ export type Plan = {
   title: string; summary: string; spec: string; input: McpInputSchema["properties"]; required?: string[];
 };
 
-const S = (description: string) => ({ type: "string", description });
-const I = (description: string) => ({ type: "integer", minimum: 1, description });
-
-const PLANS: Plan[] = [
-  // Reviews
-  { name: "review.integrate", area: "review", kind: "command", minRole: "member", title: "Integrate",
-    summary: "Merge an approved review into its base branch.",
-    spec: "Integrates by default once approved and checks pass; refuses when the base moved and conflicts; records the merge commit on linked work.",
-    input: { id: S("Review") }, required: ["id"] },
-  // Messaging
-];
+const PLANS: Plan[] = [];
 
 /** Verbs that are planned, by name, with their area and spec. */
 export const PLANNED = new Map(PLANS.map((p) => [p.name, p]));

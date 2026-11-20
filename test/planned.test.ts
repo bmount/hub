@@ -11,7 +11,7 @@ beforeAll(() => registerAllVerbs());
 
 describe("planned capabilities", () => {
   it("are exactly these, each a tenant verb inside the MCP rules", () => {
-    expect([...PLANNED.keys()].sort()).toEqual(["review.integrate"]);
+    expect([...PLANNED.keys()].sort()).toEqual([]);
     for (const v of listVerbs().filter((x) => PLANNED.has(x.name))) {
       expect(mcpViolations(v), v.name).toEqual([]);
       expect(v.scope, v.name).toBe("tenant");
@@ -19,13 +19,10 @@ describe("planned capabilities", () => {
     }
   });
 
-  it("answer 501 not_implemented with the spec, naming its area", async () => {
+  it("dispatches review.integrate instead of returning its former 501 stub", async () => {
     const t = await seedTenant("acme");
     const pat = await seedHuman("pat@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
     const res = await apiPost("acme.pimwell.test", "review.integrate", { id: "site!1" }, cookieHeaders(pat.token, "acme.pimwell.test"));
-    expect(res.status).toBe(501);
-    const body = (await res.json()) as { error: string; detail: string; data: { planned: boolean; area: string } };
-    expect(body).toMatchObject({ error: "not_implemented", data: { planned: true, area: "review" } });
-    expect(body.detail).toContain("review.integrate is planned:");
+    expect(res.status).toBe(404);
   });
 });

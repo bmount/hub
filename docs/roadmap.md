@@ -62,7 +62,7 @@ The milestone tables below keep their original statuses. This is the current pic
 - diff with merge base and renames;
 - blame, which errors-to-lines (M4) needs;
 - reflog;
-- a merge verb (`review_integrate` is still planned);
+- merge commits for diverged branches (`review_integrate` supports reviewed fast-forwards);
 - `/internal/resolve`.
 
 **Waiting on owner decisions:**

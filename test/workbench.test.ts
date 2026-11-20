@@ -486,14 +486,12 @@ describe("the workbench", () => {
     expect(sug.filter((r) => r.group === "Projects").map((r) => r.href)).toContain("/site/docket");
   });
 
-  it("lists what is coming, with each planned verb's spec", async () => {
+  it("does not advertise the shipped review integration as planned", async () => {
     const w = await world();
     const all = await (await w.get("/planned")).text();
-    expect(all).toContain("<code>review.integrate</code>");
+    expect(all).not.toContain("<code>review.integrate</code>");
     const one = await (await w.get("/planned/review?v=review.integrate")).text();
-    expect(one).toContain("<code>review_integrate</code>");
-    expect(one).toContain("POST /api/review.integrate");
-    expect(one).toContain("501 not_implemented");
+    expect(one).not.toContain("POST /api/review.integrate");
     expect((await w.get("/planned/nosuch")).status).toBe(404);
   });
 

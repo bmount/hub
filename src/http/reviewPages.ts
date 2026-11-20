@@ -1,6 +1,6 @@
 import { projectPathSql } from "../db/projects";
 // Reviews in the workbench: the list (the organization's, or one project's) and one review in the inspector with its
-// diff, verdicts and comments. Integrating waits for Ardi's merge verb.
+// diff, verdicts, comments and merge action.
 import type { Env } from "../env";
 import { emptyState, esc, formRow, htmlResponse, inspectorSection, kitList, kitTable, statusChip, toolbar, workbench } from "../html";
 import { buildContext, rank } from "../auth/context";
@@ -56,15 +56,15 @@ ${rows.length ? kitTable("Reviews",[{label:"Reference"},{label:"Title"},{label:"
     const canWrite = rank(ctx.role) >= rank("member");
     const back = `${base}${esc(suffix)}`;
     const me = v.reviewers.find((x) => x.identity_id === ctx.identity!.id);
-    inspector = `<a class="back" href="${back}">‹ Reviews</a><div class="head"><strong>${esc(r.slug)}!${r.number}</strong><span>${esc(STATUS[r.status] ?? r.status)}</span><code>${esc(r.branch)}</code><span>into</span><code>${esc(r.base)}</code></div>
+    inspector = `<a class="back" href="${back}">‹ Reviews</a><div class="head"><strong>${esc(r.slug)}!${r.number}</strong><span>${esc(r.merged_oid ? "Merged" : STATUS[r.status] ?? r.status)}</span><code>${esc(r.branch)}</code><span>into</span><code>${esc(r.base)}</code></div>
 <h1>${esc(r.title)}</h1>${r.summary ? `<div class="prose">${esc(r.summary)}</div>` : ""}
 ${toolbar("Review actions", (canWrite ? `<a class="button" href="/new?review=${esc(encodeURIComponent(`${r.slug}!${r.number}`))}">File work from this review</a>` : "") + (canWrite ? `<form class="inline" method="post" action="/api/review.ai"><input type="hidden" name="id" value="${esc(r.slug)}!${r.number}"><input type="hidden" name="_back" value="${esc(reviewHref(r.slug,r.number,r.repo))}"><button type="submit" class="quiet">Ask the reviewer agent</button></form>` : ""))}
 <h2>Recorded work</h2>
 <p class="lede">${v.relatedWorkCommit ? `Commit associations use ${esc(v.relatedWorkCommit)}, not the moving branch tip.` : "No supported full recorded commit; only explicit review URL associations are matched."}</p>
 ${v.relatedWork.length ? recordedWorkTable(v.relatedWork) : `<p class="lede">No work associations recorded for this review.</p>`}
 <p class="lede">${v.relatedWorkCoverage.shown} related work items shown${v.relatedWorkCoverage.truncated ? `; capped at ${v.relatedWorkCoverage.limit}, more omitted` : ""}.</p>
-${inspectorSection("Record", [{label:"Author",html:`${esc(r.author)}`},{label:"Reviewers",html:`${v.reviewers.length ? v.reviewers.map((x) => `${esc(x.name)}: ${x.verdict ? (x.verdict === "approve" ? "approved" : "changes asked") : "waiting"}${x.stale ? " <small>(on an older commit)</small>" : ""}`).join("<br>") : "nobody named"}`},{label:"Integrate",html:`<span class="pill">planned</span> waits for a merge verb in the git host`}])}
-${canWrite && r.author_id !== ctx.identity!.id && r.status !== "closed" ? `<form method="post" action="/api/review.verdict"><input type="hidden" name="id" value="${esc(r.slug)}!${r.number}"><input type="hidden" name="_back" value="${esc(reviewHref(r.slug,r.number,r.repo))}">
+${inspectorSection("Record", [{label:"Author",html:`${esc(r.author)}`},{label:"Reviewers",html:`${v.reviewers.length ? v.reviewers.map((x) => `${esc(x.name)}: ${x.verdict ? (x.verdict === "approve" ? "approved" : "changes asked") : "waiting"}${x.stale ? " <small>(on an older commit)</small>" : ""}`).join("<br>") : "nobody named"}`},{label:"Integrate",html: r.merged_oid ? `Merged at <code>${esc(r.merged_oid)}</code>` : canWrite && r.status === "approved" && r.base_oid ? `<form method="post" action="/api/review.integrate"><input type="hidden" name="id" value="${esc(r.id)}"><input type="hidden" name="_back" value="${esc(reviewHref(r.slug,r.number,r.repo))}"><button type="submit">${r.merge_push_id ? "Check merge result" : "Fast-forward " + esc(r.base)}</button></form>` : esc(r.base_oid ? "Requires current approvals and a fast-forward." : "No recorded base branch tip. Request a new review to merge.")}])}
+${canWrite && r.author_id !== ctx.identity!.id && r.status !== "closed" && !r.merge_push_id ? `<form method="post" action="/api/review.verdict"><input type="hidden" name="id" value="${esc(r.slug)}!${r.number}"><input type="hidden" name="_back" value="${esc(reviewHref(r.slug,r.number,r.repo))}">
 ${formRow("review-reason", "Reasons", `<textarea id="review-reason" data-voice name="reason" rows="2" placeholder="Required when asking for changes">${esc(me?.reason ?? "")}</textarea>`)}
 <button type="submit" name="verdict" value="approve">Approve</button> <button type="submit" name="verdict" value="changes" class="quiet">Ask for changes</button></form>` : ""}
 

@@ -1,10 +1,18 @@
 // Reviews: request a branch review, comment, give verdicts tied to the commit reviewed; reviewers hear about it.
 import { env, SELF } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProject } from "../src/db/projects";
 import { createChannel } from "../src/db/chat";
 import { createNamespace } from "../src/db/namespaces";
-import { oauthContext } from "../src/auth/context";
+import { getVerb } from "../src/verbs/table";
+import { runVerb } from "../src/verbs/dispatch";
+import { artifactPush } from "../src/code/artifactPush";
+import { authorizeGit } from "../src/code/gitAccess";
+import { codeAuth } from "../src/code/ardi";
+import { refUpdateBody } from "../src/code/gitValidation";
+import { ArtifactsRest } from "../src/code/artifactsRest";
+import { peekCommands, packet, reportOutcomes, ZERO_OID } from "../src/code/gitProtocol";
+import { buildContext, oauthContext } from "../src/auth/context";
 import { liveGrant } from "../src/db/oauthGrants";
 import { callTool } from "../src/mcp/tools";
 import { setArdiForTest } from "../src/code/ardi";
@@ -12,7 +20,7 @@ import { apiPost, cookieHeaders, seedGrant, seedHuman, seedTenant } from "./help
 
 const HOST = "acme.pimwell.test";
 const BASE = "a".repeat(40), HEAD = "b".repeat(40);
-afterEach(() => setArdiForTest(null));
+afterEach(() => { setArdiForTest(null); vi.restoreAllMocks(); });
 
 function ardi(head = HEAD) {
   const commit = (oid: string, parents: string[], summary: string) => ({ oid, parents, summary, tree: "t", author_name: "Sam", author_email: "s@example.com", author_time: 1, committer_name: "Sam", committer_email: "s@example.com", commit_time: 1791000000, principal: null, session: null, trailer_principal: null, trailer_session: null });
@@ -257,6 +265,116 @@ describe("recorded review/work evidence", () => {
       expect(page).not.toContain("channel-secret");
       expect(page).not.toContain("Foreign comment secret");
     }
+  });
+});
+
+describe("protected review integration", () => {
+  async function hosted() {
+    const w = await world();
+    const configured = { ...env, GIT_BACKEND: "artifacts" as const, ARTIFACTS_ACCOUNT_ID: "0".repeat(32), ARTIFACTS_API_TOKEN: "fixture" };
+    await env.HUB_DB.prepare("INSERT INTO repository VALUES (?, ?, 'web', 'site', 1, 0), (?, ?, 'api', 'storage-api', 0, 0)")
+      .bind(w.t.id, w.p.id, w.t.id, w.p.id).run();
+    const { result } = await w.sam_("review.request", { project: "site", repo: "api", branch: "faster", reviewers: ["pat@example.com"] });
+    expect(result.review).toMatchObject({ repo: "api", base_oid: BASE, head_oid: HEAD });
+    const id = result.ref as string;
+    const deleteSource = async () => {
+      const ctx = await buildContext(new Request(`https://${HOST}/api/whoami`, { headers: cookieHeaders(w.sam.token, HOST) }), configured);
+      const auth = await codeAuth(ctx), grant = (await authorizeGit(configured, auth, w.t.slug, "site/api"))!;
+      const update = { ref: "refs/heads/faster", oldOid: HEAD, newOid: ZERO_OID };
+      const req = new Request("https://git.internal/git-receive-pack", { method: "POST", body: await refUpdateBody([update]), headers: { authorization: auth } });
+      const res = await artifactPush(req, configured, grant, new ArtifactsRest(configured));
+      return reportOutcomes(new Uint8Array(await res.arrayBuffer()), [update])[0]!.outcome;
+    };
+    const vote = () => w.pat_("review.verdict", { id, verdict: "approve" });
+    const merge = async (token = w.sam.token) => {
+      const ctx = await buildContext(new Request(`https://${HOST}/api/review.integrate`, { headers: cookieHeaders(token, HOST) }), configured);
+      return runVerb(ctx, getVerb("review.integrate")!, { id });
+    };
+    const main = "refs/heads/main", branch = "refs/heads/faster";
+    const refs = new Map([[main, BASE], [branch, HEAD]]), staged = new Map(refs);
+    let writes = 0, beforePublish: (() => void | Promise<void>) | undefined;
+    let loseReport = false, diverged = false, readOnly = false;
+    const client = ArtifactsRest.prototype;
+    vi.spyOn(client, "info").mockImplementation(async (_ns, name) => ({ name, description: `Pimwell tenant ${w.t.id} project ${w.p.id}`, default_branch: "main", read_only: readOnly, remote: "" }));
+    vi.spyOn(client, "prepareValidation").mockImplementation(async (_ns, repo, shadow) => { expect(repo).toBe("storage-api"); return shadow; });
+    vi.spyOn(client, "log").mockImplementation(async (_ns, _repo, hash) => [{ hash, parents: diverged ? [] : [BASE] }] as Awaited<ReturnType<ArtifactsRest["log"]>>);
+    vi.spyOn(client, "readCommit").mockResolvedValue({ hash: HEAD });
+    vi.spyOn(client, "git").mockImplementation(async (_ns, repo, tail, _req, body) => {
+      const canonical = repo === "storage-api";
+      if (!canonical && !repo.startsWith("pimwell-cache-")) throw new Error("wrong repository");
+      const map = canonical ? refs : staged;
+      const response = (lines: string[]) => new Response(new Blob([...lines.map(line => packet(line).slice().buffer), "0000"]));
+      if (tail === "git-upload-pack") return response([...map].map(([ref, hash]) => `${hash} ${ref}\n`));
+      const { updates, stream } = await peekCommands(body!); await stream.cancel();
+      if (canonical) { writes++; if (updates[0]?.ref === main) await beforePublish?.(); }
+      const reports = updates.map(u => {
+        if ((map.get(u.ref) ?? ZERO_OID) !== u.oldOid) return `ng ${u.ref} stale\n`;
+        if (u.newOid === ZERO_OID) map.delete(u.ref); else map.set(u.ref, u.newOid);
+        return `ok ${u.ref}\n`;
+      });
+      if (loseReport && canonical) throw new Error("lost reply after storage write");
+      return response(["unpack ok\n", ...reports]);
+    });
+    return { ...w, id, merge, vote, deleteSource, refs, main, branch, writes: () => writes, race: (f: typeof beforePublish) => beforePublish = f,
+      lose: () => loseReport = true, diverge: () => diverged = true, freeze: () => readOnly = true };
+  }
+
+  it("publishes only the reviewed named repository, freezes verdicts and closes once", async () => {
+    const h = await hosted();
+    await expect(h.merge()).rejects.toThrow("approve");
+    await h.vote();
+    const page = await (await SELF.fetch(`https://${HOST}/site/reviews/1?repo=api`, { headers: cookieHeaders(h.sam.token, HOST) })).text();
+    expect(page).toContain('action="/api/review.integrate"');
+    h.race(async () => {
+      expect((await h.pat_("review.verdict", { id: h.id, verdict: "changes", reason: "concurrent" })).status).toBe(409);
+      expect(await h.deleteSource()).toBe("ng");
+    });
+    const merged = await h.merge();
+    expect(merged).toMatchObject({ status: "closed", merged_oid: HEAD });
+    expect(h.refs.get(h.main)).toBe(HEAD);
+    expect(h.refs.get(h.branch)).toBe(HEAD);
+    expect(await h.merge()).toEqual(merged);
+    expect(h.writes()).toBe(1);
+    expect(await env.HUB_DB.prepare("SELECT status, merged_oid, merge_push_id FROM review").first()).toEqual({ status: "closed", merged_oid: HEAD, merge_push_id: null });
+    expect(await env.HUB_DB.prepare("SELECT count(*) AS n FROM event WHERE kind = 'review.integrate'").first("n")).toBe(1);
+  });
+
+  it("refuses readers, stale approvals/tips, divergence and read-only repositories without publishing", async () => {
+    const h = await hosted();
+    await h.vote();
+    const reader = await seedHuman("r@example.com", { memberships: [{ tenant_id: h.t.id, role: "reader" }] });
+    await expect(h.merge(reader.token)).rejects.toThrow();
+    const other = "c".repeat(40);
+    for (const [ref, value] of [[h.main, BASE], [h.branch, HEAD]] as const) {
+      h.refs.set(ref, other); await expect(h.merge()).rejects.toThrow("moved"); expect(h.refs.get(ref)).toBe(other); h.refs.set(ref, value);
+    }
+    await env.HUB_DB.prepare("UPDATE review_reviewer SET head_oid = ?").bind(other).run();
+    await expect(h.merge()).rejects.toThrow();
+    await h.vote();
+    await env.HUB_DB.prepare(`INSERT INTO git_push(id, tenant_id, project_id, namespace, repo, shadow, replay_key, updates_json, published_json, state, created_at)
+      VALUES ('competing', ?, ?, 'acme', 'storage-api', '', '', '[]', ?, 'publishing', ?)`)
+      .bind(h.t.id, h.p.id, JSON.stringify([{ ref: h.branch }]), Date.now()).run();
+    await expect(h.merge()).rejects.toThrow(); expect(h.writes()).toBe(0);
+    await env.HUB_DB.prepare("UPDATE git_push SET state = 'refused' WHERE id = 'competing'").run();
+    h.diverge(); await expect(h.merge()).rejects.toThrow(); h.freeze(); await expect(h.merge()).rejects.toThrow("read-only");
+    expect(h.writes()).toBe(0); expect(h.refs.get(h.main)).toBe(BASE);
+  });
+
+  it("honors storage CAS on a competing base and doesn't close", async () => {
+    const h = await hosted(); await h.vote();
+    h.race(() => { h.refs.set(h.main, "c".repeat(40)); });
+    await expect(h.merge()).rejects.toThrow();
+    expect(h.writes()).toBe(1); expect(h.refs.get(h.main)).toBe("c".repeat(40));
+    expect(await env.HUB_DB.prepare("SELECT status, merge_push_id FROM review").first()).toEqual({ status: "approved", merge_push_id: null });
+  });
+
+  it("reconciles a lost publication report and a failed final D1 transaction on retry", async () => {
+    const h = await hosted(); await h.vote(); h.lose();
+    await env.HUB_DB.exec("CREATE TRIGGER fail_close BEFORE UPDATE OF merged_oid ON review BEGIN SELECT RAISE(ABORT, 'interrupted close'); END;");
+    await expect(h.merge()).rejects.toThrow();
+    expect(h.refs.get(h.main)).toBe(HEAD);
+    await env.HUB_DB.exec("DROP TRIGGER fail_close");
+    expect(await h.merge()).toMatchObject({ merged_oid: HEAD, status: "closed" }); expect(h.writes()).toBe(1);
   });
 });
 

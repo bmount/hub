@@ -10,6 +10,7 @@ import { situationList, situationOpen, situationResolve } from "./situation";
 import { projectStatusVerb } from "./status";
 import { reviewAi } from "./reviewAi";
 import { workBoard, workBulkUpdate } from "./board";
+import { reviewIntegrate } from "./reviewIntegrate";
 import { reviewComment, reviewList, reviewRead, reviewRequest, reviewVerdict } from "./review";
 import { repoBranches, repoCommit, repoConnect, repoDiff, repoFile, repoList, repoLog, repoSearch, repoCreate } from "./code";
 import { messageSearch, searchQuery, workSearch } from "./search";
@@ -71,7 +72,7 @@ export function registerAllVerbs(): void {
     workSearch, messageSearch, searchQuery,
     workDepend, workResources, workGraph, workFrontier, workRelease, workDelete, workPropose, workProposals, workReview,
     repoBranches, repoLog, repoCommit, repoFile, repoDiff, repoSearch, repoList, repoConnect, repoCreate,
-    reviewRequest, reviewList, reviewRead, reviewComment, reviewVerdict,
+    reviewRequest, reviewList, reviewRead, reviewComment, reviewVerdict, reviewIntegrate,
     workBoard, workBulkUpdate,
     projectStatusVerb, reviewAi,
     situationOpen, situationResolve, situationList,

@@ -2,6 +2,12 @@
 
 `review.read` / MCP `review_read` and the review inspector show work associated with a review. They return `relatedWork`, `relatedWorkCoverage` (`limit`, `shown`, `truncated`) and `relatedWorkCommit`. These are recorded associations, not proof that the work was reviewed, approved, completed or included in the whole branch.
 
+## Merging a review
+
+Use **Fast-forward** on the review or call `review_integrate {id}`. The caller needs current Git write access to the review's own repository. The source and base must both still point to the branch tips recorded at request time, and every reviewer must have independently approved the recorded head. Requests against commit IDs rather than branches, or older reviews without a recorded base, remain readable but need a new branch review before merging. For diverged branches, bring the source up to date and request a new review; Pimwell does not rebase or resolve conflicts on the caller's behalf.
+
+A successful integration leaves the source alone, advances the base through the normal protected Git push path, and closes the review with the exact `merged_oid`. If the response is lost, retry the same review: Pimwell checks the durable push record and, if necessary, the target ref before reporting success. A pending integration temporarily blocks verdict changes and publication to those two refs; retry after six minutes if the Git outcome remains uncertain.
+
 ## Filing follow-up work
 
 Members can choose **File work from this review** to open `/new?review=<project!number>` (a review ID is also accepted). The server loads authorized review metadata without requesting a git diff or invoking a model. The form defaults to an errand in the review's project, with editable title/details and a summary excerpt of at most 2,000 UTF-16 units. Longer excerpts are marked as shortened; all draft text is bounded to the existing filing limits without splitting Unicode pairs. Review status is copied as recorded data, not approval or completion of the new work.

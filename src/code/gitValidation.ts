@@ -16,6 +16,14 @@ export async function validationRefs(api: ArtifactsRest, namespace: string, repo
   return new Map(parseAdvertisedRefs(new Uint8Array(await response.arrayBuffer())).map(ref => [ref.name, ref.target]));
 }
 
+/** A refs-only update still needs a valid (empty) pack for receive-pack. */
+export async function refUpdateBody(changes: RefUpdate[]): Promise<ReadableStream<Uint8Array>> {
+  const header = new Uint8Array([80,65,67,75,0,0,0,2,0,0,0,0]);
+  const checksum = new Uint8Array(await crypto.subtle.digest("SHA-1", header));
+  return stream([...changes.map((u, i) => packet(`${u.oldOid} ${u.newOid} ${u.ref}${i ? "" : "\0report-status delete-refs"}\n`)),
+    new TextEncoder().encode("0000"), header, checksum]);
+}
+
 export function stageRefs(id: string, updates: RefUpdate[]): RefUpdate[] {
   return updates.filter(update => update.newOid !== ZERO_OID).map((update, index) => ({ oldOid: ZERO_OID, newOid: update.newOid, ref: `refs/tags/pimwell-stage-${id}/${index}` }));
 }
@@ -40,15 +48,10 @@ export async function settleValidation(api: ArtifactsRest, namespace: string, re
     return oldOid ? [{ ref: update.ref, oldOid, newOid: ZERO_OID }] : [];
   });
   if (!commands.length && !removals.length) return;
-  // Even a refs-only creation/update needs a valid empty pack.
-  const header = new Uint8Array([80,65,67,75,0,0,0,2,0,0,0,0]);
-  const checksum = new Uint8Array(await crypto.subtle.digest("SHA-1", header));
   const request = new Request(`https://git.internal/${shadow}.git/git-receive-pack`, { method: "POST", headers: { "content-type": "application/x-git-receive-pack-request" } });
   const apply = async (changes: RefUpdate[]) => {
     if (!changes.length) return;
-    const response = await api.git(namespace, shadow, "git-receive-pack", request, stream([
-      ...changes.map((u, i) => packet(`${u.oldOid} ${u.newOid} ${u.ref}${i ? "" : "\0report-status delete-refs"}\n`)), new TextEncoder().encode("0000"), header, checksum,
-    ]), true, false);
+    const response = await api.git(namespace, shadow, "git-receive-pack", request, await refUpdateBody(changes), true, false);
     if (!response.ok || reportOutcomes(new Uint8Array(await response.arrayBuffer()), changes).some(u => u.outcome !== "ok"))
       throw new HubError(502, "unavailable", "validation ref cleanup incomplete");
   };

@@ -60,7 +60,7 @@ describe("checked MCP reference", () => {
     expect(readerWrites.map((v) => v.name)).not.toContain("chat.post");
     expect(member.some((v) => v.name === "mail.send" && v.mcp!.scope === "write")).toBe(true);
     expect(member.some((v) => v.name === "chat.post" && v.mcp!.scope === "write")).toBe(true);
-    expect(member.some((v) => PLANNED.has(v.name))).toBe(true);
+    expect(member.some((v) => v.name === "review.integrate" && !PLANNED.has(v.name))).toBe(true);
   });
 });
 
