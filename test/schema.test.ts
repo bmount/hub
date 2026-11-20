@@ -23,10 +23,10 @@ describe("schema", () => {
     await expect(env.HUB_DB.prepare("SELECT handle, handle_skeleton FROM membership LIMIT 1").all()).resolves.toBeDefined();
   });
 
-  it("seeds the redirect allowlist with Claude and loopback only", async () => {
+  it("seeds the redirect allowlist with Claude, ChatGPT and loopback only", async () => {
     const rows = await env.HUB_DB.prepare("SELECT pattern FROM oauth_redirect_allow ORDER BY pattern").all<{ pattern: string }>();
     expect(rows.results.map((r) => r.pattern)).toEqual([
-      "http://127.0.0.1/callback", "http://localhost/callback", "https://claude.ai/api/mcp/auth_callback",
+      "http://127.0.0.1/callback", "http://localhost/callback", "https://chatgpt.com/connector_platform_oauth_redirect", "https://claude.ai/api/mcp/auth_callback",
     ]);
   });
 
