@@ -34,7 +34,7 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
     const link = (href: string, label: string, section: Section | null, count?: number) => ({ href, label, active: section === active && key !== "search", ...(count !== undefined ? { count } : {}) });
     const nav = [
       link("/", "Home", "home"),
-      link(hub, "All organizations", null),
+      link(hub + "?organizations=1", "All organizations", null),
       link("/attention", "Needs me", "attention", r?.needs),
       link("/docket", "Docket", "docket", r?.open),
       link("/docket?owner=me", "Mine", "mine", r?.mine),
@@ -50,11 +50,11 @@ export function shellFor(ctx: Ctx, env: Env, active: Section, key: string = acti
     ];
     const planned = PLANNED_LINKS.map((l) => ({ href: l.href, label: l.label, active: active === "planned" && key === l.key, planned: true }));
     const tabs = [
+      { href: "/", label: "Home", active: active === "home" },
       { href: "/docket", label: "Docket", active: active === "docket" || active === "project", count: r?.open },
       { href: "/c", label: "Chat", active: active === "chat" },
       { href: "/attention", label: "Needs me", active: active === "attention", count: r?.needs },
-      { href: "/mail", label: "Mail", active: active === "mail", count: r?.held },
-      { href: "/assistant", label: "Assistant", active: active === "playground" },
+
     ];
     return {
       brandHref: hub, org: { name: ctx.tenant.display_name, href: "/" }, me, tip: tipFor(key), nav, planned, tabs,
@@ -112,6 +112,7 @@ function projectExplorer(ctx: Ctx, env: Env): string {
   if (!p) return `<h2>Projects</h2><p>No active projects.</p><a href="/projects/new">New project</a>`;
   const base = `/${encodeURIComponent(p.path)}`, features = projectFeatures(p), nodes: TreeNode[] = [];
   const url = new URL(ctx.pageUrl ?? "https://pimwell.com/"), pathname = url.pathname;
+  if (pathname === "/") return `<h2>Projects</h2><input id="project-filter" type="search" placeholder="Find a project…" aria-label="Find a project"><nav class="project-switcher" aria-label="Other projects"><ul>${p.choices.slice().sort((a,b)=>a.display_name.localeCompare(b.display_name,undefined,{numeric:true})).map(c=>`<li><a href="/${esc(c.path)}">${esc(c.display_name)}</a></li>`).join("")}</ul></nav>`;
   const node = (label: string, href: string, count?: number): TreeNode => ({label, href, count, current: pathname === href.split("#")[0] && (!href.includes("#") || url.hash === href.slice(href.indexOf("#")))});
   if (features.includes("docket")) nodes.push({...node("Docket", `${base}/docket`, p.open), expanded: true, children: [node("Graph", `${base}/graph`), node("Frontier", `${base}/frontier`), node("Board", `${base}/board`, p.open), node("Status", `${base}/status`, p.open), node("Velocity", `${base}/velocity`)]});
   if (features.includes("repo")) nodes.push({...node("Code", `${base}/code`), expanded: true, children: (p.repositories ?? []).slice().sort((a,b) => b.is_default-a.is_default || a.name.localeCompare(b.name)).map((r,i) => {

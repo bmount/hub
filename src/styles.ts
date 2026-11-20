@@ -1,5 +1,11 @@
 // Components for every page, written only in the theme's variables (src/theme.ts).
 export const COMPONENTS_CSS = `
+.home-brief{max-width:52rem;margin:0 auto;padding:clamp(6px,2vw,28px);overflow-wrap:anywhere}
+.home-brief header small,.brief-list small{display:block;color:var(--muted);font-size:var(--fs-sm)}
+.home-brief .empty{text-align:left;padding:6px 0;color:var(--muted)}#org-places>details>summary{cursor:pointer;padding:4px 6px}.home-brief h1{margin:4px 0 20px}.home-brief section{margin-bottom:24px}.home-brief h2{font-size:1.1rem}
+.brief-list{list-style:none;padding:0;margin:0}.brief-list li{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 16px;padding:10px 0;border-bottom:1px solid var(--line)}
+.brief-note{margin:4px 0 0;line-height:1.4}.brief-list li>div{flex:1 1 15rem;min-width:0}.brief-title{font-weight:600}.brief-list small{margin-top:3px}.home-brief>details{border-top:1px solid var(--line);padding:10px 0}.home-brief summary{cursor:pointer}
+
 /* Shared workbench kit. Scoped classes let later passes migrate one view at a time. */
 .wb-org-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-3);margin:var(--space-3) 0}
 .wb-org-card{display:flex;flex-direction:column;gap:var(--space-2);min-width:0;padding:var(--space-4);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r);background:linear-gradient(120deg,var(--accent-soft),var(--panel));color:var(--ink);text-decoration:none;box-shadow:var(--elevation-1);transition:box-shadow .15s,border-color .15s}

@@ -25,7 +25,7 @@ describe("pages", () => {
     const t = await seedTenant("acme");
     await seedTenant("blue");
     const h = await seedHuman("a@example.com", { memberships: [{ tenant_id: t.id, role: "member" }] });
-    const html = await (await SELF.fetch("https://pimwell.test/", { headers: cookie(h.token) })).text();
+    const html = await (await SELF.fetch("https://pimwell.test/?organizations=1", { headers: cookie(h.token) })).text();
     expect(html).toContain("https://acme.pimwell.test/");
     expect(html).not.toContain("https://blue.pimwell.test/");
     expect(html).toContain("/me/sessions");

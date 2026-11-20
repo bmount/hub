@@ -16,6 +16,7 @@ import { clearSessionCookie } from "../auth/cookie";
 import { notFoundPage } from "./pages";
 import { shellFor } from "./shell";
 import { projectImages } from "./projectImages";
+import { messageOwner } from "./homeBrief";
 import { getWorkByNumber, listLinksStatement, listWorkStatement, type WorkFilter, type WorkItem, type WorkLink } from "../db/work";
 import { DOCKET, KINDS, STATES, type WorkKind } from "../work/names";
 import { AREAS, PLANNED, plannedIn, type Area, type Plan } from "../verbs/planned";
@@ -232,6 +233,14 @@ function workLinkHtml(l: WorkLink): string {
   return `<li>${esc(l.target_kind)}: ${target}${l.note ? ` <small>(${esc(l.note)})</small>` : ""}</li>`;
 }
 
+function commentRows(ctx: Ctx, id: string) {
+  return ctx.db.prepare(`SELECT * FROM (SELECT c.id,c.created_at,c.reply_to,c.body,i.display_name AS author,m.handle FROM work_comment c JOIN identity i ON i.id=c.author_id LEFT JOIN membership m ON m.identity_id=c.author_id AND m.tenant_id=c.tenant_id WHERE c.tenant_id=? AND c.item_id=? ORDER BY c.created_at DESC,c.id DESC LIMIT 200) ORDER BY created_at,id`).bind(ctx.tenant!.id,id);
+}
+async function discussion(ctx: Ctx, project: Project, w: WorkItem, comments: Comment[]) {
+  const rows = await Promise.all(comments.map(async c=>({html:`${ago(c.created_at,ctx.now)} · <span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ''}<div class="prose">${await projectImages(ctx,project.slug,c.body,esc)}</div></span>`})));
+  return `<div data-discussion="${esc(w.id)}" data-viewer="${esc(ctx.identity!.id)}" data-latest="${esc(comments.at(-1)?.id ?? '')}" data-src="/${esc(project.slug)}/w/${w.number}?fragment=discussion"><h2>Conversation</h2>${rows.length ? kitList('comments',rows) : '<p class="lede">No comments yet.</p>'}</div>`;
+}
+
 async function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, d: { links: WorkLink[]; children: WorkItem[]; owner: Member | null; parent: Quest | null; members: Member[]; quests: Quest[]; activity: Activity[]; comments: Comment[]; following: boolean }, back: string, selectedUrl?: string, suppliedGraph?: Awaited<ReturnType<typeof graphContext>>): Promise<string> {
   const canWrite = rank(ctx.role) >= rank("member") && project.state === "active";
   const graph = suppliedGraph ?? await graphContext(ctx);
@@ -249,11 +258,9 @@ async function itemInspector(ctx: Ctx, env: Env, project: Project, w: WorkItem, 
   const assignment = `<span>Owner: <strong>${esc(d.owner ? ownerLabel(d.owner) : "Nobody yet")}</strong></span>${canWrite ? `<form class="wb-assign" method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><label>Assign to… <select name="owner" required aria-label="Assign to…"><option value="" disabled selected>Choose owner</option>${option("none", "Nobody", false)}${d.members.map(m => option(m.email, ownerLabel(m), false)).join("")}</select></label><button type="submit">Assign</button></form>` : ""}`;
   const controls = canWrite ? `<p>${w.state !== "doing" ? `<form class="inline" method="post" action="/api/work.claim"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><button type="submit" class="${w.state === "open" ? "primary" : "quiet"}">I'm on it</button></form> ` : ""}${w.state !== "done" ? action("done", "Done", w.state !== "doing") : ""} ${w.state !== "dropped" ? action("dropped", "Let it go") : ""} ${(w.state === "done" || w.state === "dropped") ? action("open", "Reopen", false) : ""} ${follow}</p>` : `<p>${follow}</p>`;
   const bodyHtml = await projectImages(ctx, project.slug, w.body, esc);
-  const commentHtml = await Promise.all(d.comments.map(c => projectImages(ctx, project.slug, c.body, esc)));
-  const comments = `<h2>Comments${d.comments.length ? ` <span class="pill">${d.comments.length}</span>` : ""}</h2>
-${d.comments.length ? kitList("comments", d.comments.map((c, i)=>({html:`${ago(c.created_at, ctx.now)} · <span><b>${esc(c.author)}</b>${c.handle ? ` <small>@${esc(c.handle)}</small>` : ""}<div class="prose" style="margin-top:2px">${commentHtml[i]}</div></span>`}))) : `<p class="lede">No comments yet.</p>`}
+  const comments = `${await discussion(ctx,project,w,d.comments)}
 ${canWrite ? `<form class="wb-comment" method="post" action="/api/work.comment"><input type="hidden" name="id" value="${esc(w.id)}"><input type="hidden" name="_back" value="${keep}">
-<textarea aria-label="Comment" data-voice data-enter-submits name="body" rows="1" required maxlength="10000" placeholder="Comment…"></textarea><button type="submit" class="primary" aria-label="Send comment">↑</button></form>` : ""}`;
+<textarea aria-label="Comment" data-voice data-enter-submits name="body" rows="1" required maxlength="10000" placeholder="Ask a question or post an update…"></textarea><button type="submit" class="primary" aria-label="Send comment">↑</button></form>` : ""}`;
   const ownerChoices = d.owner && !d.members.some((m) => m.id === d.owner!.id) ? [d.owner, ...d.members] : d.members;
   const questChoices = d.parent && !d.quests.some((q) => q.id === d.parent!.id) ? [d.parent, ...d.quests] : d.quests;
   const field = (label: string, value: string, control: string) => ({label, html: value, editHtml: canWrite ? `<form method="post" action="/api/work.update"><input type="hidden" name="id" value="${esc(w.id)}">${expectedUpdate}<input type="hidden" name="_back" value="${keep}"><label>${esc(label)} ${control}</label><button type="submit">Save ${esc(label.toLowerCase())}</button></form>` : ""});
@@ -285,8 +292,9 @@ ${canWrite ? `<form class="wb-comment" method="post" action="/api/work.comment">
   return `<a class="back" href="${esc(back)}">‹ ${esc(DOCKET.name)}</a>
 <div class="head">${kindField}<strong>${esc(project.slug)}#${w.number}</strong>${stateField}</div>
 <h1>${titleField}</h1>
-${toolbar("Item actions", assignment + controls.replace(/^<p>|<\/p>$/g, "") + '<button type="button" class="quiet" data-close-inspector>Close</button>')}
-${edit}
+${toolbar("Item actions", assignment + (d.owner && d.members.some(m => m.id === d.owner!.id) ? messageOwner(ctx,d.owner.id,d.owner.display_name) : "") + controls.replace(/^<p>|<\/p>$/g, "") + '<button type="button" class="quiet" data-close-inspector>Close</button>')}
+${comments}
+<details><summary>Item details</summary>${edit}</details>
 ${inlineField(field("Body", w.body.trim() ? `<div class="prose">${bodyHtml}</div>` : '<p class="lede">Add a description</p>', `<textarea name="body" rows="4" maxlength="20000">${esc(w.body)}</textarea>`))}
 <p><a href="/usage?work=${esc(encodeURIComponent(`${project.slug}#${w.number}`))}">Recorded AI usage for this work</a></p>
 ${w.source_quote ? `<blockquote>${esc(w.source_quote)}</blockquote>` : ""}
@@ -296,7 +304,6 @@ ${sourceUrl ? `<p>Source: <a href="${esc(sourceUrl)}">Recorded URL</a>. Recorded
 
 ${dependencyInspector(graph, w, canWrite, keep, back)}
 ${under}
-${comments}
 ${plannedBlock("review.request", "Review")}
 ${links}
 ${activity}`;
@@ -318,7 +325,7 @@ export async function selectedWorkInspector(ctx: Ctx, env: Env, url: URL, scope:
     ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:316:5:selectedWorkInspector:f7d22dac*/ SELECT id, display_name, email, kind FROM identity WHERE id = ?").bind(w.owner_id),
     ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:317:5:selectedWorkInspector:da0948f2*/ SELECT id, number, title FROM work_item WHERE id = ?").bind(w.parent_id),
     ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:318:5:selectedWorkInspector:940f9327*/ SELECT e.kind, e.summary, e.created_at, i.display_name AS who FROM event e LEFT JOIN identity i ON i.id = e.identity_id WHERE e.tenant_id = ? AND e.target_id = ? ORDER BY e.created_at DESC LIMIT 30`).bind(ctx.tenant!.id, w.id),
-    ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:319:5:selectedWorkInspector:6688422a*/ SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author, m.handle FROM work_comment c JOIN identity i ON i.id = c.author_id LEFT JOIN membership m ON m.identity_id = c.author_id AND m.tenant_id = c.tenant_id WHERE c.item_id = ? ORDER BY c.created_at LIMIT 200`).bind(w.id),
+    commentRows(ctx,w.id),
     ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:320:5:selectedWorkInspector:ff730cad*/ SELECT 1 FROM follow WHERE identity_id = ? AND target_kind = 'item' AND target_id = ?").bind(ctx.identity!.id, w.id),
     ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:321:5:selectedWorkInspector:a8780539*/ UPDATE attention SET done_at = ? WHERE identity_id = ? AND item_id = ? AND done_at IS NULL").bind(ctx.now, ctx.identity!.id, w.id),
   ]);
@@ -341,7 +348,8 @@ async function listAndInspect(request: Request, env: Env, slug: string | null, n
   const url = new URL(request.url);
   const f = readFilters(url, !!project);
   const w = project && num !== null ? await getWorkByNumber(ctx.db, project.id, Number(num)) : null;
-  if (num !== null && !w) return notFoundPage(extra);
+  if (num !== null && (!w || w.tenant_id !== ctx.tenant!.id)) return notFoundPage(extra);
+  if (url.searchParams.get('fragment') === 'discussion') return w && project ? htmlResponse(await discussion(ctx,project,w,(await commentRows(ctx,w.id).all<Comment>()).results),200,extra) : notFoundPage(extra);
 
   const stmts: D1PreparedStatement[] = [listWorkStatement(ctx.db, ctx.tenant!.id, itemFilter(ctx, f, project?.id ?? null)), membersStatement(ctx), projectsStatement(ctx)];
   const questFor = project ? questsStatement(ctx, project.id) : null;
@@ -354,8 +362,7 @@ async function listAndInspect(request: Request, env: Env, slug: string | null, n
       ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:352:7:listAndInspect:da0948f2*/ SELECT id, number, title FROM work_item WHERE id = ?").bind(w.parent_id),
       ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:353:7:listAndInspect:940f9327*/ SELECT e.kind, e.summary, e.created_at, i.display_name AS who FROM event e LEFT JOIN identity i ON i.id = e.identity_id
         WHERE e.tenant_id = ? AND e.target_id = ? ORDER BY e.created_at DESC LIMIT 30`).bind(ctx.tenant!.id, w.id),
-      ctx.db.prepare(`/*perf-site:src%2Fhttp%2FworkPages.ts:355:7:listAndInspect:6688422a*/ SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author, m.handle FROM work_comment c JOIN identity i ON i.id = c.author_id
-        LEFT JOIN membership m ON m.identity_id = c.author_id AND m.tenant_id = c.tenant_id WHERE c.item_id = ? ORDER BY c.created_at LIMIT 200`).bind(w.id),
+      commentRows(ctx,w.id),
       ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:357:7:listAndInspect:c215cd57*/ SELECT 1 AS f FROM follow WHERE identity_id = ? AND target_kind = 'item' AND target_id = ?").bind(ctx.identity!.id, w.id),
       // Seeing the item is what "done" means for its entries in What needs me; same batch, no extra round trip.
       ctx.db.prepare("/*perf-site:src%2Fhttp%2FworkPages.ts:359:7:listAndInspect:a8780539*/ UPDATE attention SET done_at = ? WHERE identity_id = ? AND item_id = ? AND done_at IS NULL").bind(ctx.now, ctx.identity!.id, w.id),

@@ -72,7 +72,7 @@ describe("/me", () => {
 
   it("is linked from the apex home", async () => {
     const h = await seedHuman("a@example.com");
-    const html = await (await SELF.fetch("https://pimwell.test/", { headers: { cookie: `pmw_session=${h.token}` } })).text();
+    const html = await (await SELF.fetch("https://pimwell.test/?organizations=1", { headers: { cookie: `pmw_session=${h.token}` } })).text();
     expect(html).toContain('href="/me"');
     expect(html).toContain('href="/me/sessions"');
   });

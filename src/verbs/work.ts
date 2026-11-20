@@ -262,7 +262,7 @@ export const workRead = defineVerb({
       statement(`SELECT w.* FROM work_item w WHERE w.tenant_id = ?1 AND w.parent_id = (SELECT id FROM target)
         AND (?6 IS NULL OR w.project_id = ?6) ORDER BY w.updated_at DESC, w.id DESC LIMIT 200`),
       statement(`/*perf-site:src%2Fverbs%2Fwork.ts:227:29:workRead.run:0cf0d7f6*/ SELECT c.id, c.body, c.created_at, c.reply_to, i.display_name AS author FROM work_comment c JOIN identity i ON i.id = c.author_id
-        WHERE c.item_id = (SELECT id FROM target) ORDER BY c.created_at LIMIT 200`),
+        WHERE c.tenant_id=?1 AND c.item_id = (SELECT id FROM target) ORDER BY c.created_at DESC,c.id DESC LIMIT 200`),
       statement("SELECT * FROM work_link WHERE item_id = (SELECT id FROM target) ORDER BY created_at"),
       ...itemGraphStatements(ctx.db, ctx.tenant!.id, "", ctx.now, target),
     ]);
@@ -273,7 +273,7 @@ export const workRead = defineVerb({
     const { project_kind: _kind, project_parts: _parts, project_slug: project, ...item } = row;
     const parent = parentRows!.results[0] as WorkItem | undefined;
     const children = childRows!.results as WorkItem[];
-    const comments = commentRows!.results as Array<{ id: string; body: string; created_at: number; reply_to: string | null; author: string }>;
+    const comments = commentRows!.results.reverse() as Array<{ id: string; body: string; created_at: number; reply_to: string | null; author: string }>;
     const g = viewGraph(graphFrom(graph), ctx.now);
     const prerequisites = g.g.edges.filter((e) => e.dependent_id === item.id).map((e) => g.refOf(e.prereq_id)).sort();
     const dependents = g.g.edges.filter((e) => e.prereq_id === item.id).map((e) => g.refOf(e.dependent_id)).sort();

@@ -86,6 +86,8 @@ try {
   await verb(member, 'project.create', {slug:'assignment',kind:'workspace',display_name:'Assignment'});
   await verb(member, 'agent.create', {slug:'helper',display_name:'Helper'});
   const bot = (await db.prepare("SELECT email FROM identity WHERE kind = 'agent'").first()).email;
+  await verb(member,'work.create',{project:'assignment',kind:'errand',title:'Check the new workspace home',owner:bot});
+  await verb(member,'work.update',{id:'assignment#1',state:'doing'});
   browser = await chromium.launch({headless:true});
   for (const width of [1440, 390, 320]) {
     for (const javaScriptEnabled of [true, false]) {
@@ -104,6 +106,25 @@ try {
         await route.fulfill({status:res.status,headers:Object.fromEntries(res.headers),body:Buffer.from(await res.arrayBuffer())});
       });
       const page = await ctx.newPage();
+      await page.goto(base+'/');
+      await expect(page.getByRole('heading',{name:'What’s changed'})).toBeVisible();
+      await expect(page.locator('.brief-title',{hasText:'Check the new workspace home'})).toBeVisible();
+      await expect(page.getByRole('heading',{name:'Connect Claude or ChatGPT'})).not.toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      await page.screenshot({path:path.join(artifacts,'home-'+width+'-'+javaScriptEnabled+'.png')});
+      await page.getByRole('button',{name:'Message Helper'}).click();
+      await expect(page.locator('.channel-content')).toContainText('(direct)');
+      await expect(page.locator('.channel-content textarea[name="body"]')).toBeVisible();
+      if (javaScriptEnabled) {
+        await page.goto(base+'/assignment/w/1');
+        const draft = page.getByRole('textbox',{name:'Comment',exact:true});
+        await draft.fill('Unsent question');
+        const reply = 'Visible without reload at '+width;
+        await verb(peer,'work.comment',{id:'assignment#1',body:reply});
+        await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+        await expect(page.locator('[data-discussion]')).toContainText(reply);
+        await expect(draft).toHaveValue('Unsent question');
+      }
       for (const owner of ['peer@example.test',bot]) {
         await page.goto(base+'/new?project=assignment');
         await page.getByLabel('Title',{exact:true}).fill('Assignment '+width+' '+javaScriptEnabled+' '+owner);

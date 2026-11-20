@@ -1,6 +1,7 @@
 // People and agents in the workbench: everyone in the list, one person (or the invite form) in the inspector.
 // Admins invite, change roles and remove people here (member.set_role, member.remove, invite.create, invite.revoke);
 // everyone else sees who is here and what they are on. One D1 batch per page.
+import { messageOwner } from "./homeBrief";
 import { agentSrcAccess } from "../code/agentSrc";
 import type { Env } from "../env";
 import { listIdentityEmails } from "../db/identityEmails";
@@ -134,7 +135,7 @@ ${fresh ? `<form method="post" action="/api/invite.create">
 <form method="post" action="/api/member.remove"><input type="hidden" name="email" value="${esc(person.email)}"><input type="hidden" name="_back" value="/people">
 <label>Type their email to confirm <input name="confirm" required autocomplete="off"></label><button type="submit">Remove</button></form></details>` : "";
     inspector = `<a class="back" href="/people">‹ People</a>
-<div class="head"><span>${person.kind === "human" ? "Person" : "Agent"}</span></div><h1>${esc(person.display_name)}</h1>${sourceLink(person)}
+<div class="head"><span>${person.kind === "human" ? "Person" : "Agent"}</span></div><h1>${esc(person.display_name)}</h1>${messageOwner(ctx,person.id,person.display_name)}${sourceLink(person)}
 ${inspectorSection("Identity", [{label:"Address",html:address(person.email)},{label:"Role",html:esc(person.is_root ? "root" : person.role)},...(person.sponsor ? [{label:"Answers to",html:esc(person.sponsor)}] : []),{label:"Here since",html:day(person.created_at)},{label:"Last active",html:ago(person.last_seen,ctx.now)},{label:"Open work",html:`<a href="/docket?owner=${esc(encodeURIComponent(person.email))}">${plural(person.open,"item")}</a>`}])}
 ${person.kind === "agent" && canConnect && (admin || person.operator_id === ctx.identity.id) ? `<h2>Connect</h2><p class="lede">A new one-time link, valid 24 hours, gives the agent a fresh token. Its earlier tokens keep working until they expire or are revoked.</p>
 ${fresh ? `<form method="post" action="/api/agent.connect"><input type="hidden" name="agent_id" value="${esc(person.id)}"><button type="submit" class="quiet">Make connect link</button></form>` : extraCheck(env, ctx, `/people/${encodeURIComponent(person.email)}`, AGENT_WHY, sent)}` : ""}

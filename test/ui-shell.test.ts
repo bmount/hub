@@ -28,9 +28,9 @@ describe("the signed-in shell", () => {
       expect(html, path).toContain('<nav class="wb-tree" aria-label="Primary">');
       expect(html.slice(html.indexOf('<aside id="rail"'), html.indexOf('<aside id="explorer"')), path).toMatch(new RegExp(`aria-current="page">${label}(?:<span class="wb-count">\\d+</span>)?</a>`));
       expect(html, path).toContain('class="wb-breadcrumb" aria-label="Breadcrumb"');
-      expect(html, path).toContain('href="https://pimwell.test/">All organizations</a>');
+      expect(html, path).toContain('href="https://pimwell.test/?organizations=1">All organizations</a>');
       expect(html, path).toContain('aria-label="Project explorer"');
-      expect(hasTip(html), path).toBe(path === "/");
+      expect(hasTip(html), path).toBe(false);
       expect(html.slice(html.indexOf('<footer class="status"')), path).not.toContain('class="tip"');
     }
   });
@@ -54,7 +54,7 @@ describe("the signed-in shell", () => {
       expect(html).not.toContain("https://hidden.pimwell.test/mcp");
       if (host === HOST) expect(html).not.toContain("https://other.pimwell.test/mcp");
     }
-    const apex = await (await w.get("/", w.pat.token, "pimwell.test")).text();
+    const apex = await (await w.get("/?organizations=1", w.pat.token, "pimwell.test")).text();
     expect(apex).toContain("Set up with your agent");
     expect(apex).toContain('href="https://acme.pimwell.test/people?connect=1"');
     expect(apex).not.toContain("https://&lt;org&gt;");
@@ -84,6 +84,25 @@ describe("the signed-in shell", () => {
     expect(html).toContain("Last activity");
     expect(html).toContain("<td>2</td>");
     expect(html).toContain("Nothing needs you right now.");
+    expect(html).toContain("<h1>What’s changed</h1>");
+    expect(html.indexOf("Recent changes")).toBeLessThan(html.indexOf("<summary>Projects"));
+    expect(html).toContain('class="brief-title" href="/site/w/1">Checkout fails</a>');
+  });
+
+  it("refreshes only readable work and links directly to its owner", async () => {
+    const w = await world(), headers = cookieHeaders(w.lead.token,HOST);
+    expect((await apiPost(HOST,'work.update',{id:'site#1',state:'doing',owner:'acme.scout@pimwell.test'},headers)).status).toBe(200);
+    expect((await apiPost(HOST,'work.comment',{id:'site#1',body:'Testing <checkout>'},headers)).status).toBe(200);
+    const fragment = await (await w.get('/?fragment=updates')).text();
+    expect(fragment).toContain('Message scout');
+    expect(fragment).toContain('Testing &lt;checkout&gt;');
+    expect(fragment.match(/class="brief-title" href="\/site\/w\/1"/g)).toHaveLength(1);
+    const other = await seedTenant('other'), reader = await seedHuman('other@example.com',{memberships:[{tenant_id:other.id,role:'reader'}]});
+    expect(await (await w.get('/?fragment=updates',reader.token,'other.pimwell.test')).text()).not.toContain('Checkout fails');
+    expect((await w.get('/site/w/1?fragment=discussion',reader.token,'other.pimwell.test')).status).toBe(404);
+    const discussion = await (await w.get('/site/w/1?fragment=discussion')).text();
+    expect(discussion).toContain('Testing &lt;checkout&gt;');
+    expect(discussion).not.toContain('<form');
   });
 
   it("gives each project compact resource counts and selected work", async () => {
@@ -115,7 +134,10 @@ describe("the signed-in shell", () => {
     const login = await (await SELF.fetch("https://pimwell.test/login")).text();
     expect(login).toContain('class="plain"');
     expect(login).not.toContain('aria-label="Primary"');
-    const apex = await (await w.get("/", w.pat.token, "pimwell.test")).text();
+    const landing = await SELF.fetch("https://pimwell.test/",{headers:cookieHeaders(w.pat.token,"pimwell.test"),redirect:"manual"});
+    expect(landing.status).toBe(302);
+    expect(landing.headers.get("location")).toBe("https://acme.pimwell.test/");
+    const apex = await (await w.get("/?organizations=1", w.pat.token, "pimwell.test")).text();
     expect(apex).toContain("All organizations");
     expect(apex).toContain("https://acme.pimwell.test/");
   });

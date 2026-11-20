@@ -418,7 +418,7 @@ describe("the workbench", () => {
     await env.HUB_DB.prepare("UPDATE identity SET display_name = 'Brian' WHERE id IN (?, ?)").bind(root.identity.id, member.identity.id).run();
     for (const who of [root, member]) {
       for (const host of ["pimwell.test", HOST]) {
-        const res = await SELF.fetch(`https://${host}/`, { headers: cookieHeaders(who.token, host) });
+        const res = await SELF.fetch(`https://${host}/?organizations=1`, { headers: cookieHeaders(who.token, host) });
         expect(res.status).toBe(200);
         expect(res.headers.get("cache-control")).toBe("no-store");
         const html = await res.text();
@@ -446,7 +446,7 @@ describe("the workbench", () => {
     expect(item).toContain('<summary aria-label="Change Title">Checkout fails');
     expect(item).toContain('<a class="back" href="/site/docket?kind=snag">');
     expect(item).toContain('name="_back" value="/site/w/1?kind=snag"');
-    expect(item).toContain("<h2>Comments</h2>");
+    expect(item).toContain("<h2>Conversation</h2>");
     const org = await (await w.get("/docket?owner=me")).text();
     expect(org).toContain('data-href="/site/w/1?in=org&amp;owner=me"');
     const orgItem = await (await w.get("/site/w/1?in=org&owner=me")).text();

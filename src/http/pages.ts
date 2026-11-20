@@ -118,6 +118,9 @@ export async function homePage(request: Request, env: Env): Promise<Response> {
     if (!ctx.identity) return htmlResponse(LANDING_HTML.replace("</body>", `${createForm}</body>`), 200, extra);
     const allMemberships = await listMembershipsForIdentity(env.HUB_DB, ctx.identity.id, true);
     const memberships = allMemberships.filter((m) => m.tenant.state === "active" && m.membership.state === "active");
+    if (ctx.identity.kind === "human" && memberships.length === 1 && !new URL(request.url).search) {
+      return new Response(null, {status:302,headers:{location:`https://${memberships[0]!.tenant.slug}.${env.HUB_DOMAIN}/`,"cache-control":"private, no-store",...extra}});
+    }
     const card = (slug: string, name: string, role: string) => organizationCard({ slug, name, role }, env.HUB_DOMAIN);
     let body = `<div class="landing"><header class="landing-hero"><h1>Hello, ${esc(ctx.identity.display_name)}</h1>
 <p class="lede">What would you like to move forward? Ask here or open your team's organization.</p>

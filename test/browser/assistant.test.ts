@@ -115,7 +115,7 @@ it("captures the signed-in landing page in both themes and widths", async () => 
       await page.emulateMedia({ colorScheme });
       for (const width of [1440, 390]) {
         await page.setViewportSize({ width, height: 1000 });
-        await page.goto("https://pimwell.test/");
+        await page.goto("https://pimwell.test/?organizations=1");
         await browserExpect(page.getByRole("heading", { name: "Hello, Brian" })).toBeVisible();
         const card = page.locator('.wb-org-card');
         await browserExpect(card).toHaveAttribute('href', 'https://acme.pimwell.test/');

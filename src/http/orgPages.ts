@@ -1,3 +1,4 @@
+import { homeBrief } from "./homeBrief";
 import { mcpConnectCard } from "./mcpConnect";
 import { PART_CONTENT } from "../verbs/project";
 import type { ProjectFeature } from "../projectFeatures";
@@ -32,6 +33,9 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   const oc = await orgCtx(request, env);
   if (oc instanceof Response) return oc;
   const { ctx, extra } = oc;
+  const brief = () => homeBrief(ctx).then(content => `<div data-home-updates="${esc(ctx.identity!.id)}">${content}</div>`);
+  if (new URL(request.url).searchParams.get("fragment") === "updates") return htmlResponse(await brief(),200,extra);
+  const updates = brief();
   const t = ctx.tenant!, eventAccess = readableMailEvents(ctx);
   const [projects, needs] = await ctx.db.batch([
     ctx.db.prepare(`/*perf-site:src%2Fhttp%2ForgPages.ts:34:5:orgHomePage:f961f8e2*/ SELECT p.*, ${projectPathSql()} AS path, (SELECT slug FROM namespace WHERE id = p.namespace_id AND tenant_id = p.tenant_id) AS namespace,
@@ -62,13 +66,17 @@ export async function orgHomePage(request: Request, env: Env): Promise<Response>
   const chosen = selected === null ? null : rows.find(p => p.path === selected);
   if (selected !== null && !chosen) return notFoundPage(extra);
   const actions = `${rank(ctx.role) >= rank("member") ? '<a href="/projects/new">New project</a><a href="/people?connect=1">Connect an agent</a>' : ""}${rank(ctx.role) >= rank("admin") ? '<a href="/people?invite=1">Invite a person</a>' : ""}${rank(ctx.role) >= rank("member") ? '<a href="/new">File</a>' : ""}<a href="/archive">Archive</a>`;
-  const list = `<div class="head"><h1>${esc(t.display_name)}</h1><span>${plural(rows.length,"project")}</span></div>${toolbar("Home actions", actions)}<p class="wb-hint">${esc(shellFor(ctx,env,"home")!.tip)}</p>
-${mcpConnectCard(env, [{ slug: t.slug, name: t.display_name }])}
-<h2>Projects</h2>${kitTable("Projects", [{label:"Project"},{label:"Kind"},{label:"Open work"},{label:"Needs me"},{label:"Last activity"}], rows.map(p => {
+  const directory = kitTable("Projects", [{label:"Project"},{label:"Kind"},{label:"Open work"},{label:"Needs me"},{label:"Last activity"}], rows.map(p => {
     const href = `/?project=${encodeURIComponent(p.path)}`;
     return {href, selected: p.path === selected, cells: [{html:`<a href="${esc(href)}">${esc(p.display_name)}</a> <small>${esc(p.path)}</small>`},{html:esc(p.kind)},{html:String(p.open_work)},{html:String(p.needs)},{html:ago(ctx.now,p.last_activity)}]};
-  }))}
-<h2><a href="/attention">Needs me</a></h2>${entries.length ? kitTable("Needs me",[{label:"Waiting"},{label:"When"}],entries.slice(0,5).map(e => ({href:e.slug ? `/?work=${encodeURIComponent(`${e.slug}#${e.number}`)}` : e.href ?? "/attention",cells:[{html:`<a href="${esc(e.slug ? `/?work=${encodeURIComponent(`${e.slug}#${e.number}`)}` : e.href ?? "/attention")}">${esc(e.summary)}</a>`},{html:ago(ctx.now,e.created_at)}]}))) : '<p class="empty">Nothing needs you right now.</p>'}${entries.length > 5 ? '<a href="/attention">All Needs me →</a>' : ""}`;
+  }));
+  const needsSection = `<h2><a href="/attention">Needs you</a></h2>${entries.length ? kitTable("Needs me",[{label:"Waiting"},{label:"When"}],entries.slice(0,5).map(e => ({href:e.slug ? `/?work=${encodeURIComponent(`${e.slug}#${e.number}`)}` : e.href ?? "/attention",cells:[{html:`<a href="${esc(e.slug ? `/?work=${encodeURIComponent(`${e.slug}#${e.number}`)}` : e.href ?? "/attention")}">${esc(e.summary)}</a>`},{html:ago(ctx.now,e.created_at)}]}))) : '<p class="empty">Nothing needs you right now.</p>'}${entries.length > 5 ? '<a href="/attention">All Needs me →</a>' : ""}`;
+  const list = `<div class="home-brief"><header><small>${esc(t.display_name)}</small><h1>What’s changed</h1></header>
+${entries.length ? needsSection : ''}
+${await updates}
+${!entries.length ? '<p class="empty">Nothing needs you right now.</p>' : ''}
+<details${chosen ? ' open' : ''}><summary>Projects (${rows.length})</summary>${directory}</details>
+<details><summary>Workspace setup</summary>${toolbar("Home actions", actions)}${mcpConnectCard(env, [{slug:t.slug,name:t.display_name}])}</details></div>`;
   const overview = chosen ? await projectOverview(ctx, env, chosen, null) : null;
   return htmlResponse(workbench(t.display_name, {list, listKey:`home:${rows.map(p => `${p.path}:${p.open_work}:${p.needs}:${p.last_activity}`).join(",")}:${entries.map(e => e.id).join(",")}`, inspector:overview ? `<a class="back" href="/">‹ Home</a>${overview.list}<p><a href="/${esc(chosen!.path)}">Open project workspace →</a></p>` : work.html, inspectorKey:chosen ? `home:${chosen.path}` : work.key}, shellFor(ctx,env,"home",t.slug)!),200,extra);
 }

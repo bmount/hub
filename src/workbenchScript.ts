@@ -610,6 +610,25 @@ export const WORKBENCH_JS = `var timeText = ${timeText.toString()};\n` + String.
       el.title = d.toLocaleString(undefined, {dateStyle:"full", timeStyle:"long"});
     });
   }
+  // Refresh recorded work, not the whole workspace: keep the reader's scroll, focus and forms.
+  var briefBusy = false;
+  async function refreshBrief() {
+    var el = document.querySelector("#inspector [data-discussion]") || (!location.search && document.querySelector("[data-home-updates]"));
+    if (briefBusy || !el || document.hidden || el.contains(document.activeElement)) return;
+    briefBusy = true;
+    try {
+      var res = await fetch(el.dataset.src || "/?fragment=updates", {credentials:"same-origin",cache:"no-store",redirect:"error"});
+      if (!el.isConnected || el.contains(document.activeElement)) return;
+      if (!res.ok) { if (res.status === 401 || res.status === 404) location.reload(); return; }
+      var fresh = new DOMParser().parseFromString(await res.text(),"text/html").querySelector(el.dataset.src ? "[data-discussion]" : "[data-home-updates]");
+      if (!el.isConnected) return;
+      if (!fresh || fresh.dataset.homeUpdates !== el.dataset.homeUpdates || fresh.dataset.viewer !== el.dataset.viewer || fresh.dataset.discussion !== el.dataset.discussion) { location.reload(); return; }
+      if (el.dataset.src && fresh.dataset.latest === el.dataset.latest) return;
+      if (el.isConnected && !el.contains(document.activeElement)) { el.replaceWith(fresh); localTimes(fresh); }
+    } catch (_) {} finally { briefBusy = false; }
+  }
+  setInterval(refreshBrief,30000);
+  document.addEventListener("visibilitychange", refreshBrief);
   localTimes(document);
   voiceUp(document);
 

@@ -146,7 +146,7 @@ describe("intent", () => {
     const one = await apex("open sky ledger");
     expect(one.status).toBe(303);
     expect(one.headers.get("location")).toBe("https://acme.pimwell.test/do?q=open%20sky%20ledger");
-    expect(await (await SELF.fetch("https://pimwell.test/", { headers: cookie })).text()).toContain('action="/do"');
+    expect(await (await SELF.fetch("https://pimwell.test/?organizations=1", { headers: cookie })).text()).toContain('action="/do"');
     expect(sent.length).toBe(0);
 
     const t2 = await seedTenant("north");

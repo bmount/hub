@@ -48,7 +48,7 @@ describe("tenant.delete", () => {
     expect((await apiPost(HOST, "tenant.archive", { slug: "keep" }, h)).status).toBe(403);
     expect((await apiPost(HOST, "tenant.delete", { slug: "neworg", confirm: "neworg" }, h)).status).toBe(409);
     expect((await apiPost(HOST, "tenant.archive", { slug: "neworg" }, h)).status).toBe(200);
-    const home = await (await SELF.fetch(`https://${HOST}/`, { headers: h })).text();
+    const home = await (await SELF.fetch(`https://${HOST}/?organizations=1`, { headers: h })).text();
     expect(home).toContain("Type neworg to delete permanently");
     expect((await apiPost(HOST, "tenant.delete", { slug: "neworg", confirm: "neworg" }, bearer(human.token))).status).toBe(403);
     expect((await apiPost(HOST, "tenant.delete", { slug: "neworg", confirm: "neworg" }, { ...h, origin: "https://evil.test" })).status).toBe(403);

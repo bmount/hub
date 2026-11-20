@@ -369,7 +369,7 @@ describe("chat pages", () => {
   it("offers organization chat on the signed-in hub without listing other tenants", async () => {
     const w = await chatWorld();
     await seedTenant("other");
-    const res = await SELF.fetch("https://pimwell.test/", { headers: cookieHeaders(w.dev.token, "pimwell.test") });
+    const res = await SELF.fetch("https://pimwell.test/?organizations=1", { headers: cookieHeaders(w.dev.token, "pimwell.test") });
     const html = await res.text();
     expect(html).toContain('aria-label="Organization chat"');
     expect(html).toContain('href="https://acme.pimwell.test/c"');
