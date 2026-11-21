@@ -9,6 +9,7 @@ import { ulid } from "../ids";
 import { rank, type Ctx } from "../auth/context";
 import { readableMail } from "../auth/mailAccess";
 import { sendMail } from "../mail/send";
+import { isGloballyAllowlisted } from "../mail/allowlist";
 import type { MailAttachment } from "../mail/mime";
 import { DATA_NOTE } from "../mcp/render";
 
@@ -29,19 +30,11 @@ export function addresses(v: unknown, name: string): string[] {
   return list;
 }
 
-// Exact addresses only. This exception grants no inbound, sender, or mailbox access.
-const GLOBAL_OUTBOUND_RECIPIENTS = new Set([
-  "mcuban@gmail.com",
-  "ryanlkline@gmail.com",
-  "mark@costplusdrugs.com",
-  "ryan.kline@costplusdrugs.com",
-]);
-
 /** Global outbound recipients, signed-up active organization members, and root need no contact history. */
 export async function memberRecipientRefusals(ctx: Ctx, recipients: string[]): Promise<string[]> {
   const out: string[] = [];
   for (const r of recipients) {
-    if (GLOBAL_OUTBOUND_RECIPIENTS.has(r.trim().toLowerCase())) continue;
+    if (isGloballyAllowlisted(r)) continue;
     const member = await ctx.db.prepare(`SELECT 1 FROM identity i
       WHERE (lower(i.email) = ?1 OR EXISTS (SELECT 1 FROM identity_email ie WHERE ie.identity_id = i.id AND lower(ie.email) = ?1 AND ie.confirmed_at IS NOT NULL))
       AND i.kind = 'human' AND i.state = 'active'

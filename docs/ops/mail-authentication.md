@@ -27,17 +27,18 @@ trusted verdict either.
 
 ## Implemented boundary
 
-Organization, project, and agent mail requires an active human member/root,
+Organization, project, and agent mail normally requires an active human member/root. The global email allowlist also admits exact external sender addresses with independently verified mail authentication, without membership. Failed authentication for those external senders is rejected, not quarantined. They may deliver mail and wake the addressed agent but cannot issue member mail commands or gain mailbox access.
+
+For members and external allowlisted senders, admission still requires
 rate and actual-byte size checks, **exactly one outer From mailbox matching the
 envelope sender**, and strict independent cryptographic aligned DKIM proof or
 verified Cloudflare ARC on the original bytes. Atomic tenant/sender/exact-mailbox/Message-ID replay storage and
-scoped audit precede admission. Duplicate,
-multiple, missing, or grouped From headers stay quarantined without new consent;
-no reply is sent. Display names and address case are supported through
+scoped audit precede admission. For members, duplicate, multiple, missing, or
+grouped From headers stay quarantined without new consent; no reply is sent. Display names and address case are supported through
 PostalMime's address parser. Inner forwarded From headers are only evidence.
 
-Unknown proof stays admin-only, never wakes an agent, and does not gain new
-consent. Pre-existing consent never authenticates mail.
+Unknown proof for members stays admin-only, never wakes an agent, and does not
+gain new consent. Pre-existing consent never authenticates mail.
 Unsigned Authentication-Results, ARC-Authentication-Results and custom headers
 never grant admission. Only the cryptographically verified Cloudflare ARC verdict
 described below is trusted. Optional

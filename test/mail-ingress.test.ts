@@ -1,4 +1,7 @@
 import { env } from "cloudflare:test";
+import { createHash, createSign, generateKeyPairSync } from "node:crypto";
+import { Buffer } from "node:buffer";
+import { EXTERNAL_MAIL_ID } from "../src/mail/allowlist";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fixtures from "./fixtures/mail-ingress.json";
 import mimeFixtures from "./fixtures/dkim-mime.json";
@@ -49,6 +52,36 @@ const page = (w: Awaited<ReturnType<typeof world>>) => inbox(w).list(w.tenant.id
 afterEach(() => { delivery.setTestTransport(null); vi.restoreAllMocks(); });
 
 describe("independently authenticated ingress without automatic replies", () => {
+  it("admits authenticated allowlisted nonmembers as external evidence, not as members", async () => {
+    const w = await world();
+    const sender = "mark@costplusdrugs.com";
+    const address = "ingress.helper@pimwell.test";
+    const body = "Hello from an external sender.\r\n";
+    const headers = [
+      `From: ${sender}`, `To: ${address}`, "Subject: External evidence",
+      `Date: ${new Date(now).toUTCString()}`, "Message-ID: <external@costplusdrugs.com>",
+    ].join("\r\n");
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const bh = createHash("sha256").update(body).digest("base64");
+    const signature = `DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=costplusdrugs.com; s=test; h=from:to:subject:date:message-id; bh=${bh}; b=`;
+    const signed = createSign("RSA-SHA256").update(`${headers}\r\n${signature}`).sign(privateKey, "base64");
+    const raw = `${signature}${signed}\r\n${headers}\r\n\r\n${body}`;
+    const resolver = async () => [[`v=DKIM1; p=${Buffer.from(publicKey.export({ type: "spki", format: "der" })).toString("base64")}`]];
+    const receiveExternal = (source: string, from = sender) => handleProjectMail(message(source, address, from), env, now, resolver);
+    expect(await receiveExternal(raw.replace("Hello", "Spoof"))).toBe("rejected");
+    expect(await receiveExternal(raw, "mark+alias@costplusdrugs.com")).toBe("rejected");
+    expect(await count("inbound_mail")).toBe(0);
+    expect(await receiveExternal(raw)).toBe("admitted");
+    expect(await receiveExternal(raw)).toBe("admitted");
+    expect(await env.HUB_DB.prepare("SELECT identity_id, from_email, recipient_id, verdict FROM inbound_mail").first()).toEqual({
+      identity_id: EXTERNAL_MAIL_ID, from_email: sender, recipient_id: w.bot.agent.identity.id, verdict: "admitted",
+    });
+    expect(await count("inbound_mail")).toBe(1);
+    expect((await page(w)).items).toHaveLength(1);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM identity WHERE email = ?").bind(sender).first("n")).toBe(0);
+    expect(await env.HUB_DB.prepare("SELECT COUNT(*) AS n FROM consent WHERE email = ?").bind(sender).first("n")).toBe(0);
+  });
+
   it("recipient preferences alone do not schedule, wake extra agents, grant access or suppress one-time context", async () => {
     const w = await world();
     // Preferences affect optional setup guidance, never response scheduling,

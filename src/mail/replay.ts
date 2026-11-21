@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import type { DNSResolver } from "mailauth";
 import type { Env } from "../env";
 import { ulid, sha256Hex } from "../ids";
-import { getIdentityByEmail, normalizeEmail } from "../db/identities";
+import { normalizeEmail } from "../db/identities";
+import { EXTERNAL_MAIL_ID, inboundSenderId } from "./allowlist";
 import { verifyIndependentDkim, MAX_DKIM_BYTES, type DkimProof } from "./dkim";
 import { parseMail, resolveMailAddress, type MailTarget } from "./projectMail";
 
@@ -18,16 +19,19 @@ export type ReplayState = {
 export type IndependentStoreResult =
   | { status: "stored"; mail_id: string; identity_id: string; target: MailTarget; proof: Pass }
   | { status: "duplicate"; mail_id: string; identity_id: string; target: MailTarget; proof: Pass }
-  | { status: "unknown"; proof: DkimProof }
+  | { status: "unknown"; proof: DkimProof; identity_id: string }
   | { status: "ineligible" | "collision" | "blocked" };
 
 // Repeated inside the atomic write, not just a stale resolveMailAddress read.
 // CASE binds the exact mailbox and destination identity/project, including active
 // membership of an addressed agent. Never permit a renamed/replaced destination.
 const ELIGIBLE = `EXISTS (SELECT 1 FROM identity i JOIN tenant t ON t.id = ?
-  WHERE i.id = ? AND ? IN (SELECT i.email UNION ALL SELECT email FROM identity_email WHERE identity_id = i.id) AND i.kind = 'human' AND i.state = 'active' AND t.state = 'active'
-    AND (i.is_root = 1 OR EXISTS (SELECT 1 FROM membership m
-      WHERE m.tenant_id = t.id AND m.identity_id = i.id AND m.state = 'active'))
+  WHERE i.id = ? AND t.state = 'active'
+    AND CASE WHEN ? THEN i.id = '${EXTERNAL_MAIL_ID}' AND i.state = 'archived' AND i.is_synthetic = 1
+    ELSE ? IN (SELECT i.email UNION ALL SELECT email FROM identity_email WHERE identity_id = i.id)
+      AND i.kind = 'human' AND i.state = 'active'
+      AND (i.is_root = 1 OR EXISTS (SELECT 1 FROM membership m
+        WHERE m.tenant_id = t.id AND m.identity_id = i.id AND m.state = 'active')) END
     AND CASE WHEN ? IS NOT NULL THEN EXISTS (SELECT 1 FROM identity a JOIN membership am
       ON am.identity_id = a.id AND am.tenant_id = t.id AND am.state = 'active'
       WHERE a.id = ? AND a.kind = 'agent' AND a.state = 'active' AND a.email = ?)
@@ -55,19 +59,20 @@ export async function storeIndependentMailCandidate(env: Env,
   const bytes = new Uint8Array(input.bytes);
   const from = normalizeEmail(input.from), to = input.to.trim().toLowerCase();
   const target = await resolveMailAddress(env.HUB_DB, env.HUB_DOMAIN, to);
-  const identity = await getIdentityByEmail(env.HUB_DB, from);
-  if (!target || !identity) return { status: "ineligible" };
-  const eligibility = [target.tenant_id, identity.id, from,
+  if (!target) return { status: "ineligible" };
+  const senderId = await inboundSenderId(env.HUB_DB, from, target.tenant_id);
+  if (!senderId) return { status: "ineligible" };
+  const eligibility = [target.tenant_id, senderId, senderId === EXTERNAL_MAIL_ID ? 1 : 0, from,
     target.recipient_id ?? null, target.recipient_id ?? null, to,
     target.project_id, target.project_id, to, env.HUB_DOMAIN.toLowerCase(), to, env.HUB_DOMAIN.toLowerCase()];
   const eligible = async () => !!await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:63:40:eligible:f717c86c*/ SELECT 1 WHERE ${ELIGIBLE}`).bind(...eligibility).first();
   if (!await eligible()) return { status: "ineligible" };
   const proof = await verifyIndependentDkim(bytes, from, now, resolver);
-  if (proof.authentication !== "pass") return { status: "unknown", proof };
+  if (proof.authentication !== "pass") return { status: "unknown", proof, identity_id: senderId };
   const key = REPLAY_PREFIX + target.tenant_id + ":" + await sha256Hex(JSON.stringify([from, to, proof.messageId]));
   const raw_sha256 = createHash("sha256").update(bytes).digest("hex");
   const legacy = [target.tenant_id, from, to, proof.messageId];
-  const state: ReplayState = { attempt_id: ulid(now), mail_id: ulid(now), identity_id: identity.id,
+  const state: ReplayState = { attempt_id: ulid(now), mail_id: ulid(now), identity_id: senderId,
     raw_sha256, reserved_at: now, status: "pending" };
   const pending = JSON.stringify(state), stored = JSON.stringify({ ...state, status: "stored" });
   const parsed = await parseMail(bytes.buffer);
@@ -79,7 +84,7 @@ export async function storeIndependentMailCandidate(env: Env,
        sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied, auth_results)
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'admitted', NULL, ?, ?, ?, ?, ?
       FROM meta r WHERE r.key = ? AND r.value = ? AND ${ELIGIBLE} AND NOT ${LEGACY}`)
-      .bind(state.mail_id, target.tenant_id, target.project_id, target.recipient_id ?? null, identity.id,
+      .bind(state.mail_id, target.tenant_id, target.project_id, target.recipient_id ?? null, senderId,
         from, to, parsed.subject, proof.messageId, parsed.date, now, bytes.byteLength,
         parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0,
         JSON.stringify(proof.recipientsAuthenticated !== true ? [] : parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`))), JSON.stringify({ independent: proof }),
@@ -87,18 +92,18 @@ export async function storeIndependentMailCandidate(env: Env,
     env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:87:5:storeIndependentMailCandidate:c4ea8469*/ UPDATE meta SET value = ? WHERE key = ? AND value = ?
       AND EXISTS (SELECT 1 FROM inbound_mail WHERE id = ? AND tenant_id = ? AND identity_id = ?
         AND from_email = ? AND to_address = ? AND message_id = ? AND verdict = 'admitted' AND reason IS NULL)`)
-      .bind(stored, key, pending, state.mail_id, target.tenant_id, identity.id, from, to, proof.messageId),
+      .bind(stored, key, pending, state.mail_id, target.tenant_id, senderId, from, to, proof.messageId),
     env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:91:5:storeIndependentMailCandidate:048e1a75*/ INSERT INTO event
       (id, tenant_id, identity_id, session_id, kind, target_kind, target_id, summary, created_at)
       SELECT ?, ?, ?, NULL, 'mail.received', 'inbound_mail', ?, ?, ?
       FROM meta WHERE key = ? AND value = ?`)
-      .bind(ulid(now), target.tenant_id, identity.id, state.mail_id,
+      .bind(ulid(now), target.tenant_id, senderId, state.mail_id,
         `Mail received for ${target.recipient_name ? `the agent ${target.recipient_name}` : target.project_slug ?? "the organization inbox"}: ${parsed.subject || "(no subject)"}`.slice(0, 300),
         now, key, stored),
   ]);
   if (results[1]!.meta.changes === 1 && results[2]!.meta.changes === 1) {
     await retainProjectMailFiles(env, state.mail_id, parsed.fileParts, now);
-    return { status: "stored", mail_id: state.mail_id, identity_id: identity.id, target, proof };
+    return { status: "stored", mail_id: state.mail_id, identity_id: senderId, target, proof };
   }
   // Recheck current authority before even returning a scoped existing row id.
   if (!await eligible()) return { status: "ineligible" };
@@ -108,15 +113,15 @@ export async function storeIndependentMailCandidate(env: Env,
   try { existing = JSON.parse(value); } catch { return { status: "blocked" }; }
   if (!existing || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(existing.mail_id)
     || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(existing.attempt_id)
-    || !/^[a-f0-9]{64}$/.test(existing.raw_sha256) || existing.identity_id !== identity.id
+    || !/^[a-f0-9]{64}$/.test(existing.raw_sha256) || existing.identity_id !== senderId
     || !Number.isSafeInteger(existing.reserved_at) || existing.reserved_at < 0) return { status: "blocked" };
   if (existing.raw_sha256 !== raw_sha256) return { status: "collision" };
   if (existing.status !== "stored") return { status: "blocked" };
   const row = await env.HUB_DB.prepare(`/*perf-site:src%2Fmail%2Freplay.ts:115:21:storeIndependentMailCandidate:4a2eac7b*/ SELECT id FROM inbound_mail WHERE id = ? AND tenant_id = ?
     AND identity_id = ? AND from_email = ? AND to_address = ? AND message_id = ?
     AND project_id IS ? AND recipient_id IS ? AND verdict = 'admitted' AND reason IS NULL AND released_by IS NULL`)
-    .bind(existing.mail_id, ...[target.tenant_id, identity.id, from, to, proof.messageId], target.project_id,
+    .bind(existing.mail_id, ...[target.tenant_id, senderId, from, to, proof.messageId], target.project_id,
       target.recipient_id ?? null).first<{ id: string }>();
   if (row) await retainProjectMailFiles(env, row.id, parsed.fileParts, now);
-  return row ? { status: "duplicate", mail_id: row.id, identity_id: identity.id, target, proof } : { status: "blocked" };
+  return row ? { status: "duplicate", mail_id: row.id, identity_id: senderId, target, proof } : { status: "blocked" };
 }

@@ -4,10 +4,10 @@ import { mailIdentityAddress } from "../db/identityEmails";
 // Vetting, in order:
 //   1. The address must name an active organization (and project). Anything else is refused at delivery.
 //   2. The size must be within limits.
-//   3. The sender (envelope from) must be an active human member of the organization, or root. Strangers are refused.
+//   3. The sender must be an active human member, root, or globally allowlisted.
 //   4. Per-sender rate limit.
 //   5. Strict independently verified, aligned DKIM on original bytes, with atomic replay storage.
-//      Unknown proof is quarantined for an admin, unread by agents, without a reply.
+//      Unknown proof is quarantined for members and rejected for external senders.
 // Independently admitted project mail may authorize bounded actions as its sender.
 // Quoted/forwarded content and all other mail remain evidence only.
 import { runMailActions, newSenderText } from "./actions";
@@ -16,9 +16,9 @@ import PostalMime, { type Header } from "postal-mime";
 import type { Env } from "../env";
 import { ulid } from "../ids";
 import { isValidSlug, isValidTenantSlug } from "../tenant";
-import { getIdentityByEmail, normalizeEmail } from "../db/identities";
+import { normalizeEmail } from "../db/identities";
 import { getTenantBySlug } from "../db/tenants";
-import { getMembership } from "../db/memberships";
+import { EXTERNAL_MAIL_ID, inboundSenderId } from "./allowlist";
 import type { DNSResolver } from "mailauth";
 import { recordEvent } from "../db/events";
 import { takeRateDetail } from "../rate";
@@ -30,7 +30,7 @@ import { retainAttachmentEvidence, type AttachmentEvidence } from "./attachments
 
 export const MAX_MAIL_BYTES = MAX_RAW_MAIL_BYTES;
 export const MAX_TEXT_CHARS = 400_000;
-export const STRANGER_REASON = "This address only accepts mail from members of its organization.";
+export const STRANGER_REASON = "This address only accepts mail from organization members or approved senders.";
 
 export type MailTarget = {
   tenant_id: string; tenant_slug: string; tenant_name: string; project_id: string | null; project_slug: string | null; project_name: string | null;
@@ -96,15 +96,12 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
   if (!target) { message.setReject("Unknown recipient"); return "rejected"; }
 
   const from = normalizeEmail(message.from);
-  const identity = await getIdentityByEmail(env.HUB_DB, from);
-  const member = identity && identity.kind === "human" && identity.state === "active"
-    ? identity.is_root === 1 || (await getMembership(env.HUB_DB, identity.id, target.tenant_id))?.state === "active"
-    : false;
-  if (!identity || !member) { message.setReject(STRANGER_REASON); return "rejected"; }
+  const senderId = await inboundSenderId(env.HUB_DB, from, target.tenant_id);
+  if (!senderId) { message.setReject(STRANGER_REASON); return "rejected"; }
 
   const rate = await takeRateDetail(env.RATE, "addr", from, now);
   if (!rate.ok) {
-    if (rate.first) await recordEvent(env.HUB_DB, { tenant_id: target.tenant_id, identity_id: identity.id, session_id: null, kind: "mail.limited", target_kind: "identity", target_id: identity.id, summary: "Mail over the hourly limit; not stored" }, now);
+    if (rate.first) await recordEvent(env.HUB_DB, { tenant_id: target.tenant_id, identity_id: senderId, session_id: null, kind: "mail.limited", target_kind: "identity", target_id: senderId, summary: "Mail over the hourly limit; not stored" }, now);
     return "limited";
   }
 
@@ -126,6 +123,7 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
         thread_root: null, hop: 0, author_id: result.identity_id, wake: true, created_at: now,
       }]);
     }
+    if (result.identity_id === EXTERNAL_MAIL_ID) return "admitted";
     // These are optional effects; even an unexpected failure cannot revoke proof,
     // roll back admitted evidence, or prevent the already delivered agent wake.
     try {
@@ -162,19 +160,22 @@ export async function handleProjectMail(message: ForwardableEmailMessage, env: E
     message.setReject("Mail admission blocked; requires administrator reconciliation");
     return "rejected";
   }
+  if (result.identity_id === EXTERNAL_MAIL_ID || senderId === EXTERNAL_MAIL_ID) {
+    message.setReject("Approved external senders must pass mail authentication"); return "rejected";
+  }
   const parsed = await parseMail(bytes.buffer);
   const verdict = "quarantined";
   const id = ulid(now);
   await env.HUB_DB.prepare(
     `/*perf-site:src%2Fmail%2FprojectMail.ts:161:9:handleProjectMail:4893da46*/ INSERT INTO inbound_mail (id, tenant_id, project_id, recipient_id, identity_id, from_email, to_address, subject, message_id, sent_at, received_at, size, verdict, reason, text, attachments, forwarded, copied, reason_code, auth_results)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).bind(id, target.tenant_id, target.project_id, target.recipient_id ?? null, identity.id, from, message.to.trim().toLowerCase(), parsed.subject, safeMessageId(message.headers.get("message-id")),
+  ).bind(id, target.tenant_id, target.project_id, target.recipient_id ?? null, result.identity_id, from, message.to.trim().toLowerCase(), parsed.subject, safeMessageId(message.headers.get("message-id")),
     parsed.date, now, bytes.byteLength, verdict, result.proof.authentication === "unknown" ? result.proof.reason : "authentication unknown",
     parsed.text, JSON.stringify(parsed.attachments), parsed.forwarded ? 1 : 0,
     JSON.stringify(parsed.addressed.filter((a) => a !== from && !a.endsWith(`@${env.HUB_DOMAIN.toLowerCase()}`))), "dkim_unknown",
     JSON.stringify({ independent: result.proof, headers: parsed.headers.filter(h => /^(authentication-results|received-spf|arc-authentication-results)$/i.test(h.key)), header_trust: "untrusted evidence, not authentication" })).run();
   await recordEvent(env.HUB_DB, {
-    tenant_id: target.tenant_id, identity_id: identity.id, session_id: null, kind: "mail.quarantined", target_kind: "inbound_mail", target_id: id,
+    tenant_id: target.tenant_id, identity_id: result.identity_id, session_id: null, kind: "mail.quarantined", target_kind: "inbound_mail", target_id: id,
     summary: `Mail quarantined for ${target.recipient_name ? `the agent ${target.recipient_name}` : target.project_slug ?? "the organization inbox"}: ${parsed.subject || "(no subject)"}`.slice(0, 300),
   }, now);
   return verdict;
