@@ -2,7 +2,7 @@
 
 ## Recipient eligibility
 
-Every member-started send (`mail.send`, `mail.reply`, `doc.share`, `doc.dispatch`) uses the same rule: each recipient must be a signed-up active human identity with active membership in this organization, or root, at its primary or confirmed linked address. Anyone whose mail this organization admits can be written back to. These identities come from accepted invitations or verified sign-ins. Pending invitations, unconfirmed linked addresses, contacts, outsiders, inactive identities and archived or other-organization memberships do not qualify. No earlier inbound mail is required and replies have no 30-day expiry.
+Every member-started send (`mail.send`, `mail.reply`, `doc.share`, `doc.dispatch`) uses the same rule: globally allowlisted exact addresses qualify without a membership or contact record; any other recipient must be a signed-up active human identity with active membership in this organization, or root, at its primary or confirmed linked address. Anyone whose mail this organization admits can be written back to. These identities come from accepted invitations or verified sign-ins. Pending invitations, unconfirmed linked addresses, contacts, outsiders, inactive identities and archived or other-organization memberships do not qualify. No earlier inbound mail is required and replies have no 30-day expiry.
 
 Agents send from their own address; people send from a project address, and replies retain the received mailbox address. Reply-all skips ineligible copied recipients and names them in the reply body and tool result; it never sends a separate notice to excluded addresses. New messages allow up to ten recipients across to and cc.
 
@@ -12,7 +12,7 @@ Recipient-policy refusals name the address and the required setup. Existing send
 
 Members use `doc.share` / `doc_share` to send a file or wiki/KB/research page in one message to up to ten recipients. `doc.dispatch` / `doc_dispatch` sends one separate message per recipient, without exposing the other recipients' addresses. Give `project`, exactly one of `path` (file) or `slug` (page), `recipients` (member email addresses), and a short `note`. Both are available on workspace/wiki project MCP endpoints with the project supplied implicitly, and as forms on file inspectors and wiki pages. Sending uses the current document revision from an active project.
 
-Document sends use the same signed-up member rule for both humans and agents, including confirmed linked addresses, without any prior-contact requirement. Humans send from the project's address and agents from their own. Sending configuration, daily caps (50 per sender, 500 per organization) and consent withdrawal still apply; explicit member eligibility does not require a separate consent grant.
+Document sends use the same recipient rule for both humans and agents, including confirmed linked addresses, without any prior-contact requirement. Humans send from the project's address and agents from their own. Sending configuration, daily caps (50 per sender, 500 per organization) and consent withdrawal still apply; explicit member eligibility does not require a separate consent grant.
 
 Files of at most 512 KiB are MIME attachments. Larger files and pages use revision-pinned authenticated URLs; links grant no capability or public access, and require the same tenant membership/project-read checks as normal downloads/pages. Attachments intentionally provide recipients a copy outside Pimwell; subsequent withdrawal cannot recall an already sent copy.
 

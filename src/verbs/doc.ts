@@ -14,7 +14,7 @@ export const DOC_ATTACHMENT_BYTES = 512 * 1024;
 const input = {type: "object" as const, properties: {
   project: {type: "string"}, path: {type: "string", description: "File path; give path or slug, not both"},
   slug: {type: "string", description: "Wiki/KB/research page slug"},
-  recipients: {type: "array", items: {type: "string"}, description: "Active human organization members' email addresses (up to 10)"},
+  recipients: {type: "array", items: {type: "string"}, description: "Eligible organization member or globally allowlisted email addresses (up to 10)"},
   note: {type: "string", description: "Short plain-text note"},
 }, required: ["project", "recipients", "note"], additionalProperties: false as const};
 function parse(i: Record<string, unknown>) {
@@ -88,7 +88,7 @@ async function sendDocument(ctx: Ctx, v: ReturnType<typeof parse>, mode: "share"
 }
 const verb = (mode: "share" | "dispatch") => defineVerb({
   name: `doc.${mode}`, kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
-  summary: `${mode === "share" ? "Share a file or page by one mail" : "Dispatch a file or page in separate mails, one per member"}. Only signed-up active human organization members, at primary or confirmed linked addresses; no prior mail required, for people and agents alike. Non-data files up to 512 KiB attached; data files and larger files use sign-in links only. Sending switch, caps and withdrawal apply. Check deliveries and not_attempted before retrying.`,
+  summary: `${mode === "share" ? "Share a file or page by one mail" : "Dispatch a file or page in separate mails, one per recipient"}. Globally allowlisted recipients or signed-up active human organization members at primary or confirmed linked addresses; no prior mail required, for people and agents alike. Non-data files up to 512 KiB attached; data files and larger files use sign-in links only. Sending switch, caps and withdrawal apply. Check deliveries and not_attempted before retrying.`,
   mcp: {scope: "write", destructive: false, title: mode === "share" ? "Share document" : "Dispatch document", input},
   parse, run: (ctx, v) => sendDocument(ctx, v, mode),
 });

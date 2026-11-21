@@ -48,6 +48,21 @@ async function world() {
 }
 
 describe("outbound mail", () => {
+  it("allows exact global recipients without membership or prior contact", async () => {
+    const w = await world();
+    const send = (to: string[], cc: string[] = []) => w.call(w.bot, "mail.send",
+      {to, cc, subject: "Allowlist", body: "Hello"});
+    expect((await send(["mcuban@gmail.com"])).status).toBe(403);
+    await w.call(w.ada, "mail.sending", {on: true});
+    expect((await send(["mcuban@gmail.com"], ["mcuban+other@gmail.com"])).status).toBe(403);
+    expect(w.sent).toHaveLength(0);
+    expect((await send([" MCUBAN@GMAIL.COM ", "ryanlkline@gmail.com"],
+      ["mark@costplusdrugs.com", "ryan.kline@costplusdrugs.com"])).status).toBe(200);
+    expect(w.sent.map(m => m.to)).toEqual([
+      "mcuban@gmail.com", "ryanlkline@gmail.com", "mark@costplusdrugs.com", "ryan.kline@costplusdrugs.com",
+    ]);
+  });
+
   it.each(["person", "agent"])("checks signed-up recipients for a %s, including linked addresses", async sender => {
     const w = await world();
     await w.call(w.ada, "mail.sending", {on: true});

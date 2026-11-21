@@ -1,4 +1,4 @@
-// Member-started mail goes only to signed-up human organization members.
+// Member-started mail goes to eligible organization members or globally allowlisted recipients.
 // Sending switch, daily caps, consent withdrawal and refusal records apply to all senders.
 import { defineVerb } from "./table";
 import { optString, reqString } from "./params";
@@ -29,11 +29,19 @@ export function addresses(v: unknown, name: string): string[] {
   return list;
 }
 
-/** Anyone who may write to this organization may be written to: a signed-up human who is a member here, or root.
- * Never contact history, and never anyone else. */
+// Exact addresses only. This exception grants no inbound, sender, or mailbox access.
+const GLOBAL_OUTBOUND_RECIPIENTS = new Set([
+  "mcuban@gmail.com",
+  "ryanlkline@gmail.com",
+  "mark@costplusdrugs.com",
+  "ryan.kline@costplusdrugs.com",
+]);
+
+/** Global outbound recipients, signed-up active organization members, and root need no contact history. */
 export async function memberRecipientRefusals(ctx: Ctx, recipients: string[]): Promise<string[]> {
   const out: string[] = [];
   for (const r of recipients) {
+    if (GLOBAL_OUTBOUND_RECIPIENTS.has(r.trim().toLowerCase())) continue;
     const member = await ctx.db.prepare(`SELECT 1 FROM identity i
       WHERE (lower(i.email) = ?1 OR EXISTS (SELECT 1 FROM identity_email ie WHERE ie.identity_id = i.id AND lower(ie.email) = ?1 AND ie.confirmed_at IS NOT NULL))
       AND i.kind = 'human' AND i.state = 'active'
@@ -89,7 +97,7 @@ const body = (i: Record<string, unknown>) => {
 
 export const mailReply = defineVerb({
   name: "mail.reply", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
-  summary: "Reply from the address a message was sent to, only to signed-up active human members of this organization (primary or confirmed linked addresses). No prior-contact or age limit. Agents reply to their own mail; people reply to organization/project mail. Agents may use all to include eligible copied members.",
+  summary: "Reply from the address a message was sent to, to globally allowlisted recipients or signed-up active human members of this organization (primary or confirmed linked addresses). No prior-contact or age limit. Agents reply to their own mail; people reply to organization/project mail. Agents may use all to include eligible copied members.",
   mcp: {
     scope: "write", destructive: false, title: "Reply by mail",
     input: { type: "object", properties: { id: { type: "string", description: "The received message's id (mail_list, mail_read)" }, body: { type: "string", description: "Plain text" }, all: { type: "boolean", description: "Agents: also write to the members it was addressed or copied to" } }, required: ["id", "body"], additionalProperties: false },
@@ -119,7 +127,7 @@ export const mailReply = defineVerb({
     const subject = /^re:/i.test(m.subject) ? m.subject : `Re: ${m.subject || "your message"}`;
     const earlier = (await ctx.db.prepare("/*perf-site:src%2Fverbs%2FmailOut.ts:133:28:mailReply.run:04887000*/ SELECT o.id FROM outbound_mail o WHERE o.in_reply_to = ? AND o.status = 'sent' ORDER BY o.created_at").bind(m.id).all<{ id: string }>()).results.map((o) => `<${o.id}@${ctx.env.HUB_DOMAIN}>`);
     const notice = skipped.length
-      ? `Reply-all omitted: ${skipped.join(", ")}. No mail was sent to these addresses. Recipients must join this organization or accept its membership invitation, with an active human membership for their exact email address set up by an administrator. Membership checks cannot be bypassed by external mail.`
+      ? `Reply-all omitted: ${skipped.join(", ")}. No mail was sent to these addresses. Recipients must join this organization or accept its membership invitation, with an active human membership for their exact email address set up by an administrator. External mail does not grant recipient eligibility.`
       : undefined;
     const text = notice ? `${p.body}\n\n${notice}` : p.body;
     const r = await deliver(ctx, { from: m.to_address, to: m.from_email, cc, inbound_id: m.id, message_id: m.message_id, basis: "member" }, subject.slice(0, 200), text, [...(m.message_id ? [m.message_id] : []), ...earlier], async () => {
@@ -133,7 +141,7 @@ export const mailReply = defineVerb({
 
 export const mailSend = defineVerb({
   name: "mail.send", kind: "command", scope: "tenant", minRole: "member", freshProofMinutes: null,
-  summary: "Send to signed-up active human members of this organization, at primary or confirmed linked addresses (to and cc, up to 10 total). No prior mail required. Agents send from their own address; people use from_project. Sending switch, daily caps and consent withdrawal apply.",
+  summary: "Send to globally allowlisted recipients or signed-up active human members of this organization at primary or confirmed linked addresses (to and cc, up to 10 total). No prior mail required. Agents send from their own address; people use from_project. Sending switch, daily caps and consent withdrawal apply.",
   mcp: {
     scope: "write", destructive: false, title: "Send mail",
     input: { type: "object", properties: {
